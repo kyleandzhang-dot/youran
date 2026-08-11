@@ -1,0 +1,45 @@
+name: youran_ai
+description: "Youran AI interactive story platform."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.8.0 <3.9.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Existing project dependencies
+  http: 1.6.0
+  flutter_secure_storage: 9.2.0
+  cupertino_icons: 1.0.8
+  lucide_icons_flutter: 3.1.15
+
+  # Novel runtime dependencies compatible with Dart 3.8.1
+  web_socket_channel: 3.0.3
+  shared_preferences: 2.5.3
+  just_audio: 0.10.6
+  file_picker: 11.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+
+  # Enable only after the actual font files are added.
+  # fonts:
+  #   - family: NovelWenKai
+  #     fonts:
+  #       - asset: assets/fonts/NovelWenKai.ttf
+  #
+  #   - family: NovelSerif
+  #     fonts:
+  #       - asset: assets/fonts/NovelSerif.ttf

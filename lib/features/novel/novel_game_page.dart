@@ -1,0 +1,517 @@
+import 'dart:async';
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+
+import '../../game_shell.dart';
+import 'novel_game_controller.dart';
+import 'novel_models.dart';
+import 'novel_sheets.dart';
+import 'novel_widgets.dart';
+
+typedef NovelEndingBuilder = Widget Function(
+  BuildContext context,
+  NovelGameController controller,
+  NovelEnding ending,
+);
+
+class NovelGamePage extends StatefulWidget {
+  const NovelGamePage({
+    super.key,
+    required this.controller,
+    this.fallbackBackgroundAsset = 'assets/images/home_background.jpg',
+    this.onBack,
+    this.endingBuilder,
+    this.disposeController = true,
+  });
+
+  final NovelGameController controller;
+  final String fallbackBackgroundAsset;
+  final VoidCallback? onBack;
+  final NovelEndingBuilder? endingBuilder;
+  final bool disposeController;
+
+  @override
+  State<NovelGamePage> createState() => _NovelGamePageState();
+}
+
+class _NovelGamePageState extends State<NovelGamePage>
+    with WidgetsBindingObserver {
+  final TextEditingController _inputController = TextEditingController();
+  final FocusNode _inputFocusNode = FocusNode();
+
+  bool _characterSetupOpen = false;
+  bool _openingOpen = false;
+  bool _fateOpen = false;
+  bool _endingOpen = false;
+  bool _balanceOpen = false;
+
+  NovelGameController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    controller.addListener(_onControllerChanged);
+    unawaited(controller.initialize());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      unawaited(controller.bgm.stop());
+      return;
+    }
+    if (state == AppLifecycleState.resumed && controller.isInitialized) {
+      unawaited(controller.socket.connect(controller.sessionId));
+      unawaited(controller.bgm.init(
+        controller.bgm.currentIntensity,
+        controller.bgm.currentSceneMode,
+      ));
+    }
+  }
+
+  void _onControllerChanged() {
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _processOverlayRequests();
+    });
+  }
+
+  Future<void> _processOverlayRequests() async {
+    if (controller.showCharacterSetup && !_characterSetupOpen) {
+      _characterSetupOpen = true;
+      await showNovelCharacterSetupDialog(context, controller);
+      _characterSetupOpen = false;
+      return;
+    }
+    if (controller.showOpening && !_openingOpen) {
+      _openingOpen = true;
+      await showNovelOpeningDialog(context, controller);
+      _openingOpen = false;
+      return;
+    }
+    if (controller.showFateRevert && !_fateOpen) {
+      _fateOpen = true;
+      await showNovelFateRevertDialog(context, controller);
+      controller.showFateRevert = false;
+      controller.clearMessages();
+      _fateOpen = false;
+      return;
+    }
+    if (controller.showEnding && !_endingOpen) {
+      _endingOpen = true;
+      controller.showEnding = false;
+      controller.clearMessages();
+      if (widget.endingBuilder != null) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (context) => widget.endingBuilder!(context, controller, controller.ending),
+          ),
+        );
+      } else {
+        await showDefaultNovelEnding(context, controller);
+      }
+      _endingOpen = false;
+      return;
+    }
+    if (controller.insufficientBalance && !_balanceOpen) {
+      _balanceOpen = true;
+      await showGeneralDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: '关闭余额提示',
+        barrierColor: Colors.black.withOpacity(.80),
+        transitionDuration: const Duration(milliseconds: 200),
+        pageBuilder: (dialogContext, _, __) {
+          return Material(
+            color: Colors.transparent,
+            child: SafeArea(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 360),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+                          decoration: BoxDecoration(
+                            color: NovelPalette.panel,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(.08),
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              const Text(
+                                '余额不足',
+                                style: TextStyle(
+                                  color: NovelPalette.text,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              const Text(
+                                '当前余额不足，无法继续生成剧情。',
+                                style: TextStyle(
+                                  color: NovelPalette.muted,
+                                  fontSize: 11.5,
+                                  height: 1.55,
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+                              SizedBox(
+                                height: 42,
+                                child: FilledButton(
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: NovelPalette.accent,
+                                    foregroundColor: NovelPalette.accentDark,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(5),
+                                    ),
+                                  ),
+                                  onPressed: () =>
+                                      Navigator.of(dialogContext).pop(),
+                                  child: const Text('知道了'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+        transitionBuilder: (context, animation, secondaryAnimation, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          );
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: .97, end: 1).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      );
+      controller.insufficientBalance = false;
+      controller.clearMessages();
+      _balanceOpen = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    controller.removeListener(_onControllerChanged);
+    _inputController.dispose();
+    _inputFocusNode.dispose();
+    if (widget.disposeController) controller.dispose();
+    super.dispose();
+  }
+
+  void _back() {
+    final callback = widget.onBack;
+    if (callback != null) {
+      callback();
+    } else {
+      Navigator.of(context).maybePop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GameShell(
+      activeScenarioId: controller.scenarioId,
+      resizeToAvoidBottomInset: false,
+      backgroundColor: controller.settings.backgroundColor,
+      builder: (context, openDrawer) {
+        return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final customBackground = controller.settings.customBackground;
+        final background = customBackground.isNotEmpty
+            ? customBackground
+            : controller.world.backgroundUrl;
+        return Scaffold(
+          resizeToAvoidBottomInset: true,
+          backgroundColor: controller.settings.backgroundColor,
+          body: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              NovelWorldBackground(
+                url: background,
+                fallbackAsset: widget.fallbackBackgroundAsset,
+                // 与 Vue 一致：即使角色没有真实立绘，也会显示默认男女立绘，
+                // 因此背景仍进入“有人物”的沉浸状态。
+                characterPresent: controller.storyStarted &&
+                    controller.currentSpeakerName.isNotEmpty &&
+                    !controller.isCinematic,
+                isGenerating: controller.isGenerating,
+              ),
+              // 角色立绘由 NovelDialogPanel 内部统一绘制。
+              // 不在这里再画第二层，避免重复立绘或两套 visible 条件互相打架。
+              SafeArea(
+                minimum: const EdgeInsets.fromLTRB(14, 10, 14, 15),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 430;
+                    return Stack(
+                      children: <Widget>[
+                        // 电影模式是全屏交互层，但放在 HUD 下面，
+                        // 对齐 Vue NarrativeControls(z45) < NovelTopHeader(z50) 的层级关系。
+                        if (controller.storyStarted && controller.isCinematic)
+                          Positioned.fill(
+                            child: NovelCinematicControls(
+                              text: controller.currentSentence?.text ?? '',
+                              speakerName: controller.currentSpeakerName,
+                              isGenerating: controller.isGenerating,
+                              isFirst: !controller.hasPrevious,
+                              isLast: !controller.hasNext,
+                              fontFamily: controller.settings.fontFamily,
+                              fontSize: controller.settings.fontSize,
+                              onRevert: () => showNovelRevertDialog(context, controller),
+                              onPrevious: controller.goPrevious,
+                              onNext: controller.goNext,
+                              onContinue: controller.hasNext || controller.pendingFateRevert
+                                  ? controller.goNext
+                                  : controller.continueStory,
+                            ),
+                          ),
+                        Align(
+                          alignment: Alignment.topCenter,
+                          child: NovelTopHud(
+                            controller: controller,
+                            onMenu: widget.onBack ?? openDrawer,
+                            onOpenProfile: () => showNovelHostProfileSheet(context, controller),
+                            onOpenSettings: () => showNovelSettingsSheet(context, controller),
+                          ),
+                        ),
+                        if (controller.storyStarted)
+                          Positioned(
+                            left: compact ? 7 : 19,
+                            right: compact ? 50 : constraints.maxWidth * .28,
+                            // 场景转场标题稍微上提，避免压到人物/正文区域。
+                            // NovelSceneArrivalTitle 内部同时放宽了中文行高，解决上下笔画被切的问题。
+                            top: constraints.maxHeight * (compact ? .13 : .15),
+                            child: IgnorePointer(
+                              child: NovelSceneArrivalTitle(
+                                title: controller.locationTitle,
+                                subtitle: controller.locationSubtitle,
+                              ),
+                            ),
+                          ),
+                        if (controller.storyStarted && !controller.isGenerating)
+                          Positioned(
+                            top: 57,
+                            left: 3,
+                            child: NovelTaskBadge(
+                              task: controller.currentTask,
+                              completed: controller.taskCompleted,
+                            ),
+                          ),
+                        if (controller.storyStarted && !controller.isGenerating)
+                          Positioned(
+                            top: 57,
+                            right: 3,
+                            child: NovelScoreChip(
+                              score: controller.score,
+                              onTap: () => showNovelStoreSheet(context, controller),
+                            ),
+                          ),
+
+                        // 角色 / 经历 / 背包从底部移到积分下方。
+                        // 一行一个，不加整块面板背景，保持当前 HUD 的轻盈风格。
+                        if (controller.storyStarted && !controller.isGenerating)
+                          Positioned(
+                            top: 90,
+                            right: 3,
+                            child: NovelArchiveRail(
+                              onCharacters: () =>
+                                  showNovelCharactersSheet(context, controller),
+                              onJourney: () =>
+                                  showNovelJourneySheet(context, controller),
+                              onInventory: () =>
+                                  showNovelInventorySheet(context, controller),
+                            ),
+                          ),
+                        if (controller.storyStarted && !controller.isCinematic)
+                          Align(
+                            alignment: Alignment.bottomCenter,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 720),
+                              child: NovelDialogPanel(
+                                controller: controller,
+                                textController: _inputController,
+                                focusNode: _inputFocusNode,
+                                onSend: (text) {
+                                  controller.goLatest();
+                                  unawaited(controller.sendPlayerMessage(text));
+                                },
+                                onContinue: controller.continueStory,
+                                onForceContinue: controller.forceContinue,
+                                onOpenChoices: () => showNovelChoicesSheet(context, controller),
+                                onOpenInventory: () => showNovelInventorySheet(context, controller),
+                                onOpenCharacters: () => showNovelCharactersSheet(context, controller),
+                                onOpenJourney: () => showNovelJourneySheet(context, controller),
+                                onRevert: () => showNovelRevertDialog(context, controller),
+                                onOpenPortrait: controller.currentSpeakerCharacter == null
+                                    ? null
+                                    : () => showNovelPortraitSheet(context, controller),
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              if (controller.storyStarted &&
+                  controller.isGenerating &&
+                  (controller.currentSentence?.text.trim().isEmpty ?? true) &&
+                  !controller.showDice)
+                const NovelBrewingOverlay(),
+              if (controller.storyStarted)
+                NovelDamageFeedbackOverlay(hp: controller.protagonistHp),
+              if (controller.hudEvent != null)
+                NovelHudEventOverlay(
+                  key: ValueKey<int>(controller.hudEvent!.id),
+                  event: controller.hudEvent!,
+                ),
+              if (controller.isInitializing)
+                ColoredBox(
+                  color: Colors.black.withOpacity(.58),
+                  child: const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        CircularProgressIndicator(color: NovelPalette.accent),
+                        SizedBox(height: 18),
+                        Text('正在载入世界…', style: TextStyle(color: NovelPalette.text, letterSpacing: 2)),
+                      ],
+                    ),
+                  ),
+                ),
+              if (!controller.isInitializing &&
+                  !controller.isInitialized &&
+                  controller.lastError.isNotEmpty)
+                _FatalError(
+                  message: controller.lastError,
+                  onRetry: controller.initialize,
+                  onBack: widget.onBack ?? openDrawer,
+                ),
+              if (controller.showDice && controller.diceRoll != null)
+                IgnorePointer(child: NovelDiceOverlay(roll: controller.diceRoll!)),
+              if (controller.timeSkipLabel.isNotEmpty)
+                NovelTimeSkipOverlay(
+                  label: controller.timeSkipLabel,
+                  onDismiss: controller.dismissTimeSkip,
+                ),
+              if (controller.showEndingIntro)
+                GestureDetector(
+                  onTap: () {
+                    controller.showEndingIntro = false;
+                    controller.clearMessages();
+                  },
+                  child: const ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: Text(
+                        '故事走向终章',
+                        style: TextStyle(
+                          color: NovelPalette.text,
+                          fontSize: 18,
+                          letterSpacing: 5,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              NovelStatusBanner(
+                message: controller.lastError.isNotEmpty
+                    ? controller.lastError
+                    : controller.infoMessage,
+                isError: controller.lastError.isNotEmpty,
+                onDismiss: controller.clearMessages,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+      },
+    );
+  }
+}
+
+class _FatalError extends StatelessWidget {
+  const _FatalError({
+    required this.message,
+    required this.onRetry,
+    required this.onBack,
+  });
+
+  final String message;
+  final Future<void> Function() onRetry;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xE8090A09),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Icon(Icons.cloud_off_rounded, color: NovelPalette.danger, size: 40),
+                const SizedBox(height: 18),
+                const Text(
+                  '世界暂时无法载入',
+                  style: TextStyle(color: NovelPalette.text, fontSize: 21, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: NovelPalette.muted, height: 1.6),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    TextButton(onPressed: onBack, child: const Text('打开菜单')),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      style: FilledButton.styleFrom(backgroundColor: NovelPalette.accent, foregroundColor: NovelPalette.accentDark),
+                      onPressed: onRetry,
+                      child: const Text('重新载入'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
