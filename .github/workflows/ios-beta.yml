@@ -147,12 +147,12 @@ jobs:
           ENDPOINT="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
 
           aws s3 cp ios/Runner.ipa \
-            "s3://${{ secrets.R2_BUCKET }}/ios-app/${{ steps.build_info.outputs.ipa_name }}" \
+            "s3://${{ vars.R2_BUCKET }}/ios-app/${{ steps.build_info.outputs.ipa_name }}" \
             --endpoint-url "$ENDPOINT" \
             --content-type "application/octet-stream"
 
           aws s3 cp manifest.plist \
-            "s3://${{ secrets.R2_BUCKET }}/ios-app/manifest-${{ steps.build_info.outputs.build_time }}.plist" \
+            "s3://${{ vars.R2_BUCKET }}/ios-app/manifest-${{ steps.build_info.outputs.build_time }}.plist" \
             --endpoint-url "$ENDPOINT" \
             --content-type "application/xml"
 
@@ -186,7 +186,7 @@ jobs:
           QR_NAME="qrcode-${{ steps.build_info.outputs.build_time }}.png"
 
           aws s3 cp qrcode.png \
-            "s3://${{ secrets.R2_BUCKET }}/ios-app/qrcode/${QR_NAME}" \
+            "s3://${{ vars.R2_BUCKET }}/ios-app/qrcode/${QR_NAME}" \
             --endpoint-url "$ENDPOINT" \
             --content-type "image/png"
 
