@@ -37,6 +37,17 @@ platform :ios do
       git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"]
     )
 
+    # 【新增】强制把 Team / 签名方式 / Provisioning Profile 写入 Xcode 项目,
+    # 解决 "Signing for Runner requires a development team" 报错
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "Runner.xcodeproj",
+      team_id: "85F7XUQB6K",
+      code_sign_identity: "iPhone Distribution",
+      profile_name: "match AdHoc com.yoran.app",
+      targets: ["Runner"]
+    )
+
     build_app(
       export_method: "ad-hoc",
       scheme: "Runner", # Flutter 项目默认 scheme 是 Runner
@@ -46,7 +57,8 @@ platform :ios do
       export_options: {
         provisioningProfiles: {
           "com.yoran.app" => "match AdHoc com.yoran.app"
-        }
+        },
+        teamID: "85F7XUQB6K"
       }
     )
   end
@@ -64,6 +76,17 @@ platform :ios do
       git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"]
     )
 
+    # 【新增】强制把 Team / 签名方式 / Provisioning Profile 写入 Xcode 项目,
+    # 解决 "Signing for Runner requires a development team" 报错
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "Runner.xcodeproj",
+      team_id: "85F7XUQB6K",
+      code_sign_identity: "iPhone Distribution",
+      profile_name: "match AppStore com.yoran.app",
+      targets: ["Runner"]
+    )
+
     build_app(
       export_method: "app-store",
       scheme: "Runner",
@@ -73,7 +96,8 @@ platform :ios do
       export_options: {
         provisioningProfiles: {
           "com.yoran.app" => "match AppStore com.yoran.app"
-        }
+        },
+        teamID: "85F7XUQB6K"
       }
     )
 
