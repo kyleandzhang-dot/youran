@@ -10,28 +10,32 @@ class CreateWorldDialog extends StatefulWidget {
   const CreateWorldDialog({
     super.key,
     this.generatePath = defaultGeneratePath,
+    this.onTaskSubmitted,
   });
 
   static const String defaultGeneratePath =
       '/chat/ai/generate-scenario/submit';
 
   final String generatePath;
+  final ValueChanged<String>? onTaskSubmitted;
 
-  /// 现在只负责提交任务，成功后返回 taskId 给外层页面去异步轮询
+  /// 提交任务后先通知外层立即显示真实生成进度，再播放“收进左下角”的交接动画。
   static Future<String?> show(
     BuildContext context, {
     String generatePath = defaultGeneratePath,
+    ValueChanged<String>? onTaskSubmitted,
   }) {
     return showGeneralDialog<String>(
       context: context,
       barrierDismissible: true, // 允许点击外部遮罩关闭
-      barrierLabel: 'Create world',
+      barrierLabel: '创建世界',
       barrierColor: Colors.black.withOpacity(0.68),
       transitionDuration: const Duration(milliseconds: 240),
       pageBuilder: (context, animation, secondaryAnimation) {
         return Center(
           child: CreateWorldDialog(
             generatePath: generatePath,
+            onTaskSubmitted: onTaskSubmitted,
           ),
         );
       },
@@ -54,7 +58,7 @@ class CreateWorldDialog extends StatefulWidget {
 }
 
 class _CreateWorldDialogState extends State<CreateWorldDialog>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   static const String _selectedMode = 'novel';
   static const String _qualityMode = 'standard';
 
@@ -62,9 +66,11 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
 
   bool _isLoading = false;
   bool _showError = false;
+  bool _handoffActive = false;
   String? _requestError;
 
   late final AnimationController _shakeController;
+  late final AnimationController _handoffController;
 
   @override
   void initState() {
@@ -73,12 +79,17 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
       vsync: this,
       duration: const Duration(milliseconds: 420),
     );
+    _handoffController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 720),
+    );
   }
 
   @override
   void dispose() {
     _controller.dispose();
     _shakeController.dispose();
+    _handoffController.dispose();
     super.dispose();
   }
 
@@ -93,7 +104,7 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
       return;
     }
 
-    if (_isLoading) return;
+    if (_isLoading || _handoffActive) return;
 
     if (ApiClient.instance.accessToken == null ||
         ApiClient.instance.accessToken!.trim().isEmpty) {
@@ -132,7 +143,19 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
         throw ApiException('生成任务提交成功，但后端没有返回 task_id');
       }
 
-      // 提交成功，直接关闭弹窗并返回 taskId
+      // 先把真实任务交给 GameShell：左下角进度立即开始，不等弹窗消失。
+      widget.onTaskSubmitted?.call(taskId);
+
+      setState(() {
+        _isLoading = false;
+        _handoffActive = true;
+      });
+
+      // 给用户一个很短的“已接收”确认，再把卡片收进左下角进度区。
+      await Future<void>.delayed(const Duration(milliseconds: 260));
+      if (!mounted) return;
+      await _handoffController.forward(from: 0);
+      if (!mounted) return;
       Navigator.of(context).pop(taskId);
 
     } on ApiException catch (error) {
@@ -142,7 +165,7 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
       if (!mounted) return;
       _showRequestError('生成失败：$error');
     } finally {
-      if (mounted) {
+      if (mounted && !_handoffActive) {
         setState(() => _isLoading = false);
       }
     }
@@ -164,46 +187,115 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_isLoading,
+      canPop: !_isLoading && !_handoffActive,
       child: Material(
         color: Colors.transparent,
         child: AnimatedBuilder(
-          animation: _shakeController,
-          builder: (context, child) {
-            final t = _shakeController.value;
-            final offset = _showError
-                ? math.sin(t * math.pi * 6) * 5 * (1 - t)
-                : 0.0;
+          animation: _handoffController,
+          builder: (context, handoffChild) {
+            final raw = _handoffController.value;
+            final t = Curves.easeInOutCubic.transform(raw);
+            final screen = MediaQuery.sizeOf(context);
+            final targetX = -(screen.width * 0.5 - 92);
+            final targetY = screen.height * 0.5 - 92;
+            final scale = 1.0 - 0.78 * t;
+            final opacity = (1.0 - 0.88 * t).clamp(0.0, 1.0).toDouble();
+
             return Transform.translate(
-              offset: Offset(offset, 0),
-              child: child,
+              offset: Offset(targetX * t, targetY * t),
+              child: Transform.scale(
+                scale: scale,
+                child: Opacity(opacity: opacity, child: handoffChild),
+              ),
             );
           },
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 380),
-            child: Container(
-              width: MediaQuery.sizeOf(context).width * 0.88,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: const Color(0xFF161616),
-                borderRadius: BorderRadius.zero,
-                border: Border.all(
-                  color: Colors.white.withOpacity(0.12),
-                  width: 1,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.5),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
+          child: AnimatedBuilder(
+            animation: _shakeController,
+            builder: (context, child) {
+              final t = _shakeController.value;
+              final offset = _showError
+                  ? math.sin(t * math.pi * 6) * 5 * (1 - t)
+                  : 0.0;
+              return Transform.translate(
+                offset: Offset(offset, 0),
+                child: child,
+              );
+            },
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: Container(
+                width: MediaQuery.sizeOf(context).width * 0.88,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161616),
+                  borderRadius: BorderRadius.zero,
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.12),
+                    width: 1,
                   ),
-                ],
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.5),
+                      blurRadius: 20,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  child: _handoffActive ? _buildHandoffView() : _buildInputView(),
+                ),
               ),
-              child: _buildInputView(),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildHandoffView() {
+    return const Column(
+      key: ValueKey<String>('handoff'),
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        SizedBox(
+          width: 42,
+          height: 42,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Color(0x1F81F670),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.check_rounded,
+              size: 22,
+              color: AppColors.accent,
+            ),
+          ),
+        ),
+        SizedBox(height: 14),
+        Text(
+          '世界已开始生成',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.textOnDark,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        SizedBox(height: 6),
+        Text(
+          '生成进度将移到左下角继续显示',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.textOnDarkMuted,
+            fontSize: 11.5,
+            height: 1.45,
+          ),
+        ),
+      ],
     );
   }
 
@@ -260,7 +352,9 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
           ],
         ),
         GestureDetector(
-          onTap: () => Navigator.of(context).pop(),
+          onTap: (_isLoading || _handoffActive)
+              ? null
+              : () => Navigator.of(context).pop(),
           child: Container(
             padding: const EdgeInsets.all(4),
             color: Colors.transparent,

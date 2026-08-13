@@ -542,6 +542,13 @@ class _SettingsPanelState extends State<_SettingsPanel> {
       animation: Listenable.merge(<Listenable>[controller, controller.settings]),
       builder: (context, _) {
         final settings = controller.settings;
+        if (settings.artStyle != 'anime') {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (controller.settings.artStyle != 'anime') {
+              controller.settings.setArtStyle('anime');
+            }
+          });
+        }
         return _SheetScaffold(
           title: '偏好设置',
           subtitle: '',
@@ -551,7 +558,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
               const _CleanSettingsHeader(
                 icon: Icons.palette_outlined,
                 title: '画面风格',
-                subtitle: '影响 AI 生成立绘与画面质感',
+                subtitle: '当前暂时锁定为动漫风格，其他画风稍后开放',
               ),
               const SizedBox(height: 12),
               SizedBox(
@@ -561,31 +568,34 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   physics: const BouncingScrollPhysics(),
                   children: <Widget>[
                     _ArtStyleCard(
-                      label: '3D',
-                      asset: 'assets/images/bg-3d.webp',
-                      selected: settings.artStyle == 'stylized_3d',
-                      onTap: () => settings.setArtStyle('stylized_3d'),
+                      label: '动漫',
+                      asset: 'assets/images/bg-anime.webp',
+                      selected: true,
+                      onTap: () => settings.setArtStyle('anime'),
                     ),
                     const SizedBox(width: 10),
                     _ArtStyleCard(
-                      label: '动漫',
-                      asset: 'assets/images/bg-anime.webp',
-                      selected: settings.artStyle == 'anime',
-                      onTap: () => settings.setArtStyle('anime'),
+                      label: '3D',
+                      asset: 'assets/images/bg-3d.webp',
+                      selected: false,
+                      onTap: null,
+                      lockedLabel: '暂未开放',
                     ),
                     const SizedBox(width: 10),
                     _ArtStyleCard(
                       label: '写实',
                       asset: 'assets/images/bg-realistic.webp',
-                      selected: settings.artStyle == 'realistic',
-                      onTap: () => settings.setArtStyle('realistic'),
+                      selected: false,
+                      onTap: null,
+                      lockedLabel: '暂未开放',
                     ),
                     const SizedBox(width: 10),
                     _ArtStyleCard(
                       label: '梦幻',
                       asset: 'assets/images/bg-painterly.webp',
-                      selected: settings.artStyle == 'painterly',
-                      onTap: () => settings.setArtStyle('painterly'),
+                      selected: false,
+                      onTap: null,
+                      lockedLabel: '暂未开放',
                     ),
                   ],
                 ),
@@ -720,15 +730,18 @@ class _ArtStyleCard extends StatelessWidget {
     required this.asset,
     required this.selected,
     required this.onTap,
+    this.lockedLabel,
   });
 
   final String label;
   final String asset;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final String? lockedLabel;
 
   @override
   Widget build(BuildContext context) {
+    final disabled = onTap == null && !selected;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -777,16 +790,44 @@ class _ArtStyleCard extends StatelessWidget {
                 bottom: 7,
                 child: Text(
                   label,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: disabled ? Colors.white.withOpacity(.72) : Colors.white,
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
-                    shadows: <Shadow>[
+                    shadows: const <Shadow>[
                       Shadow(color: Colors.black, blurRadius: 4),
                     ],
                   ),
                 ),
               ),
+              if (disabled)
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(.32),
+                    ),
+                    child: Align(
+                      alignment: Alignment.topRight,
+                      child: Container(
+                        margin: const EdgeInsets.only(top: 7, right: 7),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(.42),
+                          borderRadius: BorderRadius.circular(99),
+                          border: Border.all(color: Colors.white.withOpacity(.10)),
+                        ),
+                        child: Text(
+                          lockedLabel ?? '已锁定',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(.80),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               if (selected)
                 Positioned(
                   right: 7,
@@ -1998,10 +2039,7 @@ class _InlineCharacterVisualEditorState
       text: widget.controller.characterAppearance(widget.character),
     );
 
-    _imageStyle =
-        widget.controller.settings.artStyle == 'stylized_3d'
-            ? '3d'
-            : 'anime';
+    _imageStyle = 'anime';
 
     _portraitUrl = widget.character.portraitUrl;
     _avatarUrl = widget.character.avatarUrl;
@@ -2063,7 +2101,7 @@ class _InlineCharacterVisualEditorState
       final result = await widget.controller.generatePortrait(
         character: widget.character,
         prompt: prompt,
-        style: _imageStyle,
+        style: 'anime',
       );
 
       if (!mounted) return;
@@ -2133,6 +2171,9 @@ class _InlineCharacterVisualEditorState
         avatarUrl: finalAvatar,
       );
 
+      // 立绘保存属于原地编辑，不需要再额外弹“XXX 立绘已更新”状态提示。
+      widget.controller.clearMessages();
+
       if (!mounted) return;
 
       setState(() {
@@ -2179,38 +2220,20 @@ class _InlineCharacterVisualEditorState
       );
     }
 
-    // 没有立绘时，预览区本身就是上传入口。
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: (_generating || _saving) ? null : _pickLocalImage,
         child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(
-                Icons.add_photo_alternate_outlined,
-                size: 27,
-                color: NovelPalette.muted.withOpacity(.58),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '点击上传立绘',
-                style: TextStyle(
-                  color: NovelPalette.text.withOpacity(.72),
-                  fontSize: 11.8,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '也可以在下方使用 AI 生成',
-                style: TextStyle(
-                  color: NovelPalette.muted.withOpacity(.66),
-                  fontSize: 10.2,
-                ),
-              ),
-            ],
+          child: Text(
+            '暂无立绘，点击这里上传',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: NovelPalette.muted.withOpacity(.78),
+              fontSize: 11.5,
+              height: 1.45,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ),
@@ -2219,217 +2242,241 @@ class _InlineCharacterVisualEditorState
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 620;
+    const Color primaryGreen = NovelPalette.accent;
 
-        final preview = Container(
-          width: double.infinity,
-          height: wide ? 360 : 330,
-          alignment: Alignment.bottomCenter,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(.025),
-            borderRadius: BorderRadius.circular(6),
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Text(
+            '形象设定',
+            style: TextStyle(
+              color: NovelPalette.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-          child: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              _buildPreview(),
+          const SizedBox(height: 12),
 
-              if (_generating)
-                ColoredBox(
-                  color: Colors.black.withOpacity(.34),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        const SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.8,
-                            color: NovelPalette.text,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          '正在生成立绘…',
-                          style: TextStyle(
-                            color: NovelPalette.text.withOpacity(.84),
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
+          // 上方只展示立绘，保持主角档案结构清楚。
+          Center(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: (_generating || _saving) ? null : _pickLocalImage,
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  width: 180,
+                  height: 240,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(.035),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(.06),
                     ),
                   ),
-                ),
-
-              // 已经有立绘时，右上角提供一个很轻的“更换”入口。
-              if (_hasPortrait && !_generating)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: Material(
-                    color: Colors.black.withOpacity(.34),
-                    borderRadius: BorderRadius.circular(4),
-                    child: InkWell(
-                      onTap: (_saving || _generating)
-                          ? null
-                          : _pickLocalImage,
-                      borderRadius: BorderRadius.circular(4),
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 9,
-                          vertical: 6,
-                        ),
-                        child: Text(
-                          '更换',
-                          style: TextStyle(
-                            color: NovelPalette.text,
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: <Widget>[
+                      _buildPreview(),
+                      if (_generating)
+                        ColoredBox(
+                          color: Colors.black.withOpacity(.42),
+                          child: const Center(
+                            child: SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: primaryGreen,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
+                    ],
                   ),
                 ),
-            ],
+              ),
+            ),
           ),
-        );
-
-        final controls = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Text(
-              '立绘',
-              style: TextStyle(
-                color: NovelPalette.text,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              '当前立绘会直接显示在预览区；上传或生成后先预览，再决定是否保存。',
-              style: TextStyle(
-                color: NovelPalette.muted.withOpacity(.80),
-                fontSize: 10.7,
-                height: 1.45,
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            preview,
-
-            const SizedBox(height: 14),
-
-            Row(
-              children: <Widget>[
-                _VisualStyleChoice(
-                  label: '动漫',
-                  selected: _imageStyle == 'anime',
-                  onTap: (_generating || _saving)
-                      ? null
-                      : () => setState(() => _imageStyle = 'anime'),
-                ),
-                const SizedBox(width: 8),
-                _VisualStyleChoice(
-                  label: '3D',
-                  selected: _imageStyle == '3d',
-                  onTap: (_generating || _saving)
-                      ? null
-                      : () => setState(() => _imageStyle = '3d'),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 10),
-
-            Container(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(.025),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: TextField(
-                controller: _promptController,
-                enabled: !_generating && !_saving,
-                minLines: 3,
-                maxLines: 5,
-                cursorColor: NovelPalette.accent,
-                style: const TextStyle(
-                  color: NovelPalette.text,
-                  fontSize: 12.3,
-                  height: 1.5,
-                ),
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  isDense: true,
-                  hintText: '描述角色立绘，例如：银灰短发，冷静的年轻剑士，半身立绘…',
-                  hintStyle: TextStyle(
-                    color: NovelPalette.muted.withOpacity(.52),
-                    fontSize: 11.2,
-                  ),
+          if (_hasPortrait) ...<Widget>[
+            const SizedBox(height: 7),
+            Center(
+              child: Text(
+                '点击立绘可更换',
+                style: TextStyle(
+                  color: NovelPalette.muted.withOpacity(.62),
+                  fontSize: 10.2,
                 ),
               ),
-            ),
-
-            if (_errorText.isNotEmpty) ...<Widget>[
-              const SizedBox(height: 9),
-              Text(
-                _errorText,
-                style: const TextStyle(
-                  color: NovelPalette.danger,
-                  fontSize: 11.2,
-                  height: 1.45,
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 12),
-
-            Row(
-              children: <Widget>[
-                // 上传已经由“立绘预览区 / 更换”承担，不再重复放按钮。
-                Expanded(
-                  child: _ProfileSoftAction(
-                    icon: Icons.auto_awesome_rounded,
-                    label: _generating ? '生成中…' : '生成立绘',
-                    loading: _generating,
-                    onTap: (_generating || _saving)
-                        ? null
-                        : _generatePortrait,
-                  ),
-                ),
-
-                // 只有预览内容真正变化后才出现“保存”。
-                if (_hasPendingChanges) ...<Widget>[
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _ProfileSoftAction(
-                      icon: Icons.check_rounded,
-                      label: _saving ? '保存中…' : '保存',
-                      loading: _saving,
-                      primary: true,
-                      onTap: (_generating || _saving)
-                          ? null
-                          : _savePortrait,
-                    ),
-                  ),
-                ],
-              ],
             ),
           ],
-        );
 
-        // 立绘是一个独立栏，不再把“控制区在前、预览在后”。
-        // 无论宽屏还是窄屏，用户首先看到的都是当前立绘预览。
-        return Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: controls,
-        );
-      },
+          const SizedBox(height: 22),
+
+          // 立绘下面才显示当前画风。
+          Text(
+            '当前画风',
+            style: TextStyle(
+              color: NovelPalette.muted.withOpacity(.82),
+              fontSize: 10.8,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: <Widget>[
+              _VisualStyleChoice(
+                label: '动漫',
+                selected: true,
+                onTap: (_generating || _saving)
+                    ? null
+                    : () => setState(() => _imageStyle = 'anime'),
+              ),
+              const SizedBox(width: 8),
+              const _VisualStyleChoice(
+                label: '3D（已锁定）',
+                selected: false,
+                onTap: null,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '当前主角档案立绘暂时固定使用动漫风格生成。',
+            style: TextStyle(
+              color: NovelPalette.muted.withOpacity(.58),
+              fontSize: 10.2,
+            ),
+          ),
+
+          const SizedBox(height: 18),
+
+          Text(
+            '提示词',
+            style: TextStyle(
+              color: NovelPalette.muted.withOpacity(.82),
+              fontSize: 10.8,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.028),
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(color: Colors.white.withOpacity(.055)),
+            ),
+            child: TextField(
+              controller: _promptController,
+              enabled: !_generating && !_saving,
+              minLines: 3,
+              maxLines: 5,
+              cursorColor: primaryGreen,
+              style: const TextStyle(
+                color: NovelPalette.text,
+                fontSize: 12,
+                height: 1.5,
+              ),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
+                hintText: '例如：银灰短发，年轻剑士，半身立绘……',
+                hintStyle: TextStyle(
+                  color: NovelPalette.muted.withOpacity(.46),
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          ),
+
+          if (_errorText.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(
+              _errorText,
+              style: const TextStyle(
+                color: Color(0xFFE07A78),
+                fontSize: 10.5,
+                height: 1.4,
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 14),
+
+          // 只用文字按钮，不再放魔法、相机、勾选等装饰图标。
+          SizedBox(
+            width: double.infinity,
+            height: 42,
+            child: FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.white.withOpacity(.08),
+                foregroundColor: NovelPalette.text,
+                disabledBackgroundColor: Colors.white.withOpacity(.035),
+                disabledForegroundColor: NovelPalette.muted,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(5),
+                ),
+              ),
+              onPressed: (_generating || _saving) ? null : _generatePortrait,
+              child: _generating
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: NovelPalette.text,
+                      ),
+                    )
+                  : const Text(
+                      '生成立绘',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+            ),
+          ),
+
+          if (_hasPendingChanges) ...<Widget>[
+            const SizedBox(height: 9),
+            SizedBox(
+              width: double.infinity,
+              height: 42,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: primaryGreen,
+                  foregroundColor: Colors.black,
+                  disabledBackgroundColor: primaryGreen.withOpacity(.28),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                ),
+                onPressed: (_generating || _saving) ? null : _savePortrait,
+                child: _saving
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: Colors.black,
+                        ),
+                      )
+                    : const Text(
+                        '保存立绘',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -2447,10 +2494,13 @@ class _VisualStyleChoice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final disabled = onTap == null && !selected;
     return Material(
       color: selected
           ? Colors.white.withOpacity(.10)
-          : Colors.white.withOpacity(.025),
+          : disabled
+              ? Colors.white.withOpacity(.015)
+              : Colors.white.withOpacity(.025),
       borderRadius: BorderRadius.circular(4),
       child: InkWell(
         onTap: onTap,
@@ -2465,7 +2515,9 @@ class _VisualStyleChoice extends StatelessWidget {
             style: TextStyle(
               color: selected
                   ? NovelPalette.text
-                  : NovelPalette.muted,
+                  : disabled
+                      ? NovelPalette.muted.withOpacity(.42)
+                      : NovelPalette.muted,
               fontSize: 11.5,
               fontWeight:
                   selected ? FontWeight.w700 : FontWeight.w600,
@@ -2570,8 +2622,7 @@ Future<void> showNovelPortraitSheet(
     text: controller.characterAppearance(target),
   );
 
-  var imageStyle =
-      controller.settings.artStyle == 'stylized_3d' ? '3d' : 'anime';
+  var imageStyle = 'anime';
 
   var portraitUrl = target.portraitUrl;
   var avatarUrl = target.avatarUrl;
@@ -2611,6 +2662,7 @@ Future<void> showNovelPortraitSheet(
 
             final file = result?.files.single;
             if (file == null || file.bytes == null) return;
+            if (!pageContext.mounted) return;
 
             if (file.size > 12 * 1024 * 1024) {
               setState(() => errorText = '图片请控制在 12MB 以内');
@@ -2643,7 +2695,7 @@ Future<void> showNovelPortraitSheet(
               final result = await controller.generatePortrait(
                 character: target,
                 prompt: prompt,
-                style: imageStyle,
+                style: 'anime',
               );
 
               if (!pageContext.mounted) return;
@@ -2671,6 +2723,10 @@ Future<void> showNovelPortraitSheet(
 
           Future<void> saveImage() async {
             if (generating || saving || !hasPendingChanges()) return;
+
+            // 在异步保存开始前拿到稳定的 NavigatorState。
+            // 后面不再通过可能正在 deactivate 的 BuildContext 重新查 Navigator。
+            final pageNavigator = Navigator.of(pageContext);
 
             if (!hasPortrait()) {
               setState(() => errorText = '请先上传或生成一张立绘');
@@ -2708,6 +2764,9 @@ Future<void> showNovelPortraitSheet(
                 avatarUrl: finalAvatar,
               );
 
+              // 快捷更换立绘成功后不需要顶部再显示“XXX 立绘已更新”。
+              controller.clearMessages();
+
               if (!pageContext.mounted) return;
 
               // 先把当前页面的本地状态完整收尾，再退出路由。
@@ -2725,12 +2784,11 @@ Future<void> showNovelPortraitSheet(
               });
 
               // updateCharacterVisuals 会通知剧情页重建。
-              // 等这一帧完成后，再用打开档案页时的外层 context 关闭当前路由，
-              // 不再依赖正在被销毁的 pageContext 查找 Navigator。
+              // 等本帧完成再退页；直接使用异步开始前捕获的 NavigatorState，
+              // 避免在页面 deactivate 过程中重新从 context 查找 InheritedWidget。
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!context.mounted) return;
-                final navigator = Navigator.of(context);
-                if (navigator.canPop()) navigator.pop();
+                if (!pageNavigator.mounted) return;
+                if (pageNavigator.canPop()) pageNavigator.pop();
               });
             } catch (error) {
               if (!pageContext.mounted) return;
@@ -2803,7 +2861,7 @@ Future<void> showNovelPortraitSheet(
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final compact = constraints.maxWidth < 620;
-                final previewHeight = compact ? 370.0 : 430.0;
+                final previewHeight = compact ? 240.0 : 280.0;
 
                 return ListView(
                   padding: EdgeInsets.fromLTRB(
@@ -2928,37 +2986,36 @@ Future<void> showNovelPortraitSheet(
                     const SizedBox(height: 18),
 
                     // 画风使用轻量选择，不再用大块 SegmentedButton。
+                    // 仅保留动漫和3D选项，去掉占空间的文字
                     Row(
                       children: <Widget>[
-                        Text(
-                          '画风',
-                          style: TextStyle(
-                            color: NovelPalette.muted.withOpacity(.72),
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
                         _VisualStyleChoice(
                           label: '动漫',
-                          selected: imageStyle == 'anime',
+                          selected: true,
                           onTap: (generating || saving)
                               ? null
-                              : () =>
-                                  setState(() => imageStyle = 'anime'),
+                              : () => setState(() => imageStyle = 'anime'),
                         ),
-                        const SizedBox(width: 7),
-                        _VisualStyleChoice(
-                          label: '3D',
-                          selected: imageStyle == '3d',
-                          onTap: (generating || saving)
-                              ? null
-                              : () => setState(() => imageStyle = '3d'),
+                        const SizedBox(width: 8),
+                        const _VisualStyleChoice(
+                          label: '3D（已锁定）',
+                          selected: false,
+                          onTap: null,
                         ),
                       ],
                     ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '当前主角档案立绘暂时固定使用动漫风格生成。',
+                      style: TextStyle(
+                        color: NovelPalette.muted.withOpacity(.58),
+                        fontSize: 10.2,
+                      ),
+                    ),
 
                     const SizedBox(height: 16),
+
+      
 
                     Text(
                       '生成描述',
@@ -3051,6 +3108,10 @@ Future<void> showNovelPortraitSheet(
       ),
     );
   } finally {
+    // Navigator.push() 的 Future 在 pop 后可能先完成，而路由的 reverse transition
+    // 仍在使用 TextField。立即 dispose 会造成概率性“controller disposed”红屏。
+    // 当前归档页 reverseTransitionDuration 为 220ms，留出额外余量后再释放。
+    await Future<void>.delayed(const Duration(milliseconds: 320));
     promptController.dispose();
   }
 }
@@ -3144,7 +3205,7 @@ Future<bool> showNovelRevertDialog(
   return result ?? false;
 }
 
-Future<void> showNovelCharacterSetupDialog(
+Future<bool> showNovelCharacterSetupDialog(
   BuildContext context,
   NovelGameController controller,
 ) async {
@@ -3163,313 +3224,329 @@ Future<void> showNovelCharacterSetupDialog(
     persona['portrait_prompt'] ?? persona['appearance'] ?? persona['identity'],
   );
 
-  await showGeneralDialog<void>(
+  var submitting = false;
+
+  final started = await showGeneralDialog<bool>(
     context: context,
     barrierDismissible: false,
-    barrierLabel: '角色设定',
-    barrierColor: Colors.black.withOpacity(.92),
-    transitionDuration: const Duration(milliseconds: 520),
+    barrierLabel: '确认角色',
+    barrierColor: Colors.black.withOpacity(.82),
+    transitionDuration: const Duration(milliseconds: 240),
     pageBuilder: (dialogContext, _, __) {
-      return Material(
-        color: const Color(0xFF070808),
-        child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment(.45, -.15),
-                  radius: 1.08,
-                  colors: <Color>[
-                    Color(0xFF202524),
-                    Color(0xFF0B0C0C),
-                    Color(0xFF050606),
-                  ],
-                  stops: <double>[0, .56, 1],
-                ),
-              ),
-            ),
-            if (host != null &&
-                (host.portraitUrl.isNotEmpty || host.avatarUrl.isNotEmpty))
-              Positioned(
-                top: MediaQuery.sizeOf(dialogContext).height * .06,
-                bottom: 0,
-                right: -MediaQuery.sizeOf(dialogContext).width * .10,
-                width: MediaQuery.sizeOf(dialogContext).width * .72,
-                child: Opacity(
-                  opacity: .28,
-                  child: ShaderMask(
-                    shaderCallback: (rect) => const LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: <Color>[
-                        Colors.white,
-                        Colors.white,
-                        Colors.transparent,
-                      ],
-                      stops: <double>[0, .62, 1],
-                    ).createShader(rect),
-                    blendMode: BlendMode.dstIn,
-                    child: NovelArtwork(
-                      url: host.portraitUrl.isNotEmpty
-                          ? host.portraitUrl
-                          : host.avatarUrl,
-                      fit: BoxFit.contain,
-                      alignment: Alignment.bottomRight,
-                      fallbackText: host.name,
-                    ),
-                  ),
-                ),
-              ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                  colors: <Color>[
-                    Colors.black.withOpacity(.66),
-                    Colors.black.withOpacity(.14),
-                    Colors.black.withOpacity(.48),
-                  ],
-                ),
-              ),
-            ),
-            SafeArea(
+      return StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          return Material(
+            color: Colors.transparent,
+            child: SafeArea(
               child: Center(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(22, 28, 22, 32),
+                  padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 470),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(26, 28, 26, 24),
-                          decoration: BoxDecoration(
-                            color: const Color(0x88121414),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white.withOpacity(.085)),
-                            boxShadow: const <BoxShadow>[
-                              BoxShadow(
-                                color: Color(0x88000000),
-                                blurRadius: 42,
-                                offset: Offset(0, 24),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(
-                                'IDENTITY / 角色初始化',
-                                style: TextStyle(
-                                  color: NovelPalette.accent.withOpacity(.72),
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 1.8,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              const Text(
-                                '成为故事中的你',
-                                style: TextStyle(
-                                  color: NovelPalette.text,
-                                  fontSize: 25,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 1.1,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                '世界已经为你准备好身份，你只需要确认姓名。',
-                                style: TextStyle(
-                                  color: NovelPalette.muted.withOpacity(.92),
-                                  fontSize: 11.5,
-                                  height: 1.55,
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              Row(
-                                children: <Widget>[
-                                  Container(
-                                    width: 62,
-                                    height: 62,
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(7),
-                                      border: Border.all(
-                                        color: NovelPalette.accent.withOpacity(.22),
-                                      ),
-                                    ),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: NovelArtwork(
-                                      url: host?.avatarUrl.isNotEmpty == true
-                                          ? host!.avatarUrl
-                                          : host?.portraitUrl ?? '',
-                                      fit: BoxFit.cover,
-                                      fallbackText: host?.name ?? '你',
-                                      fallbackIcon: Icons.person_outline_rounded,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 13),
-                                  Expanded(
-                                    child: Wrap(
-                                      spacing: 6,
-                                      runSpacing: 6,
-                                      children: <Widget>[
-                                        _IdentityTag(text: gender),
-                                        if (age.isNotEmpty) _IdentityTag(text: '$age 岁'),
-                                        if (appearance.isNotEmpty)
-                                          const _IdentityTag(text: '预设立绘'),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 22),
-                              const _SectionEyebrow('主角名称'),
-                              const SizedBox(height: 8),
-                              TextField(
-                                controller: nameController,
-                                maxLength: 10,
-                                cursorColor: NovelPalette.accent,
-                                style: const TextStyle(
-                                  color: NovelPalette.text,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: .6,
-                                ),
-                                decoration: InputDecoration(
-                                  counterText: '',
-                                  hintText: host?.name.isNotEmpty == true
-                                      ? host!.name
-                                      : '输入姓名…',
-                                  hintStyle: TextStyle(
-                                    color: NovelPalette.muted.withOpacity(.45),
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.black.withOpacity(.22),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 14,
-                                  ),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(7),
-                                    borderSide: BorderSide(
-                                      color: Colors.white.withOpacity(.07),
-                                    ),
-                                  ),
-                                  focusedBorder: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(7),
-                                    borderSide: BorderSide(
-                                      color: NovelPalette.accent.withOpacity(.62),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 18),
-                              const _SectionEyebrow('角色背景'),
-                              const SizedBox(height: 8),
-                              Container(
-                                constraints: const BoxConstraints(maxHeight: 190),
-                                padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(.16),
-                                  borderRadius: BorderRadius.circular(7),
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(.055),
-                                  ),
-                                ),
-                                child: SingleChildScrollView(
-                                  physics: const BouncingScrollPhysics(),
-                                  child: Text(
-                                    background,
-                                    textAlign: TextAlign.justify,
-                                    style: TextStyle(
-                                      color: NovelPalette.text.withOpacity(.68),
-                                      fontSize: 12.2,
-                                      height: 1.72,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              SizedBox(
-                                width: double.infinity,
-                                height: 48,
-                                child: FilledButton(
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: NovelPalette.accent,
-                                    foregroundColor: NovelPalette.accentDark,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(7),
-                                    ),
-                                  ),
-                                  onPressed: () async {
-                                    final name = nameController.text.trim();
-                                    if (name.isEmpty) return;
-                                    await controller.submitCharacterSetup(
-                                      NovelCharacterSetupInput(
-                                        name: name,
-                                        gender: gender,
-                                        age: int.tryParse(age),
-                                        description: background,
-                                        appearance: appearance,
-                                      ),
-                                    );
-                                    if (dialogContext.mounted) {
-                                      Navigator.of(dialogContext).pop();
-                                    }
-                                  },
-                                  child: const Text(
-                                    '开始故事',
-                                    style: TextStyle(
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 1.4,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              Center(
-                                child: Text(
-                                  '身份确立后将进入故事',
-                                  style: TextStyle(
-                                    color: NovelPalette.muted.withOpacity(.45),
-                                    fontSize: 9.5,
-                                    letterSpacing: .8,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161616),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(.10),
                         ),
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: Colors.black.withOpacity(.42),
+                            blurRadius: 24,
+                            offset: const Offset(0, 12),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: <Widget>[
+                              Container(
+                                width: 62,
+                                height: 62,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: NovelPalette.accent.withOpacity(.28),
+                                  ),
+                                ),
+                                clipBehavior: Clip.antiAlias,
+                                child: NovelArtwork(
+                                  url: host?.avatarUrl.isNotEmpty == true
+                                      ? host!.avatarUrl
+                                      : host?.portraitUrl ?? '',
+                                  fit: BoxFit.cover,
+                                  fallbackText: host?.name ?? '你',
+                                  fallbackIcon: Icons.person_outline_rounded,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    const Text(
+                                      '确认你的角色',
+                                      style: TextStyle(
+                                        color: NovelPalette.text,
+                                        fontSize: 19,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: .4,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      '这是你在这个世界中的身份，确认后即可进入故事。',
+                                      style: TextStyle(
+                                        color: NovelPalette.muted.withOpacity(.86),
+                                        fontSize: 11.5,
+                                        height: 1.45,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                tooltip: '关闭',
+                                onPressed: submitting
+                                    ? null
+                                    : () => Navigator.of(dialogContext).pop(false),
+                                icon: const Icon(Icons.close_rounded),
+                                color: NovelPalette.muted,
+                                disabledColor: NovelPalette.muted,
+                                iconSize: 20,
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.all(6),
+                                constraints: const BoxConstraints(
+                                  minWidth: 34,
+                                  minHeight: 34,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: <Widget>[
+                              _CharacterSetupMeta(text: gender),
+                              if (age.isNotEmpty)
+                                _CharacterSetupMeta(text: '$age 岁'),
+                              if (appearance.isNotEmpty)
+                                const _CharacterSetupMeta(text: '已有形象'),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          const Text(
+                            '角色姓名',
+                            style: TextStyle(
+                              color: NovelPalette.text,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: nameController,
+                            maxLength: 10,
+                            enabled: !submitting,
+                            cursorColor: NovelPalette.accent,
+                            style: const TextStyle(
+                              color: NovelPalette.text,
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            decoration: InputDecoration(
+                              counterText: '',
+                              hintText: host?.name.isNotEmpty == true
+                                  ? host!.name
+                                  : '输入姓名',
+                              hintStyle: TextStyle(
+                                color: NovelPalette.muted.withOpacity(.55),
+                              ),
+                              filled: true,
+                              fillColor: Colors.white.withOpacity(.035),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 13,
+                                vertical: 13,
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(4),
+                                borderSide: BorderSide(
+                                  color: Colors.white.withOpacity(.09),
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(4),
+                                borderSide: BorderSide(
+                                  color: NovelPalette.accent.withOpacity(.62),
+                                ),
+                              ),
+                              disabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(4),
+                                borderSide: BorderSide(
+                                  color: Colors.white.withOpacity(.06),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            '角色背景',
+                            style: TextStyle(
+                              color: NovelPalette.text,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            constraints: const BoxConstraints(maxHeight: 170),
+                            width: double.infinity,
+                            padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(.025),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(.07),
+                              ),
+                            ),
+                            child: SingleChildScrollView(
+                              physics: const BouncingScrollPhysics(),
+                              child: Text(
+                                background,
+                                style: TextStyle(
+                                  color: NovelPalette.text.withOpacity(.70),
+                                  fontSize: 12,
+                                  height: 1.65,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 46,
+                            child: FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: NovelPalette.accent,
+                                foregroundColor: NovelPalette.accentDark,
+                                disabledBackgroundColor:
+                                    NovelPalette.accent.withOpacity(.45),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ),
+                              onPressed: submitting
+                                  ? null
+                                  : () async {
+                                      final name = nameController.text.trim();
+                                      if (name.isEmpty) return;
+                                      setDialogState(() => submitting = true);
+                                      var completed = false;
+                                      try {
+                                        await controller.submitCharacterSetup(
+                                          NovelCharacterSetupInput(
+                                            name: name,
+                                            gender: gender,
+                                            age: int.tryParse(age),
+                                            description: background,
+                                            appearance: appearance,
+                                          ),
+                                        );
+                                        if (!dialogContext.mounted) return;
+
+                                        // 成功时 controller 会关闭角色设置并进入开场。
+                                        // 只有确认状态已经切换成功才退出当前 Dialog，
+                                        // 避免保存失败时错误关闭，也避免与开场 Dialog 抢 Navigator。
+                                        if (!controller.showCharacterSetup &&
+                                            controller.showOpening) {
+                                          completed = true;
+                                          Navigator.of(dialogContext).pop(true);
+                                        }
+                                      } finally {
+                                        if (!completed && dialogContext.mounted) {
+                                          setDialogState(() => submitting = false);
+                                        }
+                                      }
+                                    },
+                              child: submitting
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: NovelPalette.accentDark,
+                                      ),
+                                    )
+                                  : const Text(
+                                      '进入故事',
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: .5,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ],
-        ),
+          );
+        },
       );
     },
     transitionBuilder: (context, animation, secondaryAnimation, child) {
       final curved = CurvedAnimation(
         parent: animation,
         curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
       );
       return FadeTransition(
         opacity: curved,
         child: ScaleTransition(
-          scale: Tween<double>(begin: .97, end: 1).animate(curved),
+          scale: Tween<double>(begin: .975, end: 1).animate(curved),
           child: child,
         ),
       );
     },
   );
   nameController.dispose();
+  return started ?? false;
+}
+
+class _CharacterSetupMeta extends StatelessWidget {
+  const _CharacterSetupMeta({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.035),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: Colors.white.withOpacity(.07)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: NovelPalette.muted.withOpacity(.92),
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
 }
 
 class _IdentityTag extends StatelessWidget {
@@ -5229,4 +5306,69 @@ String _dynamicText(dynamic value) {
     return stringValue(map['label'] ?? map['display'] ?? map['text'] ?? map['name'] ?? map.values.join(' · '));
   }
   return stringValue(value);
+}
+
+
+class _CleanActionButton extends StatelessWidget {
+  const _CleanActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.loading = false,
+    this.isPrimary = false,
+    this.primaryColor = const Color(0xFF76B900),
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  final bool loading;
+  final bool isPrimary;
+  final Color primaryColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return Material(
+      color: isPrimary
+          ? primaryColor.withOpacity(enabled ? 1 : 0.4)
+          : Colors.white.withOpacity(enabled ? 0.06 : 0.02),
+      borderRadius: BorderRadius.circular(5),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(5),
+        child: SizedBox(
+          height: 32, // 更纤薄的按钮
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              if (loading)
+                SizedBox.square(
+                  dimension: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: isPrimary ? Colors.white : primaryColor,
+                  ),
+                )
+              else
+                Icon(
+                  icon,
+                  size: 13,
+                  color: isPrimary ? Colors.white : Colors.white.withOpacity(0.8),
+                ),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isPrimary ? Colors.white : Colors.white.withOpacity(0.8),
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -1,9 +1,10 @@
+// lib/login_sheet.dart
+
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-// 引入真实的 API 和 Shared 文件
 import 'api/api_client.dart';
 import 'api/auth_api.dart';
 import 'app_shared.dart'; 
@@ -11,21 +12,34 @@ import 'app_shared.dart';
 class LoginSheet extends StatefulWidget {
   const LoginSheet({super.key, required this.onLoginSuccess});
 
-  final ValueChanged<LoginResult> onLoginSuccess;
+  /// 支持异步回调，确保 Token 保存完成后再决定是否关闭弹窗
+  final FutureOr<void> Function(LoginResult) onLoginSuccess;
 
-  static void show(BuildContext context, {required ValueChanged<LoginResult> onLoginSuccess}) {
+  static void show(
+    BuildContext context, {
+    required FutureOr<void> Function(LoginResult) onLoginSuccess,
+  }) {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent, // 必须透明，才能看到毛玻璃
+      backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      // 降低遮罩透明度，配合毛玻璃效果，使其更通透
-      barrierColor: Colors.black54, 
+      barrierColor: Colors.black54,
+      
+      // 强制登录：禁止点击蒙层关闭、禁止下滑手势关闭
+      isDismissible: false,
+      enableDrag: false,
+      useSafeArea: true,
+
       builder: (sheetContext) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+        // 拦截物理/手势返回键，防止绕过登录
+        return PopScope(
+          canPop: false,
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+            ),
+            child: LoginSheet(onLoginSuccess: onLoginSuccess),
           ),
-          child: LoginSheet(onLoginSuccess: onLoginSuccess),
         );
       },
     );
@@ -120,14 +134,23 @@ class _LoginSheetState extends State<LoginSheet> {
         email: _emailController.text.trim(),
         code: _codeController.text.trim(),
       );
+
       if (mounted) {
-        Navigator.pop(context); // 登录成功关闭 Sheet
-        widget.onLoginSuccess(result);
+        // ★ 核心修改：先等待外部 SessionManager.persist 保存完成
+        await widget.onLoginSuccess(result);
+
+        // 只有保存阶段没有抛出任何异常，才真正关闭弹窗
+        if (mounted) {
+          Navigator.pop(context);
+        }
       }
     } on ApiException catch (error) {
       if (mounted) setState(() => _errorText = error.message);
     } catch (e) {
-      if (mounted) setState(() => _errorText = '登录失败，请查验验证码');
+      debugPrint('登录或本地保存失败: $e');
+      if (mounted) {
+        setState(() => _errorText = '登录状态保存失败，请检查存储配置');
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -149,149 +172,147 @@ class _LoginSheetState extends State<LoginSheet> {
               ),
             ),
           ),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Align(
-                      child: Container(
-                        width: 34,
-                        height: 1,
-                        color: Colors.white.withOpacity(0.22),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    const Text(
-                      '登录 / 注册',
-                      style: TextStyle(
-                        color: AppColors.textOnDark,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      '未注册邮箱验证后将自动创建账号',
-                      style: TextStyle(
-                        color: AppColors.textOnDarkMuted,
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Divider(
-                      height: 1,
-                      color: Colors.white.withOpacity(0.13),
-                    ),
-                    const SizedBox(height: 16),
-                    _buildInputField(
-                      controller: _emailController,
-                      icon: LucideIcons.mail,
-                      hintText: '输入邮箱地址',
-                      keyboardType: TextInputType.emailAddress,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildInputField(
-                      controller: _codeController,
-                      icon: LucideIcons.shieldCheck,
-                      hintText: '输入 6 位验证码',
-                      keyboardType: TextInputType.number,
-                      trailing: GestureDetector(
-                        onTap: _countdown == 0 && !_sendingCode ? _handleSendCode : null,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Align(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          margin: const EdgeInsets.only(right: 4),
-                          decoration: BoxDecoration(
-                            color: _countdown == 0 && _emailValid
-                                ? AppColors.accent.withOpacity(0.15)
-                                : Colors.white.withOpacity(0.03),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                          child: _sendingCode
-                              ? const SizedBox(
-                                  width: 12,
-                                  height: 12,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 1.5,
-                                    color: AppColors.accent,
-                                  ),
-                                )
-                              : Text(
-                                  _countdown == 0 ? '获取验证码' : '${_countdown}s',
-                                  style: TextStyle(
-                                    color: _countdown == 0
-                                        ? (_emailValid ? AppColors.accent : AppColors.textOnDarkMuted)
-                                        : AppColors.textOnDarkMuted,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
+                          width: 34,
+                          height: 1,
+                          color: Colors.white.withOpacity(0.22),
                         ),
                       ),
-                    ),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: _errorText != null
-                          ? Container(
-                              key: ValueKey(_errorText),
-                              margin: const EdgeInsets.only(top: 12),
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE0554A).withOpacity(0.15),
-                                border: Border.all(color: const Color(0xFFE0554A).withOpacity(0.3)),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(LucideIcons.alertCircle, size: 14, color: Color(0xFFE0554A)),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      _errorText!,
-                                      style: const TextStyle(
-                                        color: Color(0xFFE0554A),
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500,
-                                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        '登录 / 注册',
+                        style: TextStyle(
+                          color: AppColors.textOnDark,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        '未注册邮箱验证后将自动创建账号',
+                        style: TextStyle(
+                          color: AppColors.textOnDarkMuted,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Divider(
+                        height: 1,
+                        color: Colors.white.withOpacity(0.13),
+                      ),
+                      const SizedBox(height: 16),
+                      _buildInputField(
+                        controller: _emailController,
+                        icon: LucideIcons.mail,
+                        hintText: '输入邮箱地址',
+                        keyboardType: TextInputType.emailAddress,
+                      ),
+                      const SizedBox(height: 12),
+                      _buildInputField(
+                        controller: _codeController,
+                        icon: LucideIcons.shieldCheck,
+                        hintText: '输入 6 位验证码',
+                        keyboardType: TextInputType.number,
+                        trailing: GestureDetector(
+                          onTap: _countdown == 0 && !_sendingCode ? _handleSendCode : null,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            margin: const EdgeInsets.only(right: 4),
+                            decoration: BoxDecoration(
+                              color: _countdown == 0 && _emailValid
+                                  ? AppColors.accent.withOpacity(0.15)
+                                  : Colors.white.withOpacity(0.03),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: _sendingCode
+                                ? const SizedBox(
+                                    width: 12,
+                                    height: 12,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 1.5,
+                                      color: AppColors.accent,
+                                    ),
+                                  )
+                                : Text(
+                                    _countdown == 0 ? '获取验证码' : '${_countdown}s',
+                                    style: TextStyle(
+                                      color: _countdown == 0
+                                          ? (_emailValid ? AppColors.accent : AppColors.textOnDarkMuted)
+                                          : AppColors.textOnDarkMuted,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
-                                ],
-                              ),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
-                  ],
+                          ),
+                        ),
+                      ),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: _errorText != null
+                            ? Container(
+                                key: ValueKey(_errorText),
+                                margin: const EdgeInsets.only(top: 12),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE0554A).withOpacity(0.15),
+                                  border: Border.all(color: const Color(0xFFE0554A).withOpacity(0.3)),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(LucideIcons.alertCircle, size: 14, color: Color(0xFFE0554A)),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _errorText!,
+                                        style: const TextStyle(
+                                          color: Color(0xFFE0554A),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              
-              const SizedBox(height: 32),
-              
-              // 【修改点】为按钮增加左右和底部的留白，避免其贴边变成大长条
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                child: Widget_BottomActionButton(
-                  isLoading: _submitting,
-                  label: '验证并登录',
-                  onTap: _submitting ? null : _handleSubmit,
+                
+                const SizedBox(height: 32),
+                
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  child: Widget_BottomActionButton(
+                    isLoading: _submitting,
+                    label: '验证并登录',
+                    onTap: _submitting ? null : _handleSubmit,
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  /// 构建输入框
   Widget _buildInputField({
     required TextEditingController controller,
     required IconData icon,
@@ -330,7 +351,7 @@ class _LoginSheetState extends State<LoginSheet> {
                   fontSize: 13,
                 ),
                 border: InputBorder.none,
-                isCollapsed: true, // 紧凑布局
+                isCollapsed: true,
               ),
             ),
           ),
@@ -341,7 +362,6 @@ class _LoginSheetState extends State<LoginSheet> {
   }
 }
 
-/// 通用底部高亮动作按钮
 class Widget_BottomActionButton extends StatelessWidget {
   const Widget_BottomActionButton({
     super.key,
@@ -358,13 +378,11 @@ class Widget_BottomActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: onTap != null ? AppColors.accent : AppColors.accent.withOpacity(0.2),
-      // 主按钮保留主题主色，但采用小方角，呼应右侧抽屉
       borderRadius: BorderRadius.circular(3),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Container(
-          // 与输入框保持紧凑一致的高度节奏
           height: 52,
           alignment: Alignment.center,
           child: isLoading

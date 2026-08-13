@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -33,6 +34,7 @@ class GameDrawer extends StatelessWidget {
     this.checkinStatusLoaded = false,
     this.checkedInToday = false,
     this.onCheckin,
+    this.onRefreshProfile,
     this.currentUserId,
     this.onScenarioLaunch,
     this.scenarioShareLinkBuilder,
@@ -41,6 +43,8 @@ class GameDrawer extends StatelessWidget {
     this.onOpenNotifications,
     this.onShareWorld,
     this.onEditWorld,
+    this.onRefreshWorld,
+    this.onCheckWorldCreationCompleted,
     this.selectedModule = DrawerModule.world,
     this.onModuleSelected,
     this.isCreatingWorld = false,
@@ -65,6 +69,7 @@ class GameDrawer extends StatelessWidget {
   final bool checkinStatusLoaded;
   final bool checkedInToday;
   final VoidCallback? onCheckin;
+  final VoidCallback? onRefreshProfile;
   final String? currentUserId;
   final ScenarioLaunchCallback? onScenarioLaunch;
   final String Function(String scenarioId)? scenarioShareLinkBuilder;
@@ -72,6 +77,15 @@ class GameDrawer extends StatelessWidget {
   final VoidCallback? onOpenFavorites;
   final VoidCallback? onOpenNotifications;
   final VoidCallback? onShareWorld;
+
+  /// 刷新「世界」列表。
+  /// 外层应传入真正重新请求世界列表的 Future 方法。
+  final Future<void> Function()? onRefreshWorld;
+
+  /// 创建世界期间，用后端真实状态兜底校验是否已经完成。
+  /// 返回 true 表示后端已经完成创建；返回 false 表示仍在生成。
+  /// 该回调可选：未提供时，会通过 onRefreshWorld + 世界数量变化做兜底。
+  final Future<bool> Function()? onCheckWorldCreationCompleted;
 
   /// 点击「世界」列表每一项右侧的更多按钮时触发。
   /// 外层用 index 找到真实 scenarioId，再 push ScenarioEditPage。
@@ -132,33 +146,15 @@ class GameDrawer extends StatelessWidget {
                 if (selectedModule == DrawerModule.world)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 350),
-                      switchInCurve: Curves.easeOutCubic,
-                      switchOutCurve: Curves.easeInCubic,
-                      transitionBuilder: (child, animation) {
-                        return FadeTransition(
-                          opacity: animation,
-                          child: SizeTransition(
-                            sizeFactor: animation,
-                            axisAlignment: 1.0, // 从底部展开
-                            child: child,
-                          ),
-                        );
-                      },
-                      child: isCreatingWorld
-                          ? _CreationProgressPanel(
-                              key: const ValueKey('progress_panel'),
-                              progress: createWorldProgress,
-                              step: createWorldStep,
-                              hasError: createWorldError,
-                            )
-                          : _BottomActionButton(
-                              key: const ValueKey('create_button'),
-                              icon: LucideIcons.plus,
-                              label: '创建世界',
-                              onTap: onCreateWorld,
-                            ),
+                    child: _CreationProgressSlot(
+                      isCreatingWorld: isCreatingWorld,
+                      progress: createWorldProgress,
+                      step: createWorldStep,
+                      hasError: createWorldError,
+                      worldCount: games.length,
+                      onCreateWorld: onCreateWorld,
+                      onRefreshWorld: onRefreshWorld,
+                      onCheckCompleted: onCheckWorldCreationCompleted,
                     ),
                   )
                 else if (selectedModule == DrawerModule.discover)
@@ -188,28 +184,12 @@ class GameDrawer extends StatelessWidget {
   Widget _buildMainContent() {
     switch (selectedModule) {
       case DrawerModule.world:
-        return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
-          physics: const BouncingScrollPhysics(),
-          itemCount: games.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            return _WorldItem(
-              game: games[index],
-              selected: selectedGameIndex == index,
-              onTap: () => onGameSelected(index),
-              onDetailTap: () {
-                final callback = onEditWorld;
-                if (callback == null) {
-                  debugPrint('未配置 onEditWorld：${games[index].title}');
-                  return;
-                }
-                
-                // 直接触发跳转，不关闭抽屉
-                callback(index);
-              },
-            );
-          },
+        return _WorldPanel(
+          games: games,
+          selectedGameIndex: selectedGameIndex,
+          onGameSelected: onGameSelected,
+          onEditWorld: onEditWorld,
+          onRefresh: onRefreshWorld,
         );
       case DrawerModule.mine:
         return _MinePanel(
@@ -221,6 +201,7 @@ class GameDrawer extends StatelessWidget {
           onOpenFavorites: onOpenFavorites,
           onOpenNotifications: onOpenNotifications,
           onLogout: onLogout,
+          onRefreshProfile: onRefreshProfile,
         );
       case DrawerModule.discover:
         return _DiscoverPanel(
@@ -230,6 +211,249 @@ class GameDrawer extends StatelessWidget {
           scenarioShareLinkBuilder: scenarioShareLinkBuilder,
         );
     }
+  }
+}
+
+
+class _WorldPanel extends StatelessWidget {
+  const _WorldPanel({
+    required this.games,
+    required this.selectedGameIndex,
+    required this.onGameSelected,
+    this.onEditWorld,
+    this.onRefresh,
+  });
+
+  final List<GameData> games;
+  final int selectedGameIndex;
+  final ValueChanged<int> onGameSelected;
+  final ValueChanged<int>? onEditWorld;
+  final Future<void> Function()? onRefresh;
+
+  Future<void> _refresh() async {
+    final callback = onRefresh;
+    if (callback == null) return;
+    await callback();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      color: AppColors.accent,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: BouncingScrollPhysics(),
+        ),
+        itemCount: games.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (context, index) {
+          return _WorldItem(
+            game: games[index],
+            selected: selectedGameIndex == index,
+            onTap: () {
+              // 核心拦截：如果点击的就是当前正在游玩的剧本
+              if (selectedGameIndex == index) {
+                // 直接关闭侧边栏抽屉，不重新走进房逻辑
+                Navigator.of(context).pop();
+                return;
+              }
+              
+              // 点击了其他剧本，正常走切换逻辑
+              onGameSelected(index);
+            },
+            onDetailTap: () {
+              final callback = onEditWorld;
+              if (callback == null) {
+                debugPrint('未配置 onEditWorld：${games[index].title}');
+                return;
+              }
+
+              // 直接触发跳转，不关闭抽屉
+              callback(index);
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CreationProgressSlot extends StatefulWidget {
+  const _CreationProgressSlot({
+    required this.isCreatingWorld,
+    required this.progress,
+    required this.step,
+    required this.hasError,
+    required this.worldCount,
+    required this.onCreateWorld,
+    this.onRefreshWorld,
+    this.onCheckCompleted,
+  });
+
+  final bool isCreatingWorld;
+  final double progress;
+  final String step;
+  final bool hasError;
+  final int worldCount;
+  final VoidCallback onCreateWorld;
+  final Future<void> Function()? onRefreshWorld;
+  final Future<bool> Function()? onCheckCompleted;
+
+  @override
+  State<_CreationProgressSlot> createState() => _CreationProgressSlotState();
+}
+
+class _CreationProgressSlotState extends State<_CreationProgressSlot> {
+  Timer? _pollTimer;
+  bool _checking = false;
+  bool _resolvedLocally = false;
+  late int _worldCountAtStart;
+
+  @override
+  void initState() {
+    super.initState();
+    _worldCountAtStart = widget.worldCount;
+    _configurePolling();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CreationProgressSlot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // 新一轮创建开始时重新建立基线。
+    if (widget.isCreatingWorld && !oldWidget.isCreatingWorld) {
+      _resolvedLocally = false;
+      _worldCountAtStart = widget.worldCount;
+      _configurePolling();
+    }
+
+    // 外层已经收到完成状态，立即结束本地轮询。
+    if (!widget.isCreatingWorld && oldWidget.isCreatingWorld) {
+      _resolvedLocally = false;
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
+
+    // 即使完成事件丢失，只要刷新后世界数量增加，也判定创建已落库。
+    if (widget.isCreatingWorld &&
+        !_resolvedLocally &&
+        widget.worldCount > _worldCountAtStart) {
+      _markResolved();
+    }
+
+    // 100% 本身就是强完成信号：马上再向后端/列表核对一次。
+    if (widget.isCreatingWorld &&
+        !widget.hasError &&
+        widget.progress >= 100 &&
+        oldWidget.progress < 100) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _syncCreationState());
+    }
+
+    if (widget.isCreatingWorld &&
+        (oldWidget.onRefreshWorld != widget.onRefreshWorld ||
+            oldWidget.onCheckCompleted != widget.onCheckCompleted)) {
+      _configurePolling();
+    }
+  }
+
+  void _configurePolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+
+    if (!widget.isCreatingWorld || _resolvedLocally) return;
+    if (widget.onRefreshWorld == null && widget.onCheckCompleted == null) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncCreationState());
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _syncCreationState(),
+    );
+  }
+
+  Future<void> _syncCreationState() async {
+    if (!mounted ||
+        !widget.isCreatingWorld ||
+        widget.hasError ||
+        _resolvedLocally ||
+        _checking) {
+      return;
+    }
+
+    _checking = true;
+    try {
+      final checker = widget.onCheckCompleted;
+      if (checker != null) {
+        final completed = await checker();
+        if (!mounted) return;
+        if (completed) {
+          _markResolved();
+          await widget.onRefreshWorld?.call();
+          return;
+        }
+      }
+
+      // 没有专门状态接口时，至少重拉世界列表。
+      // 新世界一旦出现在 games 中，didUpdateWidget 会自动结束进度条。
+      await widget.onRefreshWorld?.call();
+
+      // 如果流式进度已经明确到 100%，刷新一次后不再让 UI 永久卡住。
+      if (mounted && widget.progress >= 100 && !widget.hasError) {
+        _markResolved();
+      }
+    } catch (e) {
+      debugPrint('创建世界状态同步失败：$e');
+    } finally {
+      _checking = false;
+    }
+  }
+
+  void _markResolved() {
+    if (!mounted || _resolvedLocally) return;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    setState(() => _resolvedLocally = true);
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showProgress = widget.isCreatingWorld && !_resolvedLocally;
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 350),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) {
+        return FadeTransition(
+          opacity: animation,
+          child: SizeTransition(
+            sizeFactor: animation,
+            axisAlignment: 1.0,
+            child: child,
+          ),
+        );
+      },
+      child: showProgress
+          ? _CreationProgressPanel(
+              key: const ValueKey('progress_panel'),
+              progress: widget.progress,
+              step: widget.step,
+              hasError: widget.hasError,
+            )
+          : _BottomActionButton(
+              key: const ValueKey('create_button'),
+              icon: LucideIcons.plus,
+              label: '创建世界',
+              onTap: widget.onCreateWorld,
+            ),
+    );
   }
 }
 
@@ -394,7 +618,11 @@ class _DrawerHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final avatarTap = isLoggedIn && isMine ? onEditAvatar : onProfileTap;
+    // 手机端顶部头像行为统一：
+    // 已登录时无论当前在“世界 / 发现 / 我的”哪个模块，都直接编辑头像；
+    // 未登录时才走登录/资料入口。
+    final avatarTap =
+        isLoggedIn ? (onEditAvatar ?? onProfileTap) : onProfileTap;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
@@ -996,6 +1224,7 @@ class _MinePanel extends StatefulWidget {
     this.onOpenFavorites,
     this.onOpenNotifications,
     this.onLogout,
+    this.onRefreshProfile,
   });
 
   final bool isLoggedIn;
@@ -1006,7 +1235,7 @@ class _MinePanel extends StatefulWidget {
   final VoidCallback? onOpenFavorites;
   final VoidCallback? onOpenNotifications;
   final VoidCallback? onLogout;
-
+  final VoidCallback? onRefreshProfile;
   @override
   State<_MinePanel> createState() => _MinePanelState();
 }
@@ -1704,6 +1933,9 @@ class _MinePanelState extends State<_MinePanel> {
       ),
     );
     await _loadData();
+    
+    // 【修改这行】不再调用 onCheckin，改为调用专用的刷新资料回调
+    widget.onRefreshProfile?.call(); 
   }
 
   Future<void> _openFeedback() async {

@@ -248,6 +248,44 @@ class _GameShellState extends State<GameShell> {
     }
   }
 
+  /// 统一的 Drawer 世界列表刷新入口。
+  /// 手动下拉、删除后的同步、创建完成后的同步都最终走 _loadHomeData。
+  Future<void> _refreshDrawerWorlds() async {
+    await _loadHomeData(focusScenarioId: widget.activeScenarioId);
+  }
+
+  /// 后端写入/删除完成后，HomeData 可能有极短的可见性延迟。
+  /// 这里做少量重试，确保 Drawer 最终和后端一致。
+  Future<bool> _syncWorldListUntil({
+    required String scenarioId,
+    required bool shouldExist,
+    String? focusScenarioId,
+    int maxAttempts = 5,
+  }) async {
+    final targetId = scenarioId.trim();
+
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      await _loadHomeData(focusScenarioId: focusScenarioId);
+      if (!mounted) return false;
+
+      if (targetId.isEmpty) return true;
+
+      final exists = _games.any(
+        (game) => game.id.toString() == targetId,
+      );
+
+      if (exists == shouldExist) return true;
+
+      if (attempt < maxAttempts - 1) {
+        await Future<void>.delayed(
+          Duration(milliseconds: 250 + attempt * 200),
+        );
+      }
+    }
+
+    return false;
+  }
+
   Future<void> _closeDrawerIfNeeded() async {
     if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
       Navigator.of(context).pop();
@@ -336,17 +374,68 @@ class _GameShellState extends State<GameShell> {
 
   Future<void> _onEditWorld(int index) async {
     if (index < 0 || index >= _games.length) return;
+
     final scenario = _games[index];
     final scenarioId = scenario.id.toString();
+    var deleted = false;
 
-    final changed = await Navigator.of(context).push<bool>(
+    // 拿到编辑页面的返回结果 isDataChanged（如果你点了重置，它会返回 true）
+    final isDataChanged = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => ScenarioEditPage(scenarioId: scenarioId),
+        builder: (_) => ScenarioEditPage(
+          scenarioId: scenarioId,
+          onDeleted: () {
+            deleted = true;
+          },
+        ),
       ),
     );
 
     if (!mounted) return;
-    await _loadHomeData(focusScenarioId: changed == true ? scenarioId : null);
+
+    // 判断：编辑的这个剧本，是不是我们现在正在玩的剧本？
+    final isCurrentWorld = widget.activeScenarioId?.toString() == scenarioId;
+
+    if (deleted) {
+      await _syncWorldListUntil(
+        scenarioId: scenarioId,
+        shouldExist: false,
+      );
+      if (!mounted) return;
+
+      // 如果删除的是当前世界，退出当前剧本，回到空 Shell
+      if (isCurrentWorld) {
+        Navigator.of(context, rootNavigator: true).pushReplacement<void, void>(
+          MaterialPageRoute<void>(
+            builder: (_) => GameShellPage(
+              initialSession: _session,
+              autoOpenDrawer: true,
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    // ★★★ 核心修改：处理“重置剧情”退出的情况 ★★★
+    // 如果 isDataChanged 为 true 且没有被删除，说明用户点击了“重置剧情”
+    if (isDataChanged == true && isCurrentWorld) {
+      // 当前世界的剧情被重置，同样让他退出当前剧本，回到空 Shell 选单
+      Navigator.of(context, rootNavigator: true).pushReplacement<void, void>(
+        MaterialPageRoute<void>(
+          builder: (_) => GameShellPage(
+            initialSession: _session,
+            autoOpenDrawer: true,
+          ),
+        ),
+      );
+      return;
+    }
+
+    // 普通编辑返回（比如改了名字、图片等）：世界没重置也没删，只重新拉取最新数据刷新列表。
+    await _loadHomeData(
+      focusScenarioId: isDataChanged == true ? scenarioId : null,
+    );
   }
 
   Future<void> _onShareWorld() async {
@@ -369,8 +458,19 @@ class _GameShellState extends State<GameShell> {
   }
 
   Future<void> _onCreateWorld() async {
-    final taskId = await CreateWorldDialog.show(context);
-    if (!mounted || taskId == null) return;
+    var pollingStarted = false;
+    final taskId = await CreateWorldDialog.show(
+      context,
+      onTaskSubmitted: (submittedTaskId) {
+        if (!mounted || pollingStarted) return;
+        pollingStarted = true;
+        // 在创建弹窗收进左下角之前就启动真实轮询，让进度区先出现。
+        _startPollingCreation(submittedTaskId);
+      },
+    );
+
+    if (!mounted || taskId == null || pollingStarted) return;
+    // 兼容异常/旧调用路径：如果回调没有触发，仍保证任务会开始轮询。
     _startPollingCreation(taskId);
   }
 
@@ -417,17 +517,31 @@ class _GameShellState extends State<GameShell> {
           if (!mounted) return;
 
           final result = statusData['result'] as Map?;
-          final createdScenarioId = result?['scenario_id']?.toString() ?? '';
-          setState(() => _isCreatingWorld = false);
-          await _loadHomeData(
-            focusScenarioId: createdScenarioId.isEmpty ? null : createdScenarioId,
-          );
+          final createdScenarioId = result?['scenario_id']?.toString().trim() ?? '';
 
-          if (createdScenarioId.isNotEmpty && mounted) {
-            final index = _games.indexWhere(
-              (game) => game.id.toString() == createdScenarioId,
+          // completed 只代表生成任务完成。
+          // 先重新拉 HomeData，并等待新 scenario 真正出现在 Drawer 数据源中，
+          // 再收起进度条，避免“100% 了但世界列表里暂时没有”的状态。
+          var synced = true;
+          if (createdScenarioId.isNotEmpty) {
+            synced = await _syncWorldListUntil(
+              scenarioId: createdScenarioId,
+              shouldExist: true,
+              focusScenarioId: createdScenarioId,
             );
-            if (index >= 0) await _onGameSelected(index);
+          } else {
+            await _loadHomeData();
+          }
+
+          if (!mounted) return;
+          setState(() => _isCreatingWorld = false);
+
+          // 创建完成后只刷新并定位到新世界，不自动进入。
+          // 用户仍停留在当前页面 / Drawer，明确点击世界后才真正进入。
+          if (synced) {
+            _showInPageNotification('世界创建完成，已加入世界列表', success: true);
+          } else {
+            _showInPageNotification('世界已生成，列表同步稍有延迟，可下拉刷新');
           }
           return;
         }
@@ -488,23 +602,27 @@ class _GameShellState extends State<GameShell> {
     setState(() => _userAvatarUrl = nextAvatar);
   }
 
+  // 当前在 source: 5 (game_shell.dart) 中的代码
   Future<void> _handleHeaderCheckin() async {
     if (!_isLoggedIn) return;
+    
+    // 发起签到请求
     final result = await MineDialogs.checkin(context);
     if (!mounted || result == null) return;
 
+    // 强制重新请求一次个人资料，确保点数绝对准确
+    await _loadProfile();
+
+    if (!mounted) return;
+
+    // 触发 UI 刷新，将状态变为已签到
     setState(() {
       _checkinStatusLoaded = true;
       _checkedInToday = true;
-      if (result.balance != null) _userPoints = result.balance!;
+      // _loadProfile() 内部会通过 setState 更新 _userPoints
     });
 
-    if (result.balance == null) {
-      await _loadProfile();
-      if (!mounted) return;
-    }
-
-    _showInPageNotification('签到成功  +${result.reward} y币', success: true);
+    _showInPageNotification('签到成功  +${result.reward} 积分', success: true);
   }
 
   Future<void> _logout() async {
@@ -604,6 +722,7 @@ class _GameShellState extends State<GameShell> {
       onEditWorld: _onEditWorld,
       onCreateWorld: _onCreateWorld,
       onShareWorld: _onShareWorld,
+      onRefreshWorld: _refreshDrawerWorlds,
       isLoggedIn: _isLoggedIn,
       userName: _userName,
       userAvatarUrl: _userAvatarUrl,
@@ -616,6 +735,7 @@ class _GameShellState extends State<GameShell> {
       checkinStatusLoaded: _checkinStatusLoaded,
       checkedInToday: _checkedInToday,
       onCheckin: _handleHeaderCheckin,
+      onRefreshProfile: _loadProfile, // <--- 【新增这一行】传入专用的刷新资料方法
       currentUserId: _isLoggedIn ? _userId : null,
       onScenarioLaunch: _onScenarioLaunch,
       selectedModule: _selectedModule,

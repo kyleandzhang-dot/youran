@@ -954,11 +954,18 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     setState(() => _actionLoading = true);
     try {
       await _api.resetScenario(widget.scenarioId);
-      _showSnack('已重置');
+      if (!mounted) return;
+      // 与删除保持一致：明确告诉 GameShell 这个世界的数据生命周期已变化。
+      // 若它正是当前游玩的世界，GameShell 会自动退出旧页面并打开世界列表。
+      setState(() => _actionLoading = false);
+      Navigator.of(context).pop(true);
+      return;
     } on ApiException catch (e) {
       _showSnack(e.message, error: true);
     } finally {
-      if (mounted) setState(() => _actionLoading = false);
+      if (mounted && _actionLoading) {
+        setState(() => _actionLoading = false);
+      }
     }
   }
 
@@ -975,11 +982,15 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       await _api.deleteScenario(widget.scenarioId);
       if (!mounted) return;
       widget.onDeleted?.call();
+      setState(() => _actionLoading = false);
       Navigator.of(context).pop(true);
+      return;
     } on ApiException catch (e) {
       _showSnack(e.message, error: true);
     } finally {
-      if (mounted) setState(() => _actionLoading = false);
+      if (mounted && _actionLoading) {
+        setState(() => _actionLoading = false);
+      }
     }
   }
 

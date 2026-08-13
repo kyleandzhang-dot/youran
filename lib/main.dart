@@ -7,6 +7,7 @@ import 'api/user_api.dart';
 import 'features/novel/novel.dart';
 import 'game_shell.dart';
 import 'services/session_manager.dart';
+import 'login_sheet.dart'; // 引入登录面板组件
 
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -131,6 +132,30 @@ class _StartupGateState extends State<_StartupGate> {
     _session = session;
     if (session == null) {
       setState(() => _loading = false);
+      
+      // 如果未登录，在此处等待第一帧渲染完空壳页面后，强制弹起不可关闭的登录面板
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        LoginSheet.show(
+          context,
+          onLoginSuccess: (result) async {
+            // 登录成功后保存状态
+            await SessionManager.persist(result);
+            ApiClient.instance.accessToken = result.accessToken;
+            ApiClient.instance.userId = 
+                result.userId.trim().isEmpty ? null : result.userId.trim();
+            
+            if (mounted) {
+              // 重新启动加载流程，去寻找上次进入的世界
+              setState(() {
+                _loading = true;
+                _status = '正在恢复世界…';
+              });
+              _bootstrap(); 
+            }
+          },
+        );
+      });
       return;
     }
 
@@ -212,10 +237,10 @@ class _StartupGateState extends State<_StartupGate> {
     }
 
     // 无登录态 / 没有 activeScenario / 恢复失败：
-    // 不再进入 HomePage，只保留空 GameShell 并自动打开 Drawer。
+    // 不再进入 HomePage，只保留空 GameShell。未登录时不自动打开 Drawer，避免抢焦点。
     return GameShellPage(
       initialSession: _session,
-      autoOpenDrawer: true,
+      autoOpenDrawer: _session != null, 
     );
   }
 }

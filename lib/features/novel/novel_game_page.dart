@@ -41,6 +41,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   final FocusNode _inputFocusNode = FocusNode();
 
   bool _characterSetupOpen = false;
+  bool _characterSetupDismissed = false;
   bool _openingOpen = false;
   bool _fateOpen = false;
   bool _endingOpen = false;
@@ -81,10 +82,28 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   Future<void> _processOverlayRequests() async {
-    if (controller.showCharacterSetup && !_characterSetupOpen) {
+    // 角色确认弹窗尚未完全退出时，禁止再 push 开场/其他覆盖层。
+    // submitCharacterSetup() 成功后会 notify，并把 showOpening 设为 true；
+    // 如果这里不拦截，就会出现两个 Dialog 同时操作 Navigator 的 assertion。
+    if (_characterSetupOpen) return;
+
+    if (controller.showCharacterSetup && !_characterSetupDismissed) {
       _characterSetupOpen = true;
-      await showNovelCharacterSetupDialog(context, controller);
+      final started = await showNovelCharacterSetupDialog(context, controller);
       _characterSetupOpen = false;
+      if (!mounted) return;
+
+      if (started) {
+        _characterSetupDismissed = false;
+        // 等角色弹窗的 reverse transition 完成，再打开开场。
+        await Future<void>.delayed(const Duration(milliseconds: 90));
+        if (mounted) {
+          await _processOverlayRequests();
+        }
+      } else {
+        // 用户主动关闭：本次停留不再强制弹出。重新进入世界后 State 重建，仍会再次出现。
+        _characterSetupDismissed = true;
+      }
       return;
     }
     if (controller.showOpening && !_openingOpen) {
@@ -254,15 +273,16 @@ class _NovelGamePageState extends State<NovelGamePage>
           body: Stack(
             fit: StackFit.expand,
             children: <Widget>[
-              NovelWorldBackground(
-                url: background,
-                fallbackAsset: widget.fallbackBackgroundAsset,
-                // 与 Vue 一致：即使角色没有真实立绘，也会显示默认男女立绘，
-                // 因此背景仍进入“有人物”的沉浸状态。
-                characterPresent: controller.storyStarted &&
-                    controller.currentSpeakerName.isNotEmpty &&
-                    !controller.isCinematic,
-                isGenerating: controller.isGenerating,
+              RepaintBoundary(
+                child: NovelWorldBackground(
+                  url: background,
+                  fallbackAsset: widget.fallbackBackgroundAsset,
+                  // 背景单独成层：流式文字/爱心动画更新时尽量复用已栅格化背景。
+                  characterPresent: controller.storyStarted &&
+                      controller.currentSpeakerName.isNotEmpty &&
+                      !controller.isCinematic,
+                  isGenerating: controller.isGenerating,
+                ),
               ),
               // 角色立绘由 NovelDialogPanel 内部统一绘制。
               // 不在这里再画第二层，避免重复立绘或两套 visible 条件互相打架。
@@ -314,15 +334,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 title: controller.locationTitle,
                                 subtitle: controller.locationSubtitle,
                               ),
-                            ),
-                          ),
-                        if (controller.storyStarted && !controller.isGenerating)
-                          Positioned(
-                            top: 57,
-                            left: 3,
-                            child: NovelTaskBadge(
-                              task: controller.currentTask,
-                              completed: controller.taskCompleted,
                             ),
                           ),
                         if (controller.storyStarted && !controller.isGenerating)
@@ -381,18 +392,18 @@ class _NovelGamePageState extends State<NovelGamePage>
                   },
                 ),
               ),
+              // 保留氛围型反馈：AI 尚未开始输出正文时显示“故事酝酿中”。
               if (controller.storyStarted &&
                   controller.isGenerating &&
                   (controller.currentSentence?.text.trim().isEmpty ?? true) &&
                   !controller.showDice)
                 const NovelBrewingOverlay(),
+
+              // 保留受伤时屏幕周边的呼吸/泛红反馈。
+              // 详细伤势文字 HUD 已在 Controller 中关闭，不会再弹窗。
               if (controller.storyStarted)
                 NovelDamageFeedbackOverlay(hp: controller.protagonistHp),
-              if (controller.hudEvent != null)
-                NovelHudEventOverlay(
-                  key: ValueKey<int>(controller.hudEvent!.id),
-                  event: controller.hudEvent!,
-                ),
+
               if (controller.isInitializing)
                 ColoredBox(
                   color: Colors.black.withOpacity(.58),

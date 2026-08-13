@@ -107,6 +107,13 @@ class NovelGameController extends ChangeNotifier {
   Timer? _diceTimer;
   Timer? _taskTimer;
   Timer? _hudEventTimer;
+
+  // 流式文本如果每个 token 都立刻解析 + notify，会导致整页在手机上高频 rebuild。
+  // 这里把多个小 chunk 合并成约 14fps 的 UI 刷新；网络流本身不降速，也不会丢字。
+  Timer? _streamUiTimer;
+  String _pendingStreamText = '';
+  static const Duration _streamUiInterval = Duration(milliseconds: 72);
+
   final List<NovelHudEvent> _hudEventQueue = <NovelHudEvent>[];
   final Map<String, DateTime> _recentHudEventKeys = <String, DateTime>{};
   int _hudEventSerial = 0;
@@ -152,18 +159,66 @@ class NovelGameController extends ChangeNotifier {
     return parts.sublist(0, parts.length - 1).join(' · ');
   }
 
+  String _normalizeSpeakerLookupName(String value) {
+    var normalized = value.trim();
+    if (normalized.isEmpty) return '';
+
+    // 流式/后端 speaker 字段偶尔会混入对白标点或动作说明。
+    // 这里只做保守清洗，不修改真正展示给用户的 speakerName。
+    normalized = normalized
+        .replaceAll(RegExp(r'^[「『“]+|[」』”]+$'), '')
+        .replaceAll(RegExp(r'[（(][^）)]*[）)]'), '')
+        .replaceAll(RegExp(r'[:：\s]+$'), '')
+        .trim();
+    return normalized;
+  }
+
+  bool _matchesSpeakerName(NovelCharacter character, String rawSpeakerName) {
+    final speakerName = rawSpeakerName.trim();
+    if (speakerName.isEmpty) return false;
+    if (character.matchesName(speakerName)) return true;
+
+    final normalizedSpeaker = _normalizeSpeakerLookupName(speakerName);
+    if (normalizedSpeaker.isEmpty) return false;
+    if (character.matchesName(normalizedSpeaker)) return true;
+
+    final normalizedCharacter = _normalizeSpeakerLookupName(character.name);
+    return normalizedCharacter.isNotEmpty && normalizedSpeaker == normalizedCharacter;
+  }
+
   NovelCharacter? get currentSpeakerCharacter {
     final sentence = currentSentence;
-    if (sentence == null || sentence.speakerName.isEmpty) return null;
-    if (sentence.isProtagonist || sentence.speakerName == '我' || sentence.speakerName == protagonistName) {
+    if (sentence == null) return null;
+
+    // 先判断主角和 characterId，再看 speakerName。
+    // 有些 sentenceItems 会带 character_id 但 speaker_name 暂时为空，
+    // 旧逻辑会在这里提前 return null，导致明明有角色 id 却拿不到立绘。
+    if (sentence.isProtagonist) return protagonist;
+
+    final rawSpeakerName = sentence.speakerName.trim();
+    if (rawSpeakerName == '我' || rawSpeakerName == protagonistName) {
       return protagonist;
     }
-    if (sentence.characterId.isNotEmpty) {
-      final direct = scenario?.characters[sentence.characterId];
+
+    final characterId = sentence.characterId.trim();
+    if (characterId.isNotEmpty) {
+      final characters = scenario?.characters;
+
+      // 第一层：兼容 characters Map 本身就是以角色 id 为 key 的情况。
+      final direct = characters?[characterId];
       if (direct != null) return direct;
+
+      // 第二层：Map key 可能是名字/序号，真正角色 id 存在 value.id 中。
+      for (final character in characters?.values ?? const <NovelCharacter>[]) {
+        if (character.id == characterId) return character;
+      }
     }
+
+    if (rawSpeakerName.isEmpty) return null;
+
+    // 最后才按角色名/别名匹配，并对常见标点与“（动作）”做保守归一化。
     for (final character in scenario?.characters.values ?? const <NovelCharacter>[]) {
-      if (character.matchesName(sentence.speakerName)) return character;
+      if (_matchesSpeakerName(character, rawSpeakerName)) return character;
     }
     return null;
   }
@@ -178,15 +233,34 @@ class NovelGameController extends ChangeNotifier {
   String get currentPortraitUrl {
     final sentence = currentSentence;
     final character = currentSpeakerCharacter;
-    if (character?.portraitUrl.isNotEmpty == true) return character!.portraitUrl;
-    return sentence?.portraitUrl ?? '';
+
+    final characterPortrait = character?.portraitUrl.trim() ?? '';
+    if (characterPortrait.isNotEmpty) return characterPortrait;
+
+    final sentencePortrait = sentence?.portraitUrl.trim() ?? '';
+    if (sentencePortrait.isNotEmpty) return sentencePortrait;
+
+    // 剧情页的“立绘层”只认真正的 portrait。
+    // 如果没有立绘，就返回空字符串，让前端直接不显示人物层，
+    // 而不是再退化成头像/首字母占位图。
+    return '';
   }
 
   String get currentAvatarUrl {
     final sentence = currentSentence;
     final character = currentSpeakerCharacter;
-    if (character?.avatarUrl.isNotEmpty == true) return character!.avatarUrl;
-    return sentence?.avatarUrl ?? '';
+
+    final characterAvatar = character?.avatarUrl.trim() ?? '';
+    if (characterAvatar.isNotEmpty) return characterAvatar;
+
+    final sentenceAvatar = sentence?.avatarUrl.trim() ?? '';
+    if (sentenceAvatar.isNotEmpty) return sentenceAvatar;
+
+    // 反向兜底：只有立绘没有独立头像时，头像位置也可以正常显示。
+    final characterPortrait = character?.portraitUrl.trim() ?? '';
+    if (characterPortrait.isNotEmpty) return characterPortrait;
+
+    return sentence?.portraitUrl.trim() ?? '';
   }
 
   int get protagonistHp {
@@ -406,8 +480,10 @@ class NovelGameController extends ChangeNotifier {
     return character.name;
   }
 
-  /// AI 立绘生成使用 Flutter 原生 HTTP 状态轮询，而不是照搬浏览器 EventSource。
-  /// 后端协议保持完全一致，UI 层因此不需要管理 SSE 生命周期和多个定时器。
+  /// AI 立绘任务不轮询 `/image/task/{taskId}`：该路由是 SSE 长连接，
+  /// 普通 http.get 会一直等到流关闭，导致“图片已经生成但 Flutter 仍在等待/超时”。
+  /// Flutter 只轮询普通 JSON 的 `/image/task/{taskId}/result`，
+  /// Redis 中一旦出现 portrait_url 就立即返回给 UI，不必等待 completed。
   Future<({String portraitUrl, String avatarUrl})> generatePortrait({
     required NovelCharacter character,
     String prompt = '',
@@ -419,10 +495,12 @@ class NovelGameController extends ChangeNotifier {
     if (description.length < 2) {
       throw const NovelBackendException('生成描述太短，请至少输入 2 个字');
     }
+
     final selectedStyle = style.trim().isNotEmpty
         ? style.trim()
         : settings.artStyle;
     final apiStyle = selectedStyle == 'stylized_3d' ? '3d' : selectedStyle;
+
     final created = await backend.createImageTask(
       description: description,
       style: apiStyle,
@@ -434,19 +512,12 @@ class NovelGameController extends ChangeNotifier {
       throw const NovelBackendException('图片服务未返回 task_id');
     }
 
-    final estimated = intValue(created['estimated_wait'], 30);
-    final timeoutSeconds = (estimated + 20).clamp(30, 120).toInt();
+    // 图片服务自己会返回动态 estimated_wait。这里额外给 CDN/R2 同步留余量，
+    // 但不允许单次 HTTP 请求吞掉整个 deadline。
+    final estimated = intValue(created['estimated_wait'], 60);
+    final timeoutSeconds = (estimated + 45).clamp(60, 180).toInt();
     final deadline = DateTime.now().add(Duration(seconds: timeoutSeconds));
 
-    const completedStates = <String>{
-      'completed',
-      'complete',
-      'success',
-      'succeeded',
-      'done',
-      'finished',
-      'ready',
-    };
     const failedStates = <String>{
       'failed',
       'error',
@@ -475,7 +546,7 @@ class NovelGameController extends ChangeNotifier {
     var partialPortrait = portraitFrom(created);
     var partialAvatar = avatarFrom(created);
 
-    // 某些图片服务在创建任务响应里就已经附带结果。
+    // 极少数情况下创建任务响应本身已经带 URL。
     if (partialPortrait.isNotEmpty) {
       return (
         portraitUrl: partialPortrait,
@@ -483,62 +554,61 @@ class NovelGameController extends ChangeNotifier {
       );
     }
 
-    var pollCount = 0;
+    NovelBackendException? lastBackendError;
+
     while (DateTime.now().isBefore(deadline)) {
-      pollCount += 1;
-      final status = await backend.fetchImageTaskStatus(taskId);
-      final state = stringValue(
-        status['status'] ?? status['state'] ?? status['task_status'],
-      ).trim().toLowerCase();
+      try {
+        // 关键修复：只访问普通 JSON result 接口，绝不调用 SSE status 接口。
+        final result = await backend
+            .fetchImageTaskResult(taskId)
+            .timeout(const Duration(seconds: 8));
 
-      partialPortrait = portraitFrom(status, partialPortrait);
-      partialAvatar = avatarFrom(status, partialAvatar);
+        lastBackendError = null;
+        final state = stringValue(
+          result['status'] ?? result['state'] ?? result['task_status'],
+        ).trim().toLowerCase();
 
-      // 最关键：只要状态接口已经给出可用图片地址，就立即显示，
-      // 不再等待后端状态字段从 processing 切换到 completed。
-      if (partialPortrait.isNotEmpty) {
-        return (
-          portraitUrl: partialPortrait,
-          avatarUrl: partialAvatar.isEmpty ? partialPortrait : partialAvatar,
-        );
+        partialPortrait = portraitFrom(result, partialPortrait);
+        partialAvatar = avatarFrom(result, partialAvatar);
+
+        // portrait 一出现就让生成页立即刷新，不再等 avatar，也不等 completed。
+        // avatar 尚未同步时先用 portrait 兜底，符合现有 UI 行为。
+        if (partialPortrait.isNotEmpty) {
+          return (
+            portraitUrl: partialPortrait,
+            avatarUrl: partialAvatar.isEmpty ? partialPortrait : partialAvatar,
+          );
+        }
+
+        if (failedStates.contains(state)) {
+          throw NovelBackendException(
+            stringValue(
+              result['error'] ?? result['message'],
+              'AI 立绘生成失败',
+            ),
+          );
+        }
+      } on TimeoutException {
+        // 单次网络请求超时不等于生成失败；继续下一轮，避免网络抖动误判。
+      } on NovelBackendException catch (error) {
+        if (error.statusCode == 404) {
+          // 创建任务后 Redis/网关极短时间内尚未可见，继续轮询即可。
+          lastBackendError = error;
+        } else {
+          rethrow;
+        }
+      } catch (_) {
+        // 临时网络错误不立即终止生成。最终 deadline 前仍会继续探测 result。
       }
 
-      if (failedStates.contains(state)) {
-        throw NovelBackendException(
-          stringValue(status['error'] ?? status['message'], 'AI 立绘生成失败'),
-        );
-      }
-
-      // 完成状态立即取结果；另外每约 1.2 秒主动探测一次 result。
-      // 这样即使“图片已经生成，但任务状态更新滞后”，前端也能第一时间拿到 URL。
-      if (completedStates.contains(state) || pollCount % 3 == 0) {
-        try {
-          final result = await backend.fetchImageTaskResult(taskId);
-          final portrait = portraitFrom(result, partialPortrait);
-          final avatar = avatarFrom(result, partialAvatar);
-          if (portrait.isNotEmpty) {
-            return (
-              portraitUrl: portrait,
-              avatarUrl: avatar.isEmpty ? portrait : avatar,
-            );
-          }
-        } on NovelBackendException catch (error) {
-          // 任务未完成时 result 端点返回 404/处理中属于正常情况；
-          // 真正完成态却仍取不到结果时继续下一轮，给后端极短的落盘时间。
-          if (completedStates.contains(state) &&
-              error.statusCode != null &&
-              error.statusCode! >= 500) {
-            rethrow;
-          }
-        } catch (_) {}
-      }
-
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     }
 
-    // 最后再主动取一次，避免临界时刻状态包或 URL 更新刚好错过。
+    // deadline 临界点再取最后一次，避免刚好在最后 500ms 写入 Redis。
     try {
-      final result = await backend.fetchImageTaskResult(taskId);
+      final result = await backend
+          .fetchImageTaskResult(taskId)
+          .timeout(const Duration(seconds: 8));
       final portrait = portraitFrom(result, partialPortrait);
       final avatar = avatarFrom(result, partialAvatar);
       if (portrait.isNotEmpty) {
@@ -548,6 +618,10 @@ class NovelGameController extends ChangeNotifier {
         );
       }
     } catch (_) {}
+
+    if (lastBackendError != null && lastBackendError!.statusCode != 404) {
+      throw lastBackendError!;
+    }
     throw const NovelBackendException('立绘生成超时，请稍后重试');
   }
 
@@ -626,7 +700,9 @@ class NovelGameController extends ChangeNotifier {
       );
     }
     scenario = currentScenario.copyWith(characters: updatedMap, raw: payload);
-    infoMessage = '${character.name}的立绘已更新';
+
+    // 立绘更新属于原地编辑操作，不再写入全局 infoMessage，
+    // 避免剧情页顶部出现“XXX 的立绘已更新”提示。
     _rebuildSentences();
     _notify();
   }
@@ -699,6 +775,11 @@ class NovelGameController extends ChangeNotifier {
       messages.add(temporaryAi);
     }
 
+    // 新一轮生成开始前清掉上一轮尚未显示的 UI 缓冲。
+    _streamUiTimer?.cancel();
+    _streamUiTimer = null;
+    _pendingStreamText = '';
+
     isGenerating = true;
     choicesVisible = false;
     choices = <NovelChoice>[];
@@ -735,6 +816,9 @@ class NovelGameController extends ChangeNotifier {
             _appendStreamText(event.text);
             break;
           case NovelStreamEventType.completed:
+            // complete 可能紧跟在最后一个 token 后面；先把缓冲刷进 message，
+            // 避免服务端 completed 没带 content 时漏掉尾部文本。
+            _flushStreamText(notify: false);
             await _completeGeneration(event);
             break;
           case NovelStreamEventType.suggestions:
@@ -762,12 +846,14 @@ class NovelGameController extends ChangeNotifier {
         }
       }
       if (generationId == _generationId && isGenerating) {
+        _flushStreamText(notify: false);
         isGenerating = false;
         _rebuildSentences();
         _notify();
       }
     } on NovelBackendException catch (error) {
       if (generationId != _generationId) return;
+      _flushStreamText(notify: false);
       isGenerating = false;
       lastError = error.message;
       insufficientBalance = error.isInsufficientBalance;
@@ -775,6 +861,7 @@ class NovelGameController extends ChangeNotifier {
       await syncHistory();
     } catch (error) {
       if (generationId != _generationId) return;
+      _flushStreamText(notify: false);
       isGenerating = false;
       lastError = '生成中断：$error';
       _notify();
@@ -784,13 +871,31 @@ class NovelGameController extends ChangeNotifier {
 
   void _appendStreamText(String rawText) {
     if (rawText.isEmpty || messages.isEmpty) return;
-    final cleanText = rawText.replaceAll(r'\n', '\n');
+
+    // 只缓存，不在每个网络 token 到达时立刻做正则清洗、分页解析和整页 notify。
+    // 72ms 内的 token 一次性合并，手机端 CPU / layout 压力会小很多。
+    _pendingStreamText += rawText.replaceAll(r'\n', '\n');
+    _streamUiTimer ??= Timer(_streamUiInterval, () => _flushStreamText());
+  }
+
+  void _flushStreamText({bool notify = true}) {
+    _streamUiTimer?.cancel();
+    _streamUiTimer = null;
+
+    if (_pendingStreamText.isEmpty || messages.isEmpty) {
+      _pendingStreamText = '';
+      return;
+    }
+
+    final pending = _pendingStreamText;
+    _pendingStreamText = '';
+
     final last = messages.last;
-    final content = parser.cleanStreamingText('${last.content}$cleanText');
+    final content = parser.cleanStreamingText('${last.content}$pending');
     messages[messages.length - 1] = last.copyWith(content: content);
     _markLatestUserSuccess();
     _rebuildSentences();
-    _notify();
+    if (notify) _notify();
   }
 
   Future<void> _completeGeneration(NovelStreamEvent event) async {
@@ -849,6 +954,8 @@ class NovelGameController extends ChangeNotifier {
 
   Future<void> cancelGeneration() async {
     _generationId += 1;
+    // 主动停止时仍把已收到的文字显示出来。
+    _flushStreamText(notify: false);
     await backend.cancelActiveStream();
     isGenerating = false;
     _notify();
@@ -1747,26 +1854,10 @@ class NovelGameController extends ChangeNotifier {
     String tone = 'neutral',
     String dedupeKey = '',
   }) {
-    if (title.trim().isEmpty) return;
-    final now = DateTime.now();
-    if (dedupeKey.isNotEmpty) {
-      final last = _recentHudEventKeys[dedupeKey];
-      if (last != null && now.difference(last) < const Duration(milliseconds: 1400)) {
-        return;
-      }
-      _recentHudEventKeys[dedupeKey] = now;
-      _recentHudEventKeys.removeWhere((_, time) => now.difference(time) > const Duration(seconds: 8));
-    }
-
-    _hudEventQueue.add(NovelHudEvent(
-      id: ++_hudEventSerial,
-      kind: kind,
-      title: title.trim(),
-      detail: detail.trim(),
-      delta: delta,
-      tone: tone,
-    ));
-    if (hudEvent == null) _showNextHudEvent();
+    // 游戏主界面不再显示全局 HUD 浮层。
+    // 剧情推进、路线变化、受伤、积分、背包、关系等变化都只更新真实状态，
+    // 不再额外弹出屏幕提示。好感度变化由当前角色对话框旁的爱心动画承担。
+    return;
   }
 
   void _showNextHudEvent() {
@@ -1825,6 +1916,8 @@ class NovelGameController extends ChangeNotifier {
     _diceTimer?.cancel();
     _taskTimer?.cancel();
     _hudEventTimer?.cancel();
+    _streamUiTimer?.cancel();
+    _pendingStreamText = '';
     _hudEventQueue.clear();
     _socketSubscription?.cancel();
     unawaited(backend.close());

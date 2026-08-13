@@ -62,9 +62,9 @@ class MineDialogs {
               const SizedBox(height: 10),
               _error(error!),
             ],
-            const SizedBox(height: 18),
+            const SizedBox(height: 20),
             _primaryButton(
-              label: saving ? '保存中…' : '保存',
+              label: saving ? '保存中...' : '保存',
               enabled: !saving,
               onTap: submit,
             ),
@@ -77,93 +77,222 @@ class MineDialogs {
     return result;
   }
 
+  /// 手机端头像编辑
   static Future<String?> editAvatar(BuildContext context) async {
-    FilePickerResult? picked;
-    try {
-      picked = await FilePicker.pickFiles(
-        type: FileType.image,
-        allowMultiple: false,
-        withData: true,
-      );
-    } catch (_) {
-      return null;
-    }
-
-    if (picked == null || picked.files.isEmpty) return null;
-    final file = picked.files.first;
-    final bytes = file.bytes;
-    if (bytes == null || bytes.isEmpty) {
-      _toast(context, '无法读取图片', isError: true);
-      return null;
-    }
-
-    var uploading = false;
+    Uint8List? selectedBytes;
+    String selectedFilename = 'avatar.jpg';
+    bool uploading = false;
     String? error;
 
-    return _show<String>(
-      context,
-      title: '修改头像',
-      builder: (dialogContext, setState) {
-        Future<void> submit() async {
-          if (uploading) return;
-          setState(() {
-            uploading = true;
-            error = null;
-          });
-          try {
-            final url = await MineApi.uploadAndUpdateAvatar(
-              bytes: bytes,
-              filename: file.name.isEmpty ? 'avatar.jpg' : file.name,
-            );
-            if (dialogContext.mounted) {
-              Navigator.of(dialogContext).pop(url);
+    return showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.68),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            Future<void> pickImage() async {
+              if (uploading) return;
+              setSheetState(() => error = null);
+              FilePickerResult? picked;
+              try {
+                picked = await FilePicker.pickFiles(
+                  type: FileType.image,
+                  allowMultiple: false,
+                  withData: true,
+                );
+              } catch (_) {
+                return null;
+              }
+              if (picked == null || picked.files.isEmpty) return;
+              final file = picked.files.first;
+              final bytes = file.bytes;
+              if (bytes == null || bytes.isEmpty) {
+                if (!sheetContext.mounted) return;
+                setSheetState(() {
+                  error = '无法读取所选图片，请重新选择';
+                });
+                return;
+              }
+              if (!sheetContext.mounted) return;
+              setSheetState(() {
+                selectedBytes = Uint8List.fromList(bytes);
+                selectedFilename =
+                    file.name.trim().isEmpty ? 'avatar.jpg' : file.name.trim();
+                error = null;
+              });
             }
-          } on ApiException catch (e) {
-            setState(() {
-              uploading = false;
-              error = e.message;
-            });
-          } catch (_) {
-            setState(() {
-              uploading = false;
-              error = '头像上传失败';
-            });
-          }
-        }
 
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ClipOval(
-              child: Image.memory(
-                Uint8List.fromList(bytes),
-                width: 112,
-                height: 112,
-                fit: BoxFit.cover,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '确认使用这张图片作为头像',
-              style: TextStyle(
-                color: AppColors.textOnDarkMuted,
-                fontSize: 12,
-              ),
-            ),
-            if (error != null) ...[
-              const SizedBox(height: 10),
-              _error(error!),
-            ],
-            const SizedBox(height: 18),
-            SizedBox(
+            Future<void> submit() async {
+              final bytes = selectedBytes;
+              if (uploading || bytes == null || bytes.isEmpty) return;
+              setSheetState(() {
+                uploading = true;
+                error = null;
+              });
+              try {
+                final url = await MineApi.uploadAndUpdateAvatar(
+                  bytes: bytes,
+                  filename: selectedFilename,
+                );
+                if (!sheetContext.mounted) return;
+                Navigator.of(sheetContext).pop(url);
+              } on ApiException catch (e) {
+                if (!sheetContext.mounted) return;
+                setSheetState(() {
+                  uploading = false;
+                  error = e.message;
+                });
+              } catch (e) {
+                if (!sheetContext.mounted) return;
+                final message = e
+                    .toString()
+                    .replaceFirst('Exception: ', '')
+                    .replaceFirst('ApiException: ', '')
+                    .trim();
+                setSheetState(() {
+                  uploading = false;
+                  error = message.isEmpty ? '头像上传失败，请稍后重试' : message;
+                });
+              }
+            }
+
+            final media = MediaQuery.of(context);
+            final bottomPadding = media.padding.bottom;
+            final hasImage = selectedBytes != null;
+
+            return Container(
               width: double.infinity,
-              child: _primaryButton(
-                label: uploading ? '上传中…' : '确认',
-                enabled: !uploading,
-                onTap: submit,
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 20 + bottomPadding),
+              decoration: BoxDecoration(
+                color: const Color(0xFF161616),
+                border: Border(
+                  top: BorderSide(color: Colors.white.withOpacity(0.12), width: 1),
+                ),
               ),
-            ),
-          ],
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        '更换头像',
+                        style: TextStyle(
+                          color: AppColors.textOnDark,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: uploading ? null : () => Navigator.of(sheetContext).pop(),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          color: Colors.transparent,
+                          child: const Icon(
+                            LucideIcons.x,
+                            size: 18,
+                            color: AppColors.textOnDarkMuted,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  GestureDetector(
+                    onTap: uploading ? null : pickImage,
+                    child: Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.03),
+                        borderRadius: BorderRadius.zero,
+                        border: Border.all(
+                          color: hasImage ? AppColors.accent : Colors.white.withOpacity(0.1),
+                          width: 1,
+                        ),
+                      ),
+                      child: hasImage
+                          ? Image.memory(
+                              selectedBytes!,
+                              width: 120,
+                              height: 120,
+                              fit: BoxFit.cover,
+                            )
+                          : Center(
+                              child: Icon(
+                                LucideIcons.imagePlus,
+                                size: 32,
+                                color: AppColors.textOnDarkMuted.withOpacity(0.7),
+                              ),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    hasImage ? '已选择图片，可再次点击区域重新选择' : '从本地选择一张图片',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: AppColors.textOnDarkMuted,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Material(
+                    color: Colors.white.withOpacity(0.03),
+                    borderRadius: BorderRadius.zero,
+                    child: InkWell(
+                      onTap: uploading ? null : pickImage,
+                      child: Container(
+                        height: 48,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.white.withOpacity(0.1)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              LucideIcons.images,
+                              size: 16,
+                              color: uploading ? AppColors.textOnDarkMuted.withOpacity(0.5) : AppColors.textOnDark,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              hasImage ? '重新选择' : '浏览文件',
+                              style: TextStyle(
+                                color: uploading ? AppColors.textOnDarkMuted.withOpacity(0.5) : AppColors.textOnDark,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: _error(error!),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: _primaryButton(
+                      label: uploading ? '上传中...' : (hasImage ? '确认保存' : '请先选择文件'),
+                      enabled: hasImage && !uploading,
+                      onTap: submit,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
         );
       },
     );
@@ -173,6 +302,7 @@ class MineDialogs {
     MineCheckinStatus? status;
     var loading = true;
     var submitting = false;
+    var successMode = false;
     String? error;
 
     return _show<MineCheckinResult>(
@@ -191,21 +321,26 @@ class MineDialogs {
             if (!dialogContext.mounted) return;
             setState(() {
               loading = false;
-              error = '签到状态加载失败';
+              error = '状态获取失败';
             });
           });
         }
 
         Future<void> submit() async {
-          if (submitting || status?.checkedInToday == true) return;
-
+          if (submitting || status?.checkedInToday == true || successMode) return;
           setState(() {
             submitting = true;
             error = null;
           });
-
           try {
             final result = await MineApi.dailyCheckin();
+            if (!dialogContext.mounted) return;
+            setState(() {
+              submitting = false;
+              successMode = true;
+              status = MineCheckinStatus(checkedInToday: true, days: [...?status?.days, 'today']);
+            });
+            await Future<void>.delayed(const Duration(milliseconds: 800));
             if (!dialogContext.mounted) return;
             Navigator.of(dialogContext).pop(result);
           } on ApiException catch (e) {
@@ -218,14 +353,14 @@ class MineDialogs {
             if (!dialogContext.mounted) return;
             setState(() {
               submitting = false;
-              error = '签到失败，请稍后重试';
+              error = '网络请求异常，请重试';
             });
           }
         }
 
         if (loading) {
           return const SizedBox(
-            height: 250,
+            height: 200,
             child: Center(
               child: CircularProgressIndicator(
                 strokeWidth: 2,
@@ -238,208 +373,139 @@ class MineDialogs {
         final checked = status?.checkedInToday ?? false;
         final days = status?.days ?? const <String>[];
         final now = DateTime.now();
-        final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-        final firstWeekday = DateTime(now.year, now.month, 1).weekday;
-        final leadingEmpty = firstWeekday - 1;
-        final progress = daysInMonth == 0
-            ? 0.0
-            : (days.length / daysInMonth).clamp(0.0, 1.0);
-        final monthPrefix =
-            '${now.year}-${now.month.toString().padLeft(2, '0')}-';
+
+        final currentWeekday = now.weekday;
+        final startOfWeek = now.subtract(Duration(days: currentWeekday - 1));
         const weekLabels = <String>['一', '二', '三', '四', '五', '六', '日'];
+
+        int weeklyCheckinCount = 0;
+        for (int i = 0; i < 7; i++) {
+          final date = startOfWeek.add(Duration(days: i));
+          final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+          if (days.contains(dateStr)) weeklyCheckinCount++;
+        }
+        final progress = (weeklyCheckinCount / 7.0).clamp(0.0, 1.0);
 
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Container(
-              padding: const EdgeInsets.fromLTRB(14, 13, 14, 12),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.025),
-                border: Border.all(
-                  color: Colors.white.withOpacity(0.06),
-                ),
-                borderRadius: BorderRadius.circular(8),
+                color: Colors.white.withOpacity(0.03),
+                border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
+                borderRadius: BorderRadius.zero,
               ),
-              child: Row(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${now.month} 月签到',
-                          style: const TextStyle(
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '本周签到记录',
+                          style: TextStyle(
                             color: AppColors.textOnDark,
                             fontSize: 13.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '本月已签到 ${days.length} 天',
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: checked ? AppColors.accent.withOpacity(0.12) : Colors.white.withOpacity(0.03),
+                          border: Border.all(
+                            color: checked ? AppColors.accent : Colors.white.withOpacity(0.1),
+                          ),
+                          borderRadius: BorderRadius.zero,
+                        ),
+                        child: Text(
+                          checked ? '已完成' : '待签到',
                           style: TextStyle(
-                            color: AppColors.textOnDarkMuted,
-                            fontSize: 10.8,
+                            color: checked ? AppColors.accent : AppColors.textOnDarkMuted,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 9,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: checked
-                          ? AppColors.accent.withOpacity(0.10)
-                          : Colors.white.withOpacity(0.035),
-                      border: Border.all(
-                        color: checked
-                            ? AppColors.accent.withOpacity(0.18)
-                            : Colors.white.withOpacity(0.06),
-                      ),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      checked ? '今日已签到' : '今日待签到',
-                      style: TextStyle(
-                        color: checked
-                            ? AppColors.accent
-                            : AppColors.textOnDarkMuted,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 2,
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      backgroundColor: Colors.white.withOpacity(0.05),
+                      color: AppColors.accent,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: SizedBox(
-                height: 3,
-                child: LinearProgressIndicator(
-                  value: progress,
-                  backgroundColor: Colors.white.withOpacity(0.055),
-                  color: AppColors.accent,
-                ),
-              ),
-            ),
-            const SizedBox(height: 15),
-
+            const SizedBox(height: 20),
             Row(
-              children: [
-                for (final label in weekLabels)
-                  Expanded(
-                    child: Center(
-                      child: Text(
-                        label,
-                        style: TextStyle(
-                          color: AppColors.textOnDarkMuted.withOpacity(0.72),
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w600,
-                        ),
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: List.generate(7, (index) {
+                final date = startOfWeek.add(Duration(days: index));
+                final value = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+                final done = days.contains(value) || (successMode && date.day == now.day);
+                final today = date.day == now.day && date.month == now.month && date.year == now.year;
+
+                return Column(
+                  children: [
+                    Text(
+                      weekLabels[index],
+                      style: TextStyle(
+                        color: AppColors.textOnDarkMuted.withOpacity(0.7),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 7),
-
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: leadingEmpty + daysInMonth,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 7,
-                mainAxisSpacing: 5,
-                crossAxisSpacing: 5,
-                childAspectRatio: 1.08,
-              ),
-              itemBuilder: (_, index) {
-                if (index < leadingEmpty) {
-                  return const SizedBox.shrink();
-                }
-
-                final day = index - leadingEmpty + 1;
-                final value = '$monthPrefix${day.toString().padLeft(2, '0')}';
-                final done = days.contains(value);
-                final today = now.day == day;
-
-                return Container(
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: done
-                        ? AppColors.accent.withOpacity(0.11)
-                        : Colors.white.withOpacity(0.018),
-                    border: Border.all(
-                      color: done
-                          ? AppColors.accent.withOpacity(0.24)
-                          : today
-                              ? Colors.white.withOpacity(0.22)
-                              : Colors.white.withOpacity(0.045),
-                    ),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: done
-                      ? const Icon(
-                          LucideIcons.check,
-                          size: 12,
-                          color: AppColors.accent,
-                        )
-                      : Text(
-                          '$day',
-                          style: TextStyle(
-                            color: today
-                                ? AppColors.textOnDark
-                                : AppColors.textOnDarkMuted,
-                            fontSize: 9.5,
-                            fontWeight: today
-                                ? FontWeight.w700
-                                : FontWeight.w500,
-                          ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: 36,
+                      height: 36,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: done ? AppColors.accent.withOpacity(0.1) : Colors.transparent,
+                        border: Border.all(
+                          color: done 
+                              ? AppColors.accent 
+                              : (today ? Colors.white.withOpacity(0.3) : Colors.white.withOpacity(0.05)),
+                          width: 1,
                         ),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      child: done
+                          ? const Icon(
+                              LucideIcons.check,
+                              size: 16,
+                              color: AppColors.accent,
+                            )
+                          : Text(
+                              '${date.day}',
+                              style: TextStyle(
+                                color: today ? AppColors.textOnDark : AppColors.textOnDarkMuted,
+                                fontSize: 11,
+                                fontWeight: today ? FontWeight.w700 : FontWeight.w500,
+                              ),
+                            ),
+                    ),
+                  ],
                 );
-              },
+              }),
             ),
-
             if (error != null) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 16),
               _error(error!),
             ],
-
-            const SizedBox(height: 16),
-
-            if (checked)
-              Container(
-                height: 44,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.025),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.055),
-                  ),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  '今天已完成签到',
-                  style: TextStyle(
-                    color: AppColors.textOnDarkMuted,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              )
-            else
-              _primaryButton(
-                label: submitting ? '签到中…' : '立即签到',
-                enabled: !submitting,
-                onTap: submit,
-              ),
+            const SizedBox(height: 24),
+            _primaryButton(
+              label: successMode ? '签到成功' : (submitting ? '处理中...' : (checked ? '今日已签到' : '立即签到')),
+              enabled: !submitting && !checked && !successMode,
+              onTap: submit,
+            ),
           ],
         );
       },
@@ -449,33 +515,42 @@ class MineDialogs {
   static Future<bool> redeem(BuildContext context) async {
     final controller = TextEditingController();
     var loading = false;
+    var successMode = false;
     String? error;
 
     final result = await _show<bool>(
       context,
-      title: '兑换码',
+      title: '兑换激活码',
       builder: (dialogContext, setState) {
         Future<void> submit() async {
           final code = controller.text.trim();
-          if (code.isEmpty || loading) return;
+          if (code.isEmpty || loading || successMode) return;
           setState(() {
             loading = true;
             error = null;
           });
           try {
             await MineApi.redeemCode(code);
+            if (!dialogContext.mounted) return;
+            setState(() {
+              loading = false;
+              successMode = true;
+            });
+            await Future.delayed(const Duration(milliseconds: 800));
             if (dialogContext.mounted) {
               Navigator.of(dialogContext).pop(true);
             }
           } on ApiException catch (e) {
+            if (!dialogContext.mounted) return;
             setState(() {
               loading = false;
               error = e.message;
             });
           } catch (_) {
+            if (!dialogContext.mounted) return;
             setState(() {
               loading = false;
-              error = '兑换失败，请检查兑换码';
+              error = '兑换失败，请检查网络连接';
             });
           }
         }
@@ -486,17 +561,18 @@ class MineDialogs {
           children: [
             _input(
               controller: controller,
-              hint: '输入兑换码',
+              hint: '请输入激活码',
               autofocus: true,
+              enabled: !successMode,
             ),
             if (error != null) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 12),
               _error(error!),
             ],
-            const SizedBox(height: 18),
+            const SizedBox(height: 20),
             _primaryButton(
-              label: loading ? '兑换中…' : '确认兑换',
-              enabled: !loading,
+              label: successMode ? '兑换成功' : (loading ? '验证中...' : '确认兑换'),
+              enabled: !loading && !successMode,
               onTap: submit,
             ),
           ],
@@ -514,7 +590,7 @@ class MineDialogs {
 
     await _show<void>(
       context,
-      title: '公告',
+      title: '系统公告',
       maxWidth: 430,
       builder: (dialogContext, setState) {
         return FutureBuilder<List<MineAnnouncement>>(
@@ -533,15 +609,12 @@ class MineDialogs {
             }
 
             if (snapshot.hasError) {
-              return SizedBox(
+              return const SizedBox(
                 height: 160,
                 child: Center(
                   child: Text(
                     '公告加载失败',
-                    style: TextStyle(
-                      color: AppColors.textOnDarkMuted,
-                      fontSize: 12.5,
-                    ),
+                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12.5),
                   ),
                 ),
               );
@@ -549,15 +622,12 @@ class MineDialogs {
 
             final items = snapshot.data ?? const <MineAnnouncement>[];
             if (items.isEmpty) {
-              return SizedBox(
+              return const SizedBox(
                 height: 150,
                 child: Center(
                   child: Text(
                     '暂无公告',
-                    style: TextStyle(
-                      color: AppColors.textOnDarkMuted,
-                      fontSize: 12.5,
-                    ),
+                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12.5),
                   ),
                 ),
               );
@@ -591,19 +661,12 @@ class MineDialogs {
                           }),
                           child: Container(
                             constraints: const BoxConstraints(maxWidth: 150),
-                            padding: const EdgeInsets.only(
-                              left: 1,
-                              right: 1,
-                              top: 3,
-                              bottom: 7,
-                            ),
+                            padding: const EdgeInsets.only(bottom: 7),
                             decoration: BoxDecoration(
                               border: Border(
                                 bottom: BorderSide(
-                                  color: active
-                                      ? AppColors.accent
-                                      : Colors.transparent,
-                                  width: 1.5,
+                                  color: active ? AppColors.accent : Colors.transparent,
+                                  width: 2,
                                 ),
                               ),
                             ),
@@ -613,13 +676,9 @@ class MineDialogs {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                color: active
-                                    ? AppColors.textOnDark
-                                    : AppColors.textOnDarkMuted,
-                                fontSize: 11.5,
-                                fontWeight: active
-                                    ? FontWeight.w700
-                                    : FontWeight.w500,
+                                color: active ? AppColors.textOnDark : AppColors.textOnDarkMuted,
+                                fontSize: 12,
+                                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                               ),
                             ),
                           ),
@@ -629,19 +688,16 @@ class MineDialogs {
                   ),
                 ),
                 const SizedBox(height: 14),
-
                 Container(
                   constraints: const BoxConstraints(
                     minHeight: 190,
                     maxHeight: 360,
                   ),
-                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.022),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.055),
-                    ),
-                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.white.withOpacity(0.03),
+                    border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
+                    borderRadius: BorderRadius.zero,
                   ),
                   child: SingleChildScrollView(
                     child: AnimatedSwitcher(
@@ -659,24 +715,22 @@ class MineDialogs {
                             ),
                           ),
                           if (selectedDate.isNotEmpty) ...[
-                            const SizedBox(height: 5),
+                            const SizedBox(height: 4),
                             Text(
                               selectedDate,
-                              style: TextStyle(
+                              style: const TextStyle(
                                 color: AppColors.textOnDarkMuted,
-                                fontSize: 9.8,
+                                fontSize: 11,
                               ),
                             ),
                           ],
-                          const SizedBox(height: 13),
+                          const SizedBox(height: 14),
                           Text(
-                            selected.content.isEmpty
-                                ? '暂无详细内容'
-                                : selected.content,
-                            style: TextStyle(
+                            selected.content.isEmpty ? '内容为空' : selected.content,
+                            style: const TextStyle(
                               color: AppColors.textOnDarkMuted,
-                              fontSize: 11.8,
-                              height: 1.65,
+                              fontSize: 13,
+                              height: 1.6,
                             ),
                           ),
                         ],
@@ -696,16 +750,17 @@ class MineDialogs {
     final titleController = TextEditingController();
     final contentController = TextEditingController();
     var loading = false;
+    var successMode = false;
     String? error;
 
     final result = await _show<bool>(
       context,
-      title: '帮助与反馈',
+      title: '问题反馈',
       builder: (dialogContext, setState) {
         Future<void> submit() async {
           final title = titleController.text.trim();
           final content = contentController.text.trim();
-          if (loading) return;
+          if (loading || successMode) return;
           if (title.isEmpty || content.isEmpty) {
             setState(() => error = '请填写标题和详细描述');
             return;
@@ -720,18 +775,26 @@ class MineDialogs {
               title: title,
               content: content,
             );
+            if (!dialogContext.mounted) return;
+            setState(() {
+              loading = false;
+              successMode = true;
+            });
+            await Future.delayed(const Duration(milliseconds: 800));
             if (dialogContext.mounted) {
               Navigator.of(dialogContext).pop(true);
             }
           } on ApiException catch (e) {
+            if (!dialogContext.mounted) return;
             setState(() {
               loading = false;
               error = e.message;
             });
           } catch (_) {
+            if (!dialogContext.mounted) return;
             setState(() {
               loading = false;
-              error = '发送失败，请稍后重试';
+              error = '发送失败，请重试';
             });
           }
         }
@@ -742,23 +805,24 @@ class MineDialogs {
           children: [
             _input(
               controller: titleController,
-              hint: '问题标题',
+              hint: '请概括您遇到的问题',
+              enabled: !successMode,
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             _input(
               controller: contentController,
-              hint: '详细描述',
+              hint: '请提供更多细节描述...',
               maxLines: 5,
-              height: 120,
+              enabled: !successMode,
             ),
             if (error != null) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 12),
               _error(error!),
             ],
-            const SizedBox(height: 18),
+            const SizedBox(height: 20),
             _primaryButton(
-              label: loading ? '发送中…' : '提交反馈',
-              enabled: !loading,
+              label: successMode ? '提交成功' : (loading ? '提交中...' : '确认提交'),
+              enabled: !loading && !successMode,
               onTap: submit,
             ),
           ],
@@ -780,14 +844,15 @@ class MineDialogs {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  '确定退出当前账号？',
+                const Text(
+                  '确定要退出当前账号吗？',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: AppColors.textOnDarkMuted,
-                    fontSize: 12.5,
+                    fontSize: 13,
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 24),
                 _primaryButton(
                   label: '确认退出',
                   enabled: true,
@@ -801,7 +866,6 @@ class MineDialogs {
         true;
   }
 
-  /// API 设置：保留模型选择与自定义 API。
   static Future<void> apiSettingsPending(BuildContext context) async {
     final baseUrlController = TextEditingController();
     final modelController = TextEditingController();
@@ -813,12 +877,13 @@ class MineDialogs {
     var enableOwnKey = false;
     var toggling = false;
     var saving = false;
+    var successMode = false;
     String? errorText;
     var selectedModelId = '';
     var models = <ModelOption>[];
 
     String modelNameFor(String id) {
-      if (id.trim().isEmpty) return '未选择';
+      if (id.trim().isEmpty) return '未配置';
       for (final item in models) {
         if (item.id == id) return item.name;
       }
@@ -828,7 +893,7 @@ class MineDialogs {
 
     await _show<void>(
       context,
-      title: 'API 设置',
+      title: '接口设置',
       maxWidth: 420,
       builder: (dialogContext, setState) {
         if (!loadStarted) {
@@ -857,7 +922,7 @@ class MineDialogs {
               if (!dialogContext.mounted) return;
               setState(() {
                 loading = false;
-                errorText = '配置加载失败';
+                errorText = '配置获取失败';
               });
             }
           });
@@ -865,20 +930,15 @@ class MineDialogs {
 
         Future<void> chooseModel() async {
           if (enableOwnKey || models.isEmpty) return;
-
           final selected = await _pickModel(
             dialogContext,
-            title: '选择模型',
+            title: '节点切换',
             models: models,
             currentId: selectedModelId,
           );
           if (!dialogContext.mounted || selected == null) return;
-
           try {
-            await ModelConfigApi.updateScenePreference(
-              'novel',
-              selected.id,
-            );
+            await ModelConfigApi.updateScenePreference('novel', selected.id);
             if (!dialogContext.mounted) return;
             setState(() {
               selectedModelId = selected.id;
@@ -889,20 +949,18 @@ class MineDialogs {
             setState(() => errorText = e.message);
           } catch (_) {
             if (!dialogContext.mounted) return;
-            setState(() => errorText = '模型保存失败');
+            setState(() => errorText = '保存异常');
           }
         }
 
         Future<void> toggleOwnKey(bool value) async {
           if (toggling) return;
           final previous = enableOwnKey;
-
           setState(() {
             toggling = true;
             enableOwnKey = value;
             errorText = null;
           });
-
           try {
             await ModelConfigApi.toggleOwnKey(value);
           } on ApiException catch (e) {
@@ -925,14 +983,13 @@ class MineDialogs {
         }
 
         Future<void> saveCustomApi() async {
-          if (!enableOwnKey || saving) return;
-
+          if (!enableOwnKey || saving || successMode) return;
           final apiKey = apiKeyController.text.trim();
           final baseUrl = baseUrlController.text.trim();
           final modelName = modelController.text.trim();
 
           if (apiKey.isEmpty || baseUrl.isEmpty || modelName.isEmpty) {
-            setState(() => errorText = '请填写完整配置');
+            setState(() => errorText = '所有参数均需填写');
             return;
           }
 
@@ -947,25 +1004,28 @@ class MineDialogs {
               baseUrl: baseUrl,
               modelName: modelName,
             );
-
             if (!ok) {
               if (!dialogContext.mounted) return;
               setState(() {
                 saving = false;
-                errorText = '连接验证失败，请检查配置';
+                errorText = '节点验证未通过';
               });
               return;
             }
-
             await ModelConfigApi.saveCustomApi(
               apiKey: apiKey,
               baseUrl: baseUrl,
               modelName: modelName,
             );
-
             if (!dialogContext.mounted) return;
-            setState(() => saving = false);
-            _toast(dialogContext, '配置已保存并启用');
+            setState(() {
+              saving = false;
+              successMode = true;
+            });
+            await Future.delayed(const Duration(milliseconds: 1000));
+            if (dialogContext.mounted) {
+              setState(() => successMode = false);
+            }
           } on ApiException catch (e) {
             if (!dialogContext.mounted) return;
             setState(() {
@@ -976,7 +1036,7 @@ class MineDialogs {
             if (!dialogContext.mounted) return;
             setState(() {
               saving = false;
-              errorText = '网络异常';
+              errorText = '网络连接失败';
             });
           }
         }
@@ -999,7 +1059,7 @@ class MineDialogs {
             child: Center(
               child: Text(
                 errorText!,
-                style: TextStyle(
+                style: const TextStyle(
                   color: AppColors.textOnDarkMuted,
                   fontSize: 12.5,
                 ),
@@ -1015,63 +1075,50 @@ class MineDialogs {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Material(
-              color: Colors.white.withOpacity(0.025),
-              borderRadius: BorderRadius.circular(8),
-              clipBehavior: Clip.antiAlias,
+              color: Colors.white.withOpacity(0.03),
+              borderRadius: BorderRadius.zero,
               child: InkWell(
                 onTap: enableOwnKey ? null : chooseModel,
                 child: Container(
                   constraints: const BoxConstraints(minHeight: 62),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 13,
-                    vertical: 11,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.06),
-                    ),
-                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
                   ),
                   child: Row(
                     children: [
                       Container(
-                        width: 34,
-                        height: 34,
+                        width: 36,
+                        height: 36,
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: AppColors.accent.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(7),
+                          color: AppColors.accent.withOpacity(0.1),
+                          border: Border.all(color: AppColors.accent.withOpacity(0.3), width: 1),
                         ),
-                        child: const Icon(
-                          LucideIcons.sparkles,
-                          size: 16,
-                          color: AppColors.accent,
-                        ),
+                        child: const Icon(LucideIcons.cpu, size: 16, color: AppColors.accent),
                       ),
-                      const SizedBox(width: 11),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
-                              '模型选择',
+                              '当前节点',
                               style: TextStyle(
                                 color: AppColors.textOnDark,
-                                fontSize: 12.8,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            const SizedBox(height: 3),
+                            const SizedBox(height: 4),
                             Text(
-                              enableOwnKey
-                                  ? '自定义 API 已启用'
-                                  : currentModelName,
+                              enableOwnKey ? '自定义配置' : currentModelName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
+                              style: const TextStyle(
                                 color: AppColors.textOnDarkMuted,
-                                fontSize: 10.5,
+                                fontSize: 11.5,
                               ),
                             ),
                           ],
@@ -1080,51 +1127,41 @@ class MineDialogs {
                       Icon(
                         LucideIcons.chevronRight,
                         size: 15,
-                        color: AppColors.textOnDarkMuted.withOpacity(
-                          enableOwnKey ? 0.25 : 0.70,
-                        ),
+                        color: AppColors.textOnDarkMuted.withOpacity(enableOwnKey ? 0.25 : 0.70),
                       ),
                     ],
                   ),
                 ),
               ),
             ),
-
-            const SizedBox(height: 10),
-
+            const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 13,
-                vertical: 10,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.018),
-                border: Border.all(
-                  color: Colors.white.withOpacity(0.05),
-                ),
-                borderRadius: BorderRadius.circular(8),
+                color: Colors.white.withOpacity(0.03),
+                border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
               ),
               child: Row(
                 children: [
-                  Expanded(
+                  const Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Text(
-                          '自定义 API',
+                        Text(
+                          '使用外部接口',
                           style: TextStyle(
                             color: AppColors.textOnDark,
-                            fontSize: 12.3,
-                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
-                        const SizedBox(height: 3),
+                        SizedBox(height: 4),
                         Text(
-                          '使用自己的 OpenAI 兼容接口',
+                          '启用后将覆盖默认配置',
                           style: TextStyle(
                             color: AppColors.textOnDarkMuted,
-                            fontSize: 10,
+                            fontSize: 11,
                           ),
                         ),
                       ],
@@ -1134,41 +1171,28 @@ class MineDialogs {
                     value: enableOwnKey,
                     onChanged: toggling ? null : toggleOwnKey,
                     activeColor: AppColors.accent,
+                    inactiveTrackColor: Colors.white.withOpacity(0.1),
                   ),
                 ],
               ),
             ),
-
             AnimatedSize(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
               child: enableOwnKey
                   ? Padding(
-                      padding: const EdgeInsets.only(top: 12),
+                      padding: const EdgeInsets.only(top: 14),
                       child: Column(
                         children: [
-                          _input(
-                            controller: baseUrlController,
-                            hint: 'Base URL',
-                            enabled: !saving,
-                          ),
-                          const SizedBox(height: 9),
-                          _input(
-                            controller: modelController,
-                            hint: 'Model ID',
-                            enabled: !saving,
-                          ),
-                          const SizedBox(height: 9),
-                          _input(
-                            controller: apiKeyController,
-                            hint: 'API Key',
-                            enabled: !saving,
-                            obscureText: true,
-                          ),
-                          const SizedBox(height: 14),
+                          _input(controller: baseUrlController, hint: '接口地址 (Base URL)', enabled: !saving && !successMode),
+                          const SizedBox(height: 10),
+                          _input(controller: modelController, hint: '模型名称 (Model ID)', enabled: !saving && !successMode),
+                          const SizedBox(height: 10),
+                          _input(controller: apiKeyController, hint: '接口密钥 (API Key)', enabled: !saving && !successMode, obscureText: true),
+                          const SizedBox(height: 16),
                           _primaryButton(
-                            label: saving ? '验证并保存中…' : '验证并保存',
-                            enabled: !saving,
+                            label: successMode ? '连接成功' : (saving ? '验证中...' : '保存配置'),
+                            enabled: !saving && !successMode,
                             onTap: saveCustomApi,
                           ),
                         ],
@@ -1176,9 +1200,8 @@ class MineDialogs {
                     )
                   : const SizedBox.shrink(),
             ),
-
             if (errorText != null) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 14),
               _error(errorText!),
             ],
           ],
@@ -1203,14 +1226,14 @@ class MineDialogs {
       maxWidth: 410,
       builder: (dialogContext, setState) {
         if (models.isEmpty) {
-          return SizedBox(
+          return const SizedBox(
             height: 120,
             child: Center(
               child: Text(
-                '暂无可用模型',
+                '暂无可用节点',
                 style: TextStyle(
                   color: AppColors.textOnDarkMuted,
-                  fontSize: 12,
+                  fontSize: 13,
                 ),
               ),
             ),
@@ -1222,31 +1245,23 @@ class MineDialogs {
           child: ListView.separated(
             shrinkWrap: true,
             itemCount: models.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 6),
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
             itemBuilder: (_, index) {
               final item = models[index];
               final selected = item.id == currentId;
 
               return Material(
-                color: selected
-                    ? AppColors.accent.withOpacity(0.07)
-                    : Colors.white.withOpacity(0.018),
-                borderRadius: BorderRadius.circular(8),
-                clipBehavior: Clip.antiAlias,
+                color: selected ? AppColors.accent.withOpacity(0.1) : Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.zero,
                 child: InkWell(
                   onTap: () => Navigator.of(dialogContext).pop(item),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 11,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: selected
-                            ? AppColors.accent.withOpacity(0.20)
-                            : Colors.white.withOpacity(0.05),
+                        color: selected ? AppColors.accent : Colors.white.withOpacity(0.1),
+                        width: 1,
                       ),
-                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       children: [
@@ -1256,20 +1271,16 @@ class MineDialogs {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: selected
-                                  ? AppColors.textOnDark
-                                  : AppColors.textOnDark,
-                              fontSize: 12.5,
-                              fontWeight: selected
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
+                              color: AppColors.textOnDark,
+                              fontSize: 13,
+                              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                             ),
                           ),
                         ),
                         if (selected)
                           const Icon(
                             LucideIcons.check,
-                            size: 15,
+                            size: 16,
                             color: AppColors.accent,
                           ),
                       ],
@@ -1284,91 +1295,6 @@ class MineDialogs {
     );
   }
 
-  static Widget _settingsRow({
-    required String title,
-    required String trailing,
-    required bool enabled,
-    required VoidCallback onTap,
-  }) {
-    return Opacity(
-      opacity: enabled ? 1 : 0.42,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: enabled ? onTap : null,
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 48),
-            padding: const EdgeInsets.symmetric(
-              horizontal: 2,
-              vertical: 10,
-            ),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: Colors.white.withOpacity(0.05),
-                ),
-              ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      color: AppColors.textOnDark,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 150),
-                  child: Text(
-                    trailing,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      color: AppColors.textOnDarkMuted,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 7),
-                Icon(
-                  LucideIcons.chevronRight,
-                  size: 14,
-                  color: AppColors.textOnDarkMuted.withOpacity(0.6),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-
-  static Future<void> simplePending(
-    BuildContext context, {
-    required String title,
-  }) async {
-    await _show<void>(
-      context,
-      title: title,
-      builder: (_, __) {
-        return Text(
-          '入口已保留，等对应接口代码接入后直接补功能。',
-          style: TextStyle(
-            color: AppColors.textOnDarkMuted,
-            fontSize: 12,
-            height: 1.6,
-          ),
-        );
-      },
-    );
-  }
-
   static Future<T?> _show<T>(
     BuildContext context, {
     required String title,
@@ -1376,14 +1302,14 @@ class MineDialogs {
       BuildContext context,
       StateSetter setState,
     ) builder,
-    double maxWidth = 390,
+    double maxWidth = 380,
   }) {
     return showGeneralDialog<T>(
       context: context,
       barrierDismissible: true,
       barrierLabel: '关闭',
-      barrierColor: Colors.black.withOpacity(0.48),
-      transitionDuration: const Duration(milliseconds: 180),
+      barrierColor: Colors.black.withOpacity(0.68),
+      transitionDuration: const Duration(milliseconds: 240),
       pageBuilder: (dialogContext, _, __) {
         return Material(
           color: Colors.transparent,
@@ -1398,15 +1324,17 @@ class MineDialogs {
                     ),
                     child: Container(
                       width: MediaQuery.sizeOf(context).width * 0.88,
-                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                      padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
                         color: const Color(0xFF161616),
+                        borderRadius: BorderRadius.zero,
                         border: Border.all(
-                          color: Colors.white.withOpacity(0.08),
+                          color: Colors.white.withOpacity(0.12),
+                          width: 1,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.30),
+                            color: Colors.black.withOpacity(0.5),
                             blurRadius: 20,
                             offset: const Offset(0, 8),
                           ),
@@ -1417,47 +1345,33 @@ class MineDialogs {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            SizedBox(
-                              height: 30,
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 38),
-                                    child: Text(
-                                      title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
-                                        color: AppColors.textOnDark,
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w700,
-                                      ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  title,
+                                  style: const TextStyle(
+                                    color: AppColors.textOnDark,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: () => Navigator.of(dialogContext).pop(),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    color: Colors.transparent,
+                                    child: const Icon(
+                                      LucideIcons.x,
+                                      size: 18,
+                                      color: AppColors.textOnDarkMuted,
                                     ),
                                   ),
-                                  Positioned(
-                                    right: 0,
-                                    child: InkResponse(
-                                      onTap: () => Navigator.of(dialogContext).pop(),
-                                      radius: 20,
-                                      child: SizedBox(
-                                        width: 30,
-                                        height: 30,
-                                        child: Center(
-                                          child: Icon(
-                                            LucideIcons.x,
-                                            size: 17,
-                                            color: AppColors.textOnDarkMuted,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 18),
+                            const SizedBox(height: 24),
                             builder(dialogContext, setState),
                           ],
                         ),
@@ -1472,13 +1386,10 @@ class MineDialogs {
       },
       transitionBuilder: (_, animation, __, child) {
         return FadeTransition(
-          opacity: animation,
+          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
           child: ScaleTransition(
-            scale: Tween<double>(begin: 0.98, end: 1).animate(
-              CurvedAnimation(
-                parent: animation,
-                curve: Curves.easeOutCubic,
-              ),
+            scale: Tween<double>(begin: 0.95, end: 1.0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
             ),
             child: child,
           ),
@@ -1494,16 +1405,13 @@ class MineDialogs {
     bool enabled = true,
     bool obscureText = false,
     int maxLines = 1,
-    double height = 48,
   }) {
     return Container(
-      height: height,
-      alignment: maxLines == 1 ? Alignment.center : Alignment.topCenter,
-      padding: const EdgeInsets.symmetric(horizontal: 13),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.035),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-        borderRadius: BorderRadius.circular(8),
+        color: Colors.white.withOpacity(0.03),
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
       ),
       child: TextField(
         controller: controller,
@@ -1511,27 +1419,23 @@ class MineDialogs {
         enabled: enabled,
         obscureText: obscureText,
         maxLines: obscureText ? 1 : maxLines,
-        textAlignVertical: maxLines == 1
-            ? TextAlignVertical.center
-            : TextAlignVertical.top,
+        minLines: maxLines > 1 ? 4 : 1,
+        textAlignVertical: maxLines == 1 ? TextAlignVertical.center : TextAlignVertical.top,
         cursorColor: AppColors.accent,
-        style: TextStyle(
-          color: enabled
-              ? AppColors.textOnDark
-              : AppColors.textOnDarkMuted.withOpacity(0.45),
+        style: const TextStyle(
+          color: AppColors.textOnDark,
           fontSize: 13.5,
+          height: 1.5,
         ),
         decoration: InputDecoration(
+          isDense: true,
+          contentPadding: EdgeInsets.zero,
           hintText: hint,
-          hintStyle: TextStyle(
-            color: AppColors.textOnDarkMuted.withOpacity(0.65),
-            fontSize: 12.5,
+          hintStyle: const TextStyle(
+            color: AppColors.textOnDarkMuted,
+            fontSize: 13,
           ),
           border: InputBorder.none,
-          isDense: true,
-          contentPadding: maxLines > 1
-              ? const EdgeInsets.symmetric(vertical: 13)
-              : EdgeInsets.zero,
         ),
       ),
     );
@@ -1547,24 +1451,22 @@ class MineDialogs {
         ? const Color(0xFFE0554A)
         : enabled
             ? AppColors.accent
-            : AppColors.accent.withOpacity(0.18);
+            : Colors.white.withOpacity(0.06);
 
     return Material(
       color: color,
-      borderRadius: BorderRadius.circular(4),
-      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: enabled ? onTap : null,
-        child: SizedBox(
+        child: Container(
           height: 48,
-          child: Center(
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Color(0xFF101010),
-                fontSize: 13.5,
-                fontWeight: FontWeight.w700,
-              ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: (danger || !enabled) ? AppColors.textOnDarkMuted : const Color(0xFF121212),
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
             ),
           ),
         ),
@@ -1573,35 +1475,28 @@ class MineDialogs {
   }
 
   static Widget _error(String message) {
-    return Text(
-      message,
-      style: const TextStyle(
-        color: Color(0xFFE7685E),
-        fontSize: 11.5,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE0554A).withOpacity(0.08),
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: const Color(0xFFE0554A).withOpacity(0.4), width: 1),
       ),
-    );
-  }
-
-  static void _toast(
-    BuildContext context,
-    String message, {
-    bool isError = false,
-  }) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          backgroundColor: const Color(0xFF161616),
-          behavior: SnackBarBehavior.floating,
-          content: Text(
-            message,
-            style: TextStyle(
-              color: isError
-                  ? const Color(0xFFE7685E)
-                  : AppColors.textOnDark,
+      child: Row(
+        children: [
+          const Icon(LucideIcons.alertCircle, size: 16, color: Color(0xFFE0554A)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: Color(0xFFE0554A),
+                fontSize: 12,
+              ),
             ),
           ),
-        ),
-      );
+        ],
+      ),
+    );
   }
 }

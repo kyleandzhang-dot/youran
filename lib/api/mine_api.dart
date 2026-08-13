@@ -1,3 +1,5 @@
+import 'package:http/http.dart' as http;
+
 import 'api_client.dart';
 
 class MineAnnouncement {
@@ -101,36 +103,72 @@ class MineApi {
     );
   }
 
+  /// 用户头像上传：
+  /// 1. 向后端申请 R2 预签名地址；
+  /// 2. 客户端直接 PUT 到 R2；
+  /// 3. 将 public_url 写回 /user/avatar。
+  ///
+  /// 这里复用当前项目中场景/角色图片已经使用的 R2 上传链路，
+  /// 不再依赖旧的 /upload/image multipart 接口。
   static Future<String> uploadAndUpdateAvatar({
     required List<int> bytes,
     required String filename,
   }) async {
-    final upload = await _client.postMultipartBytes(
-      '/upload/image',
-      fieldName: 'file',
-      bytes: bytes,
-      filename: filename,
-      fields: const <String, String>{'category': 'avatar'},
+    if (bytes.isEmpty) {
+      throw const ApiException('头像文件为空');
+    }
+
+    final safeFilename =
+        filename.trim().isEmpty ? 'avatar.jpg' : filename.trim();
+    final contentType = _imageContentType(safeFilename);
+
+    final signatureResponse = await _client.post(
+      '/r2/get-signature',
+      body: <String, dynamic>{
+        'filename': safeFilename,
+        'content_type': contentType,
+        // 当前项目角色头像已经使用该分类，直接复用现有可用分类。
+        'category': 'char/avatar',
+      },
     );
 
-    final data = _data(upload);
-    final url = _string(
-      data['url'] ??
-          data['image_url'] ??
-          data['avatar_url'] ??
-          data['file_url'] ??
-          upload['url'],
+    final signature = _data(signatureResponse);
+    final uploadUrl = _string(signature['upload_url']);
+    final publicUrl = _string(signature['public_url']);
+
+    if (uploadUrl.isEmpty || publicUrl.isEmpty) {
+      throw const ApiException('服务器未返回有效的头像上传地址');
+    }
+
+    final uploadResponse = await http.put(
+      Uri.parse(uploadUrl),
+      headers: <String, String>{
+        'Content-Type': contentType,
+      },
+      body: bytes,
     );
 
-    if (url.isEmpty) {
-      throw const ApiException('头像上传成功，但服务器没有返回图片地址');
+    if (uploadResponse.statusCode < 200 ||
+        uploadResponse.statusCode >= 300) {
+      throw ApiException('头像上传失败（${uploadResponse.statusCode}）');
     }
 
     await _client.put(
       '/user/avatar',
-      body: <String, dynamic>{'avatar_url': url},
+      body: <String, dynamic>{'avatar_url': publicUrl},
     );
-    return url;
+
+    return publicUrl;
+  }
+
+  static String _imageContentType(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    if (lower.endsWith('.heif')) return 'image/heif';
+    return 'image/jpeg';
   }
 
   static Future<MineCheckinStatus> getCheckinStatus() async {
