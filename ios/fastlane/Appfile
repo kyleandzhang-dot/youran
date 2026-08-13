@@ -1,6 +1,6 @@
 # ios/fastlane/Appfile
 #
-# 【仍需修改】apple_id 和 team_id 换成你的真实信息(Bundle ID 已填好)
+# 【仍需修改】 apple_id 和 team_id 换成你的真实信息(Bundle ID 已填好)
 
 app_identifier("com.yoran.app")
 apple_id(ENV["FASTLANE_APPLE_ID"] || "your-apple-id@example.com") # 用 API Key 认证时这个字段基本不生效,但建议保留占位
