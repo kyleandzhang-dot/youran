@@ -9,14 +9,17 @@ class NovelBgmService {
   NovelBgmService({
     AudioPlayer? player,
     AudioPlayer? weatherPlayer,
+    AudioPlayer? typingPlayer,
     this.defaultVolume = 0.35,
     this.fadeDuration = const Duration(milliseconds: 1500),
     this.debounceCount = 2,
   })  : _player = player ?? AudioPlayer(),
-        _weatherPlayer = weatherPlayer ?? AudioPlayer();
+        _weatherPlayer = weatherPlayer ?? AudioPlayer(),
+        _typingPlayer = typingPlayer ?? AudioPlayer();
 
   final AudioPlayer _player;
   final AudioPlayer _weatherPlayer;
+  final AudioPlayer _typingPlayer;
   final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
   final double defaultVolume;
   final Duration fadeDuration;
@@ -37,6 +40,131 @@ class NovelBgmService {
   int _weatherSwitchId = 0;
   String currentWeatherKey = 'none';
   bool isWeatherPlaying = false;
+
+  static const String typingAsset = 'assets/audio/ui/typing.wav';
+  static const double typingVolume = 0.46;
+
+  // 逐字动画通常 30ms 推进一次。60ms 一个音效 tick 能保持连续感，
+  // 同时避免浏览器 / just_audio 被过于密集的 seek + play 请求淹没。
+  static const Duration typingThrottle = Duration(milliseconds: 60);
+  DateTime? _lastTypingTickAt;
+  bool _typingReady = false;
+  Future<void>? _typingPrepareFuture;
+  bool _typingRestartInFlight = false;
+  bool _typingRestartQueued = false;
+  int _typingPlaybackEpoch = 0;
+  Timer? _weatherDuckRestoreTimer;
+
+  /// 预加载流式打字音效。资源缺失时静默降级。
+  Future<void> preloadTypingSfx() async {
+    await _prepareTypingPlayer();
+  }
+
+  Future<void> _prepareTypingPlayer() async {
+    if (_typingReady) return;
+    final existing = _typingPrepareFuture;
+    if (existing != null) return existing;
+
+    final future = () async {
+      try {
+        await _typingPlayer.setLoopMode(LoopMode.off);
+        await _typingPlayer.setVolume(typingVolume);
+        await _typingPlayer.setAsset(typingAsset);
+        _typingReady = true;
+      } catch (_) {
+        // UI 音效缺失时静默跳过，不影响剧情。
+        _typingReady = false;
+      } finally {
+        _typingPrepareFuture = null;
+      }
+    }();
+    _typingPrepareFuture = future;
+    return future;
+  }
+
+  double _currentWeatherTargetVolume() =>
+      _weatherVolume(currentWeatherKey).clamp(0.0, 1.0).toDouble();
+
+  void _duckWeatherForTyping() {
+    _weatherDuckRestoreTimer?.cancel();
+    if (isWeatherPlaying && _weatherPlayer.playing) {
+      final ducked = (_currentWeatherTargetVolume() * 0.45)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      unawaited(_weatherPlayer.setVolume(ducked));
+    }
+    _weatherDuckRestoreTimer = Timer(const Duration(milliseconds: 240), () {
+      if (isWeatherPlaying && _weatherPlayer.playing) {
+        unawaited(_weatherPlayer.setVolume(_currentWeatherTargetVolume()));
+      }
+    });
+  }
+
+  /// 流式文字的短促前景音效。高频调用会自动节流。
+  ///
+  /// 同一时刻只允许一个 seek/restart 流程进行；如果这期间又来了新的 tick，
+  /// 只记一次“待重播”，避免 Web 端多个异步 seek/play 互相打架后偶发静音。
+  void playTypingTick() {
+    final now = DateTime.now();
+    final last = _lastTypingTickAt;
+    if (last != null && now.difference(last) < typingThrottle) return;
+    _lastTypingTickAt = now;
+
+    if (_typingRestartInFlight) {
+      _typingRestartQueued = true;
+      return;
+    }
+    unawaited(_playTypingTickInternal());
+  }
+
+  Future<void> _playTypingTickInternal() async {
+    if (_typingRestartInFlight) {
+      _typingRestartQueued = true;
+      return;
+    }
+
+    _typingRestartInFlight = true;
+    final epoch = _typingPlaybackEpoch;
+    try {
+      do {
+        _typingRestartQueued = false;
+        await _prepareTypingPlayer();
+        if (!_typingReady || epoch != _typingPlaybackEpoch) return;
+
+        _duckWeatherForTyping();
+        await _typingPlayer.setVolume(typingVolume);
+        await _typingPlayer.seek(Duration.zero);
+        if (epoch != _typingPlaybackEpoch) return;
+
+        // play() 在 just_audio 中会持续到本次播放结束；这里不能 await，
+        // 否则下一次 tick 会被整段 wav 的时长阻塞。异常单独吞掉，避免未处理 Future。
+        unawaited(_typingPlayer.play().catchError((_) {}));
+      } while (_typingRestartQueued && epoch == _typingPlaybackEpoch);
+    } catch (_) {
+      // seek / source 状态异常时让下一次 tick 重新准备资源，而不是永久静音。
+      _typingReady = false;
+    } finally {
+      _typingRestartInFlight = false;
+      if (_typingRestartQueued && epoch == _typingPlaybackEpoch) {
+        _typingRestartQueued = false;
+        unawaited(_playTypingTickInternal());
+      }
+    }
+  }
+
+  Future<void> stopTypingSound() async {
+    _typingPlaybackEpoch += 1;
+    _typingRestartQueued = false;
+    _lastTypingTickAt = null;
+    _weatherDuckRestoreTimer?.cancel();
+    _weatherDuckRestoreTimer = null;
+    try {
+      await _typingPlayer.stop();
+    } catch (_) {}
+    if (isWeatherPlaying && _weatherPlayer.playing) {
+      await _weatherPlayer.setVolume(_currentWeatherTargetVolume());
+    }
+  }
 
   Future<void> loadPreference() async {
     enabled = await _prefs.getBool('app_setting_bgm') ?? true;
@@ -180,6 +308,15 @@ class NovelBgmService {
     await completer.future;
   }
 
+  /// 保留初始化入口，但不再用真实天气播放器预载 rain.mp3。
+  ///
+  /// 旧实现会把 rain.mp3 固定塞进 _weatherPlayer 再 pause；之后雷暴雨也复用
+  /// 同一个播放器切 source。理论上 setAsset 会替换，但 Web 端音频状态切换容易造成
+  /// 旧 source 残留/听感混淆。天气资源现在只在 setWeatherAmbient 中按当前 key 加载。
+  Future<void> preloadWeatherAmbient() async {
+    return;
+  }
+
   static const Map<String, String> weatherAssets = <String, String>{
     'rain': 'assets/audio/weather/rain.mp3',
     'snow': 'assets/audio/weather/snow.mp3',
@@ -310,6 +447,10 @@ class NovelBgmService {
     if (asset == null) return;
 
     try {
+      // 强制释放上一种天气的 source，再加载当前天气。
+      // 这样 thunderstorm 永远只会绑定 thunderstorm.mp3，不会沿用 rain.mp3。
+      await _weatherPlayer.stop();
+      await _weatherPlayer.setVolume(0);
       await _weatherPlayer.setLoopMode(LoopMode.one);
       await _weatherPlayer.setAsset(asset);
       if (switchId != _weatherSwitchId) return;
@@ -350,16 +491,24 @@ class NovelBgmService {
     _weatherSwitchId += 1;
     _cancelFade();
     _cancelWeatherFade();
+    _weatherDuckRestoreTimer?.cancel();
+    _weatherDuckRestoreTimer = null;
     await _player.stop();
     await _weatherPlayer.stop();
+    await stopTypingSound();
     isPlaying = false;
     isWeatherPlaying = false;
   }
 
   Future<void> dispose() async {
+    _typingPlaybackEpoch += 1;
+    _typingRestartQueued = false;
     _cancelFade();
     _cancelWeatherFade();
+    _weatherDuckRestoreTimer?.cancel();
+    _weatherDuckRestoreTimer = null;
     await _player.dispose();
     await _weatherPlayer.dispose();
+    await _typingPlayer.dispose();
   }
 }

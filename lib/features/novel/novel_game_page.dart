@@ -46,7 +46,9 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _fateOpen = false;
   bool _endingOpen = false;
   bool _balanceOpen = false;
-  NovelWeatherEffect _weatherPreview = NovelWeatherEffect.none;
+  NovelWeatherEffect? _weatherPreviewOverride;
+  NovelTimePeriod? _timePreviewOverride;
+  String _lastWeatherSyncToken = '';
 
   NovelGameController get controller => widget.controller;
 
@@ -55,7 +57,14 @@ class _NovelGamePageState extends State<NovelGamePage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     controller.addListener(_onControllerChanged);
-    unawaited(controller.initialize());
+    unawaited(_initializeGame());
+  }
+
+  Future<void> _initializeGame() async {
+    await controller.initialize();
+    if (!mounted) return;
+    await controller.bgm.preloadWeatherAmbient();
+    await _syncActiveWeatherAudio(force: true);
   }
 
   @override
@@ -72,18 +81,16 @@ class _NovelGamePageState extends State<NovelGamePage>
         controller.bgm.currentIntensity,
         controller.bgm.currentSceneMode,
       ));
-      unawaited(controller.bgm.setWeatherAmbient(
-        controller.bgm.currentWeatherKey,
-        effectsEnabled: controller.settings.weatherEffectsEnabled,
-        force: true,
-      ));
+      unawaited(_syncActiveWeatherAudio(force: true));
     }
   }
 
   void _onControllerChanged() {
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _processOverlayRequests();
+      if (!mounted) return;
+      _processOverlayRequests();
+      unawaited(_syncActiveWeatherAudio());
     });
   }
 
@@ -251,30 +258,69 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
 
+  NovelWeatherEffect get _backendWeatherEffect =>
+      novelWeatherEffectFromKey(controller.world.weather);
+
+  NovelTimePeriod get _backendTimePeriod =>
+      novelTimePeriodFromKey(controller.effectiveWorldTimePeriodKey);
+
+  NovelWeatherEffect get _activeWeatherEffect =>
+      _weatherPreviewOverride ?? _backendWeatherEffect;
+
+  NovelTimePeriod get _activeTimePeriod =>
+      _timePreviewOverride ?? _backendTimePeriod;
+
   String _weatherAudioKey(NovelWeatherEffect effect) {
     return switch (effect) {
-      NovelWeatherEffect.rain => 'rain',
-      NovelWeatherEffect.snow => 'snow',
+      NovelWeatherEffect.rain || NovelWeatherEffect.heavyRain => 'rain',
+      NovelWeatherEffect.snow || NovelWeatherEffect.blizzard => 'snow',
       NovelWeatherEffect.thunderstorm => 'thunderstorm',
-      NovelWeatherEffect.none => 'none',
+      _ => 'none',
     };
   }
 
-  Future<void> _cycleWeatherPreview() async {
-    final next = switch (_weatherPreview) {
-      NovelWeatherEffect.none => NovelWeatherEffect.rain,
-      NovelWeatherEffect.rain => NovelWeatherEffect.snow,
-      NovelWeatherEffect.snow => NovelWeatherEffect.thunderstorm,
-      NovelWeatherEffect.thunderstorm => NovelWeatherEffect.none,
-    };
-    if (mounted) setState(() => _weatherPreview = next);
-
-    // 手动天气测试阶段：视觉和环境音必须由同一次切换驱动。
+  Future<void> _syncActiveWeatherAudio({bool force = false}) async {
+    if (!controller.isInitialized) return;
+    final effect = _activeWeatherEffect;
+    final key = _weatherAudioKey(effect);
+    final enabled = controller.settings.weatherEffectsEnabled;
+    final token = '$key:$enabled:${_weatherPreviewOverride == null ? 'auto' : 'preview'}';
+    if (!force && token == _lastWeatherSyncToken) return;
+    _lastWeatherSyncToken = token;
     await controller.bgm.setWeatherAmbient(
-      _weatherAudioKey(next),
-      effectsEnabled: controller.settings.weatherEffectsEnabled,
+      key,
+      effectsEnabled: enabled,
       force: true,
     );
+  }
+
+  Future<void> _cycleWeatherPreview() async {
+    final next = switch (_weatherPreviewOverride) {
+      null => NovelWeatherEffect.none,
+      NovelWeatherEffect.none => NovelWeatherEffect.cloudy,
+      NovelWeatherEffect.cloudy => NovelWeatherEffect.rain,
+      NovelWeatherEffect.rain => NovelWeatherEffect.heavyRain,
+      NovelWeatherEffect.heavyRain => NovelWeatherEffect.thunderstorm,
+      NovelWeatherEffect.thunderstorm => NovelWeatherEffect.snow,
+      NovelWeatherEffect.snow => NovelWeatherEffect.blizzard,
+      NovelWeatherEffect.blizzard => null,
+    };
+    if (mounted) setState(() => _weatherPreviewOverride = next);
+    _lastWeatherSyncToken = '';
+    await _syncActiveWeatherAudio(force: true);
+  }
+
+  void _cycleTimePreview() {
+    final next = switch (_timePreviewOverride) {
+      null => NovelTimePeriod.morning,
+      NovelTimePeriod.morning => NovelTimePeriod.noon,
+      NovelTimePeriod.noon => NovelTimePeriod.afternoon,
+      NovelTimePeriod.afternoon => NovelTimePeriod.evening,
+      NovelTimePeriod.evening => NovelTimePeriod.night,
+      NovelTimePeriod.night => NovelTimePeriod.midnight,
+      NovelTimePeriod.midnight => null,
+    };
+    if (mounted) setState(() => _timePreviewOverride = next);
   }
 
   void _back() {
@@ -300,6 +346,8 @@ class _NovelGamePageState extends State<NovelGamePage>
         final background = customBackground.isNotEmpty
             ? customBackground
             : controller.world.backgroundUrl;
+        final activeWeather = _activeWeatherEffect;
+        final activeTime = _activeTimePeriod;
         return Scaffold(
           resizeToAvoidBottomInset: true,
           backgroundColor: controller.settings.backgroundColor,
@@ -316,8 +364,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                       !controller.isCinematic,
                   isGenerating: controller.isGenerating,
                   weatherEffect: controller.settings.weatherEffectsEnabled
-                      ? _weatherPreview
+                      ? activeWeather
                       : NovelWeatherEffect.none,
+                  timePeriod: activeTime,
                 ),
               ),
               // 角色立绘由 NovelDialogPanel 内部统一绘制。
@@ -334,6 +383,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                         if (controller.storyStarted && controller.isCinematic)
                           Positioned.fill(
                             child: NovelCinematicControls(
+                              controller: controller,
                               text: controller.currentSentence?.text ?? '',
                               speakerName: controller.currentSpeakerName,
                               isGenerating: controller.isGenerating,
@@ -361,7 +411,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                         if (controller.storyStarted)
                           Positioned(
                             left: 0,
-                            top: 55,
+                            top: 56,
                             child: NovelLocationHud(
                               title: controller.locationTitle,
                               subtitle: controller.locationSubtitle,
@@ -411,9 +461,21 @@ class _NovelGamePageState extends State<NovelGamePage>
                           Positioned(
                             top: compact ? 248 : 260,
                             right: 3,
-                            child: _NovelWeatherTestButton(
-                              effect: _weatherPreview,
-                              onTap: () => unawaited(_cycleWeatherPreview()),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: <Widget>[
+                                _NovelWeatherTestButton(
+                                  effect: activeWeather,
+                                  isAuto: _weatherPreviewOverride == null,
+                                  onTap: () => unawaited(_cycleWeatherPreview()),
+                                ),
+                                const SizedBox(height: 7),
+                                _NovelTimeTestButton(
+                                  period: activeTime,
+                                  isAuto: _timePreviewOverride == null,
+                                  onTap: _cycleTimePreview,
+                                ),
+                              ],
                             ),
                           ),
                         if (controller.storyStarted && !controller.isCinematic)
@@ -585,23 +647,71 @@ class _FatalError extends StatelessWidget {
 class _NovelWeatherTestButton extends StatelessWidget {
   const _NovelWeatherTestButton({
     required this.effect,
+    required this.isAuto,
     required this.onTap,
   });
 
   final NovelWeatherEffect effect;
+  final bool isAuto;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _NovelPreviewButton(
+      tooltip: '天气预览：自动 / 晴 / 阴 / 小雨 / 大雨 / 雷暴雨 / 雪 / 暴雪',
+      icon: isAuto ? Icons.sync_rounded : effect.icon,
+      label: isAuto ? '天气·自动' : '天气·${effect.label}',
+      onTap: onTap,
+    );
+  }
+}
+
+class _NovelTimeTestButton extends StatelessWidget {
+  const _NovelTimeTestButton({
+    required this.period,
+    required this.isAuto,
+    required this.onTap,
+  });
+
+  final NovelTimePeriod period;
+  final bool isAuto;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _NovelPreviewButton(
+      tooltip: '时间预览：自动 / 早晨 / 中午 / 下午 / 傍晚 / 夜晚 / 深夜',
+      icon: isAuto ? Icons.schedule_rounded : period.icon,
+      label: isAuto ? '时间·自动' : '时间·${period.label}',
+      onTap: onTap,
+    );
+  }
+}
+
+class _NovelPreviewButton extends StatelessWidget {
+  const _NovelPreviewButton({
+    required this.tooltip,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final String label;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: '测试天气：点击切换 无 / 雨 / 雪 / 雷雨',
+      message: tooltip,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(12),
           child: Container(
-            constraints: const BoxConstraints(minWidth: 48),
+            constraints: const BoxConstraints(minWidth: 52),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
             decoration: BoxDecoration(
               color: const Color(0xB51A1C20),
@@ -618,14 +728,10 @@ class _NovelWeatherTestButton extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Icon(
-                  effect.icon,
-                  size: 17,
-                  color: Colors.white.withOpacity(.94),
-                ),
+                Icon(icon, size: 17, color: Colors.white.withOpacity(.94)),
                 const SizedBox(height: 3),
                 Text(
-                  '天气·${effect.label}',
+                  label,
                   style: TextStyle(
                     color: Colors.white.withOpacity(.90),
                     fontSize: 9.2,
@@ -641,3 +747,4 @@ class _NovelWeatherTestButton extends StatelessWidget {
     );
   }
 }
+

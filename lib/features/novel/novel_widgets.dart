@@ -284,25 +284,308 @@ class _StagePortraitArtwork extends StatelessWidget {
   }
 }
 
-enum NovelWeatherEffect { none, rain, snow, thunderstorm }
+enum NovelWeatherEffect {
+  none,
+  cloudy,
+  rain,
+  heavyRain,
+  thunderstorm,
+  snow,
+  blizzard,
+}
+
+NovelWeatherEffect novelWeatherEffectFromKey(String raw) {
+  final key = raw.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+  if (key.isEmpty || key == 'clear' || key == 'sunny' || key.contains('晴')) {
+    return NovelWeatherEffect.none;
+  }
+  if (key == 'cloudy' || key.contains('多云') || key.contains('阴')) {
+    return NovelWeatherEffect.cloudy;
+  }
+  if (key == 'thunderstorm' || key.contains('雷暴') || key.contains('雷阵雨') || key.contains('雷雨')) {
+    return NovelWeatherEffect.thunderstorm;
+  }
+  if (key == 'heavy_rain' || key.contains('暴雨') || key.contains('大雨')) {
+    return NovelWeatherEffect.heavyRain;
+  }
+  if (key == 'blizzard' || key.contains('暴雪') || key.contains('风雪')) {
+    return NovelWeatherEffect.blizzard;
+  }
+  if (key == 'snow' || key.contains('雪')) {
+    return NovelWeatherEffect.snow;
+  }
+  if (key == 'rain' || key.contains('小雨') || key.contains('细雨') || key == '雨') {
+    return NovelWeatherEffect.rain;
+  }
+  return NovelWeatherEffect.none;
+}
 
 extension NovelWeatherEffectLabel on NovelWeatherEffect {
   String get label {
     return switch (this) {
-      NovelWeatherEffect.none => '无',
-      NovelWeatherEffect.rain => '雨',
+      NovelWeatherEffect.none => '晴',
+      NovelWeatherEffect.cloudy => '阴',
+      NovelWeatherEffect.rain => '小雨',
+      NovelWeatherEffect.heavyRain => '大雨',
+      NovelWeatherEffect.thunderstorm => '雷暴雨',
       NovelWeatherEffect.snow => '雪',
-      NovelWeatherEffect.thunderstorm => '雷雨',
+      NovelWeatherEffect.blizzard => '暴雪',
     };
   }
 
   IconData get icon {
     return switch (this) {
       NovelWeatherEffect.none => Icons.wb_sunny_outlined,
+      NovelWeatherEffect.cloudy => Icons.cloud_outlined,
       NovelWeatherEffect.rain => Icons.water_drop_outlined,
-      NovelWeatherEffect.snow => Icons.ac_unit_rounded,
+      NovelWeatherEffect.heavyRain => Icons.water_rounded,
       NovelWeatherEffect.thunderstorm => Icons.thunderstorm_outlined,
+      NovelWeatherEffect.snow => Icons.ac_unit_rounded,
+      NovelWeatherEffect.blizzard => Icons.ac_unit_rounded,
     };
+  }
+}
+
+enum NovelTimePeriod {
+  morning,
+  noon,
+  afternoon,
+  evening,
+  night,
+  midnight,
+}
+
+NovelTimePeriod novelTimePeriodFromKey(String raw) {
+  final key = raw.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+  if (key == 'midnight' || key.contains('凌晨') || key.contains('深夜')) {
+    return NovelTimePeriod.midnight;
+  }
+  if (key == 'night' || key.contains('夜晚') || key.contains('晚上')) {
+    return NovelTimePeriod.night;
+  }
+  if (key == 'evening' || key.contains('傍晚') || key.contains('黄昏')) {
+    return NovelTimePeriod.evening;
+  }
+  if (key == 'afternoon' || key.contains('下午') || key.contains('午后')) {
+    return NovelTimePeriod.afternoon;
+  }
+  if (key == 'noon' || key.contains('中午') || key.contains('正午')) {
+    return NovelTimePeriod.noon;
+  }
+  return NovelTimePeriod.morning;
+}
+
+extension NovelTimePeriodVisual on NovelTimePeriod {
+  String get label {
+    return switch (this) {
+      NovelTimePeriod.morning => '早晨',
+      NovelTimePeriod.noon => '中午',
+      NovelTimePeriod.afternoon => '下午',
+      NovelTimePeriod.evening => '傍晚',
+      NovelTimePeriod.night => '夜晚',
+      NovelTimePeriod.midnight => '深夜',
+    };
+  }
+
+  IconData get icon {
+    return switch (this) {
+      NovelTimePeriod.morning => Icons.wb_twilight_outlined,
+      NovelTimePeriod.noon => Icons.light_mode_outlined,
+      NovelTimePeriod.afternoon => Icons.wb_sunny_outlined,
+      NovelTimePeriod.evening => Icons.wb_twilight_rounded,
+      NovelTimePeriod.night => Icons.nights_stay_outlined,
+      NovelTimePeriod.midnight => Icons.dark_mode_outlined,
+    };
+  }
+}
+
+class NovelTimeOverlay extends StatelessWidget {
+  const NovelTimeOverlay({
+    super.key,
+    required this.period,
+    this.weatherEffect = NovelWeatherEffect.none,
+  });
+
+  final NovelTimePeriod period;
+  final NovelWeatherEffect weatherEffect;
+
+  bool get _isWetWeather => switch (weatherEffect) {
+        NovelWeatherEffect.cloudy ||
+        NovelWeatherEffect.rain ||
+        NovelWeatherEffect.heavyRain ||
+        NovelWeatherEffect.thunderstorm => true,
+        _ => false,
+      };
+
+  bool get _isSnowWeather => switch (weatherEffect) {
+        NovelWeatherEffect.snow || NovelWeatherEffect.blizzard => true,
+        _ => false,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    // 时间只负责“基础光照”。天气拥有更高视觉优先级：
+    // 阴雨/雷暴会压掉早晨、下午、傍晚的暖色，雪天则改成冷白漫射光。
+    // 这样不会出现“明媚雷暴雨”或“橙红暴雪”的违和组合。
+    final Color tint;
+    final List<Color> lightColors;
+
+    if (weatherEffect == NovelWeatherEffect.thunderstorm) {
+      tint = switch (period) {
+        NovelTimePeriod.morning => const Color(0x24415267),
+        NovelTimePeriod.noon => const Color(0x1E46576A),
+        NovelTimePeriod.afternoon => const Color(0x263C4D61),
+        NovelTimePeriod.evening => const Color(0x30313D52),
+        NovelTimePeriod.night => const Color(0x56203350),
+        NovelTimePeriod.midnight => const Color(0x7210192C),
+      };
+      lightColors = switch (period) {
+        NovelTimePeriod.morning || NovelTimePeriod.noon => const <Color>[
+            Color(0x1C8192A4), Color(0x123C4E62), Colors.transparent,
+          ],
+        NovelTimePeriod.afternoon => const <Color>[
+            Color(0x174B5D70), Color(0x16334255), Colors.transparent,
+          ],
+        NovelTimePeriod.evening => const <Color>[
+            Color(0x123A465A), Color(0x26303A4C), Color(0x30090E19),
+          ],
+        NovelTimePeriod.night => const <Color>[
+            Color(0x102F4868), Color(0x35223653), Color(0x55080D18),
+          ],
+        NovelTimePeriod.midnight => const <Color>[
+            Color(0x0D263B59), Color(0x4A14233A), Color(0x70050912),
+          ],
+      };
+    } else if (weatherEffect == NovelWeatherEffect.heavyRain ||
+        weatherEffect == NovelWeatherEffect.rain ||
+        weatherEffect == NovelWeatherEffect.cloudy) {
+      final strength = weatherEffect == NovelWeatherEffect.heavyRain
+          ? 1.0
+          : weatherEffect == NovelWeatherEffect.rain
+              ? .72
+              : .52;
+      final neutralAlpha = (0x24 * strength).round().clamp(0, 255).toInt();
+      tint = switch (period) {
+        NovelTimePeriod.morning => Color.fromARGB(neutralAlpha, 75, 91, 108),
+        NovelTimePeriod.noon => Color.fromARGB((neutralAlpha * .55).round(), 210, 219, 225),
+        NovelTimePeriod.afternoon => Color.fromARGB(neutralAlpha, 76, 91, 106),
+        NovelTimePeriod.evening => Color.fromARGB((neutralAlpha * 1.15).round().clamp(0, 255).toInt(), 61, 66, 82),
+        NovelTimePeriod.night => const Color(0x4A203860),
+        NovelTimePeriod.midnight => const Color(0x7310192C),
+      };
+      lightColors = switch (period) {
+        NovelTimePeriod.morning => <Color>[
+            Color.fromARGB((26 * strength).round(), 164, 177, 187),
+            Color.fromARGB((12 * strength).round(), 104, 119, 132),
+            Colors.transparent,
+          ],
+        NovelTimePeriod.noon => <Color>[
+            Color.fromARGB((18 * strength).round(), 226, 232, 235),
+            Colors.transparent,
+            Colors.transparent,
+          ],
+        NovelTimePeriod.afternoon => <Color>[
+            Color.fromARGB((22 * strength).round(), 138, 149, 159),
+            Color.fromARGB((12 * strength).round(), 78, 91, 104),
+            Colors.transparent,
+          ],
+        NovelTimePeriod.evening => <Color>[
+            Color.fromARGB((18 * strength).round(), 92, 96, 108),
+            Color.fromARGB((22 * strength).round(), 58, 63, 78),
+            const Color(0x220B1020),
+          ],
+        NovelTimePeriod.night => const <Color>[
+            Color(0x142D4B77), Color(0x2B213B61), Color(0x4D080D1A),
+          ],
+        NovelTimePeriod.midnight => const <Color>[
+            Color(0x12243B64), Color(0x46101E38), Color(0x6D050A14),
+          ],
+      };
+    } else if (_isSnowWeather) {
+      final blizzard = weatherEffect == NovelWeatherEffect.blizzard;
+      tint = switch (period) {
+        NovelTimePeriod.morning => Color(blizzard ? 0x24D8E6F2 : 0x1CE8F4FC),
+        NovelTimePeriod.noon => Color(blizzard ? 0x20E1EAF1 : 0x18F2F8FC),
+        NovelTimePeriod.afternoon => Color(blizzard ? 0x24CCD9E6 : 0x1BDDEAF4),
+        NovelTimePeriod.evening => Color(blizzard ? 0x2A8799B2 : 0x229BAEC7),
+        NovelTimePeriod.night => const Color(0x4D294568),
+        NovelTimePeriod.midnight => const Color(0x68203957),
+      };
+      lightColors = switch (period) {
+        NovelTimePeriod.morning => <Color>[
+            Color(blizzard ? 0x30EDF4F8 : 0x35F5FAFC),
+            const Color(0x14C8D8E6),
+            Colors.transparent,
+          ],
+        NovelTimePeriod.noon => <Color>[
+            Color(blizzard ? 0x2AE9F0F4 : 0x30F8FBFD),
+            const Color(0x10D8E4EC),
+            Colors.transparent,
+          ],
+        NovelTimePeriod.afternoon => const <Color>[
+            Color(0x28E1EAF2), Color(0x139FB4C8), Colors.transparent,
+          ],
+        NovelTimePeriod.evening => const <Color>[
+            Color(0x2097A8BE), Color(0x1C687A95), Color(0x220B1320),
+          ],
+        NovelTimePeriod.night => const <Color>[
+            Color(0x183A5C83), Color(0x302A4364), Color(0x4B09101C),
+          ],
+        NovelTimePeriod.midnight => const <Color>[
+            Color(0x122C4B71), Color(0x44213B5C), Color(0x65060D18),
+          ],
+      };
+    } else {
+      tint = switch (period) {
+        NovelTimePeriod.morning => const Color(0x18FFD49A),
+        NovelTimePeriod.noon => const Color(0x06FFFBEA),
+        NovelTimePeriod.afternoon => const Color(0x17F1B06E),
+        NovelTimePeriod.evening => const Color(0x32B85D38),
+        NovelTimePeriod.night => const Color(0x4A203860),
+        NovelTimePeriod.midnight => const Color(0x7310192C),
+      };
+
+      lightColors = switch (period) {
+        NovelTimePeriod.morning => const <Color>[
+            Color(0x3AFFDCA8), Color(0x0AFFF0D0), Colors.transparent,
+          ],
+        NovelTimePeriod.noon => const <Color>[
+            Color(0x16FFFCE9), Colors.transparent, Colors.transparent,
+          ],
+        NovelTimePeriod.afternoon => const <Color>[
+            Color(0x28F4B66F), Color(0x09E59A52), Colors.transparent,
+          ],
+        NovelTimePeriod.evening => const <Color>[
+            Color(0x38D77B50), Color(0x1CA14642), Color(0x260B1020),
+          ],
+        NovelTimePeriod.night => const <Color>[
+            Color(0x142D4B77), Color(0x2B213B61), Color(0x4D080D1A),
+          ],
+        NovelTimePeriod.midnight => const <Color>[
+            Color(0x12243B64), Color(0x46101E38), Color(0x6D050A14),
+          ],
+      };
+    }
+
+    return IgnorePointer(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 900),
+        curve: Curves.easeInOutCubic,
+        color: tint,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: period == NovelTimePeriod.morning && !_isWetWeather
+                  ? Alignment.topLeft
+                  : Alignment.topCenter,
+              end: Alignment.bottomRight,
+              stops: const <double>[0, .48, 1],
+              colors: lightColors,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -415,11 +698,20 @@ class _NovelWeatherPainter extends CustomPainter {
     switch (effect) {
       case NovelWeatherEffect.none:
         return;
+      case NovelWeatherEffect.cloudy:
+        _paintCloudy(canvas, size);
+        return;
       case NovelWeatherEffect.rain:
         _paintRain(canvas, size);
         return;
+      case NovelWeatherEffect.heavyRain:
+        _paintHeavyRain(canvas, size);
+        return;
       case NovelWeatherEffect.snow:
         _paintSnow(canvas, size);
+        return;
+      case NovelWeatherEffect.blizzard:
+        _paintBlizzard(canvas, size);
         return;
       case NovelWeatherEffect.thunderstorm:
         _paintThunderstorm(canvas, size);
@@ -499,8 +791,109 @@ class _NovelWeatherPainter extends CustomPainter {
     }
   }
 
+  void _paintCloudy(Canvas canvas, Size size) {
+    final shade = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: const <Color>[
+          Color(0x342B3440), Color(0x162C3640), Color(0x0C202832),
+        ],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, shade);
+
+    final cloudPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(.08, -.92),
+        radius: 1.18,
+        colors: const <Color>[
+          Color(0x384D5864), Color(0x1D3C4650), Colors.transparent,
+        ],
+        stops: const <double>[0, .52, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, cloudPaint);
+  }
+
+  void _paintHeavyRain(Canvas canvas, Size size) {
+    final dark = Paint()..color = const Color(0x24202B36);
+    canvas.drawRect(Offset.zero & size, dark);
+    _paintRain(canvas, size);
+
+    final extraPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0x55DFEEF7);
+    final count = compact ? 92 : 136;
+    for (var i = 0; i < count; i++) {
+      final depth = _hash(i, 81);
+      final travel = (_hash(i, 82) + phase * (2 + (i % 3))) % 1.0;
+      final length = 9.0 + depth * 24.0;
+      final x = _hash(i, 83) * (size.width + 44) - 22 + travel * 16;
+      final y = travel * (size.height + 56) - 34;
+      extraPaint.strokeWidth = .30 + depth * .52;
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x + 3 + depth * 5.5, y + length),
+        extraPaint,
+      );
+    }
+  }
+
+  void _paintBlizzard(Canvas canvas, Size size) {
+    final veil = Paint()..color = const Color(0x283B4754);
+    canvas.drawRect(Offset.zero & size, veil);
+    _paintSnow(canvas, size);
+
+    final streakPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0x65F3F7FA);
+    final count = compact ? 74 : 110;
+    for (var i = 0; i < count; i++) {
+      final depth = _hash(i, 91);
+      final travel = (_hash(i, 92) + phase * (2 + (i % 2))) % 1.0;
+      final x = travel * (size.width + 90) - 45;
+      final y = _hash(i, 93) * size.height +
+          math.sin(phase * math.pi * 2 + i) * 18;
+      final len = 10 + depth * 24;
+      streakPaint.strokeWidth = .45 + depth * .8;
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x + len, y + len * .28),
+        streakPaint,
+      );
+    }
+  }
+
   void _paintThunderstorm(Canvas canvas, Size size) {
-    // 雷雨以细雨为基础，不把雨丝突然做粗；主要靠密度、暗部和闪电体现强度。
+    // 雷暴雨先持续压暗环境，再叠加细密暴雨和随机雷光。
+    // 暗部保持稳定，闪电出现时才有足够反差和压迫感。
+    final stormDarkPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: <Color>[
+          const Color(0x92050B12),
+          const Color(0x7208121C),
+          const Color(0x62050A10),
+        ],
+        stops: const <double>[0, .58, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, stormDarkPaint);
+
+    // 顶部再压一层乌云阴影，让天空比地面更沉，不做成均匀黑色蒙版。
+    final cloudShadePaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(.18, -.92),
+        radius: 1.15,
+        colors: <Color>[
+          const Color(0x78101825),
+          const Color(0x3D111A24),
+          Colors.transparent,
+        ],
+        stops: const <double>[0, .52, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, cloudShadePaint);
+
+    // 雷暴雨仍使用细雨丝，不用粗白线；强度主要来自密度、速度和环境压暗。
     _paintRain(canvas, size);
 
     final extraPaint = Paint()
@@ -538,7 +931,7 @@ class _NovelWeatherPainter extends CustomPainter {
     if (flash <= 0) return;
 
     final flashPaint = Paint()
-      ..color = const Color(0xFFD9E8FF).withOpacity((flash * .28).clamp(0.0, .28).toDouble());
+      ..color = const Color(0xFFE4EEFF).withOpacity((flash * .46).clamp(0.0, .46).toDouble());
     canvas.drawRect(Offset.zero & size, flashPaint);
 
     // 只有最强的一组闪光出现可见闪电枝杈，避免每次都像贴图特效。
@@ -713,6 +1106,7 @@ class NovelWorldBackground extends StatefulWidget {
     this.characterPresent = false,
     this.isGenerating = false,
     this.weatherEffect = NovelWeatherEffect.none,
+    this.timePeriod = NovelTimePeriod.noon,
   });
 
   final String url;
@@ -720,6 +1114,7 @@ class NovelWorldBackground extends StatefulWidget {
   final bool characterPresent;
   final bool isGenerating;
   final NovelWeatherEffect weatherEffect;
+  final NovelTimePeriod timePeriod;
 
   @override
   State<NovelWorldBackground> createState() => _NovelWorldBackgroundState();
@@ -826,7 +1221,17 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
   @override
   Widget build(BuildContext context) {
-    final dim = widget.characterPresent ? .12 : .08;
+    final weatherDim = switch (widget.weatherEffect) {
+      NovelWeatherEffect.thunderstorm => .30,
+      NovelWeatherEffect.heavyRain => .16,
+      NovelWeatherEffect.blizzard => .14,
+      NovelWeatherEffect.cloudy => .08,
+      _ => .0,
+    };
+    final dim = math.max(
+      weatherDim,
+      widget.characterPresent ? .12 : .08,
+    );
     final blur = widget.characterPresent ? 2.2 : 0.0;
 
     final imageLayer = AnimatedSwitcher(
@@ -877,6 +1282,10 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       children: <Widget>[
         ClipRect(
           child: RepaintBoundary(child: backgroundLayer),
+        ),
+        NovelTimeOverlay(
+          period: widget.timePeriod,
+          weatherEffect: widget.weatherEffect,
         ),
         AnimatedContainer(
           duration: const Duration(milliseconds: 760),
@@ -1052,27 +1461,31 @@ class NovelLocationHud extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final compact = MediaQuery.sizeOf(context).width < 430;
+    final hasSubtitle = subtitle.trim().isNotEmpty;
     return IgnorePointer(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: compact ? 235 : 330),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Container(
-              width: 2,
-              height: subtitle.trim().isEmpty ? 22 : 34,
-              margin: const EdgeInsets.only(top: 1, right: 8),
-              decoration: BoxDecoration(
-                color: NovelPalette.accent.withOpacity(.72),
-                borderRadius: BorderRadius.circular(2),
+        child: SizedBox(
+          height: hasSubtitle ? 38 : 30,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                width: 2,
+                height: hasSubtitle ? 30 : 20,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: NovelPalette.accent.withOpacity(.72),
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-            ),
-            Flexible(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
                   if (subtitle.trim().isNotEmpty)
                     Text(
                       subtitle,
@@ -1106,10 +1519,11 @@ class NovelLocationHud extends StatelessWidget {
                       ],
                     ),
                   ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1490,6 +1904,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   String _lastFullText = '';
   late final ValueNotifier<String> _displayTextNotifier;
   bool _revealing = false;
+  bool _typingSoundForReveal = false;
+  final Set<String> _typingSoundVisited = <String>{};
   bool _showSwipeHint = true;
   Timer? _swipeHintTimer;
   double _horizontalDragDistance = 0;
@@ -1503,6 +1919,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   void initState() {
     super.initState();
     _displayTextNotifier = ValueNotifier<String>('');
+    widget.textController.addListener(_handleInputTextChanged);
     _swipeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -1518,7 +1935,43 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   @override
   void didUpdateWidget(covariant NovelDialogPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.textController != widget.textController) {
+      oldWidget.textController.removeListener(_handleInputTextChanged);
+      widget.textController.addListener(_handleInputTextChanged);
+    }
     _syncReveal();
+  }
+
+  void _handleInputTextChanged() {
+    if (mounted) setState(() {});
+  }
+
+  double _adaptiveFooterHeight({
+    required double availableWidth,
+    required bool compact,
+    required bool choicesVisible,
+  }) {
+    final base = compact ? 52.0 : 54.0;
+    final text = widget.textController.text;
+    if (text.isEmpty) return base;
+
+    // 与实际输入栏宽度保持近似：页面主体最多 720，扣除继续按钮、幸运卡和发送键。
+    var textWidth = math.min(availableWidth, 720.0) - 124.0;
+    if (!choicesVisible) textWidth -= 56.0;
+    if (controller.luckyCardCount > 0) textWidth -= 54.0;
+    textWidth = textWidth.clamp(150.0, 560.0).toDouble();
+
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: const TextStyle(fontSize: 14, height: 1.35),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 5,
+    )..layout(maxWidth: textWidth);
+
+    final lines = painter.computeLineMetrics().length.clamp(1, 5);
+    return base + (lines - 1) * (compact ? 19.0 : 20.0);
   }
 
   // _syncReveal 会在句子变化时更新缓存。逐字动画期间直接读缓存，
@@ -1536,12 +1989,24 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     }
   }
 
+  String get _currentAssistantMessageKey {
+    final message = controller.lastAssistantMessage;
+    final id = message?.id.trim() ?? '';
+    if (id.isNotEmpty) return id;
+    return 'timestamp:${message?.timestamp ?? 0}';
+  }
+
   void _syncReveal({bool force = false}) {
     final sentence = controller.currentSentence;
     // 后端已输出最终可展示的 currentSentence；前端不再做角色名/动作/引号解析。
     final full = _sanitizeNovelStreamingText(sentence?.text.trim() ?? '');
+
+    // 必须把 assistant message id 放进 identity。
+    // 否则新一轮回复如果仍是“第 0 句 + 同一个说话人 + 同一种类型”，
+    // 会被误判成上一轮句子的 SSE 续写，继承旧的逐字与音效状态。
+    final messageKey = _currentAssistantMessageKey;
     final identity =
-        '${controller.currentSentenceIndex}|${sentence?.speakerName ?? ''}|${sentence?.type ?? ''}';
+        '$messageKey|${controller.currentSentenceIndex}|${sentence?.speakerName ?? ''}|${sentence?.type ?? ''}';
 
     if (force || identity != _lastIdentity) {
       _lastIdentity = identity;
@@ -1550,6 +2015,19 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       _revealTimer = null;
       _visibleLength = 0;
       _displayTextNotifier.value = '';
+
+      // 每一段“第一次逐字展示”都允许播放打字声。
+      // 生成过程中允许实时响；生成完成后按“本轮消息 + 句子序号”记忆，
+      // 因此向前阅读新句会响，向后回看已经展示过的句子不会重复响。
+      if (controller.isGenerating) {
+        _typingSoundForReveal = true;
+      } else {
+        // 用 message id 而不是 timestamp。服务端时间戳可能只有秒级精度，
+        // 连续两轮回复可能撞 key，造成整句被误判为“已经响过”。
+        final soundKey = '$messageKey|${controller.currentSentenceIndex}';
+        _typingSoundForReveal = _typingSoundVisited.add(soundKey);
+      }
+
       _revealing = full.isNotEmpty;
       _scheduleReveal();
       return;
@@ -1607,6 +2085,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
           (_visibleLength + step).clamp(0, latestRunes.length);
       _publishVisibleText();
 
+      // 每一段首次逐字展示都播放；回退重看已经展示过的句子保持安静。
+      if (controller.settings.typingSoundEnabled &&
+          _typingSoundForReveal &&
+          current.trim().isNotEmpty) {
+        controller.bgm.playTypingTick();
+      }
+
       if (_visibleLength >= latestRunes.length) {
         _finishReveal();
       } else {
@@ -1626,11 +2111,18 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       _visibleLength = _fullRuneLength;
       _publishVisibleText();
       _finishReveal();
+      unawaited(controller.bgm.stopTypingSound());
       return;
     }
     if (controller.hasNext || controller.pendingFateRevert) {
-      controller.goNext();
+      unawaited(_goNextAfterTypingStops());
     }
+  }
+
+  Future<void> _goNextAfterTypingStops() async {
+    await controller.bgm.stopTypingSound();
+    if (!mounted) return;
+    controller.goNext();
   }
 
   double _swipeLimit(double width) =>
@@ -1712,6 +2204,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     if (_revealing) {
       _finishReveal();
     }
+    await controller.bgm.stopTypingSound();
+    if (!mounted) return;
 
     final width = MediaQuery.sizeOf(context).width;
     final exit = _swipeLimit(width) * (direction < 0 ? -1 : 1);
@@ -1829,6 +2323,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   void dispose() {
     _revealTimer?.cancel();
     _swipeHintTimer?.cancel();
+    widget.textController.removeListener(_handleInputTextChanged);
     _swipeController.dispose();
     _displayTextNotifier.dispose();
     super.dispose();
@@ -1874,7 +2369,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
         // 回看剧情时底部不再放“角色 / 经历 / 物品”，
         // 让画面底部只保留自然呼吸区。
-        final footerHeight = browsingStory ? 0.0 : (compact ? 52.0 : 54.0);
+        final footerHeight = browsingStory
+            ? 0.0
+            : _adaptiveFooterHeight(
+                availableWidth: constraints.maxWidth,
+                compact: compact,
+                choicesVisible: canShowChoices,
+              );
         final footerBottom = compact ? 4.0 : 8.0;
 
         // 按真实视觉高度预留，不再给选择区留过多空白。
@@ -3361,10 +3862,15 @@ class _NovelDialogFooter extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    return SizedBox(
-      height: 52,
-      child: Row(
-        children: <Widget>[
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 170),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.bottomCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 52, maxHeight: 134),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: <Widget>[
           if (!choicesAvailable) ...<Widget>[
             _GameContinueButton(onTap: onContinue),
             const SizedBox(width: 9),
@@ -3381,6 +3887,7 @@ class _NovelDialogFooter extends StatelessWidget {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -3689,6 +4196,7 @@ class _VueContinueButton extends StatelessWidget {
 class NovelCinematicControls extends StatefulWidget {
   const NovelCinematicControls({
     super.key,
+    required this.controller,
     required this.text,
     required this.speakerName,
     required this.isGenerating,
@@ -3702,6 +4210,7 @@ class NovelCinematicControls extends StatefulWidget {
     required this.onContinue,
   });
 
+  final NovelGameController controller;
   final String text;
   final String speakerName;
   final bool isGenerating;
@@ -3719,69 +4228,165 @@ class NovelCinematicControls extends StatefulWidget {
 }
 
 class _NovelCinematicControlsState extends State<NovelCinematicControls> {
-  Timer? _revealTimer;
   Timer? _typingTimer;
   int _visibleLength = 0;
+  String _lastRevealKey = '';
+  String _lastSafeText = '';
   bool _revealing = false;
+  bool _typingSoundForReveal = false;
+  final Set<String> _typingSoundVisited = <String>{};
+
+  NovelGameController get controller => widget.controller;
+
+  String get _currentAssistantMessageKey {
+    final message = controller.lastAssistantMessage;
+    final id = message?.id.trim() ?? '';
+    if (id.isNotEmpty) return id;
+    return 'timestamp:${message?.timestamp ?? 0}';
+  }
+
+  String get _currentRevealKey =>
+      '$_currentAssistantMessageKey|${controller.currentSentenceIndex}|${widget.speakerName}';
 
   @override
   void initState() {
     super.initState();
-    _typingTimer = Timer.periodic(const Duration(milliseconds: 30), (timer) {
-      if (!mounted) return;
-      if (widget.text.isEmpty) {
-        timer.cancel();
-        return;
-      }
-      final safeText = _sanitizeNovelStreamingText(widget.text);
-      final runeLength = safeText.runes.length;
-      setState(() => _visibleLength = (_visibleLength + 1).clamp(0, runeLength));
-      if (_visibleLength >= runeLength) timer.cancel();
-    });
+    _syncReveal(force: true);
   }
 
   @override
   void didUpdateWidget(covariant NovelCinematicControls oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text) {
+    _syncReveal();
+  }
+
+  /// 电影模式与普通剧情使用同一套原则：
+  /// - 新句从 0 开始逐字显示并播放打字声；
+  /// - SSE 只是补长当前句时，不把已经显示的文字清零；
+  /// - 回退后再次看到已经展示过的句子，不重复播放音效。
+  void _syncReveal({bool force = false}) {
+    final safeText = _sanitizeNovelStreamingText(widget.text);
+    final revealKey = _currentRevealKey;
+
+    if (force || revealKey != _lastRevealKey) {
       _typingTimer?.cancel();
+      _typingTimer = null;
+      _lastRevealKey = revealKey;
+      _lastSafeText = safeText;
       _visibleLength = 0;
-      _typingTimer = Timer.periodic(const Duration(milliseconds: 30), (timer) {
-        if (!mounted) return;
-        if (widget.text.isEmpty) {
-          timer.cancel();
-          return;
-        }
-        setState(() => _visibleLength = (_visibleLength + 1).clamp(0, widget.text.length));
-        if (_visibleLength >= widget.text.length) timer.cancel();
-      });
+
+      if (widget.isGenerating) {
+        _typingSoundForReveal = true;
+      } else {
+        _typingSoundForReveal = _typingSoundVisited.add(revealKey);
+      }
+
+      _revealing = safeText.isNotEmpty;
+      _scheduleReveal();
+      if (!force && mounted) setState(() {});
+      return;
+    }
+
+    if (safeText != _lastSafeText) {
+      final previousLength = _lastSafeText.runes.length;
+      final nextLength = safeText.runes.length;
+      _lastSafeText = safeText;
+
+      if (_visibleLength > nextLength) {
+        _visibleLength = nextLength;
+        if (mounted) setState(() {});
+      }
+
+      if (nextLength > previousLength &&
+          _visibleLength < nextLength &&
+          _typingTimer == null) {
+        _revealing = true;
+        _scheduleReveal();
+      }
     }
   }
 
-  void _finishReveal() {
+  void _scheduleReveal() {
     _typingTimer?.cancel();
-    if (mounted) {
-      setState(
-        () => _visibleLength =
-            _sanitizeNovelStreamingText(widget.text).runes.length,
-      );
+    final runes = _lastSafeText.runes.toList(growable: false);
+    if (!mounted || _visibleLength >= runes.length) {
+      _typingTimer = null;
+      _revealing = false;
+      return;
     }
+
+    _typingTimer = Timer(const Duration(milliseconds: 30), () {
+      if (!mounted) return;
+      final latestRunes = _lastSafeText.runes.toList(growable: false);
+      if (latestRunes.isEmpty || _visibleLength >= latestRunes.length) {
+        _finishReveal();
+        return;
+      }
+
+      final current = String.fromCharCode(
+        latestRunes[_visibleLength.clamp(0, latestRunes.length - 1)],
+      );
+      _visibleLength = (_visibleLength + 1).clamp(0, latestRunes.length);
+
+      if (controller.settings.typingSoundEnabled &&
+          _typingSoundForReveal &&
+          current.trim().isNotEmpty) {
+        controller.bgm.playTypingTick();
+      }
+
+      if (mounted) setState(() {});
+      if (_visibleLength >= latestRunes.length) {
+        _finishReveal();
+      } else {
+        _scheduleReveal();
+      }
+    });
+  }
+
+  void _finishReveal({bool revealAll = false}) {
+    _typingTimer?.cancel();
+    _typingTimer = null;
+    if (revealAll) {
+      _visibleLength = _lastSafeText.runes.length;
+    }
+    _revealing = false;
+    if (mounted) setState(() {});
   }
 
   void _handleScreenTap() {
-    if (!widget.isGenerating) widget.onContinue();
+    if (_revealing) {
+      _finishReveal(revealAll: true);
+      unawaited(controller.bgm.stopTypingSound());
+      return;
+    }
+    if (!widget.isGenerating) {
+      unawaited(_navigateAfterTypingStops(widget.onContinue));
+    }
+  }
+
+  void _handlePrevious() {
+    unawaited(_navigateAfterTypingStops(widget.onPrevious));
+  }
+
+  void _handleNext() {
+    unawaited(_navigateAfterTypingStops(widget.onNext));
+  }
+
+  Future<void> _navigateAfterTypingStops(VoidCallback navigate) async {
+    await controller.bgm.stopTypingSound();
+    if (!mounted) return;
+    navigate();
   }
 
   @override
   void dispose() {
-    _revealTimer?.cancel();
     _typingTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final safeText = _sanitizeNovelStreamingText(widget.text);
+    final safeText = _lastSafeText;
     final displayText = _novelPrefixByRunes(safeText, _visibleLength);
     final narration = widget.speakerName.trim().isEmpty;
     return GestureDetector(
@@ -3792,9 +4397,9 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
           final velocity = details.primaryVelocity ?? 0;
           if (velocity.abs() < 260) return;
           if (velocity < 0 && !widget.isLast) {
-            widget.onNext();
+            _handleNext();
           } else if (velocity > 0 && !widget.isFirst) {
-            widget.onPrevious();
+            _handlePrevious();
           }
         },
         child: Stack(
@@ -3837,7 +4442,7 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
                         children: <Widget>[
                           const SizedBox(width: 38),
                           const Spacer(),
-                          _GameContinueButton(onTap: widget.isGenerating ? null : widget.onContinue),
+                          _GameContinueButton(onTap: widget.isGenerating ? null : _handleScreenTap),
                           const Spacer(),
                           IgnorePointer(child: Opacity(opacity: (widget.isFirst && widget.isLast) ? 0 : 1, child: const _LuxurySwipeHint())),
                         ],
@@ -3971,7 +4576,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
         opacity: widget.enabled ? 1 : .50,
         duration: const Duration(milliseconds: 160),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: <Widget>[
             if (widget.luckyCardCount > 0) ...<Widget>[
               ClipRRect(
@@ -4019,7 +4624,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                         sigma: 22,
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 170),
-                          constraints: const BoxConstraints(minHeight: 48),
+                          constraints: const BoxConstraints(minHeight: 48, maxHeight: 128),
                           padding: const EdgeInsets.fromLTRB(15, 5, 6, 5),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(focused ? .12 : .085),
@@ -4037,7 +4642,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                             ],
                           ),
                           child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: <Widget>[
                               Expanded(
                                 child: Focus(
@@ -4047,7 +4652,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                     focusNode: widget.focusNode,
                                     enabled: widget.enabled,
                                     minLines: 1,
-                                    maxLines: 3,
+                                    maxLines: 5,
                                     keyboardType: TextInputType.multiline,
                                     textInputAction: TextInputAction.send,
                                     onSubmitted: (_) => _submit(),

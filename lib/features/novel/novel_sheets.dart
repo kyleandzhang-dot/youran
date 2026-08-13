@@ -697,6 +697,25 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                     ),
                     Divider(height: 1, color: Colors.white.withOpacity(.14)),
                     _CleanSettingsRow(
+                      icon: Icons.keyboard_alt_outlined,
+                      title: '打字音效',
+                      subtitle: settings.typingSoundEnabled
+                          ? '逐字显示时播放轻微打字声'
+                          : '逐字显示保持静音',
+                      trailing: Switch.adaptive(
+                        value: settings.typingSoundEnabled,
+                        activeColor: NovelPalette.accent,
+                        onChanged: (value) async {
+                          await settings.setTypingSoundEnabled(value);
+                          if (!value) {
+                            await controller.bgm.stopTypingSound();
+                          }
+                          if (mounted) setState(() {});
+                        },
+                      ),
+                    ),
+                    Divider(height: 1, color: Colors.white.withOpacity(.14)),
+                    _CleanSettingsRow(
                       icon: Icons.cloud_outlined,
                       title: '天气特效',
                       subtitle: settings.weatherEffectsEnabled

@@ -42,7 +42,8 @@ flutter:
 
   assets:
     - assets/images/
-    - assets/icon/
+    - assets/audio/weather/
+    - assets/audio/ui/
 
   # Enable only after the actual font files are added.
   # fonts:

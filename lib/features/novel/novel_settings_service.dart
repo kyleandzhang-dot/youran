@@ -10,6 +10,7 @@ class NovelSettingsService extends ChangeNotifier {
   String customBackground = '';
   String artStyle = 'anime';
   bool weatherEffectsEnabled = true;
+  bool typingSoundEnabled = true;
 
   Future<void> load() async {
     fontKey = await _prefs.getString('novel-font') ?? 'font-wenkai';
@@ -19,6 +20,8 @@ class NovelSettingsService extends ChangeNotifier {
     artStyle = await _prefs.getString('novel-art-style') ?? 'anime';
     weatherEffectsEnabled =
         await _prefs.getBool('novel-weather-effects-enabled') ?? true;
+    typingSoundEnabled =
+        await _prefs.getBool('novel-typing-sound-enabled') ?? true;
     // 兼容旧 Flutter 版本曾使用的字体 key，并统一成 Vue 当前 key。
     if (fontKey == 'font-serif') fontKey = 'font-song';
     if (fontKey == 'font-sans') fontKey = 'font-hei';
@@ -56,6 +59,12 @@ class NovelSettingsService extends ChangeNotifier {
   Future<void> setWeatherEffectsEnabled(bool value) async {
     weatherEffectsEnabled = value;
     await _prefs.setBool('novel-weather-effects-enabled', value);
+    notifyListeners();
+  }
+
+  Future<void> setTypingSoundEnabled(bool value) async {
+    typingSoundEnabled = value;
+    await _prefs.setBool('novel-typing-sound-enabled', value);
     notifyListeners();
   }
 

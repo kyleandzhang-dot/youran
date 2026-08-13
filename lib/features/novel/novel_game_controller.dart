@@ -50,6 +50,7 @@ class NovelGameController extends ChangeNotifier {
 
   NovelScenario? scenario;
   NovelWorldState world = const NovelWorldState();
+  String worldTimePeriodKey = '';
   List<NovelMessage> messages = <NovelMessage>[];
   List<NovelSentence> sentences = <NovelSentence>[];
   List<NovelChoice> choices = <NovelChoice>[];
@@ -67,6 +68,31 @@ class NovelGameController extends ChangeNotifier {
   final Map<String, String> characterExpressions = <String, String>{};
   /// 正在自动生成立绘的角色 id 集合（素材库未命中时后端触发），供 UI 显示"生成中"占位
   final Set<String> generatingPortraitCharacterIds = <String>{};
+
+
+  String _normalizeWorldTimePeriodKey(String raw) {
+    final value = raw.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+    if (value == 'morning') return 'morning';
+    if (value == 'noon') return 'noon';
+    if (value == 'afternoon') return 'afternoon';
+    if (value == 'evening') return 'evening';
+    if (value == 'night') return 'night';
+    if (value == 'midnight') return 'midnight';
+    if (value.contains('凌晨') || value.contains('深夜')) return 'midnight';
+    if (value.contains('夜晚') || value.contains('晚上')) return 'night';
+    if (value.contains('傍晚') || value.contains('黄昏')) return 'evening';
+    if (value.contains('下午') || value.contains('午后')) return 'afternoon';
+    if (value.contains('中午') || value.contains('正午')) return 'noon';
+    if (value.contains('清晨') || value.contains('早晨') || value.contains('上午')) return 'morning';
+    return '';
+  }
+
+  String get effectiveWorldTimePeriodKey {
+    final explicit = _normalizeWorldTimePeriodKey(worldTimePeriodKey);
+    if (explicit.isNotEmpty) return explicit;
+    final inferred = _normalizeWorldTimePeriodKey(world.timeDescription);
+    return inferred.isNotEmpty ? inferred : 'noon';
+  }
 
   /// 远端 AI 模型配置。Vue 原版把这部分散在 index.vue；
   /// Flutter 收拢到 Controller，页面只负责展示和选择。
@@ -290,7 +316,9 @@ class NovelGameController extends ChangeNotifier {
       ]);
       scenario = await backend.fetchScenario(scenarioId, full: true);
       world = scenario!.worldState;
+      worldTimePeriodKey = _normalizeWorldTimePeriodKey(world.timeDescription);
       bgm.setConfig(scenario!.bgmConfig);
+      unawaited(bgm.preloadTypingSfx());
 
       // 模型配置不是进入剧情的硬依赖：接口异常时不应该让整个小说页初始化失败。
       await _loadModelConfig(notify: false);
@@ -395,6 +423,16 @@ class NovelGameController extends ChangeNotifier {
         world.currentDay,
       ),
     );
+    final historyWorldTime = asJsonMap(attributes['world_time']);
+    final historyPeriodKey = stringValue(
+      attributes['period_key'] ?? historyWorldTime['period_key'],
+    );
+    final normalizedHistoryPeriod = _normalizeWorldTimePeriodKey(
+      historyPeriodKey.isNotEmpty ? historyPeriodKey : world.timeDescription,
+    );
+    if (normalizedHistoryPeriod.isNotEmpty) {
+      worldTimePeriodKey = normalizedHistoryPeriod;
+    }
 
     if (attributes['protagonist_condition'] != null) {
       protagonistCondition = stringValue(attributes['protagonist_condition'], protagonistCondition);
@@ -1049,6 +1087,16 @@ class NovelGameController extends ChangeNotifier {
       weather: stringValue(extra['weather'], world.weather),
       atmosphere: stringValue(extra['atmosphere'], world.atmosphere),
     );
+    final messageWorldTime = asJsonMap(extra['world_time']);
+    final messagePeriodKey = stringValue(
+      extra['period_key'] ?? messageWorldTime['period_key'],
+    );
+    final normalizedMessagePeriod = _normalizeWorldTimePeriodKey(
+      messagePeriodKey.isNotEmpty ? messagePeriodKey : world.timeDescription,
+    );
+    if (normalizedMessagePeriod.isNotEmpty) {
+      worldTimePeriodKey = normalizedMessagePeriod;
+    }
 
     isGenerating = false;
     _rebuildSentences(resetIndex: true);
@@ -1517,10 +1565,11 @@ class NovelGameController extends ChangeNotifier {
         playerHint = stringValue(data['player_hint']);
         break;
       case 'world_state_update':
+        final worldTimeData = asJsonMap(data['world_time']);
         world = world.copyWith(
           location: stringValue(data['current_location'] ?? data['location'], world.location),
           timeDescription: stringValue(
-            data['time_desc'] ?? asJsonMap(data['world_time'])['period_name'],
+            data['time_desc'] ?? worldTimeData['period_name'],
             world.timeDescription,
           ),
           weather: stringValue(data['weather'], world.weather),
@@ -1528,6 +1577,13 @@ class NovelGameController extends ChangeNotifier {
           timeLabel: stringValue(data['time_label'], world.timeLabel),
           currentDay: intValue(data['story_current_day'] ?? data['current_day'], world.currentDay),
         );
+        final incomingPeriodKey = stringValue(worldTimeData['period_key']);
+        final normalizedPeriod = _normalizeWorldTimePeriodKey(
+          incomingPeriodKey.isNotEmpty ? incomingPeriodKey : world.timeDescription,
+        );
+        if (normalizedPeriod.isNotEmpty) {
+          worldTimePeriodKey = normalizedPeriod;
+        }
         if (boolValue(data['is_timeskip']) && stringValue(data['time_label']).isNotEmpty) {
           timeSkipLabel = stringValue(data['time_label']);
         }
