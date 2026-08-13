@@ -1,0 +1,86 @@
+# ios/fastlane/Fastfile
+#
+# 使用前请修改下面标了 【需修改】 的地方:
+# 1. app_identifier / apple_id 相关信息
+# 2. match 的 git_url(存放证书的私有仓库)
+# 3. team_id(Apple Developer Team ID)
+
+default_platform(:ios)
+
+platform :ios do
+
+  # ============ 公共:App Store Connect API Key 认证 ============
+  # 对应 workflow 里传进来的三个环境变量:
+  #   APP_STORE_CONNECT_API_KEY_ID
+  #   APP_STORE_CONNECT_API_ISSUER_ID
+  #   APP_STORE_CONNECT_API_KEY_CONTENT (base64 或原始 .p8 内容均可,这里按原始内容处理)
+  lane :api_key do
+    app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_API_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_API_ISSUER_ID"],
+      key_content: ENV["APP_STORE_CONNECT_API_KEY_CONTENT"],
+      is_key_content_base64: false,
+      in_house: false # 【需修改】如果是 Apple Enterprise 账号(In-House分发)改成 true
+    )
+  end
+
+  # ============ Ad Hoc 打包(用于 R2/Diawi 分发,不走 TestFlight) ============
+  desc "Build Ad Hoc ipa for R2/Diawi distribution"
+  lane :adhoc do
+    api_key
+
+    match(
+      type: "adhoc",
+      readonly: false, # 【临时】首次为 com.yoran.app 生成证书,用完后改回 is_ci
+      app_identifier: "com.yoran.app",
+      git_url: "https://github.com/kyleandzhang-dot/ios-certificates.git",
+      git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"]
+    )
+
+    build_app(
+      export_method: "ad-hoc",
+      scheme: "Runner", # Flutter 项目默认 scheme 是 Runner
+      workspace: "Runner.xcworkspace",
+      output_directory: ".",
+      output_name: "Runner.ipa",
+      export_options: {
+        provisioningProfiles: {
+          "com.yoran.app" => "match AdHoc com.yoran.app"
+        }
+      }
+    )
+  end
+
+  # ============ TestFlight 打包(可选,由仓库 Variable PUSH_TO_TESTFLIGHT 控制) ============
+  desc "Build and push to TestFlight"
+  lane :beta do
+    api_key
+
+    match(
+      type: "appstore",
+      readonly: false, # 【临时】首次为 com.yoran.app 生成证书,用完后改回 is_ci
+      app_identifier: "com.yoran.app",
+      git_url: "https://github.com/kyleandzhang-dot/ios-certificates.git",
+      git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"]
+    )
+
+    build_app(
+      export_method: "app-store",
+      scheme: "Runner",
+      workspace: "Runner.xcworkspace",
+      output_directory: ".",
+      output_name: "Runner.ipa",
+      export_options: {
+        provisioningProfiles: {
+          "com.yoran.app" => "match AppStore com.yoran.app"
+        }
+      }
+    )
+
+    upload_to_testflight(
+      skip_waiting_for_build_processing: true,
+      apple_id: ENV["APP_STORE_CONNECT_API_KEY_ID"] ? nil : "your-apple-id@example.com" # 用 API Key 认证时无需手动填 apple_id
+    )
+  end
+
+end

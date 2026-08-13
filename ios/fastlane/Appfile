@@ -1,0 +1,7 @@
+# ios/fastlane/Appfile
+#
+# 【仍需修改】apple_id 和 team_id 换成你的真实信息(Bundle ID 已填好)
+
+app_identifier("com.yoran.app")
+apple_id(ENV["FASTLANE_APPLE_ID"] || "your-apple-id@example.com") # 用 API Key 认证时这个字段基本不生效,但建议保留占位
+team_id("85F7XUQB6K") # 【需修改】Apple Developer Team ID,登录 developer.apple.com -> Membership 页面能看到,10位字母数字,你之前截图里是 85F7XUQB6K,如果是同一个账号可以直接用

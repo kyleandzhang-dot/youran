@@ -1,0 +1,204 @@
+name: iOS Beta Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+env:
+  XCODE_VERSION: 'latest-stable'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Cache Flutter pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      # - name: Set build number
+      #   run: |
+      #     VERSION_NAME=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d '+' -f 1)
+      #     sed -i.bak "s/^version: .*/version: ${VERSION_NAME}+${{ github.run_number }}/" pubspec.yaml
+      #     cat pubspec.yaml | grep version
+
+      - name: Build Flutter iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: Install fastlane
+        run: gem install fastlane
+
+      - name: Run fastlane adhoc (Ad Hoc签名,用于R2/Diawi分发,不走TestFlight)
+        working-directory: ios
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+        run: fastlane adhoc
+
+      - name: Run fastlane beta (可选,由仓库Variable PUSH_TO_TESTFLIGHT 控制,推送TestFlight)
+        if: ${{ vars.PUSH_TO_TESTFLIGHT == 'true' }}
+        working-directory: ios
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+        run: fastlane beta
+
+      - name: Get build info
+        id: build_info
+        run: |
+          BUILD_TIME=$(date +%Y%m%d-%H%M%S)
+          echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
+          echo "ipa_name=AITavern-${BUILD_TIME}.ipa" >> "$GITHUB_OUTPUT"
+
+      - name: Generate manifest.plist
+        run: |
+          cat <<EOF > manifest.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>items</key>
+              <array>
+                  <dict>
+                      <key>assets</key>
+                      <array>
+                          <dict>
+                              <key>kind</key>
+                              <string>software-package</string>
+                              <key>url</key>
+                              <string>${{ vars.R2_PUBLIC_URL }}/ios-app/${{ steps.build_info.outputs.ipa_name }}</string>
+                          </dict>
+                      </array>
+                      <key>metadata</key>
+                      <dict>
+                          <key>bundle-identifier</key>
+                          <string>com.yoran.app</string>
+                          <key>bundle-version</key>
+                          <string>${{ github.run_number }}</string>
+                          <key>kind</key>
+                          <string>software</string>
+                          <key>title</key>
+                          <string>AI Tavern</string>
+                      </dict>
+                  </dict>
+              </array>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Install AWS CLI (for R2 upload, R2兼容S3协议)
+        run: |
+          if ! command -v aws &> /dev/null; then
+            pip3 install awscli --break-system-packages 2>/dev/null || pip3 install awscli
+          fi
+
+      - name: Upload IPA + manifest to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          ENDPOINT="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+
+          aws s3 cp ios/Runner.ipa \
+            "s3://${{ secrets.R2_BUCKET }}/ios-app/${{ steps.build_info.outputs.ipa_name }}" \
+            --endpoint-url "$ENDPOINT" \
+            --content-type "application/octet-stream"
+
+          aws s3 cp manifest.plist \
+            "s3://${{ secrets.R2_BUCKET }}/ios-app/manifest-${{ steps.build_info.outputs.build_time }}.plist" \
+            --endpoint-url "$ENDPOINT" \
+            --content-type "application/xml"
+
+      - name: Print install link
+        run: |
+          MANIFEST_URL="${{ vars.R2_PUBLIC_URL }}/ios-app/manifest-${{ steps.build_info.outputs.build_time }}.plist"
+          INSTALL_LINK="itms-services://?action=download-manifest&url=${MANIFEST_URL}"
+          echo "$INSTALL_LINK" > install_link.txt
+          echo "=================================================="
+          echo "📱 手机Safari打开下面链接直接安装:"
+          echo "$INSTALL_LINK"
+          echo "=================================================="
+          echo "### 📱 手机安装链接" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$INSTALL_LINK\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[点击安装](${INSTALL_LINK})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate QR code and upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          if ! command -v qrencode &> /dev/null; then
+            brew install qrencode
+          fi
+
+          INSTALL_LINK=$(cat install_link.txt)
+          qrencode -o qrcode.png -s 10 -m 2 "$INSTALL_LINK"
+
+          ENDPOINT="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          QR_NAME="qrcode-${{ steps.build_info.outputs.build_time }}.png"
+
+          aws s3 cp qrcode.png \
+            "s3://${{ secrets.R2_BUCKET }}/ios-app/qrcode/${QR_NAME}" \
+            --endpoint-url "$ENDPOINT" \
+            --content-type "image/png"
+
+          echo "qr_name=${QR_NAME}" >> "$GITHUB_OUTPUT"
+        id: qr
+
+      - name: Embed QR code in Summary
+        run: |
+          QR_URL="${{ vars.R2_PUBLIC_URL }}/ios-app/qrcode/${{ steps.qr.outputs.qr_name }}"
+          {
+            echo ""
+            echo "### 📷 扫码安装 (iPhone相机或微信扫一扫)"
+            echo ""
+            echo "![install qrcode](${QR_URL})"
+          } >> "$GITHUB_STEP_SUMMARY"
