@@ -2168,15 +2168,17 @@ class _InlineCharacterVisualEditorState
               : _localContentType,
         );
 
-        // 手动上传的是“立绘”，只更新 portrait。
-        // 头像 avatar 保持原值，禁止再用立绘覆盖头像。
+        // 当前没有独立头像时，上传的立绘同时作为头像兜底。
+        if (finalAvatar.trim().isEmpty ||
+            finalAvatar == widget.character.avatarUrl) {
+          finalAvatar = finalPortrait;
+        }
       }
 
       await widget.controller.updateCharacterVisuals(
         character: widget.character,
         portraitUrl: finalPortrait,
-        // 本地上传只改立绘；AI 生成时才允许同步后端返回的独立头像。
-        avatarUrl: _localBytes != null ? null : finalAvatar,
+        avatarUrl: finalAvatar,
       );
 
       // 立绘保存属于原地编辑，不需要再额外弹“XXX 立绘已更新”状态提示。
@@ -2756,14 +2758,16 @@ Future<void> showNovelPortraitSheet(
                       : localContentType,
                 );
 
-                // 快捷上传同样只修改立绘，头像保持原值。
+                if (finalAvatar.trim().isEmpty ||
+                    finalAvatar == target.avatarUrl) {
+                  finalAvatar = finalPortrait;
+                }
               }
 
               await controller.updateCharacterVisuals(
                 character: target,
                 portraitUrl: finalPortrait,
-                // 快捷本地上传只改立绘；AI 生成仍可保存独立头像。
-                avatarUrl: localBytes != null ? null : finalAvatar,
+                avatarUrl: finalAvatar,
               );
 
               // 快捷更换立绘成功后不需要顶部再显示“XXX 立绘已更新”。

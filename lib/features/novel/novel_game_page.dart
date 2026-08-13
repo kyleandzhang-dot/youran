@@ -47,8 +47,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _endingOpen = false;
   bool _balanceOpen = false;
   NovelWeatherEffect _weatherPreview = NovelWeatherEffect.none;
-  String _lastWeatherAudioKey = '';
-  bool? _lastWeatherEffectsEnabled;
 
   NovelGameController get controller => widget.controller;
 
@@ -58,9 +56,6 @@ class _NovelGamePageState extends State<NovelGamePage>
     WidgetsBinding.instance.addObserver(this);
     controller.addListener(_onControllerChanged);
     unawaited(controller.initialize());
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_syncWeatherAmbient(force: true));
-    });
   }
 
   @override
@@ -77,16 +72,18 @@ class _NovelGamePageState extends State<NovelGamePage>
         controller.bgm.currentIntensity,
         controller.bgm.currentSceneMode,
       ));
-      unawaited(_syncWeatherAmbient(force: true));
+      unawaited(controller.bgm.setWeatherAmbient(
+        controller.bgm.currentWeatherKey,
+        effectsEnabled: controller.settings.weatherEffectsEnabled,
+        force: true,
+      ));
     }
   }
 
   void _onControllerChanged() {
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _processOverlayRequests();
-      unawaited(_syncWeatherAmbient());
+      if (mounted) _processOverlayRequests();
     });
   }
 
@@ -254,8 +251,8 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
 
-  String get _weatherAudioKey {
-    return switch (_weatherPreview) {
+  String _weatherAudioKey(NovelWeatherEffect effect) {
+    return switch (effect) {
       NovelWeatherEffect.rain => 'rain',
       NovelWeatherEffect.snow => 'snow',
       NovelWeatherEffect.thunderstorm => 'thunderstorm',
@@ -263,34 +260,21 @@ class _NovelGamePageState extends State<NovelGamePage>
     };
   }
 
-  Future<void> _syncWeatherAmbient({bool force = false}) async {
-    final effectsEnabled = controller.settings.weatherEffectsEnabled;
-    final key = effectsEnabled ? _weatherAudioKey : 'none';
-    if (!force &&
-        _lastWeatherAudioKey == key &&
-        _lastWeatherEffectsEnabled == effectsEnabled) {
-      return;
-    }
+  Future<void> _cycleWeatherPreview() async {
+    final next = switch (_weatherPreview) {
+      NovelWeatherEffect.none => NovelWeatherEffect.rain,
+      NovelWeatherEffect.rain => NovelWeatherEffect.snow,
+      NovelWeatherEffect.snow => NovelWeatherEffect.thunderstorm,
+      NovelWeatherEffect.thunderstorm => NovelWeatherEffect.none,
+    };
+    if (mounted) setState(() => _weatherPreview = next);
 
-    _lastWeatherAudioKey = key;
-    _lastWeatherEffectsEnabled = effectsEnabled;
+    // 手动天气测试阶段：视觉和环境音必须由同一次切换驱动。
     await controller.bgm.setWeatherAmbient(
-      key,
-      effectsEnabled: effectsEnabled,
-      force: force,
+      _weatherAudioKey(next),
+      effectsEnabled: controller.settings.weatherEffectsEnabled,
+      force: true,
     );
-  }
-
-  void _cycleWeatherPreview() {
-    setState(() {
-      _weatherPreview = switch (_weatherPreview) {
-        NovelWeatherEffect.none => NovelWeatherEffect.rain,
-        NovelWeatherEffect.rain => NovelWeatherEffect.snow,
-        NovelWeatherEffect.snow => NovelWeatherEffect.thunderstorm,
-        NovelWeatherEffect.thunderstorm => NovelWeatherEffect.none,
-      };
-    });
-    unawaited(_syncWeatherAmbient(force: true));
   }
 
   void _back() {
@@ -310,14 +294,12 @@ class _NovelGamePageState extends State<NovelGamePage>
       backgroundColor: controller.settings.backgroundColor,
       builder: (context, openDrawer) {
         return AnimatedBuilder(
-      animation: controller,
+      animation: Listenable.merge(<Listenable>[controller, controller.settings]),
       builder: (context, _) {
         final customBackground = controller.settings.customBackground;
         final background = customBackground.isNotEmpty
             ? customBackground
             : controller.world.backgroundUrl;
-        final weatherEffectsEnabled =
-            controller.settings.weatherEffectsEnabled;
         return Scaffold(
           resizeToAvoidBottomInset: true,
           backgroundColor: controller.settings.backgroundColor,
@@ -333,7 +315,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                       controller.currentSpeakerName.isNotEmpty &&
                       !controller.isCinematic,
                   isGenerating: controller.isGenerating,
-                  weatherEffect: weatherEffectsEnabled
+                  weatherEffect: controller.settings.weatherEffectsEnabled
                       ? _weatherPreview
                       : NovelWeatherEffect.none,
                 ),
@@ -378,15 +360,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                         ),
                         if (controller.storyStarted)
                           Positioned(
-                            left: 46,
-                            top: 52,
-                            child: IgnorePointer(
-                              child: NovelLocationCornerLabel(
-                                title: controller.locationTitle,
-                                subtitle: controller.locationSubtitle,
-                                compact: compact,
-                                dimmed: controller.isGenerating,
-                              ),
+                            left: 0,
+                            top: 55,
+                            child: NovelLocationHud(
+                              title: controller.locationTitle,
+                              subtitle: controller.locationSubtitle,
                             ),
                           ),
                         if (controller.storyStarted)
@@ -429,15 +407,13 @@ class _NovelGamePageState extends State<NovelGamePage>
                             ),
                           ),
 
-                        if (controller.storyStarted &&
-                            !controller.isGenerating &&
-                            weatherEffectsEnabled)
+                        if (controller.storyStarted && !controller.isGenerating)
                           Positioned(
                             top: compact ? 248 : 260,
                             right: 3,
                             child: _NovelWeatherTestButton(
                               effect: _weatherPreview,
-                              onTap: _cycleWeatherPreview,
+                              onTap: () => unawaited(_cycleWeatherPreview()),
                             ),
                           ),
                         if (controller.storyStarted && !controller.isCinematic)

@@ -301,7 +301,7 @@ extension NovelWeatherEffectLabel on NovelWeatherEffect {
       NovelWeatherEffect.none => Icons.wb_sunny_outlined,
       NovelWeatherEffect.rain => Icons.water_drop_outlined,
       NovelWeatherEffect.snow => Icons.ac_unit_rounded,
-      NovelWeatherEffect.thunderstorm => Icons.flash_on_rounded,
+      NovelWeatherEffect.thunderstorm => Icons.thunderstorm_outlined,
     };
   }
 }
@@ -427,162 +427,144 @@ class _NovelWeatherPainter extends CustomPainter {
     }
   }
 
-  void _paintRain(Canvas canvas, Size size, {bool storm = false}) {
-    // 雨效刻意做“细、密、分层”，避免粗白线像贴上去的游戏粒子。
-    // 远景几乎只有细丝，中景承担主要可见雨量，近景只保留极少量掠镜雨滴。
-    final atmospherePaint = Paint()
+  void _paintRain(Canvas canvas, Size size) {
+    // 雨丝尽量细、透明、分层。重点是“空气里有雨”，而不是满屏白色直线。
+    final hazePaint = Paint()
       ..shader = LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: <Color>[
-          storm ? const Color(0x38314354) : const Color(0x162B4352),
-          storm ? const Color(0x20152231) : const Color(0x09172732),
-          storm ? const Color(0x30313C47) : const Color(0x123B4851),
+          const Color(0x11283B49),
+          const Color(0x061B2831),
+          const Color(0x0D33444F),
         ],
-        stops: const <double>[0, .50, 1],
       ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, atmospherePaint);
+    canvas.drawRect(Offset.zero & size, hazePaint);
 
-    if (storm) {
-      final curtainPaint = Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: const <Color>[
-            Color(0x08FFFFFF),
-            Color(0x183C5161),
-            Color(0x06374755),
-          ],
-        ).createShader(Offset.zero & size);
-      canvas.drawRect(Offset.zero & size, curtainPaint);
-    }
-
-    final count = storm
-        ? (compact ? 230 : 330)
-        : (compact ? 170 : 245);
-
-    final farPaint = Paint()
-      ..strokeCap = StrokeCap.butt
-      ..blendMode = BlendMode.srcOver;
-    final midPaint = Paint()
-      ..strokeCap = StrokeCap.butt
-      ..blendMode = BlendMode.srcOver;
-    final nearPaint = Paint()
+    final count = compact ? 118 : 176;
+    final backPaint = Paint()
       ..strokeCap = StrokeCap.round
-      ..blendMode = BlendMode.srcOver;
-
-    final windPhase =
-        math.sin(phase * math.pi * 2) * (storm ? 1.8 : .85);
+      ..color = const Color(0x35D6E8F4);
+    final midPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0x58E1EEF7);
+    final frontPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0x72EDF6FC);
 
     for (var i = 0; i < count; i++) {
-      final depth = _hash(i, storm ? 111 : 1);
-      final seed = _hash(i, storm ? 112 : 2);
-      final lane = _hash(i, storm ? 113 : 3);
-      final speedSeed = _hash(i, storm ? 114 : 4);
-      final cluster = _hash(i, storm ? 115 : 5);
+      final depth = _hash(i, 1);
+      final lane = _hash(i, 2);
+      final seed = _hash(i, 3);
+      final speedTurns = 1 + (_hash(i, 4) * 3).floor();
+      final travel = (seed + phase * speedTurns) % 1.0;
 
-      final speed = (storm ? 4.5 : 3.1) +
-          depth * (storm ? 5.4 : 3.8) +
-          speedSeed * 1.1;
-      final travel = (seed + phase * speed) % 1.0;
+      final length = 7.0 + depth * 21.0;
+      final y = travel * (size.height + length + 24) - length - 12;
+      final wind = 6.0 + depth * 14.0;
+      final xBase = lane * (size.width + 48) - 24;
+      final x = xBase + travel * wind;
 
-      final clusterOffset =
-          math.sin((lane * 3.0 + phase * .65) * math.pi * 2) *
-              size.width *
-              (cluster > .76 ? .012 : .004);
-      final baseX = lane * (size.width + 90) - 45 + clusterOffset;
-
-      // 大部分雨丝都很短很细；只有最靠近镜头的少量雨滴明显更长。
-      final length = depth < .40
-          ? 7.0 + depth * 18
-          : depth < .90
-              ? 12.0 + depth * (storm ? 28 : 22)
-              : 30.0 + depth * (storm ? 34 : 25);
-      final y = travel * (size.height + length + 55) - length - 28;
-
-      final slant = (storm ? 8.0 : 5.0) +
-          depth * (storm ? 11 : 7) +
-          windPhase;
-      final x = baseX + travel * slant * .58;
-
-      final Paint paint;
-      if (depth < .40) {
-        paint = farPaint
-          ..strokeWidth = .22 + depth * .32
-          ..color = Color.fromARGB(
-            (storm ? 34 : 25) + (depth * 28).round(),
-            190,
-            211,
-            226,
-          );
-      } else if (depth < .90) {
-        paint = midPaint
-          ..strokeWidth = .34 + depth * .42
-          ..color = Color.fromARGB(
-            (storm ? 62 : 46) + (depth * 32).round(),
-            207,
-            225,
-            237,
-          );
-      } else {
-        paint = nearPaint
-          ..strokeWidth = .62 + depth * (storm ? .52 : .36)
-          ..color = Color.fromARGB(
-            (storm ? 108 : 82) + (depth * 24).round(),
-            224,
-            237,
-            245,
-          );
-      }
+      final paint = depth < .38
+          ? backPaint
+          : depth < .82
+              ? midPaint
+              : frontPaint;
+      // 绝大多数雨丝都控制在 1px 以下，避免“粉笔线”质感。
+      paint.strokeWidth = .28 + depth * .56;
 
       canvas.drawLine(
         Offset(x, y),
-        Offset(x + slant, y + length),
+        Offset(x + 2.2 + depth * 4.5, y + length),
         paint,
       );
     }
 
-    // 掠过镜头的粗雨滴只留极少数，而且比上一版更细、更淡。
-    final lensCount = storm ? (compact ? 5 : 7) : (compact ? 2 : 4);
-    if (lensCount > 0) {
-      final lensRain = Paint()
-        ..strokeCap = StrokeCap.round
-        ..color = Colors.white.withOpacity(storm ? .17 : .11)
-        ..strokeWidth = storm ? 1.35 : 1.05
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.15);
-      for (var i = 0; i < lensCount; i++) {
-        final seed = _hash(i, storm ? 121 : 21);
-        final speed = storm ? 5.5 + (i % 3) * .7 : 3.9 + (i % 2) * .55;
-        final travel = (seed + phase * speed) % 1.0;
-        final x = _hash(i, storm ? 122 : 22) * (size.width + 35) - 18 +
-            travel * 14;
-        final y = travel * (size.height + 120) - 88;
-        final len = (storm ? 52.0 : 40.0) + _hash(i, 123) * 20;
-        canvas.drawLine(
-          Offset(x, y),
-          Offset(x + (storm ? 11 : 8), y + len),
-          lensRain,
-        );
-      }
+    // 只留极少数镜头前雨丝，避免近景粗线让画面显假。
+    final softPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0x30FFFFFF)
+      ..strokeWidth = 1.15
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.35);
+    for (var i = 0; i < (compact ? 3 : 5); i++) {
+      final seed = _hash(i, 21);
+      final travel = (seed + phase * (1 + (i % 2))) % 1.0;
+      final x = _hash(i, 22) * size.width + travel * 12;
+      final y = travel * (size.height + 88) - 54;
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x + 7, y + 48),
+        softPaint,
+      );
+    }
+  }
+
+  void _paintThunderstorm(Canvas canvas, Size size) {
+    // 雷雨以细雨为基础，不把雨丝突然做粗；主要靠密度、暗部和闪电体现强度。
+    _paintRain(canvas, size);
+
+    final extraPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0x45DDEBF4);
+    final extraCount = compact ? 54 : 82;
+    for (var i = 0; i < extraCount; i++) {
+      final depth = _hash(i, 71);
+      final seed = _hash(i, 72);
+      final travel = (seed + phase * (2 + (i % 3))) % 1.0;
+      final length = 10.0 + depth * 25.0;
+      final x = _hash(i, 73) * (size.width + 40) - 20 + travel * 18;
+      final y = travel * (size.height + 56) - 34;
+      extraPaint.strokeWidth = .34 + depth * .52;
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x + 3 + depth * 5, y + length),
+        extraPaint,
+      );
     }
 
-    final wetMist = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: <Color>[
-          Colors.transparent,
-          storm ? const Color(0x103E5260) : const Color(0x0752616B),
-          storm ? const Color(0x1D31424E) : const Color(0x0E384650),
-        ],
-        stops: const <double>[0, .62, 1],
-      ).createShader(
-        Rect.fromLTWH(0, size.height * .48, size.width, size.height * .52),
-      );
-    canvas.drawRect(
-      Rect.fromLTWH(0, size.height * .48, size.width, size.height * .52),
-      wetMist,
+    // 12 秒循环里安排几组不等距闪光；双闪比固定“亮一下”自然得多。
+    final seconds = phase * 12.0;
+    double pulse(double center, double width) {
+      final d = (seconds - center).abs();
+      if (d >= width) return 0;
+      final x = 1 - d / width;
+      return Curves.easeOut.transform(x);
+    }
+
+    final flash = math.max(
+      math.max(pulse(1.15, .11), pulse(1.34, .07) * .58),
+      math.max(pulse(6.05, .09), pulse(9.72, .13) * .78),
     );
+    if (flash <= 0) return;
+
+    final flashPaint = Paint()
+      ..color = const Color(0xFFD9E8FF).withOpacity((flash * .28).clamp(0.0, .28).toDouble());
+    canvas.drawRect(Offset.zero & size, flashPaint);
+
+    // 只有最强的一组闪光出现可见闪电枝杈，避免每次都像贴图特效。
+    if (pulse(6.05, .09) > .35) {
+      final bolt = Path()
+        ..moveTo(size.width * .72, -8)
+        ..lineTo(size.width * .67, size.height * .16)
+        ..lineTo(size.width * .70, size.height * .25)
+        ..lineTo(size.width * .63, size.height * .43)
+        ..lineTo(size.width * .66, size.height * .50);
+      final glow = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..strokeWidth = 5.5
+        ..color = const Color(0x667EAEFF)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.5);
+      final core = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..strokeWidth = 1.15
+        ..color = const Color(0xE8EFF6FF);
+      canvas.drawPath(bolt, glow);
+      canvas.drawPath(bolt, core);
+    }
   }
 
   void _paintSnow(Canvas canvas, Size size) {
@@ -640,122 +622,79 @@ class _NovelWeatherPainter extends CustomPainter {
     }
   }
 
-  void _paintThunderstorm(Canvas canvas, Size size) {
-    // 雷雨先复用高质量暴雨，再叠加“环境压暗 + 不规律闪光 + 偶发闪电枝杈”。
-    _paintRain(canvas, size, storm: true);
-
-    final stormShade = Paint()
+  void _paintFog(Canvas canvas, Size size) {
+    // 基础空气雾，不做纯白蒙版，保留背景层次。
+    final basePaint = Paint()
       ..shader = LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
-        colors: const <Color>[
-          Color(0x4A101929),
-          Color(0x24111925),
-          Color(0x3810151E),
-        ],
-      ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, stormShade);
-
-    final flash = _lightningFlashIntensity(phase);
-    if (flash <= 0) return;
-
-    // 闪电首先应该“照亮整个空气”，而不是只出现一条白线。
-    final flashPaint = Paint()
-      ..shader = RadialGradient(
-        center: const Alignment(.18, -.72),
-        radius: 1.05,
         colors: <Color>[
-          const Color(0xFFEAF3FF).withOpacity((flash * .44).clamp(0.0, .48).toDouble()),
-          const Color(0xFFB7CBEC).withOpacity((flash * .20).clamp(0.0, .25).toDouble()),
-          Colors.transparent,
+          const Color(0x163B4650),
+          const Color(0x244E5961),
+          const Color(0x18364048),
         ],
-        stops: const <double>[0, .42, 1],
+        stops: const <double>[0, .58, 1],
       ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, flashPaint);
+    canvas.drawRect(Offset.zero & size, basePaint);
 
-    // 只有较强闪光才出现真正闪电；弱闪只像云层内部亮了一下。
-    if (flash > .56) {
-      final strikeSeed = phase < .50 ? 301 : 337;
-      _paintLightningBolt(canvas, size, strikeSeed, flash);
+    final angle = phase * math.pi * 2;
+    for (var i = 0; i < 7; i++) {
+      final depth = i / 6.0;
+      final direction = i.isEven ? 1.0 : -1.0;
+      final drift = math.sin(angle + i * .83) * size.width * (.08 + depth * .05);
+      final lift = math.cos(angle * .72 + i * 1.17) * size.height * .035;
+      final center = Offset(
+        size.width * (.14 + _hash(i, 52) * .72) + drift * direction,
+        size.height * (.18 + _hash(i, 53) * .68) + lift,
+      );
+      final width = size.width * (.58 + depth * .48);
+      final height = size.height * (.16 + depth * .12);
+      final opacity = .035 + depth * .045;
+
+      final fogPaint = Paint()
+        ..shader = RadialGradient(
+          colors: <Color>[
+            Colors.white.withOpacity(opacity),
+            const Color(0x124D5961),
+            Colors.transparent,
+          ],
+          stops: const <double>[0, .46, 1],
+        ).createShader(
+          Rect.fromCenter(
+            center: center,
+            width: width,
+            height: height,
+          ),
+        );
+
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: center,
+          width: width,
+          height: height,
+        ),
+        fogPaint,
+      );
     }
-  }
 
-  double _lightningFlashIntensity(double p) {
-    // 一个 12 秒循环内安排两组不规则雷光：强闪→暗→弱回闪，以及另一组短双闪。
-    // 用户看到的是不均匀的组合，而不是固定“亮一下”。
-    double pulse(double center, double width, double strength) {
-      final d = (p - center).abs();
-      if (d >= width) return 0;
-      final x = 1 - d / width;
-      return Curves.easeOutCubic.transform(x) * strength;
-    }
-
-    final first = math.max(
-      pulse(.118, .010, 1.0),
-      math.max(pulse(.139, .006, .46), pulse(.158, .012, .72)),
+    // 地面附近再加一层慢雾，让场景有纵深，而不是整屏发白。
+    final groundPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: <Color>[
+          Colors.transparent,
+          const Color(0x0FFFFFFF),
+          const Color(0x2BFFFFFF),
+        ],
+        stops: const <double>[0, .55, 1],
+      ).createShader(
+        Rect.fromLTWH(0, size.height * .48, size.width, size.height * .52),
+      );
+    canvas.drawRect(
+      Rect.fromLTWH(0, size.height * .48, size.width, size.height * .52),
+      groundPaint,
     );
-    final second = math.max(
-      pulse(.712, .008, .68),
-      math.max(pulse(.729, .005, .34), pulse(.748, .010, .94)),
-    );
-    return math.max(first, second).clamp(0.0, 1.0).toDouble();
-  }
-
-  void _paintLightningBolt(Canvas canvas, Size size, int seed, double intensity) {
-    final startX = size.width * (.26 + _hash(seed, 1) * .48);
-    final endY = size.height * (.48 + _hash(seed, 2) * .18);
-    final points = <Offset>[Offset(startX, -8)];
-    var x = startX;
-    const segments = 11;
-    for (var i = 1; i <= segments; i++) {
-      final y = endY * i / segments;
-      final jitter = (_hash(seed + i, 3) - .5) * size.width * (.055 + i * .002);
-      x += jitter;
-      points.add(Offset(x, y));
-    }
-
-    final glowPath = Path()..moveTo(points.first.dx, points.first.dy);
-    for (final point in points.skip(1)) {
-      glowPath.lineTo(point.dx, point.dy);
-    }
-
-    final glow = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = 7.5
-      ..color = const Color(0xFFBBD7FF).withOpacity((intensity * .24).clamp(0.0, .28).toDouble())
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    canvas.drawPath(glowPath, glow);
-
-    final core = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = 1.35
-      ..color = Colors.white.withOpacity((.70 + intensity * .25).clamp(0.0, .98).toDouble());
-    canvas.drawPath(glowPath, core);
-
-    // 两三条短分叉足够，太多会像卡通闪电。
-    for (var branch = 0; branch < 3; branch++) {
-      final anchorIndex = 3 + ((_hash(seed, 30 + branch) * 5).floor());
-      final anchor = points[anchorIndex.clamp(1, points.length - 2).toInt()];
-      final dir = _hash(seed, 40 + branch) > .5 ? 1.0 : -1.0;
-      final branchPath = Path()..moveTo(anchor.dx, anchor.dy);
-      var bx = anchor.dx;
-      var by = anchor.dy;
-      for (var j = 0; j < 3; j++) {
-        bx += dir * size.width * (.025 + _hash(seed + branch * 7 + j, 50) * .025);
-        by += size.height * (.035 + _hash(seed + branch * 5 + j, 60) * .028);
-        branchPath.lineTo(bx, by);
-      }
-      final branchPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..strokeWidth = .85
-        ..color = Colors.white.withOpacity((intensity * .72).clamp(0.0, .80).toDouble());
-      canvas.drawPath(branchPath, branchPaint);
-    }
   }
 
   @override
@@ -1017,74 +956,78 @@ class NovelTopHud extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final generating = controller.isGenerating;
-    final compactHud = MediaQuery.sizeOf(context).width < 560;
-    final avatarUrl = controller.protagonist?.avatarUrl ??
-        controller.scenario?.hostAvatarUrl ??
-        '';
-
     return AnimatedOpacity(
       opacity: generating ? .42 : 1,
       duration: const Duration(milliseconds: 420),
       child: SizedBox(
         height: 48,
-        child: Row(
+        child: Stack(
+          fit: StackFit.expand,
           children: <Widget>[
-            _TopIconButton(
-              tooltip: '菜单',
-              icon: Icons.menu_rounded,
-              onTap: onMenu,
-              size: 21,
-            ),
-            const SizedBox(width: 4),
-            InkWell(
-              onTap: onOpenProfile,
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    _ConditionAvatar(
-                      url: avatarUrl,
-                      hp: controller.protagonistHp,
-                    ),
-                    SizedBox(width: compactHud ? 6 : 8),
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: compactHud ? 68 : 86,
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  _TopIconButton(
+                    tooltip: '菜单',
+                    icon: Icons.menu_rounded,
+                    onTap: onMenu,
+                    size: 21,
+              ),
+                  const SizedBox(width: 4),
+                  InkWell(
+                    onTap: onOpenProfile,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          _ConditionAvatar(
+                            url: controller.protagonist?.avatarUrl ??
+                                controller.scenario?.hostAvatarUrl ??
+                                '',
+                            hp: controller.protagonistHp,
                           ),
-                          child: Text(
-                            controller.protagonistName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: NovelPalette.text,
-                              fontSize: compactHud ? 11.8 : 12.5,
-                              height: 1,
-                              fontWeight: FontWeight.w700,
-                            ),
+                          const SizedBox(width: 8),
+                          Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 78),
+                                child: Text(
+                                  controller.protagonistName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: NovelPalette.text,
+                                    fontSize: 12.5,
+                                    height: 1,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                              _HealthBar(progress: controller.protagonistHp / 100),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 5),
-                        _HealthBar(
-                          progress: controller.protagonistHp / 100,
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-            const Spacer(),
-            _TopIconButton(
-              tooltip: '设置',
-              icon: Icons.more_horiz_rounded,
-              onTap: onOpenSettings,
-              size: 19,
+            Align(
+              alignment: Alignment.centerRight,
+              child: _TopIconButton(
+                tooltip: '设置',
+                icon: Icons.more_horiz_rounded,
+                onTap: onOpenSettings,
+                size: 19,
+              ),
             ),
           ],
         ),
@@ -1093,93 +1036,73 @@ class NovelTopHud extends StatelessWidget {
   }
 }
 
-/// 常驻场景标签放在主角头像下方，不再占用顶部正中央。
-/// 视觉上保持轻量：细竖线 + 副标题 + 地点名，不铺大面积卡片背景。
-class NovelLocationCornerLabel extends StatelessWidget {
-  const NovelLocationCornerLabel({
+class NovelLocationHud extends StatelessWidget {
+  const NovelLocationHud({
     super.key,
     required this.title,
-    required this.subtitle,
-    this.compact = false,
-    this.dimmed = false,
+    this.subtitle = '',
   });
 
   final String title;
   final String subtitle;
-  final bool compact;
-  final bool dimmed;
 
   @override
   Widget build(BuildContext context) {
-    final cleanTitle = title.trim();
-    final cleanSubtitle = subtitle.trim();
-    if (cleanTitle.isEmpty && cleanSubtitle.isEmpty) {
+    if (title.trim().isEmpty && subtitle.trim().isEmpty) {
       return const SizedBox.shrink();
     }
-
-    return AnimatedOpacity(
-      opacity: dimmed ? .42 : .92,
-      duration: const Duration(milliseconds: 420),
+    final compact = MediaQuery.sizeOf(context).width < 430;
+    return IgnorePointer(
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: compact ? 220 : 300),
+        constraints: BoxConstraints(maxWidth: compact ? 235 : 330),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
           children: <Widget>[
             Container(
               width: 2,
-              height: cleanSubtitle.isEmpty ? 21 : 30,
+              height: subtitle.trim().isEmpty ? 22 : 34,
+              margin: const EdgeInsets.only(top: 1, right: 8),
               decoration: BoxDecoration(
+                color: NovelPalette.accent.withOpacity(.72),
                 borderRadius: BorderRadius.circular(2),
-                color: NovelPalette.accent.withOpacity(.78),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: NovelPalette.accent.withOpacity(.22),
-                    blurRadius: 7,
-                  ),
-                ],
               ),
             ),
-            const SizedBox(width: 8),
             Flexible(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  if (cleanSubtitle.isNotEmpty) ...<Widget>[
+                  if (subtitle.trim().isNotEmpty)
                     Text(
-                      cleanSubtitle,
+                      subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.left,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(.50),
-                        fontSize: compact ? 8.0 : 8.5,
-                        height: 1.1,
-                        letterSpacing: compact ? .7 : 1.05,
+                        color: Colors.white.withOpacity(.46),
+                        fontSize: 8.5,
+                        height: 1.05,
+                        letterSpacing: 1.0,
                         shadows: const <Shadow>[
-                          Shadow(color: Colors.black87, blurRadius: 7),
+                          Shadow(color: Colors.black87, blurRadius: 8),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 3),
-                  ],
+                  if (subtitle.trim().isNotEmpty) const SizedBox(height: 3),
                   Text(
-                    cleanTitle,
+                    title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: const Color(0xFFF4F5F4),
-                      fontSize: compact ? 12.5 : 13.5,
-                      height: 1.05,
+                    textAlign: TextAlign.left,
+                    style: const TextStyle(
+                      color: NovelPalette.text,
+                      fontSize: 13.2,
+                      height: 1.08,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: compact ? .15 : .45,
-                      shadows: const <Shadow>[
-                        Shadow(color: Colors.black87, blurRadius: 8),
-                        Shadow(
-                          color: Color(0x52000000),
-                          blurRadius: 3,
-                          offset: Offset(0, 1),
-                        ),
+                      letterSpacing: .45,
+                      shadows: <Shadow>[
+                        Shadow(color: Colors.black87, blurRadius: 9),
                       ],
                     ),
                   ),
