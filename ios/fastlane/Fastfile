@@ -5,6 +5,8 @@
 # 2. match 的 git_url(存放证书的私有仓库)
 # 3. team_id(Apple Developer Team ID)
 
+require 'securerandom'
+
 default_platform(:ios)
 
 platform :ios do
@@ -24,17 +26,40 @@ platform :ios do
     )
   end
 
+  # ============ 公共:创建临时 CI Keychain ============
+  # 解决 CI 上没有桌面、codesign 无法弹出权限确认框导致的卡死问题。
+  # 每次运行都新建一个带随机密码的 keychain,签名全程无需人工确认。
+  lane :setup_ci_keychain do
+    keychain_password = SecureRandom.uuid
+
+    create_keychain(
+      name: "ci_keychain",
+      password: keychain_password,
+      default_keychain: true,
+      unlock: true,
+      timeout: 3600,
+      lock_when_sleeps: false
+    )
+
+    # 存进 Lane Context,后面的 match / build_app 都能取到
+    Actions.lane_context[:CI_KEYCHAIN_NAME] = "ci_keychain"
+    Actions.lane_context[:CI_KEYCHAIN_PASSWORD] = keychain_password
+  end
+
   # ============ Ad Hoc 打包(用于 R2/Diawi 分发,不走 TestFlight) ============
   desc "Build Ad Hoc ipa for R2/Diawi distribution"
   lane :adhoc do
     api_key
+    setup_ci_keychain
 
     match(
       type: "adhoc",
       readonly: false, # 【临时】首次为 com.yoran.app 生成证书,用完后改回 is_ci
       app_identifier: "com.yoran.app",
       git_url: "https://github.com/kyleandzhang-dot/ios-certificates.git",
-      git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"]
+      git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"],
+      keychain_name: Actions.lane_context[:CI_KEYCHAIN_NAME],
+      keychain_password: Actions.lane_context[:CI_KEYCHAIN_PASSWORD]
     )
 
     # 【新增】强制把 Team / 签名方式 / Provisioning Profile 写入 Xcode 项目,
@@ -67,13 +92,16 @@ platform :ios do
   desc "Build and push to TestFlight"
   lane :beta do
     api_key
+    setup_ci_keychain
 
     match(
       type: "appstore",
       readonly: false, # 【临时】首次为 com.yoran.app 生成证书,用完后改回 is_ci
       app_identifier: "com.yoran.app",
       git_url: "https://github.com/kyleandzhang-dot/ios-certificates.git",
-      git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"]
+      git_basic_authorization: ENV["MATCH_GIT_BASIC_AUTHORIZATION"],
+      keychain_name: Actions.lane_context[:CI_KEYCHAIN_NAME],
+      keychain_password: Actions.lane_context[:CI_KEYCHAIN_PASSWORD]
     )
 
     # 【新增】强制把 Team / 签名方式 / Provisioning Profile 写入 Xcode 项目,
