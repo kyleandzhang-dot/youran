@@ -696,6 +696,22 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       ),
                     ),
                     Divider(height: 1, color: Colors.white.withOpacity(.14)),
+                    _CleanSettingsRow(
+                      icon: Icons.cloud_outlined,
+                      title: '天气特效',
+                      subtitle: settings.weatherEffectsEnabled
+                          ? '天气画面与环境音已开启'
+                          : '雨、雪、雷雨特效与环境音均已关闭',
+                      trailing: Switch.adaptive(
+                        value: settings.weatherEffectsEnabled,
+                        activeColor: NovelPalette.accent,
+                        onChanged: (value) async {
+                          await settings.setWeatherEffectsEnabled(value);
+                          if (mounted) setState(() {});
+                        },
+                      ),
+                    ),
+                    Divider(height: 1, color: Colors.white.withOpacity(.14)),
                     PopupMenuButton<String>(
                       tooltip: '选择模型',
                       color: const Color(0xFF191B1B),
@@ -2152,17 +2168,15 @@ class _InlineCharacterVisualEditorState
               : _localContentType,
         );
 
-        // 当前没有独立头像时，上传的立绘同时作为头像兜底。
-        if (finalAvatar.trim().isEmpty ||
-            finalAvatar == widget.character.avatarUrl) {
-          finalAvatar = finalPortrait;
-        }
+        // 手动上传的是“立绘”，只更新 portrait。
+        // 头像 avatar 保持原值，禁止再用立绘覆盖头像。
       }
 
       await widget.controller.updateCharacterVisuals(
         character: widget.character,
         portraitUrl: finalPortrait,
-        avatarUrl: finalAvatar,
+        // 本地上传只改立绘；AI 生成时才允许同步后端返回的独立头像。
+        avatarUrl: _localBytes != null ? null : finalAvatar,
       );
 
       // 立绘保存属于原地编辑，不需要再额外弹“XXX 立绘已更新”状态提示。
@@ -2742,16 +2756,14 @@ Future<void> showNovelPortraitSheet(
                       : localContentType,
                 );
 
-                if (finalAvatar.trim().isEmpty ||
-                    finalAvatar == target.avatarUrl) {
-                  finalAvatar = finalPortrait;
-                }
+                // 快捷上传同样只修改立绘，头像保持原值。
               }
 
               await controller.updateCharacterVisuals(
                 character: target,
                 portraitUrl: finalPortrait,
-                avatarUrl: finalAvatar,
+                // 快捷本地上传只改立绘；AI 生成仍可保存独立头像。
+                avatarUrl: localBytes != null ? null : finalAvatar,
               );
 
               // 快捷更换立绘成功后不需要顶部再显示“XXX 立绘已更新”。

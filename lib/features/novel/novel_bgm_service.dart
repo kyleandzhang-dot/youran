@@ -8,12 +8,15 @@ import 'novel_models.dart';
 class NovelBgmService {
   NovelBgmService({
     AudioPlayer? player,
+    AudioPlayer? weatherPlayer,
     this.defaultVolume = 0.35,
     this.fadeDuration = const Duration(milliseconds: 1500),
     this.debounceCount = 2,
-  }) : _player = player ?? AudioPlayer();
+  })  : _player = player ?? AudioPlayer(),
+        _weatherPlayer = weatherPlayer ?? AudioPlayer();
 
   final AudioPlayer _player;
+  final AudioPlayer _weatherPlayer;
   final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
   final double defaultVolume;
   final Duration fadeDuration;
@@ -28,6 +31,12 @@ class NovelBgmService {
   String currentSceneMode = 'normal';
   bool enabled = true;
   bool isPlaying = false;
+
+  Timer? _weatherFadeTimer;
+  Completer<void>? _weatherFadeCompleter;
+  int _weatherSwitchId = 0;
+  String currentWeatherKey = 'none';
+  bool isWeatherPlaying = false;
 
   Future<void> loadPreference() async {
     enabled = await _prefs.getBool('app_setting_bgm') ?? true;
@@ -171,6 +180,159 @@ class NovelBgmService {
     await completer.future;
   }
 
+  static const Map<String, String> weatherAssets = <String, String>{
+    'rain': 'assets/audio/weather/rain.mp3',
+    'snow': 'assets/audio/weather/snow.mp3',
+    'thunderstorm': 'assets/audio/weather/thunderstorm.mp3',
+  };
+
+  double _weatherVolume(String key) {
+    return switch (key) {
+      'thunderstorm' => .48,
+      'rain' => .40,
+      'snow' => .27,
+      _ => .0,
+    };
+  }
+
+  void _cancelWeatherFade() {
+    _weatherFadeTimer?.cancel();
+    _weatherFadeTimer = null;
+    final completer = _weatherFadeCompleter;
+    _weatherFadeCompleter = null;
+    if (completer != null && !completer.isCompleted) completer.complete();
+  }
+
+  Future<void> _fadeWeatherOut([Duration? duration]) async {
+    _cancelWeatherFade();
+    if (!_weatherPlayer.playing) {
+      isWeatherPlaying = false;
+      return;
+    }
+
+    final total = duration ?? const Duration(milliseconds: 900);
+    final startVolume = _weatherPlayer.volume;
+    final completer = Completer<void>();
+    _weatherFadeCompleter = completer;
+    const tick = Duration(milliseconds: 50);
+    final steps = (total.inMilliseconds / tick.inMilliseconds)
+        .ceil()
+        .clamp(1, 1000)
+        .toInt();
+    var current = 0;
+
+    _weatherFadeTimer = Timer.periodic(tick, (timer) async {
+      current += 1;
+      final progress = current / steps;
+      await _weatherPlayer.setVolume(
+        (startVolume * (1 - progress)).clamp(0.0, 1.0).toDouble(),
+      );
+      if (current >= steps) {
+        timer.cancel();
+        await _weatherPlayer.pause();
+        await _weatherPlayer.setVolume(0);
+        isWeatherPlaying = false;
+        if (!completer.isCompleted) completer.complete();
+        if (identical(_weatherFadeCompleter, completer)) {
+          _weatherFadeCompleter = null;
+        }
+      }
+    });
+    await completer.future;
+  }
+
+  Future<void> _fadeWeatherIn(
+    String key, [
+    Duration? duration,
+  ]) async {
+    _cancelWeatherFade();
+    final targetVolume = _weatherVolume(key);
+    final total = duration ?? const Duration(milliseconds: 1200);
+    await _weatherPlayer.setVolume(0);
+    unawaited(_weatherPlayer.play());
+    isWeatherPlaying = true;
+
+    final completer = Completer<void>();
+    _weatherFadeCompleter = completer;
+    const tick = Duration(milliseconds: 50);
+    final steps = (total.inMilliseconds / tick.inMilliseconds)
+        .ceil()
+        .clamp(1, 1000)
+        .toInt();
+    var current = 0;
+
+    _weatherFadeTimer = Timer.periodic(tick, (timer) async {
+      current += 1;
+      final progress = current / steps;
+      await _weatherPlayer.setVolume(
+        (targetVolume * progress).clamp(0.0, targetVolume).toDouble(),
+      );
+      if (current >= steps) {
+        timer.cancel();
+        await _weatherPlayer.setVolume(targetVolume);
+        if (!completer.isCompleted) completer.complete();
+        if (identical(_weatherFadeCompleter, completer)) {
+          _weatherFadeCompleter = null;
+        }
+      }
+    });
+    await completer.future;
+  }
+
+  /// 独立于剧情 BGM 的天气环境音。
+  /// 当前测试阶段只认手动天气 key，不读取后端 world.weather。
+  Future<void> setWeatherAmbient(
+    String weatherKey, {
+    bool effectsEnabled = true,
+    bool force = false,
+  }) async {
+    final normalized = weatherKey.trim().toLowerCase();
+    final nextKey = weatherAssets.containsKey(normalized) ? normalized : 'none';
+
+    if (!force && currentWeatherKey == nextKey) {
+      if (!effectsEnabled && isWeatherPlaying) {
+        _weatherSwitchId += 1;
+        await _fadeWeatherOut(const Duration(milliseconds: 700));
+      }
+      return;
+    }
+
+    currentWeatherKey = nextKey;
+    final switchId = ++_weatherSwitchId;
+    await _fadeWeatherOut(const Duration(milliseconds: 850));
+    if (switchId != _weatherSwitchId) return;
+
+    if (!effectsEnabled || nextKey == 'none') {
+      return;
+    }
+
+    final asset = weatherAssets[nextKey];
+    if (asset == null) return;
+
+    try {
+      await _weatherPlayer.setLoopMode(LoopMode.one);
+      await _weatherPlayer.setAsset(asset);
+      if (switchId != _weatherSwitchId) return;
+      await _fadeWeatherIn(nextKey);
+    } catch (_) {
+      // 音频文件尚未放入 assets / pubspec 未声明时不影响剧情页运行。
+      await _weatherPlayer.stop();
+      isWeatherPlaying = false;
+    }
+  }
+
+  Future<void> stopWeatherAmbient({bool fade = true}) async {
+    currentWeatherKey = 'none';
+    _weatherSwitchId += 1;
+    if (fade) {
+      await _fadeWeatherOut(const Duration(milliseconds: 700));
+    } else {
+      _cancelWeatherFade();
+      await _weatherPlayer.stop();
+      isWeatherPlaying = false;
+    }
+  }
+
   Future<void> setEnabled(bool value) async {
     enabled = value;
     await _prefs.setBool('app_setting_bgm', value);
@@ -185,13 +347,19 @@ class NovelBgmService {
 
   Future<void> stop() async {
     _switchId += 1;
+    _weatherSwitchId += 1;
     _cancelFade();
+    _cancelWeatherFade();
     await _player.stop();
+    await _weatherPlayer.stop();
     isPlaying = false;
+    isWeatherPlaying = false;
   }
 
   Future<void> dispose() async {
     _cancelFade();
+    _cancelWeatherFade();
     await _player.dispose();
+    await _weatherPlayer.dispose();
   }
 }

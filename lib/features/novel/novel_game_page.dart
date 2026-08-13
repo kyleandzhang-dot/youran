@@ -46,6 +46,9 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _fateOpen = false;
   bool _endingOpen = false;
   bool _balanceOpen = false;
+  NovelWeatherEffect _weatherPreview = NovelWeatherEffect.none;
+  String _lastWeatherAudioKey = '';
+  bool? _lastWeatherEffectsEnabled;
 
   NovelGameController get controller => widget.controller;
 
@@ -55,6 +58,9 @@ class _NovelGamePageState extends State<NovelGamePage>
     WidgetsBinding.instance.addObserver(this);
     controller.addListener(_onControllerChanged);
     unawaited(controller.initialize());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_syncWeatherAmbient(force: true));
+    });
   }
 
   @override
@@ -71,13 +77,16 @@ class _NovelGamePageState extends State<NovelGamePage>
         controller.bgm.currentIntensity,
         controller.bgm.currentSceneMode,
       ));
+      unawaited(_syncWeatherAmbient(force: true));
     }
   }
 
   void _onControllerChanged() {
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _processOverlayRequests();
+      if (!mounted) return;
+      _processOverlayRequests();
+      unawaited(_syncWeatherAmbient());
     });
   }
 
@@ -244,6 +253,46 @@ class _NovelGamePageState extends State<NovelGamePage>
     super.dispose();
   }
 
+
+  String get _weatherAudioKey {
+    return switch (_weatherPreview) {
+      NovelWeatherEffect.rain => 'rain',
+      NovelWeatherEffect.snow => 'snow',
+      NovelWeatherEffect.thunderstorm => 'thunderstorm',
+      NovelWeatherEffect.none => 'none',
+    };
+  }
+
+  Future<void> _syncWeatherAmbient({bool force = false}) async {
+    final effectsEnabled = controller.settings.weatherEffectsEnabled;
+    final key = effectsEnabled ? _weatherAudioKey : 'none';
+    if (!force &&
+        _lastWeatherAudioKey == key &&
+        _lastWeatherEffectsEnabled == effectsEnabled) {
+      return;
+    }
+
+    _lastWeatherAudioKey = key;
+    _lastWeatherEffectsEnabled = effectsEnabled;
+    await controller.bgm.setWeatherAmbient(
+      key,
+      effectsEnabled: effectsEnabled,
+      force: force,
+    );
+  }
+
+  void _cycleWeatherPreview() {
+    setState(() {
+      _weatherPreview = switch (_weatherPreview) {
+        NovelWeatherEffect.none => NovelWeatherEffect.rain,
+        NovelWeatherEffect.rain => NovelWeatherEffect.snow,
+        NovelWeatherEffect.snow => NovelWeatherEffect.thunderstorm,
+        NovelWeatherEffect.thunderstorm => NovelWeatherEffect.none,
+      };
+    });
+    unawaited(_syncWeatherAmbient(force: true));
+  }
+
   void _back() {
     final callback = widget.onBack;
     if (callback != null) {
@@ -267,6 +316,8 @@ class _NovelGamePageState extends State<NovelGamePage>
         final background = customBackground.isNotEmpty
             ? customBackground
             : controller.world.backgroundUrl;
+        final weatherEffectsEnabled =
+            controller.settings.weatherEffectsEnabled;
         return Scaffold(
           resizeToAvoidBottomInset: true,
           backgroundColor: controller.settings.backgroundColor,
@@ -282,6 +333,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                       controller.currentSpeakerName.isNotEmpty &&
                       !controller.isCinematic,
                   isGenerating: controller.isGenerating,
+                  weatherEffect: weatherEffectsEnabled
+                      ? _weatherPreview
+                      : NovelWeatherEffect.none,
                 ),
               ),
               // 角色立绘由 NovelDialogPanel 内部统一绘制。
@@ -359,6 +413,18 @@ class _NovelGamePageState extends State<NovelGamePage>
                                   showNovelJourneySheet(context, controller),
                               onInventory: () =>
                                   showNovelInventorySheet(context, controller),
+                            ),
+                          ),
+
+                        if (controller.storyStarted &&
+                            !controller.isGenerating &&
+                            weatherEffectsEnabled)
+                          Positioned(
+                            top: compact ? 248 : 260,
+                            right: 3,
+                            child: _NovelWeatherTestButton(
+                              effect: _weatherPreview,
+                              onTap: _cycleWeatherPreview,
                             ),
                           ),
                         if (controller.storyStarted && !controller.isCinematic)
@@ -517,6 +583,66 @@ class _FatalError extends StatelessWidget {
                       child: const Text('重新载入'),
                     ),
                   ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NovelWeatherTestButton extends StatelessWidget {
+  const _NovelWeatherTestButton({
+    required this.effect,
+    required this.onTap,
+  });
+
+  final NovelWeatherEffect effect;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '测试天气：点击切换 无 / 雨 / 雪 / 雷雨',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 48),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xB51A1C20),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withOpacity(.14)),
+              boxShadow: const <BoxShadow>[
+                BoxShadow(
+                  color: Color(0x4A000000),
+                  blurRadius: 12,
+                  offset: Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  effect.icon,
+                  size: 17,
+                  color: Colors.white.withOpacity(.94),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '天气·${effect.label}',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.90),
+                    fontSize: 9.2,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .15,
+                  ),
                 ),
               ],
             ),

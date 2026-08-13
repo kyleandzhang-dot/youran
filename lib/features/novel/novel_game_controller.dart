@@ -762,14 +762,19 @@ class NovelGameController extends ChangeNotifier {
   Future<void> updateCharacterVisuals({
     required NovelCharacter character,
     required String portraitUrl,
-    String avatarUrl = '',
+    String? avatarUrl,
   }) async {
     final currentScenario = scenario;
     if (currentScenario == null) {
       throw const NovelBackendException('剧本数据尚未加载');
     }
     final portrait = portraitUrl.trim();
-    final avatar = avatarUrl.trim().isEmpty ? portrait : avatarUrl.trim();
+    // avatarUrl == null 表示这次只更新立绘，不触碰头像。
+    // 头像与立绘是两个独立字段，禁止用 portrait 自动兜底写入 avatar。
+    final shouldUpdateAvatar = avatarUrl != null;
+    final avatar = shouldUpdateAvatar
+        ? avatarUrl!.trim()
+        : character.avatarUrl.trim();
     if (portrait.isEmpty) {
       throw const NovelBackendException('立绘地址为空，无法保存');
     }
@@ -792,8 +797,8 @@ class NovelGameController extends ChangeNotifier {
           'portrait': portrait,
           'tachie': portrait,
           'portrait_url': portrait,
-          'avatar': avatar,
-          'avatar_url': avatar,
+          if (shouldUpdateAvatar) 'avatar': avatar,
+          if (shouldUpdateAvatar) 'avatar_url': avatar,
         };
       }).toList();
     }
@@ -814,7 +819,7 @@ class NovelGameController extends ChangeNotifier {
     if (entry != null) {
       updatedMap[entry.key] = entry.value.copyWith(
         portraitUrl: portrait,
-        avatarUrl: avatar,
+        avatarUrl: shouldUpdateAvatar ? avatar : entry.value.avatarUrl,
       );
     }
     scenario = currentScenario.copyWith(characters: updatedMap, raw: payload);

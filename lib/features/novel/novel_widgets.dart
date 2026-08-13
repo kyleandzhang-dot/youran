@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -283,6 +284,488 @@ class _StagePortraitArtwork extends StatelessWidget {
   }
 }
 
+enum NovelWeatherEffect { none, rain, snow, thunderstorm }
+
+extension NovelWeatherEffectLabel on NovelWeatherEffect {
+  String get label {
+    return switch (this) {
+      NovelWeatherEffect.none => '无',
+      NovelWeatherEffect.rain => '雨',
+      NovelWeatherEffect.snow => '雪',
+      NovelWeatherEffect.thunderstorm => '雷雨',
+    };
+  }
+
+  IconData get icon {
+    return switch (this) {
+      NovelWeatherEffect.none => Icons.wb_sunny_outlined,
+      NovelWeatherEffect.rain => Icons.water_drop_outlined,
+      NovelWeatherEffect.snow => Icons.ac_unit_rounded,
+      NovelWeatherEffect.thunderstorm => Icons.flash_on_rounded,
+    };
+  }
+}
+
+class NovelWeatherOverlay extends StatefulWidget {
+  const NovelWeatherOverlay({
+    super.key,
+    required this.effect,
+  });
+
+  final NovelWeatherEffect effect;
+
+  @override
+  State<NovelWeatherOverlay> createState() => _NovelWeatherOverlayState();
+}
+
+class _NovelWeatherOverlayState extends State<NovelWeatherOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  bool _animationsDisabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 12),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _animationsDisabled = MediaQuery.of(context).disableAnimations;
+    _syncAnimation();
+  }
+
+  @override
+  void didUpdateWidget(covariant NovelWeatherOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.effect != widget.effect) {
+      _syncAnimation(reset: true);
+    }
+  }
+
+  void _syncAnimation({bool reset = false}) {
+    if (_animationsDisabled || widget.effect == NovelWeatherEffect.none) {
+      _controller.stop();
+      if (reset) _controller.value = 0;
+      return;
+    }
+    if (reset) _controller.value = 0;
+    if (!_controller.isAnimating) {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.effect == NovelWeatherEffect.none) {
+      return const SizedBox.shrink();
+    }
+
+    final compact = MediaQuery.sizeOf(context).shortestSide < 600;
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            return CustomPaint(
+              painter: _NovelWeatherPainter(
+                effect: widget.effect,
+                phase: _animationsDisabled ? .18 : _controller.value,
+                compact: compact,
+              ),
+              size: Size.infinite,
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _NovelWeatherPainter extends CustomPainter {
+  const _NovelWeatherPainter({
+    required this.effect,
+    required this.phase,
+    required this.compact,
+  });
+
+  final NovelWeatherEffect effect;
+  final double phase;
+  final bool compact;
+
+  static double _hash(int index, int salt) {
+    final value = math.sin(index * 127.1 + salt * 311.7) * 43758.5453123;
+    return value - value.floorToDouble();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    switch (effect) {
+      case NovelWeatherEffect.none:
+        return;
+      case NovelWeatherEffect.rain:
+        _paintRain(canvas, size);
+        return;
+      case NovelWeatherEffect.snow:
+        _paintSnow(canvas, size);
+        return;
+      case NovelWeatherEffect.thunderstorm:
+        _paintThunderstorm(canvas, size);
+        return;
+    }
+  }
+
+  void _paintRain(Canvas canvas, Size size, {bool storm = false}) {
+    // 雨效刻意做“细、密、分层”，避免粗白线像贴上去的游戏粒子。
+    // 远景几乎只有细丝，中景承担主要可见雨量，近景只保留极少量掠镜雨滴。
+    final atmospherePaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: <Color>[
+          storm ? const Color(0x38314354) : const Color(0x162B4352),
+          storm ? const Color(0x20152231) : const Color(0x09172732),
+          storm ? const Color(0x30313C47) : const Color(0x123B4851),
+        ],
+        stops: const <double>[0, .50, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, atmospherePaint);
+
+    if (storm) {
+      final curtainPaint = Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: const <Color>[
+            Color(0x08FFFFFF),
+            Color(0x183C5161),
+            Color(0x06374755),
+          ],
+        ).createShader(Offset.zero & size);
+      canvas.drawRect(Offset.zero & size, curtainPaint);
+    }
+
+    final count = storm
+        ? (compact ? 230 : 330)
+        : (compact ? 170 : 245);
+
+    final farPaint = Paint()
+      ..strokeCap = StrokeCap.butt
+      ..blendMode = BlendMode.srcOver;
+    final midPaint = Paint()
+      ..strokeCap = StrokeCap.butt
+      ..blendMode = BlendMode.srcOver;
+    final nearPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..blendMode = BlendMode.srcOver;
+
+    final windPhase =
+        math.sin(phase * math.pi * 2) * (storm ? 1.8 : .85);
+
+    for (var i = 0; i < count; i++) {
+      final depth = _hash(i, storm ? 111 : 1);
+      final seed = _hash(i, storm ? 112 : 2);
+      final lane = _hash(i, storm ? 113 : 3);
+      final speedSeed = _hash(i, storm ? 114 : 4);
+      final cluster = _hash(i, storm ? 115 : 5);
+
+      final speed = (storm ? 4.5 : 3.1) +
+          depth * (storm ? 5.4 : 3.8) +
+          speedSeed * 1.1;
+      final travel = (seed + phase * speed) % 1.0;
+
+      final clusterOffset =
+          math.sin((lane * 3.0 + phase * .65) * math.pi * 2) *
+              size.width *
+              (cluster > .76 ? .012 : .004);
+      final baseX = lane * (size.width + 90) - 45 + clusterOffset;
+
+      // 大部分雨丝都很短很细；只有最靠近镜头的少量雨滴明显更长。
+      final length = depth < .40
+          ? 7.0 + depth * 18
+          : depth < .90
+              ? 12.0 + depth * (storm ? 28 : 22)
+              : 30.0 + depth * (storm ? 34 : 25);
+      final y = travel * (size.height + length + 55) - length - 28;
+
+      final slant = (storm ? 8.0 : 5.0) +
+          depth * (storm ? 11 : 7) +
+          windPhase;
+      final x = baseX + travel * slant * .58;
+
+      final Paint paint;
+      if (depth < .40) {
+        paint = farPaint
+          ..strokeWidth = .22 + depth * .32
+          ..color = Color.fromARGB(
+            (storm ? 34 : 25) + (depth * 28).round(),
+            190,
+            211,
+            226,
+          );
+      } else if (depth < .90) {
+        paint = midPaint
+          ..strokeWidth = .34 + depth * .42
+          ..color = Color.fromARGB(
+            (storm ? 62 : 46) + (depth * 32).round(),
+            207,
+            225,
+            237,
+          );
+      } else {
+        paint = nearPaint
+          ..strokeWidth = .62 + depth * (storm ? .52 : .36)
+          ..color = Color.fromARGB(
+            (storm ? 108 : 82) + (depth * 24).round(),
+            224,
+            237,
+            245,
+          );
+      }
+
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x + slant, y + length),
+        paint,
+      );
+    }
+
+    // 掠过镜头的粗雨滴只留极少数，而且比上一版更细、更淡。
+    final lensCount = storm ? (compact ? 5 : 7) : (compact ? 2 : 4);
+    if (lensCount > 0) {
+      final lensRain = Paint()
+        ..strokeCap = StrokeCap.round
+        ..color = Colors.white.withOpacity(storm ? .17 : .11)
+        ..strokeWidth = storm ? 1.35 : 1.05
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.15);
+      for (var i = 0; i < lensCount; i++) {
+        final seed = _hash(i, storm ? 121 : 21);
+        final speed = storm ? 5.5 + (i % 3) * .7 : 3.9 + (i % 2) * .55;
+        final travel = (seed + phase * speed) % 1.0;
+        final x = _hash(i, storm ? 122 : 22) * (size.width + 35) - 18 +
+            travel * 14;
+        final y = travel * (size.height + 120) - 88;
+        final len = (storm ? 52.0 : 40.0) + _hash(i, 123) * 20;
+        canvas.drawLine(
+          Offset(x, y),
+          Offset(x + (storm ? 11 : 8), y + len),
+          lensRain,
+        );
+      }
+    }
+
+    final wetMist = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: <Color>[
+          Colors.transparent,
+          storm ? const Color(0x103E5260) : const Color(0x0752616B),
+          storm ? const Color(0x1D31424E) : const Color(0x0E384650),
+        ],
+        stops: const <double>[0, .62, 1],
+      ).createShader(
+        Rect.fromLTWH(0, size.height * .48, size.width, size.height * .52),
+      );
+    canvas.drawRect(
+      Rect.fromLTWH(0, size.height * .48, size.width, size.height * .52),
+      wetMist,
+    );
+  }
+
+  void _paintSnow(Canvas canvas, Size size) {
+    final veilPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: <Color>[
+          const Color(0x0AFFFFFF),
+          Colors.transparent,
+          const Color(0x102A3540),
+        ],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, veilPaint);
+
+    final count = compact ? 72 : 108;
+    final crispPaint = Paint()..style = PaintingStyle.fill;
+    final softPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.2);
+
+    for (var i = 0; i < count; i++) {
+      final depth = _hash(i, 31);
+      final seed = _hash(i, 32);
+      final speedTurns = depth > .72 ? 2 : 1;
+      final travel = (seed + phase * speedTurns) % 1.0;
+
+      final radius = .85 + depth * 2.65;
+      final fallY = travel * (size.height + 42) - 22;
+      final amplitude = 7 + depth * 24;
+      final frequency = 1.0 + _hash(i, 33) * 1.8;
+      final sway = math.sin(
+            phase * math.pi * 2 * frequency + _hash(i, 34) * math.pi * 2,
+          ) *
+          amplitude;
+      final x = _hash(i, 35) * size.width + sway;
+
+      final opacity = .30 + depth * .58;
+      final paint = depth > .82 ? softPaint : crispPaint;
+      paint.color = Colors.white.withOpacity(opacity.clamp(0.0, .88).toDouble());
+
+      canvas.drawCircle(Offset(x, fallY), radius, paint);
+
+      // 少量近景雪片不是完美圆点，略带椭圆拖尾，更像镜头前的真实飘雪。
+      if (depth > .90) {
+        canvas.drawOval(
+          Rect.fromCenter(
+            center: Offset(x + radius * .8, fallY + radius * 1.4),
+            width: radius * 1.15,
+            height: radius * 2.5,
+          ),
+          paint,
+        );
+      }
+    }
+  }
+
+  void _paintThunderstorm(Canvas canvas, Size size) {
+    // 雷雨先复用高质量暴雨，再叠加“环境压暗 + 不规律闪光 + 偶发闪电枝杈”。
+    _paintRain(canvas, size, storm: true);
+
+    final stormShade = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: const <Color>[
+          Color(0x4A101929),
+          Color(0x24111925),
+          Color(0x3810151E),
+        ],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, stormShade);
+
+    final flash = _lightningFlashIntensity(phase);
+    if (flash <= 0) return;
+
+    // 闪电首先应该“照亮整个空气”，而不是只出现一条白线。
+    final flashPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(.18, -.72),
+        radius: 1.05,
+        colors: <Color>[
+          const Color(0xFFEAF3FF).withOpacity((flash * .44).clamp(0.0, .48).toDouble()),
+          const Color(0xFFB7CBEC).withOpacity((flash * .20).clamp(0.0, .25).toDouble()),
+          Colors.transparent,
+        ],
+        stops: const <double>[0, .42, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, flashPaint);
+
+    // 只有较强闪光才出现真正闪电；弱闪只像云层内部亮了一下。
+    if (flash > .56) {
+      final strikeSeed = phase < .50 ? 301 : 337;
+      _paintLightningBolt(canvas, size, strikeSeed, flash);
+    }
+  }
+
+  double _lightningFlashIntensity(double p) {
+    // 一个 12 秒循环内安排两组不规则雷光：强闪→暗→弱回闪，以及另一组短双闪。
+    // 用户看到的是不均匀的组合，而不是固定“亮一下”。
+    double pulse(double center, double width, double strength) {
+      final d = (p - center).abs();
+      if (d >= width) return 0;
+      final x = 1 - d / width;
+      return Curves.easeOutCubic.transform(x) * strength;
+    }
+
+    final first = math.max(
+      pulse(.118, .010, 1.0),
+      math.max(pulse(.139, .006, .46), pulse(.158, .012, .72)),
+    );
+    final second = math.max(
+      pulse(.712, .008, .68),
+      math.max(pulse(.729, .005, .34), pulse(.748, .010, .94)),
+    );
+    return math.max(first, second).clamp(0.0, 1.0).toDouble();
+  }
+
+  void _paintLightningBolt(Canvas canvas, Size size, int seed, double intensity) {
+    final startX = size.width * (.26 + _hash(seed, 1) * .48);
+    final endY = size.height * (.48 + _hash(seed, 2) * .18);
+    final points = <Offset>[Offset(startX, -8)];
+    var x = startX;
+    const segments = 11;
+    for (var i = 1; i <= segments; i++) {
+      final y = endY * i / segments;
+      final jitter = (_hash(seed + i, 3) - .5) * size.width * (.055 + i * .002);
+      x += jitter;
+      points.add(Offset(x, y));
+    }
+
+    final glowPath = Path()..moveTo(points.first.dx, points.first.dy);
+    for (final point in points.skip(1)) {
+      glowPath.lineTo(point.dx, point.dy);
+    }
+
+    final glow = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = 7.5
+      ..color = const Color(0xFFBBD7FF).withOpacity((intensity * .24).clamp(0.0, .28).toDouble())
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    canvas.drawPath(glowPath, glow);
+
+    final core = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = 1.35
+      ..color = Colors.white.withOpacity((.70 + intensity * .25).clamp(0.0, .98).toDouble());
+    canvas.drawPath(glowPath, core);
+
+    // 两三条短分叉足够，太多会像卡通闪电。
+    for (var branch = 0; branch < 3; branch++) {
+      final anchorIndex = 3 + ((_hash(seed, 30 + branch) * 5).floor());
+      final anchor = points[anchorIndex.clamp(1, points.length - 2).toInt()];
+      final dir = _hash(seed, 40 + branch) > .5 ? 1.0 : -1.0;
+      final branchPath = Path()..moveTo(anchor.dx, anchor.dy);
+      var bx = anchor.dx;
+      var by = anchor.dy;
+      for (var j = 0; j < 3; j++) {
+        bx += dir * size.width * (.025 + _hash(seed + branch * 7 + j, 50) * .025);
+        by += size.height * (.035 + _hash(seed + branch * 5 + j, 60) * .028);
+        branchPath.lineTo(bx, by);
+      }
+      final branchPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = .85
+        ..color = Colors.white.withOpacity((intensity * .72).clamp(0.0, .80).toDouble());
+      canvas.drawPath(branchPath, branchPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _NovelWeatherPainter oldDelegate) {
+    return oldDelegate.effect != effect ||
+        oldDelegate.phase != phase ||
+        oldDelegate.compact != compact;
+  }
+}
+
 class NovelWorldBackground extends StatefulWidget {
   const NovelWorldBackground({
     super.key,
@@ -290,12 +773,14 @@ class NovelWorldBackground extends StatefulWidget {
     this.fallbackAsset = 'assets/images/home_background.jpg',
     this.characterPresent = false,
     this.isGenerating = false,
+    this.weatherEffect = NovelWeatherEffect.none,
   });
 
   final String url;
   final String fallbackAsset;
   final bool characterPresent;
   final bool isGenerating;
+  final NovelWeatherEffect weatherEffect;
 
   @override
   State<NovelWorldBackground> createState() => _NovelWorldBackgroundState();
@@ -305,6 +790,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     with SingleTickerProviderStateMixin {
   late final AnimationController _motionController;
   bool _lowPowerEffects = false;
+  bool _animationsDisabled = false;
 
   @override
   void initState() {
@@ -318,16 +804,19 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final nextLowPower = _useLowPowerNovelEffects(context);
-    if (nextLowPower == _lowPowerEffects &&
-        (_lowPowerEffects || _motionController.isAnimating)) {
-      return;
-    }
+    final media = MediaQuery.of(context);
+    final nextLowPower = media.size.shortestSide < 600;
+    final nextAnimationsDisabled = media.disableAnimations;
 
     _lowPowerEffects = nextLowPower;
-    if (_lowPowerEffects) {
-      _motionController.stop();
-      _motionController.value = .5;
+    _animationsDisabled = nextAnimationsDisabled;
+
+    // 手机端也保留背景运动。手机只关闭昂贵的持续模糊，
+    // 使用更小幅度的 translate + scale 来保持流畅与“活起来”的感觉。
+    if (_animationsDisabled) {
+      _motionController
+        ..stop()
+        ..value = .5;
     } else if (!_motionController.isAnimating) {
       _motionController.repeat(reverse: true);
     }
@@ -402,7 +891,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     final blur = widget.characterPresent ? 2.2 : 0.0;
 
     final imageLayer = AnimatedSwitcher(
-      duration: Duration(milliseconds: _lowPowerEffects ? 520 : 1200),
+      duration: Duration(milliseconds: _lowPowerEffects ? 650 : 1200),
       switchInCurve: Curves.easeInOutCubic,
       switchOutCurve: Curves.easeInOutCubic,
       child: SizedBox.expand(
@@ -411,29 +900,38 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       ),
     );
 
-    final backgroundLayer = _lowPowerEffects
-        ? Transform.scale(
-            // 手机端保留一点“电影裁切感”，但不再让全屏图片 60fps 持续移动/模糊。
-            scale: 1.025,
-            child: imageLayer,
-          )
-        : AnimatedBuilder(
-            animation: _motionController,
-            child: imageLayer,
-            builder: (context, child) {
-              final t = Curves.easeInOut.transform(_motionController.value);
-              return Transform.scale(
-                scale: 1.06,
-                child: Transform.translate(
-                  offset: Offset(14 - 28 * t, 8 - 16 * t),
-                  child: ImageFiltered(
-                    imageFilter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-                    child: child,
-                  ),
-                ),
-              );
-            },
+    final backgroundLayer = AnimatedBuilder(
+      animation: _motionController,
+      child: imageLayer,
+      builder: (context, child) {
+        final raw = _animationsDisabled ? .5 : _motionController.value;
+        final t = Curves.easeInOut.transform(raw);
+        final breathe = math.sin(t * math.pi);
+
+        final scale = _lowPowerEffects
+            ? 1.035 + breathe * .012
+            : 1.052 + breathe * .016;
+        final dx = _lowPowerEffects ? 9 - 18 * t : 14 - 28 * t;
+        final dy = _lowPowerEffects ? 5 - 10 * t : 8 - 16 * t;
+
+        Widget movingChild = child ?? const SizedBox.shrink();
+        if (!_lowPowerEffects && blur > 0) {
+          movingChild = ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+            child: movingChild,
           );
+        }
+
+        return Transform.scale(
+          scale: scale,
+          alignment: Alignment.center,
+          child: Transform.translate(
+            offset: Offset(dx, dy),
+            child: movingChild,
+          ),
+        );
+      },
+    );
 
     return Stack(
       fit: StackFit.expand,
@@ -446,6 +944,8 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
           curve: Curves.easeOutCubic,
           color: Colors.black.withOpacity(dim),
         ),
+        if (widget.weatherEffect != NovelWeatherEffect.none)
+          NovelWeatherOverlay(effect: widget.weatherEffect),
         DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -522,119 +1022,156 @@ class NovelTopHud extends StatelessWidget {
       duration: const Duration(milliseconds: 420),
       child: SizedBox(
         height: 48,
-        child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  _TopIconButton(
-                    tooltip: '菜单',
-                    icon: Icons.menu_rounded,
-                    onTap: onMenu,
-                    size: 21,
-              ),
-                  const SizedBox(width: 4),
-                  InkWell(
-                    onTap: onOpenProfile,
-                    borderRadius: BorderRadius.circular(6),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
-                      child: Row(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compactHud = constraints.maxWidth < 560;
+            // 保持原来的横向角色 HUD：头像右侧是名字，名字下方是 HP。
+            // 窄屏只压缩角色区宽度，不改变信息层级，避免 HP 掉到头像下面。
+            final leftReserve = compactHud ? 156.0 : 190.0;
+            const rightReserve = 44.0;
+            final avatarUrl = controller.protagonist?.avatarUrl ??
+                controller.scenario?.hostAvatarUrl ??
+                '';
+
+            return Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: leftReserve,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        _TopIconButton(
+                          tooltip: '菜单',
+                          icon: Icons.menu_rounded,
+                          onTap: onMenu,
+                          size: 21,
+                        ),
+                        const SizedBox(width: 4),
+                        InkWell(
+                          onTap: onOpenProfile,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 2,
+                              vertical: 3,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                _ConditionAvatar(
+                                  url: avatarUrl,
+                                  hp: controller.protagonistHp,
+                                ),
+                                SizedBox(width: compactHud ? 6 : 8),
+                                Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxWidth: compactHud ? 62 : 78,
+                                      ),
+                                      child: Text(
+                                        controller.protagonistName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: NovelPalette.text,
+                                          fontSize: compactHud ? 11.8 : 12.5,
+                                          height: 1,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    _HealthBar(
+                                      progress: controller.protagonistHp / 100,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // 地图名只允许在预留的安全区域里布局。
+                // 无论标题多长，都不会再侵入左侧头像/HP或右侧设置按钮。
+                Positioned(
+                  left: leftReserve + 6,
+                  right: rightReserve + 6,
+                  top: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: Center(
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
-                          _ConditionAvatar(
-                            url: controller.protagonist?.avatarUrl ??
-                                controller.scenario?.hostAvatarUrl ??
-                                '',
-                            hp: controller.protagonistHp,
-                          ),
-                          const SizedBox(width: 8),
-                          Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 78),
-                                child: Text(
-                                  controller.protagonistName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: NovelPalette.text,
-                                    fontSize: 12.5,
-                                    height: 1,
-                                    fontWeight: FontWeight.w700,
+                          if (controller.locationSubtitle.isNotEmpty)
+                            Text(
+                              controller.locationSubtitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.42),
+                                fontSize: compactHud ? 8 : 8.5,
+                                letterSpacing: compactHud ? .75 : 1.25,
+                                shadows: const <Shadow>[
+                                  Shadow(
+                                    color: Colors.black87,
+                                    blurRadius: 8,
                                   ),
-                                ),
+                                ],
                               ),
-                              const SizedBox(height: 5),
-                              _HealthBar(progress: controller.protagonistHp / 100),
-                            ],
+                            ),
+                          const SizedBox(height: 1),
+                          Text(
+                            controller.locationTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: NovelPalette.text,
+                              fontSize: compactHud ? 12.5 : 13.5,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: compactHud ? .25 : .7,
+                              shadows: const <Shadow>[
+                                Shadow(
+                                  color: Colors.black87,
+                                  blurRadius: 8,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
-            IgnorePointer(
-              child: Align(
-                alignment: Alignment.center,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: MediaQuery.sizeOf(context).width * .38,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      if (controller.locationSubtitle.isNotEmpty)
-                        Text(
-                          controller.locationSubtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(.42),
-                            fontSize: 8.5,
-                            letterSpacing: 1.25,
-                            shadows: const <Shadow>[
-                              Shadow(color: Colors.black87, blurRadius: 8),
-                            ],
-                          ),
-                        ),
-                      const SizedBox(height: 1),
-                      Text(
-                        controller.locationTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: NovelPalette.text,
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: .7,
-                          shadows: <Shadow>[
-                            Shadow(color: Colors.black87, blurRadius: 8),
-                          ],
-                        ),
-                      ),
-                    ],
+                ),
+
+                Positioned(
+                  right: 0,
+                  top: 5,
+                  child: _TopIconButton(
+                    tooltip: '设置',
+                    icon: Icons.more_horiz_rounded,
+                    onTap: onOpenSettings,
+                    size: 19,
                   ),
                 ),
-              ),
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: _TopIconButton(
-                tooltip: '设置',
-                icon: Icons.more_horiz_rounded,
-                onTap: onOpenSettings,
-                size: 19,
-              ),
-            ),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );
