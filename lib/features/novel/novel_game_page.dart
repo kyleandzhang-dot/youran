@@ -378,6 +378,19 @@ class _NovelGamePageState extends State<NovelGamePage>
                         ),
                         if (controller.storyStarted)
                           Positioned(
+                            left: 46,
+                            top: 52,
+                            child: IgnorePointer(
+                              child: NovelLocationCornerLabel(
+                                title: controller.locationTitle,
+                                subtitle: controller.locationSubtitle,
+                                compact: compact,
+                                dimmed: controller.isGenerating,
+                              ),
+                            ),
+                          ),
+                        if (controller.storyStarted)
+                          Positioned(
                             left: compact ? 7 : 19,
                             right: compact ? 50 : constraints.maxWidth * .28,
                             // 场景转场标题稍微上提，避免压到人物/正文区域。

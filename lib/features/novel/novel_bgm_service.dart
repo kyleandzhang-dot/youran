@@ -187,10 +187,12 @@ class NovelBgmService {
   };
 
   double _weatherVolume(String key) {
+    // 天气是独立环境音轨；整体提高存在感，但雪天仍保持更克制。
+    // 剧情 BGM 使用另一条 AudioPlayer，不会被这里的音量覆盖。
     return switch (key) {
-      'thunderstorm' => .48,
-      'rain' => .40,
-      'snow' => .27,
+      'thunderstorm' => .78,
+      'rain' => .65,
+      'snow' => .42,
       _ => .0,
     };
   }

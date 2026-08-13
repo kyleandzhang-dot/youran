@@ -1017,161 +1017,176 @@ class NovelTopHud extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final generating = controller.isGenerating;
+    final compactHud = MediaQuery.sizeOf(context).width < 560;
+    final avatarUrl = controller.protagonist?.avatarUrl ??
+        controller.scenario?.hostAvatarUrl ??
+        '';
+
     return AnimatedOpacity(
       opacity: generating ? .42 : 1,
       duration: const Duration(milliseconds: 420),
       child: SizedBox(
         height: 48,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final compactHud = constraints.maxWidth < 560;
-            // 保持原来的横向角色 HUD：头像右侧是名字，名字下方是 HP。
-            // 窄屏只压缩角色区宽度，不改变信息层级，避免 HP 掉到头像下面。
-            final leftReserve = compactHud ? 156.0 : 190.0;
-            const rightReserve = 44.0;
-            final avatarUrl = controller.protagonist?.avatarUrl ??
-                controller.scenario?.hostAvatarUrl ??
-                '';
-
-            return Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: leftReserve,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+        child: Row(
+          children: <Widget>[
+            _TopIconButton(
+              tooltip: '菜单',
+              icon: Icons.menu_rounded,
+              onTap: onMenu,
+              size: 21,
+            ),
+            const SizedBox(width: 4),
+            InkWell(
+              onTap: onOpenProfile,
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _ConditionAvatar(
+                      url: avatarUrl,
+                      hp: controller.protagonistHp,
+                    ),
+                    SizedBox(width: compactHud ? 6 : 8),
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        _TopIconButton(
-                          tooltip: '菜单',
-                          icon: Icons.menu_rounded,
-                          onTap: onMenu,
-                          size: 21,
-                        ),
-                        const SizedBox(width: 4),
-                        InkWell(
-                          onTap: onOpenProfile,
-                          borderRadius: BorderRadius.circular(6),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 2,
-                              vertical: 3,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                _ConditionAvatar(
-                                  url: avatarUrl,
-                                  hp: controller.protagonistHp,
-                                ),
-                                SizedBox(width: compactHud ? 6 : 8),
-                                Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        maxWidth: compactHud ? 62 : 78,
-                                      ),
-                                      child: Text(
-                                        controller.protagonistName,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          color: NovelPalette.text,
-                                          fontSize: compactHud ? 11.8 : 12.5,
-                                          height: 1,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 5),
-                                    _HealthBar(
-                                      progress: controller.protagonistHp / 100,
-                                    ),
-                                  ],
-                                ),
-                              ],
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: compactHud ? 68 : 86,
+                          ),
+                          child: Text(
+                            controller.protagonistName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: NovelPalette.text,
+                              fontSize: compactHud ? 11.8 : 12.5,
+                              height: 1,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
+                        ),
+                        const SizedBox(height: 5),
+                        _HealthBar(
+                          progress: controller.protagonistHp / 100,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const Spacer(),
+            _TopIconButton(
+              tooltip: '设置',
+              icon: Icons.more_horiz_rounded,
+              onTap: onOpenSettings,
+              size: 19,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 常驻场景标签放在主角头像下方，不再占用顶部正中央。
+/// 视觉上保持轻量：细竖线 + 副标题 + 地点名，不铺大面积卡片背景。
+class NovelLocationCornerLabel extends StatelessWidget {
+  const NovelLocationCornerLabel({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    this.compact = false,
+    this.dimmed = false,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool compact;
+  final bool dimmed;
+
+  @override
+  Widget build(BuildContext context) {
+    final cleanTitle = title.trim();
+    final cleanSubtitle = subtitle.trim();
+    if (cleanTitle.isEmpty && cleanSubtitle.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return AnimatedOpacity(
+      opacity: dimmed ? .42 : .92,
+      duration: const Duration(milliseconds: 420),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: compact ? 220 : 300),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            Container(
+              width: 2,
+              height: cleanSubtitle.isEmpty ? 21 : 30,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(2),
+                color: NovelPalette.accent.withOpacity(.78),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: NovelPalette.accent.withOpacity(.22),
+                    blurRadius: 7,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  if (cleanSubtitle.isNotEmpty) ...<Widget>[
+                    Text(
+                      cleanSubtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.50),
+                        fontSize: compact ? 8.0 : 8.5,
+                        height: 1.1,
+                        letterSpacing: compact ? .7 : 1.05,
+                        shadows: const <Shadow>[
+                          Shadow(color: Colors.black87, blurRadius: 7),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                  ],
+                  Text(
+                    cleanTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: const Color(0xFFF4F5F4),
+                      fontSize: compact ? 12.5 : 13.5,
+                      height: 1.05,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: compact ? .15 : .45,
+                      shadows: const <Shadow>[
+                        Shadow(color: Colors.black87, blurRadius: 8),
+                        Shadow(
+                          color: Color(0x52000000),
+                          blurRadius: 3,
+                          offset: Offset(0, 1),
                         ),
                       ],
                     ),
                   ),
-                ),
-
-                // 地图名只允许在预留的安全区域里布局。
-                // 无论标题多长，都不会再侵入左侧头像/HP或右侧设置按钮。
-                Positioned(
-                  left: leftReserve + 6,
-                  right: rightReserve + 6,
-                  top: 0,
-                  bottom: 0,
-                  child: IgnorePointer(
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          if (controller.locationSubtitle.isNotEmpty)
-                            Text(
-                              controller.locationSubtitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(.42),
-                                fontSize: compactHud ? 8 : 8.5,
-                                letterSpacing: compactHud ? .75 : 1.25,
-                                shadows: const <Shadow>[
-                                  Shadow(
-                                    color: Colors.black87,
-                                    blurRadius: 8,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          const SizedBox(height: 1),
-                          Text(
-                            controller.locationTitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: NovelPalette.text,
-                              fontSize: compactHud ? 12.5 : 13.5,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: compactHud ? .25 : .7,
-                              shadows: const <Shadow>[
-                                Shadow(
-                                  color: Colors.black87,
-                                  blurRadius: 8,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                Positioned(
-                  right: 0,
-                  top: 5,
-                  child: _TopIconButton(
-                    tooltip: '设置',
-                    icon: Icons.more_horiz_rounded,
-                    onTap: onOpenSettings,
-                    size: 19,
-                  ),
-                ),
-              ],
-            );
-          },
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
