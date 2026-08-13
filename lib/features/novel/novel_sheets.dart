@@ -2035,9 +2035,9 @@ class _InlineCharacterVisualEditorState
   void initState() {
     super.initState();
 
-    _promptController = TextEditingController(
-      text: widget.controller.characterAppearance(widget.character),
-    );
+    // 角色完整资料由 Controller 自动整理成 Character Brief。
+    // 这里仅填写“本次额外形象调整”，留空也可以直接生成。
+    _promptController = TextEditingController();
 
     _imageStyle = 'anime';
 
@@ -2085,12 +2085,6 @@ class _InlineCharacterVisualEditorState
     if (_generating || _saving) return;
 
     final prompt = _promptController.text.trim();
-    if (prompt.length < 2) {
-      setState(() {
-        _errorText = '请填写至少 2 个字的生成描述';
-      });
-      return;
-    }
 
     setState(() {
       _generating = true;
@@ -2344,7 +2338,7 @@ class _InlineCharacterVisualEditorState
           ),
           const SizedBox(height: 6),
           Text(
-            '当前主角档案立绘暂时固定使用动漫风格生成。',
+            '立绘会自动读取完整角色资料；下方只需填写本次想额外调整的方向。',
             style: TextStyle(
               color: NovelPalette.muted.withOpacity(.58),
               fontSize: 10.2,
@@ -2354,7 +2348,7 @@ class _InlineCharacterVisualEditorState
           const SizedBox(height: 18),
 
           Text(
-            '提示词',
+            '额外形象要求（可选）',
             style: TextStyle(
               color: NovelPalette.muted.withOpacity(.82),
               fontSize: 10.8,
@@ -2384,7 +2378,7 @@ class _InlineCharacterVisualEditorState
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: EdgeInsets.zero,
-                hintText: '例如：银灰短发，年轻剑士，半身立绘……',
+                hintText: '留空按角色完整设定生成；例如：裙摆更轻盈、气质更清冷、仙气更强……',
                 hintStyle: TextStyle(
                   color: NovelPalette.muted.withOpacity(.46),
                   fontSize: 11,
@@ -2618,9 +2612,9 @@ Future<void> showNovelPortraitSheet(
     return;
   }
 
-  final promptController = TextEditingController(
-    text: controller.characterAppearance(target),
-  );
+  // 角色完整资料由 Controller 自动整理成 Character Brief。
+  // 这里仅填写“本次额外形象调整”，留空也可以直接生成。
+  final promptController = TextEditingController();
 
   var imageStyle = 'anime';
 
@@ -2681,10 +2675,6 @@ Future<void> showNovelPortraitSheet(
             if (generating || saving) return;
 
             final prompt = promptController.text.trim();
-            if (prompt.length < 2) {
-              setState(() => errorText = '请填写至少 2 个字的生成描述');
-              return;
-            }
 
             setState(() {
               generating = true;
@@ -3006,7 +2996,7 @@ Future<void> showNovelPortraitSheet(
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '当前主角档案立绘暂时固定使用动漫风格生成。',
+                      '立绘会自动读取完整角色资料；下方只需填写本次想额外调整的方向。',
                       style: TextStyle(
                         color: NovelPalette.muted.withOpacity(.58),
                         fontSize: 10.2,
@@ -3018,7 +3008,7 @@ Future<void> showNovelPortraitSheet(
       
 
                     Text(
-                      '生成描述',
+                      '额外形象要求（可选）',
                       style: TextStyle(
                         color: NovelPalette.muted.withOpacity(.72),
                         fontSize: 10.5,
@@ -3048,7 +3038,7 @@ Future<void> showNovelPortraitSheet(
                           border: InputBorder.none,
                           isDense: true,
                           hintText:
-                              '例如：银灰短发，冷静的年轻剑士，半身立绘…',
+                              '留空按角色完整设定生成；例如：服装更轻盈、气质更清冷、减少华丽首饰…',
                           hintStyle: TextStyle(
                             color: NovelPalette.muted.withOpacity(.46),
                             fontSize: 11.1,

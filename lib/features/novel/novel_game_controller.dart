@@ -480,6 +480,124 @@ class NovelGameController extends ChangeNotifier {
     return character.name;
   }
 
+  String _visualBriefValue(dynamic value) {
+    if (value == null) return '';
+    if (value is String) return value.trim();
+    if (value is List) {
+      return value
+          .map(_visualBriefValue)
+          .where((item) => item.isNotEmpty)
+          .join('、');
+    }
+    if (value is Map) {
+      return value.values
+          .map(_visualBriefValue)
+          .where((item) => item.isNotEmpty)
+          .join('、');
+    }
+    return value.toString().trim();
+  }
+
+  String _firstVisualBriefValue(List<dynamic> values) {
+    for (final value in values) {
+      final text = _visualBriefValue(value);
+      if (text.isNotEmpty) return text;
+    }
+    return '';
+  }
+
+  /// 给图片服务的“角色视觉简报”。
+  ///
+  /// Novel 端只负责整理角色事实、长期气质与世界观，不在这里写最终绘图 Prompt。
+  /// image-service 仍负责把这份 brief 美术化、补充构图/材质/质量词并交给 ComfyUI。
+  String buildCharacterVisualBrief(
+    NovelCharacter character, {
+    String userDirection = '',
+  }) {
+    final persona = character.persona;
+    final status = character.status;
+    final scenarioRaw = scenario?.raw ?? const <String, dynamic>{};
+    final worldSetting = asJsonMap(scenarioRaw['world_setting']);
+    final visualDna = asJsonMap(worldSetting['visual_dna']);
+
+    final gender = _firstVisualBriefValue(<dynamic>[
+      character.gender,
+      persona['gender'],
+      status['gender'],
+    ]);
+    final age = _firstVisualBriefValue(<dynamic>[
+      persona['age'],
+      status['age'],
+      status['age_visual'],
+    ]);
+    final identity = _firstVisualBriefValue(<dynamic>[
+      status['identity'],
+      persona['identity'],
+      status['role'],
+      persona['role'],
+    ]);
+    final personality = _firstVisualBriefValue(<dynamic>[
+      status['personality'],
+      persona['personality'],
+      persona['temperament'],
+      persona['traits'],
+    ]);
+    final appearance = _firstVisualBriefValue(<dynamic>[
+      persona['appearance'],
+      status['appearance'],
+      persona['looks'],
+      persona['portrait_prompt'],
+    ]);
+    final background = _firstVisualBriefValue(<dynamic>[
+      status['background'],
+      persona['background'],
+      persona['description'],
+    ]);
+
+    final worldOverview = _firstVisualBriefValue(<dynamic>[
+      worldSetting['world_overview'],
+      worldSetting['background'],
+      scenarioRaw['world_overview'],
+      scenarioRaw['background'],
+      scenario?.description,
+    ]);
+    final worldVisual = _firstVisualBriefValue(<dynamic>[
+      visualDna['world_positive'],
+      visualDna['style_lock'],
+      visualDna['culture_key'],
+      worldSetting['art_style'],
+      worldSetting['art_style_base'],
+    ]);
+
+    final extra = userDirection.trim();
+    final buffer = StringBuffer()
+      ..writeln('【角色视觉简报｜角色设定优先】')
+      ..writeln('【角色姓名】${character.name}')
+      ..writeln('【性别】${gender.isEmpty ? "未明确" : gender}')
+      ..writeln('【年龄/年龄感】${age.isEmpty ? "未明确" : age}')
+      ..writeln('【身份定位】${identity.isEmpty ? "未明确" : identity}')
+      ..writeln('【人物性格与长期气质】${personality.isEmpty ? "未明确" : personality}')
+      ..writeln('【剧情确认的静态外貌】${appearance.isEmpty ? "未明确" : appearance}')
+      ..writeln('【人物背景】${background.isEmpty ? "未明确" : background}')
+      ..writeln('【世界观/题材】${worldOverview.isEmpty ? "未明确" : worldOverview}')
+      ..writeln('【世界视觉方向】${worldVisual.isEmpty ? "按当前世界设定判断" : worldVisual}');
+
+    if (extra.isNotEmpty) {
+      buffer.writeln('【用户本次额外调整】$extra');
+    }
+
+    buffer
+      ..writeln('【美术转译要求】')
+      ..writeln('1. 以上角色资料是事实与方向依据；不要只围绕发色、衣服颜色生成一个泛化人物。')
+      ..writeln('2. 必须把身份、年龄、性格气质、背景和世界观一起视觉化到脸部气质、整体轮廓、服装层次、材质、配饰等级与姿态。')
+      ..writeln('3. “剧情确认的静态外貌”只是硬事实之一；缺失的普通视觉细节可合理补全，但不能创造会改变剧情身份的特殊设定。')
+      ..writeln('4. 高身份、超凡、武侠、仙侠、玄幻等角色不能被泛化成普通历史古装人物；现代角色也不能被错误古装化。')
+      ..writeln('5. 用户本次额外调整仅作为本次美术方向，在不与角色硬事实冲突时优先体现。')
+      ..writeln('6. 最终专业绘图 Prompt、画风词、构图、光影、质量词和负面词由图片服务统一处理。');
+
+    return buffer.toString().trim();
+  }
+
   /// AI 立绘任务不轮询 `/image/task/{taskId}`：该路由是 SSE 长连接，
   /// 普通 http.get 会一直等到流关闭，导致“图片已经生成但 Flutter 仍在等待/超时”。
   /// Flutter 只轮询普通 JSON 的 `/image/task/{taskId}/result`，
@@ -489,12 +607,12 @@ class NovelGameController extends ChangeNotifier {
     String prompt = '',
     String style = '',
   }) async {
-    final description = prompt.trim().isNotEmpty
-        ? prompt.trim()
-        : characterAppearance(character);
-    if (description.length < 2) {
-      throw const NovelBackendException('生成描述太短，请至少输入 2 个字');
-    }
+    // 前端文本框只代表“本次额外调整”，不能再覆盖完整角色资料。
+    // 即使用户留空，也始终使用完整 Character Brief 生成。
+    final description = buildCharacterVisualBrief(
+      character,
+      userDirection: prompt,
+    );
 
     final selectedStyle = style.trim().isNotEmpty
         ? style.trim()
