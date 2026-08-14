@@ -1102,7 +1102,7 @@ class NovelWorldBackground extends StatefulWidget {
   const NovelWorldBackground({
     super.key,
     required this.url,
-    this.fallbackAsset = 'assets/images/home_background.jpg',
+    this.fallbackAsset = '',
     this.characterPresent = false,
     this.isGenerating = false,
     this.weatherEffect = NovelWeatherEffect.none,
@@ -1163,25 +1163,20 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   }
 
   Widget _fallback() {
-    return Image.asset(
-      widget.fallbackAsset,
-      fit: BoxFit.cover,
-      filterQuality: FilterQuality.medium,
-      errorBuilder: (_, __, ___) {
-        return const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: <Color>[
-                Color(0xFF343027),
-                Color(0xFF171A17),
-                Color(0xFF080908),
-              ],
-            ),
-          ),
-        );
-      },
+    // 剧情页绝不读取任何 APP 主页背景资源。
+    // 剧情背景为空/加载失败时仅显示暗色占位，等待后端剧情背景。
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            Color(0xFF343027),
+            Color(0xFF171A17),
+            Color(0xFF080908),
+          ],
+        ),
+      ),
     );
   }
 

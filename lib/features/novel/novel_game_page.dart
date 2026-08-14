@@ -19,7 +19,7 @@ class NovelGamePage extends StatefulWidget {
   const NovelGamePage({
     super.key,
     required this.controller,
-    this.fallbackBackgroundAsset = 'assets/images/home_background.jpg',
+    this.fallbackBackgroundAsset = '',
     this.onBack,
     this.endingBuilder,
     this.disposeController = true,
@@ -342,10 +342,16 @@ class _NovelGamePageState extends State<NovelGamePage>
         return AnimatedBuilder(
       animation: Listenable.merge(<Listenable>[controller, controller.settings]),
       builder: (context, _) {
-        final customBackground = controller.settings.customBackground;
-        final background = customBackground.isNotEmpty
-            ? customBackground
-            : controller.world.backgroundUrl;
+        // 剧情背景只认后端剧情状态返回的 world.backgroundUrl。
+        // 不使用 APP 主页背景，也不让本地 customBackground 覆盖剧情场景。
+        final rawBackground = controller.world.backgroundUrl.trim();
+        final normalizedBackground = rawBackground.replaceAll('\\', '/').toLowerCase();
+        final isHomeBackground =
+            normalizedBackground.endsWith('/home_background.jpg') ||
+            normalizedBackground.endsWith('home_background.jpg') ||
+            normalizedBackground.endsWith('/background_home.png') ||
+            normalizedBackground.endsWith('background_home.png');
+        final background = isHomeBackground ? '' : rawBackground;
         final activeWeather = _activeWeatherEffect;
         final activeTime = _activeTimePeriod;
         return Scaffold(
@@ -357,7 +363,7 @@ class _NovelGamePageState extends State<NovelGamePage>
               RepaintBoundary(
                 child: NovelWorldBackground(
                   url: background,
-                  fallbackAsset: widget.fallbackBackgroundAsset,
+                  fallbackAsset: '', // 强制禁用主页背景兜底
                   // 背景单独成层：流式文字/爱心动画更新时尽量复用已栅格化背景。
                   characterPresent: controller.storyStarted &&
                       controller.currentSpeakerName.isNotEmpty &&
@@ -457,27 +463,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                             ),
                           ),
 
-                        if (controller.storyStarted && !controller.isGenerating)
-                          Positioned(
-                            top: compact ? 248 : 260,
-                            right: 3,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: <Widget>[
-                                _NovelWeatherTestButton(
-                                  effect: activeWeather,
-                                  isAuto: _weatherPreviewOverride == null,
-                                  onTap: () => unawaited(_cycleWeatherPreview()),
-                                ),
-                                const SizedBox(height: 7),
-                                _NovelTimeTestButton(
-                                  period: activeTime,
-                                  isAuto: _timePreviewOverride == null,
-                                  onTap: _cycleTimePreview,
-                                ),
-                              ],
-                            ),
-                          ),
                         if (controller.storyStarted && !controller.isCinematic)
                           Align(
                             alignment: Alignment.bottomCenter,

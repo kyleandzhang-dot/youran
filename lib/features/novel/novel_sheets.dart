@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/material.dart';
 
+import '../../app_shared.dart';
 import 'novel_backend.dart';
 import 'novel_game_controller.dart';
 import 'novel_models.dart';
@@ -517,6 +518,64 @@ Future<void> showNovelSettingsSheet(
   );
 }
 
+class _SettingsDrawerScaffold extends StatelessWidget {
+  const _SettingsDrawerScaffold({
+    required this.title,
+    required this.child,
+  });
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 12, 12),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: AppColors.textOnDark,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .2,
+                  ),
+                ),
+              ),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => Navigator.of(context).pop(),
+                  borderRadius: BorderRadius.circular(4),
+                  child: const SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 18,
+                      color: AppColors.textOnDarkMuted,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Divider(
+          height: 1,
+          thickness: 1,
+          color: Colors.white.withOpacity(.12),
+        ),
+        Expanded(child: child),
+      ],
+    );
+  }
+}
+
 class _SettingsPanel extends StatefulWidget {
   const _SettingsPanel({required this.controller});
   final NovelGameController controller;
@@ -549,9 +608,8 @@ class _SettingsPanelState extends State<_SettingsPanel> {
             }
           });
         }
-        return _SheetScaffold(
+        return _SettingsDrawerScaffold(
           title: '偏好设置',
-          subtitle: '',
           child: ListView(
             padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
             children: <Widget>[
@@ -615,7 +673,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                         const Text(
                           '字体大小',
                           style: TextStyle(
-                            color: NovelPalette.text,
+                            color: AppColors.textOnDark,
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
                           ),
@@ -624,7 +682,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                         Text(
                           '${settings.fontSize.round()}',
                           style: TextStyle(
-                            color: NovelPalette.text.withOpacity(.88),
+                            color: AppColors.textOnDark.withOpacity(.88),
                             fontSize: 11.5,
                             fontWeight: FontWeight.w700,
                           ),
@@ -633,14 +691,14 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                     ),
                     Row(
                       children: <Widget>[
-                        const Text('A', style: TextStyle(color: NovelPalette.muted, fontSize: 11)),
+                        const Text('A', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 11)),
                         Expanded(
                           child: SliderTheme(
                             data: SliderTheme.of(context).copyWith(
-                              activeTrackColor: NovelPalette.accent,
+                              activeTrackColor: AppColors.accent,
                               inactiveTrackColor: Colors.white.withOpacity(.08),
-                              thumbColor: NovelPalette.accent,
-                              overlayColor: NovelPalette.accent.withOpacity(.08),
+                              thumbColor: AppColors.accent,
+                              overlayColor: AppColors.accent.withOpacity(.08),
                               trackHeight: 2,
                               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5.5),
                             ),
@@ -653,7 +711,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                             ),
                           ),
                         ),
-                        const Text('A', style: TextStyle(color: NovelPalette.text, fontSize: 18)),
+                        const Text('A', style: TextStyle(color: AppColors.textOnDark, fontSize: 18)),
                       ],
                     ),
                     Divider(height: 18, color: Colors.white.withOpacity(.14)),
@@ -688,7 +746,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       subtitle: controller.bgm.enabled ? '音乐播放中' : '音乐已暂停',
                       trailing: Switch.adaptive(
                         value: controller.bgm.enabled,
-                        activeColor: NovelPalette.accent,
+                        activeColor: AppColors.accent,
                         onChanged: (value) async {
                           await controller.bgm.setEnabled(value);
                           if (mounted) setState(() {});
@@ -704,7 +762,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           : '逐字显示保持静音',
                       trailing: Switch.adaptive(
                         value: settings.typingSoundEnabled,
-                        activeColor: NovelPalette.accent,
+                        activeColor: AppColors.accent,
                         onChanged: (value) async {
                           await settings.setTypingSoundEnabled(value);
                           if (!value) {
@@ -723,7 +781,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           : '雨、雪、雷雨特效与环境音均已关闭',
                       trailing: Switch.adaptive(
                         value: settings.weatherEffectsEnabled,
-                        activeColor: NovelPalette.accent,
+                        activeColor: AppColors.accent,
                         onChanged: (value) async {
                           await settings.setWeatherEffectsEnabled(value);
                           if (mounted) setState(() {});
@@ -738,14 +796,14 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       itemBuilder: (context) => controller.availableModels
                           .map((model) => PopupMenuItem<String>(
                                 value: model.id,
-                                child: Text(model.name, style: const TextStyle(color: NovelPalette.text, fontSize: 12.5)),
+                                child: Text(model.name, style: const TextStyle(color: AppColors.textOnDark, fontSize: 12.5)),
                               ))
                           .toList(),
                       child: _CleanSettingsRow(
                         icon: Icons.hub_outlined,
                         title: 'AI 引擎模型',
                         subtitle: _modelLabel(),
-                        trailing: const Icon(Icons.chevron_right_rounded, color: NovelPalette.muted, size: 18),
+                        trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textOnDarkMuted, size: 18),
                       ),
                     ),
                   ],
@@ -902,7 +960,7 @@ class _CleanSettingsHeader extends StatelessWidget {
           child: Icon(
             icon,
             size: 16,
-            color: NovelPalette.muted.withOpacity(.88),
+            color: AppColors.textOnDarkMuted.withOpacity(.88),
           ),
         ),
         const SizedBox(width: 10),
@@ -913,7 +971,7 @@ class _CleanSettingsHeader extends StatelessWidget {
               Text(
                 title,
                 style: const TextStyle(
-                  color: NovelPalette.text,
+                  color: AppColors.textOnDark,
                   fontSize: 13.5,
                   fontWeight: FontWeight.w700,
                 ),
@@ -922,7 +980,7 @@ class _CleanSettingsHeader extends StatelessWidget {
               Text(
                 subtitle,
                 style: TextStyle(
-                  color: NovelPalette.muted.withOpacity(.86),
+                  color: AppColors.textOnDarkMuted.withOpacity(.86),
                   fontSize: 10.5,
                   height: 1.35,
                 ),
@@ -1002,8 +1060,8 @@ class _CleanSettingChoice extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: selected
-                  ? NovelPalette.text
-                  : NovelPalette.muted,
+                  ? AppColors.textOnDark
+                  : AppColors.textOnDarkMuted,
               fontSize: 11.3,
               fontWeight:
                   selected ? FontWeight.w700 : FontWeight.w600,
@@ -1039,7 +1097,7 @@ class _CleanSettingsRow extends StatelessWidget {
             Icon(
               icon,
               size: 17,
-              color: NovelPalette.muted.withOpacity(.82),
+              color: AppColors.textOnDarkMuted.withOpacity(.82),
             ),
             const SizedBox(width: 13),
             Expanded(
@@ -1050,7 +1108,7 @@ class _CleanSettingsRow extends StatelessWidget {
                   Text(
                     title,
                     style: const TextStyle(
-                      color: NovelPalette.text,
+                      color: AppColors.textOnDark,
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
                     ),
@@ -1061,7 +1119,7 @@ class _CleanSettingsRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      color: NovelPalette.muted,
+                      color: AppColors.textOnDarkMuted,
                       fontSize: 10.5,
                     ),
                   ),
@@ -1085,7 +1143,7 @@ class _SectionEyebrow extends StatelessWidget {
     return Text(
       text,
       style: const TextStyle(
-        color: NovelPalette.muted,
+        color: AppColors.textOnDarkMuted,
         fontSize: 11,
         fontWeight: FontWeight.w700,
         letterSpacing: .6,
@@ -1106,13 +1164,13 @@ class _SettingRowHeader extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
           decoration: BoxDecoration(
-            color: NovelPalette.accent.withOpacity(.08),
+            color: AppColors.accent.withOpacity(.08),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
             trailing,
             style: const TextStyle(
-              color: NovelPalette.accent,
+              color: AppColors.accent,
               fontSize: 10,
               fontWeight: FontWeight.w700,
             ),
@@ -1153,7 +1211,7 @@ class _ThemeDot extends StatelessWidget {
                 color: color,
                 border: Border.all(
                   color: selected
-                      ? NovelPalette.accent
+                      ? AppColors.accent
                       : Colors.white.withOpacity(.11),
                   width: selected ? 2 : 1,
                 ),
@@ -1171,7 +1229,7 @@ class _ThemeDot extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: selected ? NovelPalette.text : NovelPalette.muted,
+                color: selected ? AppColors.textOnDark : AppColors.textOnDarkMuted,
                 fontSize: 9.5,
               ),
             ),
@@ -1208,19 +1266,19 @@ class _FontChoice extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: selected
-                    ? NovelPalette.accent.withOpacity(.10)
+                    ? AppColors.accent.withOpacity(.10)
                     : Colors.white.withOpacity(.025),
                 borderRadius: BorderRadius.circular(7),
                 border: Border.all(
                   color: selected
-                      ? NovelPalette.accent.withOpacity(.48)
+                      ? AppColors.accent.withOpacity(.48)
                       : Colors.white.withOpacity(.07),
                 ),
               ),
               child: Text(
                 char,
                 style: TextStyle(
-                  color: selected ? NovelPalette.accent : NovelPalette.text,
+                  color: selected ? AppColors.accent : AppColors.textOnDark,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
@@ -1230,7 +1288,7 @@ class _FontChoice extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: selected ? NovelPalette.text : NovelPalette.muted,
+                color: selected ? AppColors.textOnDark : AppColors.textOnDarkMuted,
                 fontSize: 9.2,
               ),
             ),
@@ -1264,7 +1322,7 @@ class _SettingsLine extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          Icon(icon, color: NovelPalette.accent.withOpacity(.78), size: 18),
+          Icon(icon, color: AppColors.accent.withOpacity(.78), size: 18),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -1274,7 +1332,7 @@ class _SettingsLine extends StatelessWidget {
                 Text(
                   title,
                   style: const TextStyle(
-                    color: NovelPalette.text,
+                    color: AppColors.textOnDark,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w700,
                   ),
@@ -1285,7 +1343,7 @@ class _SettingsLine extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: NovelPalette.muted,
+                    color: AppColors.textOnDarkMuted,
                     fontSize: 10,
                   ),
                 ),
@@ -4004,7 +4062,7 @@ Future<T?> _showNovelEndDrawer<T>(
 
     // 对齐左侧 Drawer 打开后的主背景压暗感。
     // 只作用在抽屉外部，不会把主场景做毛玻璃。
-    barrierColor: Colors.black54,
+    barrierColor: Colors.black.withOpacity(.78),
 
     transitionDuration: const Duration(milliseconds: 260),
     pageBuilder: (dialogContext, _, __) {
@@ -4058,9 +4116,9 @@ class _EndDrawerFrame extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
         child: Container(
-          // 只调整右侧设置抽屉本身的底色：
-          // 保留毛玻璃和透明感，但整体压暗，更接近左侧抽屉的实际视觉效果。
-          color: Colors.black.withOpacity(.24),
+          // 与左侧 GameDrawer 保持一致：
+          // 使用轻微的白色透明叠层，而不是更重的黑色压暗层。
+          color: const Color.fromARGB(255, 253, 253, 253).withOpacity(0.1),
           child: SafeArea(child: child),
         ),
       ),

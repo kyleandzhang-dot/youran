@@ -417,10 +417,8 @@ class _GameShellState extends State<GameShell> {
       return;
     }
 
-    // ★★★ 核心修改：处理“重置剧情”退出的情况 ★★★
-    // 如果 isDataChanged 为 true 且没有被删除，说明用户点击了“重置剧情”
+    // 重置剧情退出的情况
     if (isDataChanged == true && isCurrentWorld) {
-      // 当前世界的剧情被重置，同样让他退出当前剧本，回到空 Shell 选单
       Navigator.of(context, rootNavigator: true).pushReplacement<void, void>(
         MaterialPageRoute<void>(
           builder: (_) => GameShellPage(
@@ -432,7 +430,6 @@ class _GameShellState extends State<GameShell> {
       return;
     }
 
-    // 普通编辑返回（比如改了名字、图片等）：世界没重置也没删，只重新拉取最新数据刷新列表。
     await _loadHomeData(
       focusScenarioId: isDataChanged == true ? scenarioId : null,
     );
@@ -464,13 +461,11 @@ class _GameShellState extends State<GameShell> {
       onTaskSubmitted: (submittedTaskId) {
         if (!mounted || pollingStarted) return;
         pollingStarted = true;
-        // 在创建弹窗收进左下角之前就启动真实轮询，让进度区先出现。
         _startPollingCreation(submittedTaskId);
       },
     );
 
     if (!mounted || taskId == null || pollingStarted) return;
-    // 兼容异常/旧调用路径：如果回调没有触发，仍保证任务会开始轮询。
     _startPollingCreation(taskId);
   }
 
@@ -519,9 +514,6 @@ class _GameShellState extends State<GameShell> {
           final result = statusData['result'] as Map?;
           final createdScenarioId = result?['scenario_id']?.toString().trim() ?? '';
 
-          // completed 只代表生成任务完成。
-          // 先重新拉 HomeData，并等待新 scenario 真正出现在 Drawer 数据源中，
-          // 再收起进度条，避免“100% 了但世界列表里暂时没有”的状态。
           var synced = true;
           if (createdScenarioId.isNotEmpty) {
             synced = await _syncWorldListUntil(
@@ -536,8 +528,6 @@ class _GameShellState extends State<GameShell> {
           if (!mounted) return;
           setState(() => _isCreatingWorld = false);
 
-          // 创建完成后只刷新并定位到新世界，不自动进入。
-          // 用户仍停留在当前页面 / Drawer，明确点击世界后才真正进入。
           if (synced) {
             _showInPageNotification('世界创建完成，已加入世界列表', success: true);
           } else {
@@ -602,27 +592,30 @@ class _GameShellState extends State<GameShell> {
     setState(() => _userAvatarUrl = nextAvatar);
   }
 
-  // 当前在 source: 5 (game_shell.dart) 中的代码
   Future<void> _handleHeaderCheckin() async {
     if (!_isLoggedIn) return;
-    
-    // 发起签到请求
-    final result = await MineDialogs.checkin(context);
-    if (!mounted || result == null) return;
 
-    // 强制重新请求一次个人资料，确保点数绝对准确
-    await _loadProfile();
+    try {
+      // 抛弃弹窗，直接调用 API 发起签到请求
+      final result = await MineApi.dailyCheckin();
 
-    if (!mounted) return;
+      // 强制重新请求一次个人资料，确保点数绝对准确
+      await _loadProfile();
 
-    // 触发 UI 刷新，将状态变为已签到
-    setState(() {
-      _checkinStatusLoaded = true;
-      _checkedInToday = true;
-      // _loadProfile() 内部会通过 setState 更新 _userPoints
-    });
+      if (!mounted) return;
 
-    _showInPageNotification('签到成功  +${result.reward} 积分', success: true);
+      // 触发 UI 刷新，将状态变为已签到
+      setState(() {
+        _checkinStatusLoaded = true;
+        _checkedInToday = true;
+      });
+
+      _showInPageNotification('签到成功  +${result.reward} 积分', success: true);
+    } catch (e) {
+      if (!mounted) return;
+      final errorMsg = e.toString().replaceFirst('Exception: ', '').replaceFirst('ApiException: ', '');
+      _showInPageNotification(errorMsg);
+    }
   }
 
   Future<void> _logout() async {
@@ -645,7 +638,6 @@ class _GameShellState extends State<GameShell> {
       onLoginSuccess: (result) async {
         await SessionManager.persist(result);
 
-        // 兼容不同版本 SessionManager：登录成功后这里再显式同步一次。
         ApiClient.instance.accessToken = result.accessToken;
         ApiClient.instance.userId = result.userId;
 
@@ -689,8 +681,9 @@ class _GameShellState extends State<GameShell> {
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.only(bottom: 26, left: 20, right: 20),
           duration: const Duration(milliseconds: 2200),
+          // 这里改成了直角边框
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.zero,
             side: BorderSide(color: Colors.white.withOpacity(.08)),
           ),
           content: Row(
@@ -735,7 +728,7 @@ class _GameShellState extends State<GameShell> {
       checkinStatusLoaded: _checkinStatusLoaded,
       checkedInToday: _checkedInToday,
       onCheckin: _handleHeaderCheckin,
-      onRefreshProfile: _loadProfile, // <--- 【新增这一行】传入专用的刷新资料方法
+      onRefreshProfile: _loadProfile,
       currentUserId: _isLoggedIn ? _userId : null,
       onScenarioLaunch: _onScenarioLaunch,
       selectedModule: _selectedModule,

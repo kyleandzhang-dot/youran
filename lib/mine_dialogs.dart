@@ -298,220 +298,6 @@ class MineDialogs {
     );
   }
 
-  static Future<MineCheckinResult?> checkin(BuildContext context) async {
-    MineCheckinStatus? status;
-    var loading = true;
-    var submitting = false;
-    var successMode = false;
-    String? error;
-
-    return _show<MineCheckinResult>(
-      context,
-      title: '签到',
-      maxWidth: 410,
-      builder: (dialogContext, setState) {
-        if (loading && status == null && error == null) {
-          MineApi.getCheckinStatus().then((value) {
-            if (!dialogContext.mounted) return;
-            setState(() {
-              status = value;
-              loading = false;
-            });
-          }).catchError((_) {
-            if (!dialogContext.mounted) return;
-            setState(() {
-              loading = false;
-              error = '状态获取失败';
-            });
-          });
-        }
-
-        Future<void> submit() async {
-          if (submitting || status?.checkedInToday == true || successMode) return;
-          setState(() {
-            submitting = true;
-            error = null;
-          });
-          try {
-            final result = await MineApi.dailyCheckin();
-            if (!dialogContext.mounted) return;
-            setState(() {
-              submitting = false;
-              successMode = true;
-              status = MineCheckinStatus(checkedInToday: true, days: [...?status?.days, 'today']);
-            });
-            await Future<void>.delayed(const Duration(milliseconds: 800));
-            if (!dialogContext.mounted) return;
-            Navigator.of(dialogContext).pop(result);
-          } on ApiException catch (e) {
-            if (!dialogContext.mounted) return;
-            setState(() {
-              submitting = false;
-              error = e.message;
-            });
-          } catch (_) {
-            if (!dialogContext.mounted) return;
-            setState(() {
-              submitting = false;
-              error = '网络请求异常，请重试';
-            });
-          }
-        }
-
-        if (loading) {
-          return const SizedBox(
-            height: 200,
-            child: Center(
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: AppColors.accent,
-              ),
-            ),
-          );
-        }
-
-        final checked = status?.checkedInToday ?? false;
-        final days = status?.days ?? const <String>[];
-        final now = DateTime.now();
-
-        final currentWeekday = now.weekday;
-        final startOfWeek = now.subtract(Duration(days: currentWeekday - 1));
-        const weekLabels = <String>['一', '二', '三', '四', '五', '六', '日'];
-
-        int weeklyCheckinCount = 0;
-        for (int i = 0; i < 7; i++) {
-          final date = startOfWeek.add(Duration(days: i));
-          final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-          if (days.contains(dateStr)) weeklyCheckinCount++;
-        }
-        final progress = (weeklyCheckinCount / 7.0).clamp(0.0, 1.0);
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.03),
-                border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-                borderRadius: BorderRadius.zero,
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          '本周签到记录',
-                          style: TextStyle(
-                            color: AppColors.textOnDark,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: checked ? AppColors.accent.withOpacity(0.12) : Colors.white.withOpacity(0.03),
-                          border: Border.all(
-                            color: checked ? AppColors.accent : Colors.white.withOpacity(0.1),
-                          ),
-                          borderRadius: BorderRadius.zero,
-                        ),
-                        child: Text(
-                          checked ? '已完成' : '待签到',
-                          style: TextStyle(
-                            color: checked ? AppColors.accent : AppColors.textOnDarkMuted,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    height: 2,
-                    child: LinearProgressIndicator(
-                      value: progress,
-                      backgroundColor: Colors.white.withOpacity(0.05),
-                      color: AppColors.accent,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: List.generate(7, (index) {
-                final date = startOfWeek.add(Duration(days: index));
-                final value = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-                final done = days.contains(value) || (successMode && date.day == now.day);
-                final today = date.day == now.day && date.month == now.month && date.year == now.year;
-
-                return Column(
-                  children: [
-                    Text(
-                      weekLabels[index],
-                      style: TextStyle(
-                        color: AppColors.textOnDarkMuted.withOpacity(0.7),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      width: 36,
-                      height: 36,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: done ? AppColors.accent.withOpacity(0.1) : Colors.transparent,
-                        border: Border.all(
-                          color: done 
-                              ? AppColors.accent 
-                              : (today ? Colors.white.withOpacity(0.3) : Colors.white.withOpacity(0.05)),
-                          width: 1,
-                        ),
-                        borderRadius: BorderRadius.zero,
-                      ),
-                      child: done
-                          ? const Icon(
-                              LucideIcons.check,
-                              size: 16,
-                              color: AppColors.accent,
-                            )
-                          : Text(
-                              '${date.day}',
-                              style: TextStyle(
-                                color: today ? AppColors.textOnDark : AppColors.textOnDarkMuted,
-                                fontSize: 11,
-                                fontWeight: today ? FontWeight.w700 : FontWeight.w500,
-                              ),
-                            ),
-                    ),
-                  ],
-                );
-              }),
-            ),
-            if (error != null) ...[
-              const SizedBox(height: 16),
-              _error(error!),
-            ],
-            const SizedBox(height: 24),
-            _primaryButton(
-              label: successMode ? '签到成功' : (submitting ? '处理中...' : (checked ? '今日已签到' : '立即签到')),
-              enabled: !submitting && !checked && !successMode,
-              onTap: submit,
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   static Future<bool> redeem(BuildContext context) async {
     final controller = TextEditingController();
     var loading = false;
@@ -585,20 +371,21 @@ class MineDialogs {
   }
 
   static Future<void> announcements(BuildContext context) async {
+    // 默认展开第一条
     var selectedIndex = 0;
     final announcementsFuture = MineApi.getAnnouncements();
 
     await _show<void>(
       context,
       title: '系统公告',
-      maxWidth: 430,
+      maxWidth: 460, // 稍微加宽，让阅读体验更好
       builder: (dialogContext, setState) {
         return FutureBuilder<List<MineAnnouncement>>(
           future: announcementsFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
               return const SizedBox(
-                height: 230,
+                height: 200,
                 child: Center(
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
@@ -614,7 +401,7 @@ class MineDialogs {
                 child: Center(
                   child: Text(
                     '公告加载失败',
-                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12.5),
+                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 13),
                   ),
                 ),
               );
@@ -623,122 +410,120 @@ class MineDialogs {
             final items = snapshot.data ?? const <MineAnnouncement>[];
             if (items.isEmpty) {
               return const SizedBox(
-                height: 150,
+                height: 160,
                 child: Center(
                   child: Text(
-                    '暂无公告',
-                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12.5),
+                    '暂无系统公告',
+                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 13),
                   ),
                 ),
               );
             }
 
-            if (selectedIndex >= items.length) selectedIndex = 0;
-            final selected = items[selectedIndex];
-            final selectedDate = selected.createdAt.contains('T')
-                ? selected.createdAt.split('T').first
-                : selected.createdAt;
+            return ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 520),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (_, index) {
+                  final item = items[index];
+                  final active = index == selectedIndex;
+                  final dateStr = item.createdAt.contains('T')
+                      ? item.createdAt.split('T').first
+                      : item.createdAt;
 
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SizedBox(
-                  height: 38,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 18),
-                    itemBuilder: (_, index) {
-                      final item = items[index];
-                      final active = index == selectedIndex;
-
-                      return Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () => setState(() {
-                            selectedIndex = index;
-                          }),
-                          child: Container(
-                            constraints: const BoxConstraints(maxWidth: 150),
-                            padding: const EdgeInsets.only(bottom: 7),
-                            decoration: BoxDecoration(
-                              border: Border(
-                                bottom: BorderSide(
-                                  color: active ? AppColors.accent : Colors.transparent,
-                                  width: 2,
-                                ),
-                              ),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              item.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: active ? AppColors.textOnDark : AppColors.textOnDarkMuted,
-                                fontSize: 12,
-                                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                              ),
-                            ),
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        setState(() {
+                          // 点击已展开的项则收起，点击未展开的项则展开
+                          selectedIndex = active ? -1 : index;
+                        });
+                      },
+                      borderRadius: BorderRadius.zero,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        decoration: BoxDecoration(
+                          color: active 
+                              ? Colors.white.withOpacity(0.04) 
+                              : Colors.white.withOpacity(0.015),
+                          border: Border.all(
+                            color: active 
+                                ? AppColors.accent.withOpacity(0.4) 
+                                : Colors.white.withOpacity(0.08),
+                            width: 1,
                           ),
+                          borderRadius: BorderRadius.zero,
                         ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Container(
-                  constraints: const BoxConstraints(
-                    minHeight: 190,
-                    maxHeight: 360,
-                  ),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.03),
-                    border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-                    borderRadius: BorderRadius.zero,
-                  ),
-                  child: SingleChildScrollView(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 160),
-                      child: Column(
-                        key: ValueKey(selectedIndex),
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            selected.title,
-                            style: const TextStyle(
-                              color: AppColors.textOnDark,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          if (selectedDate.isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              selectedDate,
-                              style: const TextStyle(
-                                color: AppColors.textOnDarkMuted,
-                                fontSize: 11,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // 标题 & 日期头部
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.title,
+                                          style: TextStyle(
+                                            color: active ? AppColors.accent : AppColors.textOnDark,
+                                            fontSize: 14,
+                                            fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+                                          ),
+                                        ),
+                                        if (dateStr.isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            dateStr,
+                                            style: TextStyle(
+                                              color: AppColors.textOnDarkMuted.withOpacity(0.7),
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(
+                                    active ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                                    size: 18,
+                                    color: active ? AppColors.accent : AppColors.textOnDarkMuted.withOpacity(0.6),
+                                  ),
+                                ],
                               ),
+                            ),
+                            // 展开的正文内容
+                            AnimatedSize(
+                              duration: const Duration(milliseconds: 240),
+                              curve: Curves.easeOutCubic,
+                              alignment: Alignment.topCenter,
+                              child: active
+                                  ? Container(
+                                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+                                      child: Text(
+                                        item.content.isEmpty ? '暂无详细内容' : item.content,
+                                        style: const TextStyle(
+                                          color: AppColors.textOnDarkMuted,
+                                          fontSize: 13,
+                                          height: 1.65,
+                                        ),
+                                      ),
+                                    )
+                                  : const SizedBox(width: double.infinity, height: 0),
                             ),
                           ],
-                          const SizedBox(height: 14),
-                          Text(
-                            selected.content.isEmpty ? '内容为空' : selected.content,
-                            style: const TextStyle(
-                              color: AppColors.textOnDarkMuted,
-                              fontSize: 13,
-                              height: 1.6,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              ],
+                  );
+                },
+              ),
             );
           },
         );

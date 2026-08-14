@@ -15,6 +15,9 @@ import 'mine_dialogs.dart';
 /// 抽屉顶部的三个功能模块
 enum DrawerModule { world, discover, mine }
 
+/// 同一套导航既可作为剧情中的 Drawer，也可作为大厅中的固定侧栏。
+enum GameDrawerPresentation { drawer, sidebar }
+
 class GameDrawer extends StatelessWidget {
   const GameDrawer({
     super.key,
@@ -51,6 +54,7 @@ class GameDrawer extends StatelessWidget {
     this.createWorldProgress = 0.0,
     this.createWorldStep = '',
     this.createWorldError = false,
+    this.presentation = GameDrawerPresentation.drawer,
   });
 
   final List<GameData> games;
@@ -100,23 +104,24 @@ class GameDrawer extends StatelessWidget {
   final String createWorldStep;
   final bool createWorldError;
 
+  /// drawer：剧情中由 Scaffold.drawer 弹出。
+  /// sidebar：大厅中固定在左侧，不再响应 Navigator.pop() 关闭逻辑。
+  final GameDrawerPresentation presentation;
+
+  bool get _isSidebar => presentation == GameDrawerPresentation.sidebar;
+
   @override
   Widget build(BuildContext context) {
-    final width = math.min(MediaQuery.sizeOf(context).width * 0.82, 300.0);
+    final width = _isSidebar
+        ? 300.0
+        : math.min(MediaQuery.sizeOf(context).width * 0.82, 300.0);
 
-    return Drawer(
+    final content = Container(
       width: width,
-      backgroundColor: Colors.transparent,
-      surfaceTintColor: Colors.transparent,
-      elevation: 0,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-        child: Container(
-          color: const Color.fromARGB(255, 253, 253, 253).withOpacity(0.1),
-          child: SafeArea(
-            child: Column(
-              children: [
+      color: const Color.fromARGB(255, 253, 253, 253).withOpacity(0.1),
+      child: SafeArea(
+        child: Column(
+          children: [
                 const SizedBox(height: 12),
                 _DrawerHeader(
                   isLoggedIn: isLoggedIn,
@@ -173,9 +178,37 @@ class GameDrawer extends StatelessWidget {
                       },
                     ),
                   ),
-              ],
+          ],
+        ),
+      ),
+    );
+
+    if (_isSidebar) {
+      return SizedBox(
+        width: width,
+        height: double.infinity,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFF171717).withOpacity(.92),
+            border: Border(
+              right: BorderSide(color: Colors.white.withOpacity(.07)),
             ),
           ),
+          child: content,
+        ),
+      );
+    }
+
+    return Drawer(
+      width: width,
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+          child: content,
         ),
       ),
     );
@@ -190,6 +223,7 @@ class GameDrawer extends StatelessWidget {
           onGameSelected: onGameSelected,
           onEditWorld: onEditWorld,
           onRefresh: onRefreshWorld,
+          dismissOnReselect: !_isSidebar,
         );
       case DrawerModule.mine:
         return _MinePanel(
@@ -222,6 +256,7 @@ class _WorldPanel extends StatelessWidget {
     required this.onGameSelected,
     this.onEditWorld,
     this.onRefresh,
+    this.dismissOnReselect = true,
   });
 
   final List<GameData> games;
@@ -229,6 +264,7 @@ class _WorldPanel extends StatelessWidget {
   final ValueChanged<int> onGameSelected;
   final ValueChanged<int>? onEditWorld;
   final Future<void> Function()? onRefresh;
+  final bool dismissOnReselect;
 
   Future<void> _refresh() async {
     final callback = onRefresh;
@@ -255,8 +291,11 @@ class _WorldPanel extends StatelessWidget {
             onTap: () {
               // 核心拦截：如果点击的就是当前正在游玩的剧本
               if (selectedGameIndex == index) {
-                // 直接关闭侧边栏抽屉，不重新走进房逻辑
-                Navigator.of(context).pop();
+                // 剧情 Drawer 中重复点击当前世界：只关闭抽屉。
+                // 大厅固定侧栏中不能 pop，否则会误退出当前页面。
+                if (dismissOnReselect && Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                }
                 return;
               }
               

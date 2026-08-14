@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'home_page.dart';
+import 'game_shell.dart';
 import 'services/session_manager.dart';
 
 class IntroSplashPage extends StatefulWidget {
@@ -95,7 +95,7 @@ class _IntroSplashPageState extends State<IntroSplashPage> with TickerProviderSt
           PageRouteBuilder(
             transitionDuration: const Duration(milliseconds: 2000),
             pageBuilder: (context, animation, secondaryAnimation) =>
-                HomePage(initialSession: widget.initialSession),
+                GameShellPage(initialSession: widget.initialSession),
             transitionsBuilder: (context, animation, secondaryAnimation, child) {
               return FadeTransition(opacity: animation, child: child);
             },
