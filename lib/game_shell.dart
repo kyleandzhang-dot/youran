@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'app_shared.dart';
+import 'app_notice.dart';
 import 'api/store_api.dart';
 import 'api/api_client.dart';
 import 'api/mine_api.dart';
@@ -53,8 +54,18 @@ class _GameShellState extends State<GameShell> {
   bool _loaded = false;
   bool _autoOpened = false;
 
-  int _selectedGameIndex = 0;
+  /// -1 表示当前没有真正激活的剧情。
+  int _selectedGameIndex = -1;
   DrawerModule _selectedModule = DrawerModule.world;
+
+  /// 只有用户点击剧情并且 setActiveScenario 成功后，才允许关闭空 Shell 的左侧抽屉。
+  bool _scenarioSelectionCommitted = false;
+
+  bool get _mustKeepDrawerOpen {
+    if (_scenarioSelectionCommitted) return false;
+    final activeId = widget.activeScenarioId?.trim() ?? '';
+    return activeId.isEmpty;
+  }
 
   bool _isLoggedIn = false;
   String _userName = '玩家';
@@ -83,6 +94,7 @@ class _GameShellState extends State<GameShell> {
   void didUpdateWidget(covariant GameShell oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.activeScenarioId != widget.activeScenarioId && _loaded) {
+      _scenarioSelectionCommitted = false;
       _loadHomeData(focusScenarioId: widget.activeScenarioId);
     }
   }
@@ -231,17 +243,19 @@ class _GameShellState extends State<GameShell> {
 
       final targetScenarioId =
           focusScenarioId ?? widget.activeScenarioId ?? home.activeScenarioId?.toString();
-      var selectedIndex = 0;
-      if (games.isNotEmpty && targetScenarioId != null) {
+
+      var selectedIndex = -1;
+      final targetId = targetScenarioId?.toString().trim() ?? '';
+      if (games.isNotEmpty && targetId.isNotEmpty) {
         final found = games.indexWhere(
-          (game) => game.id.toString() == targetScenarioId.toString(),
+          (game) => game.id.toString() == targetId,
         );
         if (found >= 0) selectedIndex = found;
       }
 
       setState(() {
         _games = games;
-        _selectedGameIndex = games.isEmpty ? 0 : selectedIndex;
+        _selectedGameIndex = selectedIndex;
       });
     } catch (error) {
       debugPrint('GameShell home data failed: $error');
@@ -286,7 +300,9 @@ class _GameShellState extends State<GameShell> {
     return false;
   }
 
-  Future<void> _closeDrawerIfNeeded() async {
+  Future<void> _closeDrawerIfNeeded({bool force = false}) async {
+    if (!force && _mustKeepDrawerOpen) return;
+
     if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
       Navigator.of(context).pop();
       await Future<void>.delayed(const Duration(milliseconds: 110));
@@ -304,13 +320,20 @@ class _GameShellState extends State<GameShell> {
     }
 
     final scenario = _games[index];
-    if (mounted) setState(() => _selectedGameIndex = index);
-    await _closeDrawerIfNeeded();
-    if (!mounted) return;
 
     try {
       final result = await UserApi.setActiveScenario(scenario.id.toString());
       if (!mounted) return;
+
+      // 后端确认成功后，才算用户真正选择了剧情。
+      setState(() {
+        _selectedGameIndex = index;
+        _scenarioSelectionCommitted = true;
+      });
+
+      await _closeDrawerIfNeeded(force: true);
+      if (!mounted) return;
+
       await _replaceScenarioRoute(
         ScenarioLaunchInfo(
           mode: scenario.mode,
@@ -320,7 +343,7 @@ class _GameShellState extends State<GameShell> {
       );
     } catch (error) {
       debugPrint('GameShell set active scenario failed: $error');
-      if (mounted) _showInPageNotification('进入世界失败，请稍后重试');
+      if (mounted) AppNotice.error(context, '进入世界失败，请稍后重试');
     }
   }
 
@@ -347,7 +370,7 @@ class _GameShellState extends State<GameShell> {
 
   Future<void> _replaceScenarioRoute(ScenarioLaunchInfo launch) async {
     if (!launch.isValid) {
-      _showInPageNotification('缺少剧本或会话参数，无法进入世界');
+      AppNotice.error(context, '缺少剧本或会话参数，无法进入世界');
       return;
     }
 
@@ -368,7 +391,7 @@ class _GameShellState extends State<GameShell> {
       );
     } catch (error) {
       debugPrint('GameShell route failed: route=$route error=$error');
-      if (mounted) _showInPageNotification('游戏路由尚未配置：$route');
+      if (mounted) AppNotice.error(context, '游戏路由尚未配置：$route');
     }
   }
 
@@ -442,7 +465,7 @@ class _GameShellState extends State<GameShell> {
       return;
     }
     if (_games.isEmpty) {
-      _showInPageNotification('还没有可以分享的世界');
+      AppNotice.info(context, '还没有可以分享的世界');
       return;
     }
 
@@ -529,9 +552,9 @@ class _GameShellState extends State<GameShell> {
           setState(() => _isCreatingWorld = false);
 
           if (synced) {
-            _showInPageNotification('世界创建完成，已加入世界列表', success: true);
+            AppNotice.success(context, '世界创建完成，已加入世界列表');
           } else {
-            _showInPageNotification('世界已生成，列表同步稍有延迟，可下拉刷新');
+            AppNotice.info(context, '世界已生成，列表同步稍有延迟，可下拉刷新');
           }
           return;
         }
@@ -610,11 +633,11 @@ class _GameShellState extends State<GameShell> {
         _checkedInToday = true;
       });
 
-      _showInPageNotification('签到成功  +${result.reward} 积分', success: true);
+      AppNotice.success(context, '签到成功  +${result.reward} 积分');
     } catch (e) {
       if (!mounted) return;
       final errorMsg = e.toString().replaceFirst('Exception: ', '').replaceFirst('ApiException: ', '');
-      _showInPageNotification(errorMsg);
+      AppNotice.error(context, errorMsg);
     }
   }
 
@@ -671,41 +694,6 @@ class _GameShellState extends State<GameShell> {
     }
   }
 
-  void _showInPageNotification(String message, {bool success = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          backgroundColor: const Color(0xE8181A19),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.only(bottom: 26, left: 20, right: 20),
-          duration: const Duration(milliseconds: 2200),
-          // 这里改成了直角边框
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.zero,
-            side: BorderSide(color: Colors.white.withOpacity(.08)),
-          ),
-          content: Row(
-            children: <Widget>[
-              Icon(
-                success ? Icons.check_circle_outline_rounded : Icons.info_outline_rounded,
-                size: 17,
-                color: success ? const Color(0xFF8FC6A0) : Colors.white70,
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Text(
-                  message,
-                  style: const TextStyle(color: Color(0xFFF1F1ED), fontSize: 12.5),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-  }
-
   @override
   Widget build(BuildContext context) {
     final drawer = GameDrawer(
@@ -739,16 +727,56 @@ class _GameShellState extends State<GameShell> {
       createWorldError: _createWorldError,
     );
 
+    final pageBody = widget.builder(
+      context,
+      () => _scaffoldKey.currentState?.openDrawer(),
+    );
+
+    // 空 Shell 且没有已激活剧情时，左侧栏直接固定在页面上。
+    // 这样点击遮罩、返回键、侧滑都无法把它关闭；
+    // 用户必须真正选择一个剧情并激活成功后才会解锁。
+    if (_loaded && _mustKeepDrawerOpen) {
+      return PopScope(
+        canPop: false,
+        child: Scaffold(
+          key: _scaffoldKey,
+          resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
+          backgroundColor: const Color(0xFF171918),
+          body: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              pageBody,
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {},
+                child: ColoredBox(
+                  color: Colors.black.withOpacity(.58),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  width: math.min(
+                    MediaQuery.sizeOf(context).width * 0.82,
+                    300.0,
+                  ),
+                  height: double.infinity,
+                  child: drawer,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       key: _scaffoldKey,
       resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
       backgroundColor: widget.backgroundColor,
       drawerScrimColor: Colors.black.withOpacity(.78),
       drawer: drawer,
-      body: widget.builder(
-        context,
-        () => _scaffoldKey.currentState?.openDrawer(),
-      ),
+      body: pageBody,
     );
   }
 }
@@ -774,9 +802,19 @@ class GameShellPage extends StatelessWidget {
         return Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            const ColoredBox(
-                color: Color(0xFFFDFEFC),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[
+                    Color(0xFF171918),
+                    Color(0xFF0D0F0E),
+                    Color(0xFF080908),
+                  ],
+                ),
               ),
+            ),
             SafeArea(
               child: Stack(
                 children: <Widget>[

@@ -5,6 +5,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'app_shared.dart';
+import 'app_notice.dart';
 import 'api/store_api.dart';
 import 'api/profile_api.dart';
 import 'api/notification_api.dart';
@@ -274,6 +275,42 @@ class _WorldPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (games.isEmpty) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            color: AppColors.accent,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
+              ),
+              children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight,
+                  ),
+                  child: Center(
+                    child: Text(
+                      '这里还没有世界\n点击下方「创建世界」，开始你的第一段故事',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: AppColors.textOnDarkMuted,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        height: 1.7,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    }
+
     return RefreshIndicator(
       onRefresh: _refresh,
       color: AppColors.accent,
@@ -1423,9 +1460,7 @@ class _MinePanelState extends State<_MinePanel> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _markingAll = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('全部已读失败')),
-      );
+      AppNotice.error(context, '全部已读失败');
     }
   }
 
@@ -1541,9 +1576,7 @@ class _MinePanelState extends State<_MinePanel> {
   void _openNotificationTarget(AppNotification item) {
     final templateId = item.templateId?.trim();
     if (templateId == null || templateId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('这条通知没有关联作品，无法跳转')),
-      );
+      AppNotice.info(context, '这条通知没有关联作品，无法跳转');
       return;
     }
 
@@ -1961,35 +1994,20 @@ class _MinePanelState extends State<_MinePanel> {
   Future<void> _openRedeem() async {
     final success = await MineDialogs.redeem(context);
     if (!mounted || !success) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        backgroundColor: Color(0xFF161616),
-        behavior: SnackBarBehavior.floating,
-        content: Text(
-          '兑换成功',
-          style: TextStyle(color: AppColors.textOnDark),
-        ),
-      ),
-    );
+
+    // 顶部白色轻提示，替代原来的底部黑色 SnackBar。
+    AppNotice.success(context, '兑换成功');
+
     await _loadData();
-    
-    // 【修改这行】不再调用 onCheckin，改为调用专用的刷新资料回调
-    widget.onRefreshProfile?.call(); 
+
+    // 刷新个人资料，确保兑换后的余额/积分立即更新。
+    widget.onRefreshProfile?.call();
   }
 
   Future<void> _openFeedback() async {
     final success = await MineDialogs.feedback(context);
     if (!mounted || !success) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        backgroundColor: Color(0xFF161616),
-        behavior: SnackBarBehavior.floating,
-        content: Text(
-          '反馈已提交',
-          style: TextStyle(color: AppColors.textOnDark),
-        ),
-      ),
-    );
+    AppNotice.success(context, '反馈已提交');
   }
 
   Future<void> _logout() async {

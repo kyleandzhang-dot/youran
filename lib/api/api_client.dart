@@ -33,7 +33,7 @@ class ApiClient {
   /// flutter run --dart-define=API_BASE_URL=http://你的地址:3000/api/v1
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://172.20.10.3:3000/api/v1',
+    defaultValue: 'https://yoran.freedreamky.com/api/v1',
   );
 
   static String get baseUrl => _trimTrailingSlash(_envBaseUrl);
