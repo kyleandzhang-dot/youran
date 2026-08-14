@@ -32,6 +32,12 @@ class SessionManager {
 
   /// 登录成功后调用。
   static Future<void> persist(LoginResult result) async {
+    // 服务端已经确认登录成功后，先让当前运行时身份立即生效。
+    // 后续页面即使马上发请求，也能立刻带上 Authorization / X-User-ID。
+    ApiClient.instance.setAccessToken(result.accessToken);
+    ApiClient.instance.setUserId(result.userId);
+
+    // 再持久化到本地；存储速度不再阻塞运行时登录态生效。
     await TokenStorage.save(
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
@@ -42,9 +48,6 @@ class SessionManager {
       username: result.username,
       tokenBalance: result.tokenBalance.toInt(),
     );
-
-    ApiClient.instance.setAccessToken(result.accessToken);
-    ApiClient.instance.setUserId(result.userId);
   }
 
   /// 运行中 access token 过期时调用。

@@ -126,50 +126,66 @@ class _StartupGateState extends State<_StartupGate> {
   }
 
   Future<void> _bootstrap() async {
+    // restore() 只允许用于 App 冷启动。
+    // 用户刚完成验证码登录时已经拿到了完整 token，不能再次 restore()，
+    // 否则 restore() 会先清空内存 token，再刷新，造成第一次登录的状态竞争。
     final session = await SessionManager.restore();
     if (!mounted) return;
 
-    _session = session;
     if (session == null) {
+      _session = null;
+      _launch = null;
       setState(() => _loading = false);
-      
-      // 如果未登录，在此处等待第一帧渲染完空壳页面后，强制弹起不可关闭的登录面板
+
+      // 未登录：第一帧空壳渲染完成后弹出不可手动关闭的登录页。
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         LoginSheet.show(
           context,
           onLoginSuccess: (result) async {
-            // 登录成功后保存状态
+            // LoginSheet 会先完整退出，再执行到这里，因此这里可以安全刷新/跳转。
             await SessionManager.persist(result);
-            ApiClient.instance.accessToken = result.accessToken;
-            ApiClient.instance.userId = 
-                result.userId.trim().isEmpty ? null : result.userId.trim();
-            
-            if (mounted) {
-              // 重新启动加载流程，去寻找上次进入的世界
-              setState(() {
-                _loading = true;
-                _status = '正在恢复世界…';
-              });
-              _bootstrap(); 
-            }
+            if (!mounted) return;
+
+            final loggedInSession = UserSession(
+              userId: result.userId,
+              username: result.username,
+              tokenBalance: result.tokenBalance.toInt(),
+              accessToken: result.accessToken,
+            );
+
+            // 直接使用本次登录结果继续，不再调用 SessionManager.restore()。
+            await _continueWithSession(loggedInSession);
           },
         );
       });
       return;
     }
 
-    // 冷启动直进游戏时，必须在任何 Novel 请求之前把身份同步回 ApiClient。
-    // 不依赖 SessionManager 的具体版本是否内部 setUserId，避免 X-User-ID 丢失。
-    ApiClient.instance.accessToken = session.accessToken;
-    ApiClient.instance.userId = session.userId.trim().isEmpty ? null : session.userId.trim();
+    await _continueWithSession(session);
+  }
+
+  Future<void> _continueWithSession(UserSession session) async {
+    if (!mounted) return;
+
+    _session = session;
+    _launch = null;
+
+    // 在任何 UserApi / Novel 请求前确保运行时身份已经就绪。
+    ApiClient.instance.setAccessToken(session.accessToken);
+    ApiClient.instance.setUserId(session.userId);
+
+    setState(() {
+      _loading = true;
+      _status = '正在寻找上次的世界…';
+    });
 
     debugPrint(
-      '[Startup] session restored: userId=${ApiClient.instance.userId}, token=${ApiClient.instance.accessToken == null ? 'missing' : 'ready'}',
+      '[Startup] session ready: userId=${ApiClient.instance.userId}, '
+      'token=${ApiClient.instance.accessToken == null ? 'missing' : 'ready'}',
     );
 
     try {
-      setState(() => _status = '正在寻找上次的世界…');
       final home = await UserApi.getHomeData();
       final activeId = home.activeScenarioId?.toString().trim() ?? '';
 
@@ -180,7 +196,9 @@ class _StartupGateState extends State<_StartupGate> {
 
         if (matches.isNotEmpty) {
           final scenario = matches.first;
-          setState(() => _status = '正在进入 ${scenario.title}…');
+          if (mounted) {
+            setState(() => _status = '正在进入 ${scenario.title}…');
+          }
 
           final result = await UserApi.setActiveScenario(activeId);
           _launch = _StartupLaunch(
@@ -191,8 +209,9 @@ class _StartupGateState extends State<_StartupGate> {
         }
       }
     } catch (error) {
-      // 启动恢复失败时不把玩家卡死在启动页，直接进入空 Shell 选择世界。
+      // 登录已经有效；恢复上次世界失败时只进入空 Shell，不重新要求登录。
       debugPrint('startup active scenario restore failed: $error');
+      _launch = null;
     }
 
     if (!mounted) return;

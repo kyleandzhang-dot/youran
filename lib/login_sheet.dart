@@ -23,8 +23,11 @@ class LoginSheet extends StatefulWidget {
     BuildContext context, {
     required FutureOr<void> Function(LoginResult) onLoginSuccess,
   }) {
-    Navigator.of(context, rootNavigator: true).push<void>(
-      PageRouteBuilder<void>(
+    // 登录页只负责验证账号。验证成功后先完整关闭 root 登录路由，
+    // 再执行外部登录成功回调，避免回调中的页面跳转与登录页 pop 互相竞争。
+    Navigator.of(context, rootNavigator: true)
+        .push<LoginResult>(
+      PageRouteBuilder<LoginResult>(
         opaque: true,
         barrierDismissible: false,
         transitionDuration: const Duration(milliseconds: 240),
@@ -45,7 +48,16 @@ class LoginSheet extends StatefulWidget {
           );
         },
       ),
-    );
+    )
+        .then((result) async {
+      if (result == null) return;
+      try {
+        await onLoginSuccess(result);
+      } catch (error, stackTrace) {
+        debugPrint('登录成功后的状态处理失败: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+    });
   }
 
   @override
@@ -149,12 +161,15 @@ class _LoginSheetState extends State<LoginSheet> {
   }
 
   Future<void> _handleSubmit() async {
+    if (_submitting) return;
+
     if (!_emailValid) {
       setState(() => _errorText = '请输入正确的邮箱地址');
       return;
     }
 
-    if (_codeController.text.trim().isEmpty) {
+    final code = _codeController.text.trim();
+    if (code.isEmpty) {
       setState(() => _errorText = '请输入验证码');
       return;
     }
@@ -167,27 +182,22 @@ class _LoginSheetState extends State<LoginSheet> {
     try {
       final result = await AuthApi.verifyEmailLogin(
         email: _emailController.text.trim(),
-        code: _codeController.text.trim(),
+        code: code,
       );
 
       if (!mounted) return;
 
-      await widget.onLoginSuccess(result);
-
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
+      // 只把登录结果交给 root 路由；show() 会在登录页完整退出后
+      // 再调用 onLoginSuccess，彻底消除导航时序竞争。
+      Navigator.of(context, rootNavigator: true).pop<LoginResult>(result);
     } on ApiException catch (error) {
       if (mounted) {
         setState(() => _errorText = error.message);
       }
-    } catch (e) {
-      debugPrint('登录或本地保存失败: $e');
+    } catch (error) {
+      debugPrint('登录请求失败: $error');
       if (mounted) {
-        setState(
-          () => _errorText =
-              '登录状态保存失败，请检查存储配置',
-        );
+        setState(() => _errorText = '登录失败，请稍后再试');
       }
     } finally {
       if (mounted) {
