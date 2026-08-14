@@ -4,7 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 class NovelSettingsService extends ChangeNotifier {
   final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
 
-  String fontKey = 'font-wenkai';
+  // 默认剧情阅读字体使用项目内置的 MiSans Regular。
+  String fontKey = 'font-misans';
   double fontSize = 15;
   String themeKey = 'theme-glass';
   String customBackground = '';
@@ -13,7 +14,7 @@ class NovelSettingsService extends ChangeNotifier {
   bool typingSoundEnabled = true;
 
   Future<void> load() async {
-    fontKey = await _prefs.getString('novel-font') ?? 'font-wenkai';
+    fontKey = await _prefs.getString('novel-font') ?? 'font-misans';
     fontSize = (await _prefs.getInt('novel-size') ?? 15).toDouble();
     themeKey = await _prefs.getString('novel-theme') ?? 'theme-glass';
     customBackground = await _prefs.getString('novel-custom-bg') ?? '';
@@ -22,9 +23,15 @@ class NovelSettingsService extends ChangeNotifier {
         await _prefs.getBool('novel-weather-effects-enabled') ?? true;
     typingSoundEnabled =
         await _prefs.getBool('novel-typing-sound-enabled') ?? true;
-    // 兼容旧 Flutter 版本曾使用的字体 key，并统一成 Vue 当前 key。
-    if (fontKey == 'font-serif') fontKey = 'font-song';
-    if (fontKey == 'font-sans') fontKey = 'font-hei';
+    // 现在只保留“黑体 / MiSans”两种字体。
+    // 旧版本保存过的文楷、宋体或旧 serif key，统一迁移到默认 MiSans；
+    // 旧 sans key 则继续对应系统黑体。
+    if (fontKey == 'font-sans') {
+      fontKey = 'font-hei';
+    } else if (fontKey != 'font-hei' && fontKey != 'font-misans') {
+      fontKey = 'font-misans';
+    }
+    await _prefs.setString('novel-font', fontKey);
     // 兼容旧 Flutter 版本曾使用的画风 key，统一到 Vue 当前四种风格。
     if (artStyle == '3d') artStyle = 'stylized_3d';
     if (artStyle == 'real') artStyle = 'realistic';
@@ -32,8 +39,9 @@ class NovelSettingsService extends ChangeNotifier {
   }
 
   Future<void> setFont(String value) async {
-    fontKey = value;
-    await _prefs.setString('novel-font', value);
+    // 设置页只允许黑体和 MiSans，其他历史 key 一律回到 MiSans。
+    fontKey = value == 'font-hei' ? 'font-hei' : 'font-misans';
+    await _prefs.setString('novel-font', fontKey);
     notifyListeners();
   }
 
@@ -80,11 +88,11 @@ class NovelSettingsService extends ChangeNotifier {
 
   String? get fontFamily {
     return switch (fontKey) {
-      'font-wenkai' => 'NovelWenKai',
-      'font-song' => 'NovelSerif',
-      // 系统黑体和 MiSans 在未提供对应字体资产时使用系统字体兜底。
-      'font-hei' || 'font-misans' => null,
-      _ => null,
+      // 黑体继续使用当前平台系统字体。
+      'font-hei' => null,
+      // MiSans 是默认剧情阅读字体；异常/旧 key 也回退到 MiSans。
+      'font-misans' => 'NovelMiSans',
+      _ => 'NovelMiSans',
     };
   }
 

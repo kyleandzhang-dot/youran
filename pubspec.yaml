@@ -45,12 +45,8 @@ flutter:
     - assets/audio/weather/
     - assets/audio/ui/
 
-  # Enable only after the actual font files are added.
-  # fonts:
-  #   - family: NovelWenKai
-  #     fonts:
-  #       - asset: assets/fonts/NovelWenKai.ttf
-  #
-  #   - family: NovelSerif
-  #     fonts:
-  #       - asset: assets/fonts/NovelSerif.ttf
+  fonts:
+    - family: NovelMiSans
+      fonts:
+        - asset: assets/fonts/MiSans-Regular.ttf
+          weight: 400

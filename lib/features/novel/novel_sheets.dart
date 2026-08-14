@@ -882,13 +882,21 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                     Divider(height: 18, color: Colors.white.withOpacity(.14)),
                     Row(
                       children: <Widget>[
-                        Expanded(child: _CleanSettingChoice(label: '黑体', selected: settings.fontKey == 'font-hei', onTap: () => settings.setFont('font-hei'))),
+                        Expanded(
+                          child: _CleanSettingChoice(
+                            label: '黑体',
+                            selected: settings.fontKey == 'font-hei',
+                            onTap: () => settings.setFont('font-hei'),
+                          ),
+                        ),
                         const SizedBox(width: 7),
-                        Expanded(child: _CleanSettingChoice(label: '文楷', selected: settings.fontKey == 'font-wenkai', onTap: () => settings.setFont('font-wenkai'))),
-                        const SizedBox(width: 7),
-                        Expanded(child: _CleanSettingChoice(label: '宋体', selected: settings.fontKey == 'font-song', onTap: () => settings.setFont('font-song'))),
-                        const SizedBox(width: 7),
-                        Expanded(child: _CleanSettingChoice(label: 'MiSans', selected: settings.fontKey == 'font-misans', onTap: () => settings.setFont('font-misans'))),
+                        Expanded(
+                          child: _CleanSettingChoice(
+                            label: 'MiSans',
+                            selected: settings.fontKey == 'font-misans',
+                            onTap: () => settings.setFont('font-misans'),
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -1769,7 +1777,7 @@ class _ArchiveCharacterCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final fallbackAsset = character.gender.trim() == '男'
         ? 'assets/images/portrait_male.png'
-        : 'assets/images/portrait_female.png';
+        : 'assets/images/portrait_female.webp';
     final relationLabel = character.isMain ? '主角' : (character.affection >= 60 ? '亲密' : '普通');
 
     return Material(
@@ -1973,7 +1981,7 @@ class _CharacterProfileBody extends StatelessWidget {
 
     final fallbackAsset = c?.gender.trim() == '男'
         ? 'assets/images/portrait_male.png'
-        : 'assets/images/portrait_female.png';
+        : 'assets/images/portrait_female.webp';
 
     final identity = stringValue(status['identity']);
     final level = stringValue(status['level']);

@@ -1389,10 +1389,7 @@ class NovelTopHud extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
                           _ConditionAvatar(
-                            url: controller.protagonist?.avatarUrl ??
-                                controller.scenario?.hostAvatarUrl ??
-                                '',
-                            hp: controller.protagonistHp,
+                            gender: controller.protagonist?.gender ?? '',
                           ),
                           const SizedBox(width: 8),
                           Column(
@@ -1568,58 +1565,36 @@ class _TopIconButton extends StatelessWidget {
 }
 
 class _ConditionAvatar extends StatelessWidget {
-  const _ConditionAvatar({required this.url, required this.hp});
-  final String url;
-  final int hp;
+  const _ConditionAvatar({required this.gender});
 
-  Color get color {
-    if (hp <= 15) return const Color(0xFFC15CFF);
-    if (hp <= 40) return const Color(0xFFEF5D5D);
-    if (hp <= 75) return const Color(0xFFF2B648);
-    return NovelPalette.accent;
+  final String gender;
+
+  bool get _isFemale {
+    final value = gender.trim().toLowerCase();
+    return value == 'female' ||
+        value == '女' ||
+        value == '女性' ||
+        value == 'woman' ||
+        value == 'girl';
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final asset = _isFemale
+        ? 'assets/images/female.webp'
+        : 'assets/images/male.webp';
+
+    // 顶部头像只显示本地透明 WebP 本身：
+    // 不裁圆、不加背景、不加边框、不加状态圈、不加阴影。
+    return SizedBox(
       width: 34,
       height: 34,
-      // ✨ 1. 外层 padding 控制彩色光圈的真实厚度（1.8 粗细适中）
-      padding: const EdgeInsets.all(1.8), 
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: SweepGradient(
-          colors: <Color>[
-            color.withOpacity(.85),
-            color.withOpacity(.30),
-            color.withOpacity(.85),
-          ],
-        ),
-        boxShadow: <BoxShadow>[BoxShadow(color: color.withOpacity(.22), blurRadius: 8)],
-      ),
-      child: Container(
-        // ✨ 2. 内层 padding 负责把头像往里挤，让头像变小，并和光圈产生呼吸感间距
-        padding: const EdgeInsets.all(1.5), 
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          // ✨ 3. 垫一层较深的半透明黑底。这一层非常关键，它挡住了底下的渐变色，保证光圈不会视觉上发胖，同时依然能承托透明底的立绘
-          color: Colors.black.withOpacity(0.65), 
-        ),
-        child: ClipOval(
-          child: url.trim().isEmpty
-              ? ColoredBox(
-                  color: Colors.white.withOpacity(.08),
-                  child: Icon(Icons.person_rounded, color: Colors.white.withOpacity(.4), size: 18),
-                )
-              : Image.network(
-                  url,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => ColoredBox(
-                    color: Colors.white.withOpacity(.08),
-                    child: Icon(Icons.person_rounded, color: Colors.white.withOpacity(.4), size: 18),
-                  ),
-                ),
-        ),
+      child: Image.asset(
+        asset,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
       ),
     );
   }

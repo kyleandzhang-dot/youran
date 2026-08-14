@@ -16,11 +16,24 @@ class NovelBgmService {
     this.debounceCount = 2,
   })  : _player = player ?? AudioPlayer(),
         _weatherPlayer = weatherPlayer ?? AudioPlayer(),
-        _typingPlayer = typingPlayer ?? AudioPlayer();
+        _typingPlayer = typingPlayer ?? AudioPlayer() {
+    // Web 继续使用单播放器快速 restart。
+    // Android / iOS 使用一个很小的播放器池轮播短音，避免必须等上一声 WAV 播完
+    // 才能听到下一声，从而出现“滴——滴——滴——”的长间隔。
+    _typingPlayers = kIsWeb
+        ? <AudioPlayer>[_typingPlayer]
+        : <AudioPlayer>[
+            _typingPlayer,
+            AudioPlayer(),
+            AudioPlayer(),
+            AudioPlayer(),
+          ];
+  }
 
   final AudioPlayer _player;
   final AudioPlayer _weatherPlayer;
   final AudioPlayer _typingPlayer;
+  late final List<AudioPlayer> _typingPlayers;
   final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
   final double defaultVolume;
   final Duration fadeDuration;
@@ -45,16 +58,17 @@ class NovelBgmService {
   static const String typingAsset = 'assets/audio/ui/typing.wav';
   static const double typingVolume = 0.46;
 
-  // 逐字动画通常 30ms 推进一次。60ms 一个音效 tick 能保持连续感，
-  // 同时避免浏览器 / just_audio 被过于密集的 seek + play 请求淹没。
+  // 逐字动画通常 30ms 推进一次。
+  // Web 保持约 60ms 一声；原生端也压到接近这一节奏，但通过播放器池避免互相抢 seek。
   static const Duration typingThrottle = Duration(milliseconds: 60);
-  static const Duration nativeTypingThrottle = Duration(milliseconds: 90);
+  static const Duration nativeTypingThrottle = Duration(milliseconds: 55);
   DateTime? _lastTypingTickAt;
   bool _typingReady = false;
   Future<void>? _typingPrepareFuture;
   bool _typingRestartInFlight = false;
   bool _typingRestartQueued = false;
   int _typingPlaybackEpoch = 0;
+  int _nativeTypingCursor = 0;
   Timer? _weatherDuckRestoreTimer;
 
   /// 预加载流式打字音效。资源缺失时静默降级。
@@ -69,9 +83,13 @@ class NovelBgmService {
 
     final future = () async {
       try {
-        await _typingPlayer.setLoopMode(LoopMode.off);
-        await _typingPlayer.setVolume(typingVolume);
-        await _typingPlayer.setAsset(typingAsset);
+        await Future.wait(
+          _typingPlayers.map((player) async {
+            await player.setLoopMode(LoopMode.off);
+            await player.setVolume(typingVolume);
+            await player.setAsset(typingAsset);
+          }),
+        );
         _typingReady = true;
       } catch (error, stackTrace) {
         // 手机安装版若资源/解码失败，必须把真实原因打印出来，避免静默无声。
@@ -106,8 +124,8 @@ class NovelBgmService {
 
   /// 流式文字的短促前景音效。高频调用会自动节流。
   ///
-  /// 同一时刻只允许一个 seek/restart 流程进行；如果这期间又来了新的 tick，
-  /// 只记一次“待重播”，避免 Web 端多个异步 seek/play 互相打架后偶发静音。
+  /// Web 使用单播放器 restart；Android / iOS 使用播放器池轮播，
+  /// 让相邻打字声可以自然重叠，不再受单个 WAV 完整时长限制。
   void playTypingTick() {
     final now = DateTime.now();
     final last = _lastTypingTickAt;
@@ -115,18 +133,49 @@ class NovelBgmService {
     if (last != null && now.difference(last) < throttle) return;
     _lastTypingTickAt = now;
 
-    if (_typingRestartInFlight) {
-      // 打字音效允许丢 tick。尤其 Android/iOS 原生播放器如果把每个字符都排队重播，
-      // 会出现上一声还没真正输出就再次 seek(0) 的情况，最终听起来像完全静音。
-      if (kIsWeb) _typingRestartQueued = true;
+    if (!kIsWeb) {
+      unawaited(_playNativeTypingTick());
       return;
     }
-    unawaited(_playTypingTickInternal());
+
+    if (_typingRestartInFlight) {
+      _typingRestartQueued = true;
+      return;
+    }
+    unawaited(_playWebTypingTick());
   }
 
-  Future<void> _playTypingTickInternal() async {
+  Future<void> _playNativeTypingTick() async {
+    final epoch = _typingPlaybackEpoch;
+    try {
+      await _prepareTypingPlayer();
+      if (!_typingReady || epoch != _typingPlaybackEpoch) return;
+
+      final player = _typingPlayers[
+          _nativeTypingCursor % _typingPlayers.length];
+      _nativeTypingCursor =
+          (_nativeTypingCursor + 1) % _typingPlayers.length;
+
+      _duckWeatherForTyping();
+      await player.setVolume(typingVolume);
+      await player.seek(Duration.zero);
+      if (epoch != _typingPlaybackEpoch) return;
+
+      unawaited(
+        player.play().catchError((Object error, StackTrace stackTrace) {
+          debugPrint('novel typing sfx play failed: $error');
+          debugPrintStack(stackTrace: stackTrace);
+        }),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('novel typing sfx native tick failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+  }
+
+  Future<void> _playWebTypingTick() async {
     if (_typingRestartInFlight) {
-      if (kIsWeb) _typingRestartQueued = true;
+      _typingRestartQueued = true;
       return;
     }
 
@@ -137,14 +186,6 @@ class NovelBgmService {
         _typingRestartQueued = false;
         await _prepareTypingPlayer();
         if (!_typingReady || epoch != _typingPlaybackEpoch) return;
-
-        // 安装版手机优先稳定：一个短 tick 尚未播放完时，不再强行 seek(0) 重启。
-        // Web 端保留原来的快速 restart 手感。
-        if (!kIsWeb &&
-            _typingPlayer.playing &&
-            _typingPlayer.processingState != ProcessingState.completed) {
-          return;
-        }
 
         _duckWeatherForTyping();
         await _typingPlayer.setVolume(typingVolume);
@@ -157,21 +198,16 @@ class NovelBgmService {
             debugPrintStack(stackTrace: stackTrace);
           }),
         );
-      } while (kIsWeb &&
-          _typingRestartQueued &&
-          epoch == _typingPlaybackEpoch);
+      } while (_typingRestartQueued && epoch == _typingPlaybackEpoch);
     } catch (error, stackTrace) {
-      // seek / source 状态异常时让下一次 tick 重新准备资源，同时输出手机端真实错误。
       debugPrint('novel typing sfx restart failed: $error');
       debugPrintStack(stackTrace: stackTrace);
       _typingReady = false;
     } finally {
       _typingRestartInFlight = false;
-      if (kIsWeb &&
-          _typingRestartQueued &&
-          epoch == _typingPlaybackEpoch) {
+      if (_typingRestartQueued && epoch == _typingPlaybackEpoch) {
         _typingRestartQueued = false;
-        unawaited(_playTypingTickInternal());
+        unawaited(_playWebTypingTick());
       }
     }
   }
@@ -180,11 +216,16 @@ class NovelBgmService {
     _typingPlaybackEpoch += 1;
     _typingRestartQueued = false;
     _lastTypingTickAt = null;
+    _nativeTypingCursor = 0;
     _weatherDuckRestoreTimer?.cancel();
     _weatherDuckRestoreTimer = null;
-    try {
-      await _typingPlayer.stop();
-    } catch (_) {}
+    await Future.wait(
+      _typingPlayers.map((player) async {
+        try {
+          await player.stop();
+        } catch (_) {}
+      }),
+    );
     if (isWeatherPlaying && _weatherPlayer.playing) {
       await _weatherPlayer.setVolume(_currentWeatherTargetVolume());
     }
@@ -533,6 +574,8 @@ class NovelBgmService {
     _weatherDuckRestoreTimer = null;
     await _player.dispose();
     await _weatherPlayer.dispose();
-    await _typingPlayer.dispose();
+    await Future.wait(
+      _typingPlayers.map((player) => player.dispose()),
+    );
   }
 }
