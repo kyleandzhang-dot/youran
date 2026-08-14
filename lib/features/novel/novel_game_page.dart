@@ -63,6 +63,12 @@ class _NovelGamePageState extends State<NovelGamePage>
   Future<void> _initializeGame() async {
     await controller.initialize();
     if (!mounted) return;
+
+    // 进入剧情后先把短打字音效送进原生播放器，避免第一段流式文字到来时
+    // Android / iOS 才临时 setAsset，导致初始化和高频 tick 撞在一起而听不到声音。
+    await controller.bgm.preloadTypingSfx();
+    if (!mounted) return;
+
     await controller.bgm.preloadWeatherAmbient();
     await _syncActiveWeatherAudio(force: true);
   }

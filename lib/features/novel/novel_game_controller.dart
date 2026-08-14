@@ -345,17 +345,10 @@ class NovelGameController extends ChangeNotifier {
       // 核心数据已经就绪，先允许游戏页面进入。
       isInitialized = true;
 
-      try {
-        await refreshCharacterStatus(notify: false);
-      } catch (error) {
-        debugPrint('novel character status init skipped: $error');
-      }
-
-      try {
-        await refreshInventory(notify: false);
-      } catch (error) {
-        debugPrint('novel inventory init skipped: $error');
-      }
+      // 角色 / 经历 / 背包改为真正的按需加载：
+      // 用户先看到页面，再由对应页面在首帧后异步刷新，避免进入世界时提前请求，
+      // 也避免点击入口后长时间没有任何界面反馈。场景详情里已有的角色基础资料
+      // 仍可直接用于剧情展示，实时状态在打开角色页后再刷新。
 
       _socketSubscription ??= socket.events.listen(_handleSocketEvent);
       try {
@@ -1353,9 +1346,16 @@ class NovelGameController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> refreshJourney() async {
-    journey = await backend.fetchJourney(scenarioId);
-    _notify();
+  Future<void> refreshJourney({bool notify = true}) async {
+    try {
+      journey = await backend.fetchJourney(scenarioId);
+      if (notify) _notify();
+    } catch (error) {
+      if (notify) {
+        lastError = '经历加载失败：$error';
+        _notify();
+      }
+    }
   }
 
   Future<void> revertPreviousTurn() async {

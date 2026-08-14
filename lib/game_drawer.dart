@@ -828,7 +828,7 @@ class _HeaderCheckinButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final canTap = loaded && onTap != null;
+    final canTap = loaded && !checked && onTap != null;
 
     return Material(
       color: checked

@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'api/api_client.dart';
 import 'app_shared.dart';
@@ -27,23 +26,21 @@ class CreateWorldDialog extends StatefulWidget {
   }) {
     return showGeneralDialog<String>(
       context: context,
-      barrierDismissible: true, // 允许点击外部遮罩关闭
+      barrierDismissible: true,
       barrierLabel: '创建世界',
-      barrierColor: Colors.black.withOpacity(0.68),
-      transitionDuration: const Duration(milliseconds: 240),
+      barrierColor: Colors.black.withOpacity(0.16),
+      transitionDuration: const Duration(milliseconds: 180),
       pageBuilder: (context, animation, secondaryAnimation) {
-        return Center(
-          child: CreateWorldDialog(
-            generatePath: generatePath,
-            onTaskSubmitted: onTaskSubmitted,
-          ),
+        return CreateWorldDialog(
+          generatePath: generatePath,
+          onTaskSubmitted: onTaskSubmitted,
         );
       },
       transitionBuilder: (context, animation, secondaryAnimation, child) {
         return FadeTransition(
           opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
           child: ScaleTransition(
-            scale: Tween<double>(begin: 0.95, end: 1.0).animate(
+            scale: Tween<double>(begin: 0.98, end: 1.0).animate(
               CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
             ),
             child: child,
@@ -61,6 +58,13 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
     with TickerProviderStateMixin {
   static const String _selectedMode = 'novel';
   static const String _qualityMode = 'standard';
+
+  static const Color _background = Color(0xFFFCFDFB);
+  static const Color _fieldBackground = Color(0xFFF4F6F2);
+  static const Color _textPrimary = Color(0xFF303730);
+  static const Color _textSecondary = Color(0xFF70786F);
+  static const Color _textMuted = Color(0xFFA3AAA2);
+  static const Color _themeGreen = Color.fromARGB(255, 129, 246, 112);
 
   final TextEditingController _controller = TextEditingController();
 
@@ -112,6 +116,8 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
       return;
     }
 
+    FocusScope.of(context).unfocus();
+
     setState(() {
       _showError = false;
       _requestError = null;
@@ -136,9 +142,10 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
 
       if (!mounted) return;
 
-      final data = submitResponse is Map ? submitResponse['data'] ?? submitResponse : {};
+      final data =
+          submitResponse is Map ? submitResponse['data'] ?? submitResponse : {};
       final taskId = data['task_id']?.toString().trim();
-      
+
       if (taskId == null || taskId.isEmpty) {
         throw ApiException('生成任务提交成功，但后端没有返回 task_id');
       }
@@ -157,7 +164,6 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
       await _handoffController.forward(from: 0);
       if (!mounted) return;
       Navigator.of(context).pop(taskId);
-
     } on ApiException catch (error) {
       if (!mounted) return;
       _showRequestError(error.message);
@@ -186,66 +192,81 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+
     return PopScope(
       canPop: !_isLoading && !_handoffActive,
       child: Material(
         color: Colors.transparent,
-        child: AnimatedBuilder(
-          animation: _handoffController,
-          builder: (context, handoffChild) {
-            final raw = _handoffController.value;
-            final t = Curves.easeInOutCubic.transform(raw);
-            final screen = MediaQuery.sizeOf(context);
-            final targetX = -(screen.width * 0.5 - 92);
-            final targetY = screen.height * 0.5 - 92;
-            final scale = 1.0 - 0.78 * t;
-            final opacity = (1.0 - 0.88 * t).clamp(0.0, 1.0).toDouble();
+        child: SafeArea(
+          child: AnimatedPadding(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            padding: EdgeInsets.fromLTRB(18, 20, 18, 20 + keyboard),
+            child: Center(
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: AnimatedBuilder(
+                  animation: _handoffController,
+                  builder: (context, handoffChild) {
+                    final raw = _handoffController.value;
+                    final t = Curves.easeInOutCubic.transform(raw);
+                    final screen = MediaQuery.sizeOf(context);
+                    final targetX = -(screen.width * 0.5 - 92);
+                    final targetY = screen.height * 0.5 - 92;
+                    final scale = 1.0 - 0.78 * t;
+                    final opacity =
+                        (1.0 - 0.88 * t).clamp(0.0, 1.0).toDouble();
 
-            return Transform.translate(
-              offset: Offset(targetX * t, targetY * t),
-              child: Transform.scale(
-                scale: scale,
-                child: Opacity(opacity: opacity, child: handoffChild),
-              ),
-            );
-          },
-          child: AnimatedBuilder(
-            animation: _shakeController,
-            builder: (context, child) {
-              final t = _shakeController.value;
-              final offset = _showError
-                  ? math.sin(t * math.pi * 6) * 5 * (1 - t)
-                  : 0.0;
-              return Transform.translate(
-                offset: Offset(offset, 0),
-                child: child,
-              );
-            },
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 380),
-              child: Container(
-                width: MediaQuery.sizeOf(context).width * 0.88,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF161616),
-                  borderRadius: BorderRadius.zero,
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.12),
-                    width: 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.5),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8),
+                    return Transform.translate(
+                      offset: Offset(targetX * t, targetY * t),
+                      child: Transform.scale(
+                        scale: scale,
+                        child: Opacity(opacity: opacity, child: handoffChild),
+                      ),
+                    );
+                  },
+                  child: AnimatedBuilder(
+                    animation: _shakeController,
+                    builder: (context, child) {
+                      final t = _shakeController.value;
+                      final offset = _showError
+                          ? math.sin(t * math.pi * 6) * 5 * (1 - t)
+                          : 0.0;
+                      return Transform.translate(
+                        offset: Offset(offset, 0),
+                        child: child,
+                      );
+                    },
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Container(
+                        width: media.size.width * 0.90,
+                        padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),
+                        decoration: BoxDecoration(
+                          color: _background,
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 24,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          switchInCurve: Curves.easeOutCubic,
+                          switchOutCurve: Curves.easeInCubic,
+                          child: _handoffActive
+                              ? _buildHandoffView()
+                              : _buildInputView(),
+                        ),
+                      ),
                     ),
-                  ],
-                ),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  child: _handoffActive ? _buildHandoffView() : _buildInputView(),
+                  ),
                 ),
               ),
             ),
@@ -256,46 +277,33 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
   }
 
   Widget _buildHandoffView() {
-    return const Column(
-      key: ValueKey<String>('handoff'),
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        SizedBox(
-          width: 42,
-          height: 42,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Color(0x1F81F670),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.check_rounded,
-              size: 22,
-              color: AppColors.accent,
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 10),
+      child: Column(
+        key: ValueKey<String>('handoff'),
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            '世界已开始生成',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
             ),
           ),
-        ),
-        SizedBox(height: 14),
-        Text(
-          '世界已开始生成',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: AppColors.textOnDark,
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
+          SizedBox(height: 7),
+          Text(
+            '生成进度将在左下角继续显示',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _textSecondary,
+              fontSize: 12,
+              height: 1.45,
+            ),
           ),
-        ),
-        SizedBox(height: 6),
-        Text(
-          '生成进度将移到左下角继续显示',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: AppColors.textOnDarkMuted,
-            fontSize: 11.5,
-            height: 1.45,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -303,7 +311,7 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
     return Column(
       key: const ValueKey<String>('input'),
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildHeader(),
         const SizedBox(height: 18),
@@ -313,13 +321,13 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
           Text(
             _requestError!,
             style: const TextStyle(
-              color: Color(0xFFE7685E),
+              color: Color(0xFFC86760),
               fontSize: 11.5,
               height: 1.4,
             ),
           ),
         ],
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         _buildSubmitButton(),
       ],
     );
@@ -327,42 +335,47 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
 
   Widget _buildHeader() {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '创建世界',
-              style: TextStyle(
-                color: AppColors.textOnDark,
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.5,
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '创建世界',
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-            SizedBox(height: 4),
-            Text(
-              '小说模式',
-              style: TextStyle(
-                color: AppColors.textOnDarkMuted,
-                fontSize: 11,
+              SizedBox(height: 5),
+              Text(
+                '告诉我想要玩什么样的世界',
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-        GestureDetector(
-          onTap: (_isLoading || _handoffActive)
+        const SizedBox(width: 12),
+        TextButton(
+          onPressed: (_isLoading || _handoffActive)
               ? null
               : () => Navigator.of(context).pop(),
-          child: Container(
-            padding: const EdgeInsets.all(4),
-            color: Colors.transparent,
-            child: const Icon(
-              LucideIcons.x,
-              size: 18,
-              color: AppColors.textOnDarkMuted,
-            ),
+          style: TextButton.styleFrom(
+            foregroundColor: _textSecondary,
+            disabledForegroundColor: _textMuted.withOpacity(0.5),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: const Text(
+            '关闭',
+            style: TextStyle(fontSize: 12),
           ),
         ),
       ],
@@ -371,19 +384,16 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
 
   Widget _buildInputArea() {
     return Container(
+      padding: const EdgeInsets.fromLTRB(14, 13, 14, 10),
       decoration: BoxDecoration(
         color: _showError
-            ? const Color(0xFFE0554A).withOpacity(0.08)
-            : Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.zero,
-        border: Border.all(
-          color: _showError
-              ? const Color(0xFFE0554A).withOpacity(0.6)
-              : Colors.white.withOpacity(0.1),
-          width: 1,
-        ),
+            ? const Color(0xFFFFF6F5)
+            : _fieldBackground,
+        borderRadius: BorderRadius.circular(8),
+        border: _showError
+            ? Border.all(color: const Color(0xFFE9A6A1), width: 1)
+            : null,
       ),
-      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -392,8 +402,9 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
             maxLines: 6,
             minLines: 4,
             textInputAction: TextInputAction.newline,
+            cursorColor: _themeGreen,
             style: const TextStyle(
-              color: AppColors.textOnDark,
+              color: _textPrimary,
               fontSize: 13.5,
               height: 1.5,
             ),
@@ -408,10 +419,11 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
             decoration: const InputDecoration(
               isDense: true,
               contentPadding: EdgeInsets.zero,
-              hintText: '输入小说背景、设定或世界观描述...',
+              hintText: '例如：我是张三，男，25岁，这是近未来城市中，人类与仿生人共同生活……',
               hintStyle: TextStyle(
-                color: AppColors.textOnDarkMuted,
+                color: _textMuted,
                 fontSize: 13,
+                height: 1.5,
               ),
               border: InputBorder.none,
             ),
@@ -423,9 +435,9 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
               final len = value.text.length;
               if (len == 0 && _showError) {
                 return const Text(
-                  '请输入设定内容后创建',
+                  '请输入设定内容',
                   style: TextStyle(
-                    color: Color(0xFFE0554A),
+                    color: Color(0xFFC86760),
                     fontSize: 11,
                   ),
                   textAlign: TextAlign.right,
@@ -434,7 +446,7 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
               return Text(
                 len > 0 ? '$len 字' : '描述越具体，生成结果越稳定',
                 style: const TextStyle(
-                  color: AppColors.textOnDarkMuted,
+                  color: _textMuted,
                   fontSize: 11,
                 ),
                 textAlign: TextAlign.right,
@@ -447,38 +459,43 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
   }
 
   Widget _buildSubmitButton() {
+    final disabled = _isLoading || _handoffActive;
+
     return Material(
-      color: AppColors.accent,
+      color: disabled ? _themeGreen.withOpacity(0.46) : _themeGreen,
+      borderRadius: BorderRadius.circular(8),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () {
-          if (_controller.text.trim().isEmpty) {
-            _triggerShake();
-            return;
-          }
-          _handleCreate();
-        },
-        child: Container(
+        onTap: disabled
+            ? null
+            : () {
+                if (_controller.text.trim().isEmpty) {
+                  _triggerShake();
+                  return;
+                }
+                _handleCreate();
+              },
+        child: SizedBox(
           height: 48,
-          alignment: Alignment.center,
-          // 去除多余图标，维持干净面板
-          child: _isLoading
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Color.fromARGB(255, 12, 12, 12),
+          child: Center(
+            child: _isLoading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF303730),
+                    ),
+                  )
+                : const Text(
+                    '创建',
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                )
-              : const Text(
-                  '创建',
-                  style: TextStyle(
-                    color: Color.fromARGB(255, 12, 12, 12),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.5,
-                  ),
-                ),
+          ),
         ),
       ),
     );

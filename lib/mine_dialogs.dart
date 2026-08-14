@@ -298,70 +298,704 @@ class MineDialogs {
     );
   }
 
+  static Future<MineCheckinResult?> checkin(BuildContext context) async {
+    MineCheckinStatus? status;
+    MineCheckinResult? successResult;
+    bool loading = true;
+    bool submitting = false;
+    bool loadStarted = false;
+    String? error;
+
+    const background = Color(0xFFFCFDFB);
+    const fieldBackground = Color(0xFFF4F6F2);
+    const border = Color(0xFFDCE2DA);
+    const textPrimary = Color(0xFF303730);
+    const textSecondary = Color(0xFF70786F);
+    const textMuted = Color(0xFFA3AAA2);
+    const themeGreen = Color.fromARGB(255, 129, 246, 112);
+
+    return showGeneralDialog<MineCheckinResult>(
+      context: context,
+      barrierDismissible: !submitting,
+      barrierLabel: '关闭签到',
+      barrierColor: Colors.black.withOpacity(0.28),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: SafeArea(
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                if (!loadStarted) {
+                  loadStarted = true;
+                  Future<void>(() async {
+                    try {
+                      final next = await MineApi.getCheckinStatus();
+                      if (!dialogContext.mounted) return;
+                      setState(() {
+                        status = next;
+                        loading = false;
+                        error = null;
+                      });
+                    } on ApiException catch (e) {
+                      if (!dialogContext.mounted) return;
+                      setState(() {
+                        loading = false;
+                        error = e.message;
+                      });
+                    } catch (_) {
+                      if (!dialogContext.mounted) return;
+                      setState(() {
+                        loading = false;
+                        error = '签到状态获取失败，请稍后重试';
+                      });
+                    }
+                  });
+                }
+
+                Future<void> submit() async {
+                  if (loading ||
+                      submitting ||
+                      successResult != null ||
+                      status?.checkedInToday == true) {
+                    return;
+                  }
+
+                  setState(() {
+                    submitting = true;
+                    error = null;
+                  });
+
+                  try {
+                    // 再向后端确认一次，避免页面状态过期后重复签到。
+                    final latest = await MineApi.getCheckinStatus();
+                    if (!dialogContext.mounted) return;
+
+                    if (latest.checkedInToday) {
+                      setState(() {
+                        status = latest;
+                        submitting = false;
+                      });
+                      return;
+                    }
+
+                    final result = await MineApi.dailyCheckin();
+                    if (!dialogContext.mounted) return;
+
+                    // 签到成功后重新读取 /user/checkin/status，
+                    // 不在前端伪造“今天已签到”或签到天数。
+                    final refreshedStatus = await MineApi.getCheckinStatus();
+                    if (!dialogContext.mounted) return;
+
+                    setState(() {
+                      successResult = result;
+                      submitting = false;
+                      status = refreshedStatus;
+                    });
+                  } on ApiException catch (e) {
+                    if (!dialogContext.mounted) return;
+
+                    // 如果后端明确告诉前端“今天已签到”，立刻重拉真实状态。
+                    final isAlreadyChecked =
+                        e.message.contains('已签到') || e.message.contains('明天再来');
+
+                    if (isAlreadyChecked) {
+                      try {
+                        final latest = await MineApi.getCheckinStatus();
+                        if (!dialogContext.mounted) return;
+                        setState(() {
+                          status = latest;
+                          submitting = false;
+                          error = null;
+                        });
+                        return;
+                      } catch (_) {
+                        // 状态刷新失败时，仍保留后端原始错误消息。
+                      }
+                    }
+
+                    setState(() {
+                      submitting = false;
+                      error = e.message;
+                    });
+                  } catch (_) {
+                    if (!dialogContext.mounted) return;
+                    setState(() {
+                      submitting = false;
+                      error = '签到失败，请稍后重试';
+                    });
+                  }
+                }
+
+                final media = MediaQuery.of(context);
+                final currentStatus = status;
+                final checked = currentStatus?.checkedInToday == true;
+                final result = successResult;
+
+                return Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 390),
+                    child: Container(
+                      width: media.size.width * 0.90,
+                      margin: const EdgeInsets.symmetric(horizontal: 18),
+                      padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),
+                      decoration: BoxDecoration(
+                        color: background,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: border),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.12),
+                            blurRadius: 28,
+                            offset: const Offset(0, 12),
+                          ),
+                        ],
+                      ),
+                      child: loading
+                          ? const SizedBox(
+                              height: 190,
+                              child: Center(
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF55A84A),
+                                  ),
+                                ),
+                              ),
+                            )
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '每日签到',
+                                            style: TextStyle(
+                                              color: textPrimary,
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          SizedBox(height: 4),
+                                          Text(
+                                            '奖励与余额均以服务器实际返回为准',
+                                            style: TextStyle(
+                                              color: textSecondary,
+                                              fontSize: 11.5,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: submitting
+                                          ? null
+                                          : () => Navigator.of(dialogContext).pop(),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: textSecondary,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 4,
+                                        ),
+                                        minimumSize: Size.zero,
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                      child: const Text(
+                                        '关闭',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                Container(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(16, 15, 16, 15),
+                                  decoration: BoxDecoration(
+                                    color: fieldBackground,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: border),
+                                  ),
+                                  child: result != null
+                                      ? Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  width: 28,
+                                                  height: 28,
+                                                  alignment: Alignment.center,
+                                                  decoration: BoxDecoration(
+                                                    color: themeGreen
+                                                        .withOpacity(0.22),
+                                                    borderRadius:
+                                                        BorderRadius.circular(6),
+                                                  ),
+                                                  child: const Icon(
+                                                    LucideIcons.check,
+                                                    size: 16,
+                                                    color: Color(0xFF3E8F37),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 10),
+                                                const Text(
+                                                  '签到成功',
+                                                  style: TextStyle(
+                                                    color: textPrimary,
+                                                    fontSize: 15,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 14),
+                                            Row(
+                                              children: [
+                                                const Expanded(
+                                                  child: Text(
+                                                    '本次获得',
+                                                    style: TextStyle(
+                                                      color: textSecondary,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '+${result.reward} 积分',
+                                                  style: const TextStyle(
+                                                    color: textPrimary,
+                                                    fontSize: 15,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            if (result.balance != null) ...[
+                                              const SizedBox(height: 8),
+                                              Row(
+                                                children: [
+                                                  const Expanded(
+                                                    child: Text(
+                                                      '当前余额',
+                                                      style: TextStyle(
+                                                        color: textSecondary,
+                                                        fontSize: 12,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    '${result.balance}',
+                                                    style: const TextStyle(
+                                                      color: textPrimary,
+                                                      fontSize: 13,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ],
+                                        )
+                                      : Row(
+                                          children: [
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    checked
+                                                        ? '今天已经签到'
+                                                        : '今天还没有签到',
+                                                    style: const TextStyle(
+                                                      color: textPrimary,
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 5),
+                                                  Text(
+                                                    '本月已签到 ${currentStatus?.days.length ?? 0} 天',
+                                                    style: const TextStyle(
+                                                      color: textSecondary,
+                                                      fontSize: 11.5,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            if (successResult?.balance != null)
+                                              Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.end,
+                                                children: [
+                                                  const Text(
+                                                    '当前余额',
+                                                    style: TextStyle(
+                                                      color: textMuted,
+                                                      fontSize: 10.5,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    '${successResult!.balance}',
+                                                    style: const TextStyle(
+                                                      color: textPrimary,
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                          ],
+                                        ),
+                                ),
+                                if (error != null) ...[
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 9,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFFF3F1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      error!,
+                                      style: const TextStyle(
+                                        color: Color(0xFFAA5A54),
+                                        fontSize: 11.5,
+                                        height: 1.4,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 14),
+                                Material(
+                                  color: result != null
+                                      ? const Color(0xFFEAF6E7)
+                                      : checked
+                                          ? const Color(0xFFE8ECE7)
+                                          : submitting
+                                              ? themeGreen.withOpacity(0.5)
+                                              : themeGreen,
+                                  borderRadius: BorderRadius.circular(8),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: InkWell(
+                                    onTap: result != null
+                                        ? () => Navigator.of(dialogContext)
+                                            .pop(result)
+                                        : (!checked && !submitting)
+                                            ? submit
+                                            : null,
+                                    child: SizedBox(
+                                      height: 48,
+                                      child: Center(
+                                        child: Text(
+                                          result != null
+                                              ? '完成'
+                                              : checked
+                                                  ? '今日已签到'
+                                                  : submitting
+                                                      ? '正在签到...'
+                                                      : '立即签到',
+                                          style: TextStyle(
+                                            color: result != null
+                                                ? const Color(0xFF3D6E39)
+                                                : checked
+                                                    ? textMuted
+                                                    : textPrimary,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (_, animation, __, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.98, end: 1).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
   static Future<bool> redeem(BuildContext context) async {
     final controller = TextEditingController();
     var loading = false;
     var successMode = false;
     String? error;
 
-    final result = await _show<bool>(
-      context,
-      title: '兑换激活码',
-      builder: (dialogContext, setState) {
-        Future<void> submit() async {
-          final code = controller.text.trim();
-          if (code.isEmpty || loading || successMode) return;
-          setState(() {
-            loading = true;
-            error = null;
-          });
-          try {
-            await MineApi.redeemCode(code);
-            if (!dialogContext.mounted) return;
-            setState(() {
-              loading = false;
-              successMode = true;
-            });
-            await Future.delayed(const Duration(milliseconds: 800));
-            if (dialogContext.mounted) {
-              Navigator.of(dialogContext).pop(true);
-            }
-          } on ApiException catch (e) {
-            if (!dialogContext.mounted) return;
-            setState(() {
-              loading = false;
-              error = e.message;
-            });
-          } catch (_) {
-            if (!dialogContext.mounted) return;
-            setState(() {
-              loading = false;
-              error = '兑换失败，请检查网络连接';
-            });
-          }
-        }
+    const background = Color(0xFFFCFDFB);
+    const fieldBackground = Color(0xFFF4F6F2);
+    const textPrimary = Color(0xFF303730);
+    const textSecondary = Color(0xFF70786F);
+    const textMuted = Color(0xFFA3AAA2);
+    const themeGreen = Color.fromARGB(255, 129, 246, 112);
 
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _input(
-              controller: controller,
-              hint: '请输入激活码',
-              autofocus: true,
-              enabled: !successMode,
+    final result = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: !loading,
+      barrierLabel: '关闭',
+      barrierColor: Colors.black.withOpacity(0.16),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: SafeArea(
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                Future<void> submit() async {
+                  final code = controller.text.trim();
+                  if (code.isEmpty || loading || successMode) return;
+
+                  FocusScope.of(context).unfocus();
+                  setState(() {
+                    loading = true;
+                    error = null;
+                  });
+
+                  try {
+                    await MineApi.redeemCode(code);
+                    if (!dialogContext.mounted) return;
+                    setState(() {
+                      loading = false;
+                      successMode = true;
+                    });
+
+                    await Future<void>.delayed(
+                      const Duration(milliseconds: 650),
+                    );
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop(true);
+                    }
+                  } on ApiException catch (e) {
+                    if (!dialogContext.mounted) return;
+                    setState(() {
+                      loading = false;
+                      error = e.message;
+                    });
+                  } catch (_) {
+                    if (!dialogContext.mounted) return;
+                    setState(() {
+                      loading = false;
+                      error = '激活失败，请稍后重试';
+                    });
+                  }
+                }
+
+                final media = MediaQuery.of(context);
+                final keyboard = media.viewInsets.bottom;
+                final width = media.size.width;
+
+                return AnimatedPadding(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.fromLTRB(
+                    18,
+                    20,
+                    18,
+                    20 + keyboard,
+                  ),
+                  child: Center(
+                    child: SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        child: Container(
+                          width: width * 0.90,
+                          padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),
+                          decoration: BoxDecoration(
+                            color: background,
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.08),
+                                blurRadius: 24,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text(
+                                      '激活码',
+                                      style: TextStyle(
+                                        color: textPrimary,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: loading
+                                        ? null
+                                        : () => Navigator.of(dialogContext).pop(),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: textSecondary,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 4,
+                                      ),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                    child: const Text(
+                                      '关闭',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 18),
+                              Container(
+                                height: 50,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 14),
+                                decoration: BoxDecoration(
+                                  color: fieldBackground,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                alignment: Alignment.center,
+                                child: TextField(
+                                  controller: controller,
+                                  autofocus: true,
+                                  enabled: !loading && !successMode,
+                                  cursorColor: const Color(0xFF55A84A),
+                                  textInputAction: TextInputAction.done,
+                                  onSubmitted: (_) => submit(),
+                                  style: const TextStyle(
+                                    color: textPrimary,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: 0.3,
+                                  ),
+                                  decoration: const InputDecoration(
+                                    isDense: true,
+                                    border: InputBorder.none,
+                                    hintText: '请输入激活码',
+                                    hintStyle: TextStyle(
+                                      color: textMuted,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w400,
+                                    ),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ),
+                              if (error != null) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 9,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFF3F1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    error!,
+                                    style: const TextStyle(
+                                      color: Color(0xFFAA5A54),
+                                      fontSize: 11.5,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 14),
+                              Material(
+                                color: successMode
+                                    ? const Color(0xFFEAF6E7)
+                                    : loading
+                                        ? themeGreen.withOpacity(0.50)
+                                        : themeGreen,
+                                borderRadius: BorderRadius.circular(8),
+                                clipBehavior: Clip.antiAlias,
+                                child: InkWell(
+                                  onTap:
+                                      (!loading && !successMode) ? submit : null,
+                                  child: SizedBox(
+                                    height: 48,
+                                    child: Center(
+                                      child: Text(
+                                        successMode
+                                            ? '激活成功'
+                                            : loading
+                                                ? '正在激活...'
+                                                : '激活',
+                                        style: const TextStyle(
+                                          color: textPrimary,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
-            if (error != null) ...[
-              const SizedBox(height: 12),
-              _error(error!),
-            ],
-            const SizedBox(height: 20),
-            _primaryButton(
-              label: successMode ? '兑换成功' : (loading ? '验证中...' : '确认兑换'),
-              enabled: !loading && !successMode,
-              onTap: submit,
+          ),
+        );
+      },
+      transitionBuilder: (_, animation, __, child) {
+        return FadeTransition(
+          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.985, end: 1.0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
             ),
-          ],
+            child: child,
+          ),
         );
       },
     );
@@ -371,161 +1005,252 @@ class MineDialogs {
   }
 
   static Future<void> announcements(BuildContext context) async {
-    // 默认展开第一条
-    var selectedIndex = 0;
+    // 公告只改交互与排版：默认全部收起，点击单条展开/收起。
+    // 接口与数据结构保持不变。
+    int expandedIndex = -1;
     final announcementsFuture = MineApi.getAnnouncements();
 
-    await _show<void>(
-      context,
-      title: '系统公告',
-      maxWidth: 460, // 稍微加宽，让阅读体验更好
-      builder: (dialogContext, setState) {
-        return FutureBuilder<List<MineAnnouncement>>(
-          future: announcementsFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const SizedBox(
-                height: 200,
-                child: Center(
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AppColors.accent,
-                  ),
-                ),
-              );
-            }
+    const background = Color(0xFFFDFEFC);
+    const textPrimary = Color(0xFF303730);
+    const textSecondary = Color(0xFF70786F);
+    const textMuted = Color(0xFFA3AAA2);
+    const softBackground = Color(0xFFF6F8F4);
 
-            if (snapshot.hasError) {
-              return const SizedBox(
-                height: 160,
-                child: Center(
-                  child: Text(
-                    '公告加载失败',
-                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 13),
-                  ),
-                ),
-              );
-            }
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭',
+      barrierColor: Colors.black.withOpacity(0.14),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: SafeArea(
+            child: Center(
+              child: StatefulBuilder(
+                builder: (context, setState) {
+                  final media = MediaQuery.of(context);
+                  final maxHeight = media.size.height * 0.76;
 
-            final items = snapshot.data ?? const <MineAnnouncement>[];
-            if (items.isEmpty) {
-              return const SizedBox(
-                height: 160,
-                child: Center(
-                  child: Text(
-                    '暂无系统公告',
-                    style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 13),
-                  ),
-                ),
-              );
-            }
-
-            return ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 520),
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: items.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                itemBuilder: (_, index) {
-                  final item = items[index];
-                  final active = index == selectedIndex;
-                  final dateStr = item.createdAt.contains('T')
-                      ? item.createdAt.split('T').first
-                      : item.createdAt;
-
-                  return Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () {
-                        setState(() {
-                          // 点击已展开的项则收起，点击未展开的项则展开
-                          selectedIndex = active ? -1 : index;
-                        });
-                      },
-                      borderRadius: BorderRadius.zero,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        decoration: BoxDecoration(
-                          color: active 
-                              ? Colors.white.withOpacity(0.04) 
-                              : Colors.white.withOpacity(0.015),
-                          border: Border.all(
-                            color: active 
-                                ? AppColors.accent.withOpacity(0.4) 
-                                : Colors.white.withOpacity(0.08),
-                            width: 1,
+                  return ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: 520,
+                      maxHeight: maxHeight,
+                    ),
+                    child: Container(
+                      width: media.size.width * 0.90,
+                      margin: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
+                      decoration: BoxDecoration(
+                        color: background,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.08),
+                            blurRadius: 26,
+                            offset: const Offset(0, 10),
                           ),
-                          borderRadius: BorderRadius.zero,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            // 标题 & 日期头部
-                            Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          item.title,
-                                          style: TextStyle(
-                                            color: active ? AppColors.accent : AppColors.textOnDark,
-                                            fontSize: 14,
-                                            fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-                                          ),
-                                        ),
-                                        if (dateStr.isNotEmpty) ...[
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            dateStr,
-                                            style: TextStyle(
-                                              color: AppColors.textOnDarkMuted.withOpacity(0.7),
-                                              fontSize: 11,
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  '系统公告',
+                                  style: TextStyle(
+                                    color: textPrimary,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w700,
                                   ),
-                                  Icon(
-                                    active ? LucideIcons.chevronUp : LucideIcons.chevronDown,
-                                    size: 18,
-                                    color: active ? AppColors.accent : AppColors.textOnDarkMuted.withOpacity(0.6),
-                                  ),
-                                ],
+                                ),
                               ),
-                            ),
-                            // 展开的正文内容
-                            AnimatedSize(
-                              duration: const Duration(milliseconds: 240),
-                              curve: Curves.easeOutCubic,
-                              alignment: Alignment.topCenter,
-                              child: active
-                                  ? Container(
-                                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+                              InkWell(
+                                onTap: () => Navigator.of(dialogContext).pop(),
+                                borderRadius: BorderRadius.circular(18),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(6),
+                                  child: Icon(
+                                    LucideIcons.x,
+                                    size: 18,
+                                    color: textMuted,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Flexible(
+                            child: FutureBuilder<List<MineAnnouncement>>(
+                              future: announcementsFuture,
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState != ConnectionState.done) {
+                                  return const Center(
+                                    child: Padding(
+                                      padding: EdgeInsets.symmetric(vertical: 36),
+                                      child: SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                if (snapshot.hasError) {
+                                  return const Center(
+                                    child: Padding(
+                                      padding: EdgeInsets.symmetric(vertical: 28),
                                       child: Text(
-                                        item.content.isEmpty ? '暂无详细内容' : item.content,
-                                        style: const TextStyle(
-                                          color: AppColors.textOnDarkMuted,
+                                        '公告加载失败，请稍后重试',
+                                        style: TextStyle(
+                                          color: textSecondary,
                                           fontSize: 13,
-                                          height: 1.65,
                                         ),
                                       ),
-                                    )
-                                  : const SizedBox(width: double.infinity, height: 0),
+                                    ),
+                                  );
+                                }
+
+                                final items = snapshot.data ?? const <MineAnnouncement>[];
+                                if (items.isEmpty) {
+                                  return const Center(
+                                    child: Padding(
+                                      padding: EdgeInsets.symmetric(vertical: 28),
+                                      child: Text(
+                                        '暂无系统公告',
+                                        style: TextStyle(
+                                          color: textMuted,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                return ListView.builder(
+                                  shrinkWrap: true,
+                                  padding: EdgeInsets.zero,
+                                  itemCount: items.length,
+                                  itemBuilder: (_, index) {
+                                    final item = items[index];
+                                    final expanded = expandedIndex == index;
+                                    final dateStr = item.createdAt.contains('T')
+                                        ? item.createdAt.split('T').first
+                                        : item.createdAt;
+
+                                    return Padding(
+                                      padding: EdgeInsets.only(
+                                        bottom: index == items.length - 1 ? 0 : 8,
+                                      ),
+                                      child: Material(
+                                        color: expanded ? softBackground : Colors.transparent,
+                                        borderRadius: BorderRadius.circular(12),
+                                        clipBehavior: Clip.antiAlias,
+                                        child: InkWell(
+                                          onTap: () {
+                                            setState(() {
+                                              expandedIndex = expanded ? -1 : index;
+                                            });
+                                          },
+                                          child: Padding(
+                                            padding: const EdgeInsets.fromLTRB(14, 13, 12, 13),
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                                              children: [
+                                                Row(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          Text(
+                                                            item.title,
+                                                            maxLines: expanded ? null : 1,
+                                                            overflow: expanded
+                                                                ? TextOverflow.visible
+                                                                : TextOverflow.ellipsis,
+                                                            style: const TextStyle(
+                                                              color: textPrimary,
+                                                              fontSize: 14,
+                                                              fontWeight: FontWeight.w600,
+                                                              height: 1.35,
+                                                            ),
+                                                          ),
+                                                          if (dateStr.isNotEmpty) ...[
+                                                            const SizedBox(height: 5),
+                                                            Text(
+                                                              dateStr,
+                                                              style: const TextStyle(
+                                                                color: textMuted,
+                                                                fontSize: 11,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 10),
+                                                    AnimatedRotation(
+                                                      turns: expanded ? 0.5 : 0,
+                                                      duration: const Duration(milliseconds: 160),
+                                                      child: const Icon(
+                                                        LucideIcons.chevronDown,
+                                                        size: 16,
+                                                        color: textMuted,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                                AnimatedSize(
+                                                  duration: const Duration(milliseconds: 180),
+                                                  curve: Curves.easeOutCubic,
+                                                  alignment: Alignment.topCenter,
+                                                  child: expanded
+                                                      ? Padding(
+                                                          padding: const EdgeInsets.only(top: 12),
+                                                          child: Text(
+                                                            item.content.isEmpty
+                                                                ? '暂无详细内容'
+                                                                : item.content,
+                                                            style: const TextStyle(
+                                                              color: textSecondary,
+                                                              fontSize: 13,
+                                                              height: 1.7,
+                                                            ),
+                                                          ),
+                                                        )
+                                                      : const SizedBox.shrink(),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
                   );
                 },
               ),
-            );
-          },
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (_, animation, __, child) {
+        return FadeTransition(
+          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          child: child,
         );
       },
     );
@@ -538,7 +1263,7 @@ class MineDialogs {
     var successMode = false;
     String? error;
 
-    final result = await _show<bool>(
+    final result = await _showLight<bool>(
       context,
       title: '问题反馈',
       builder: (dialogContext, setState) {
@@ -588,13 +1313,13 @@ class MineDialogs {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _input(
+            _lightInput(
               controller: titleController,
               hint: '请概括您遇到的问题',
               enabled: !successMode,
             ),
             const SizedBox(height: 12),
-            _input(
+            _lightInput(
               controller: contentController,
               hint: '请提供更多细节描述...',
               maxLines: 5,
@@ -602,10 +1327,10 @@ class MineDialogs {
             ),
             if (error != null) ...[
               const SizedBox(height: 12),
-              _error(error!),
+              _lightError(error!),
             ],
             const SizedBox(height: 20),
-            _primaryButton(
+            _lightPrimaryButton(
               label: successMode ? '提交成功' : (loading ? '提交中...' : '确认提交'),
               enabled: !loading && !successMode,
               onTap: submit,
@@ -676,7 +1401,7 @@ class MineDialogs {
       return parts.isEmpty ? id : parts.last;
     }
 
-    await _show<void>(
+    await _showLight<void>(
       context,
       title: '接口设置',
       maxWidth: 420,
@@ -826,9 +1551,14 @@ class MineDialogs {
           }
         }
 
+        const textPrimary = Color(0xFF303730);
+        const textSecondary = Color(0xFF70786F);
+        const textMuted = Color(0xFFA3AAA2);
+        const softBackground = Color(0xFFF4F6F2);
+
         if (loading) {
           return const SizedBox(
-            height: 220,
+            height: 180,
             child: Center(
               child: CircularProgressIndicator(
                 strokeWidth: 2,
@@ -840,12 +1570,12 @@ class MineDialogs {
 
         if (config == null && errorText != null) {
           return SizedBox(
-            height: 130,
+            height: 120,
             child: Center(
               child: Text(
                 errorText!,
                 style: const TextStyle(
-                  color: AppColors.textOnDarkMuted,
+                  color: textSecondary,
                   fontSize: 12.5,
                 ),
               ),
@@ -860,71 +1590,60 @@ class MineDialogs {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Material(
-              color: Colors.white.withOpacity(0.03),
-              borderRadius: BorderRadius.zero,
+              color: enableOwnKey
+                  ? softBackground.withOpacity(0.72)
+                  : softBackground,
+              borderRadius: BorderRadius.circular(8),
+              clipBehavior: Clip.antiAlias,
               child: InkWell(
                 onTap: enableOwnKey ? null : chooseModel,
-                child: Container(
-                  constraints: const BoxConstraints(minHeight: 62),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-                  ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
                   child: Row(
                     children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: AppColors.accent.withOpacity(0.1),
-                          border: Border.all(color: AppColors.accent.withOpacity(0.3), width: 1),
-                        ),
-                        child: const Icon(LucideIcons.cpu, size: 16, color: AppColors.accent),
-                      ),
-                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
-                              '当前节点',
+                              '当前模型',
                               style: TextStyle(
-                                color: AppColors.textOnDark,
+                                color: textPrimary,
                                 fontSize: 13,
-                                fontWeight: FontWeight.w700,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              enableOwnKey ? '自定义配置' : currentModelName,
+                              enableOwnKey ? '使用自定义接口' : currentModelName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                color: AppColors.textOnDarkMuted,
+                                color: textSecondary,
                                 fontSize: 11.5,
                               ),
                             ),
                           ],
                         ),
                       ),
-                      Icon(
-                        LucideIcons.chevronRight,
-                        size: 15,
-                        color: AppColors.textOnDarkMuted.withOpacity(enableOwnKey ? 0.25 : 0.70),
-                      ),
+                      if (!enableOwnKey)
+                        const Icon(
+                          LucideIcons.chevronRight,
+                          size: 15,
+                          color: textMuted,
+                        ),
                     ],
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.03),
-                border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
+                color: softBackground,
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
@@ -934,18 +1653,18 @@ class MineDialogs {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          '使用外部接口',
+                          '自定义接口',
                           style: TextStyle(
-                            color: AppColors.textOnDark,
+                            color: textPrimary,
                             fontSize: 13,
-                            fontWeight: FontWeight.w700,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                        SizedBox(height: 4),
+                        SizedBox(height: 3),
                         Text(
-                          '启用后将覆盖默认配置',
+                          '开启后使用你自己的接口配置',
                           style: TextStyle(
-                            color: AppColors.textOnDarkMuted,
+                            color: textSecondary,
                             fontSize: 11,
                           ),
                         ),
@@ -955,8 +1674,15 @@ class MineDialogs {
                   Switch(
                     value: enableOwnKey,
                     onChanged: toggling ? null : toggleOwnKey,
-                    activeColor: AppColors.accent,
-                    inactiveTrackColor: Colors.white.withOpacity(0.1),
+                    // 开启时的滑块颜色
+                    activeColor: Colors.white,
+                    // 开启时的滑轨底色：使用不透明的主题深绿，保证清晰可见
+                    activeTrackColor: const Color(0xFF55A84A), 
+                    // 关闭时的滑块与滑轨颜色
+                    inactiveThumbColor: Colors.white,
+                    inactiveTrackColor: const Color(0xFFE2E6DF),
+                    // 隐藏原生的自带边框，让开关更极简扁平
+                    trackOutlineColor: WidgetStateProperty.all(Colors.transparent), 
                   ),
                 ],
               ),
@@ -964,19 +1690,37 @@ class MineDialogs {
             AnimatedSize(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
               child: enableOwnKey
                   ? Padding(
-                      padding: const EdgeInsets.only(top: 14),
+                      padding: const EdgeInsets.only(top: 12),
                       child: Column(
                         children: [
-                          _input(controller: baseUrlController, hint: '接口地址 (Base URL)', enabled: !saving && !successMode),
-                          const SizedBox(height: 10),
-                          _input(controller: modelController, hint: '模型名称 (Model ID)', enabled: !saving && !successMode),
-                          const SizedBox(height: 10),
-                          _input(controller: apiKeyController, hint: '接口密钥 (API Key)', enabled: !saving && !successMode, obscureText: true),
-                          const SizedBox(height: 16),
-                          _primaryButton(
-                            label: successMode ? '连接成功' : (saving ? '验证中...' : '保存配置'),
+                          _lightInput(
+                            controller: baseUrlController,
+                            hint: '接口地址',
+                            enabled: !saving && !successMode,
+                          ),
+                          const SizedBox(height: 9),
+                          _lightInput(
+                            controller: modelController,
+                            hint: '模型名称',
+                            enabled: !saving && !successMode,
+                          ),
+                          const SizedBox(height: 9),
+                          _lightInput(
+                            controller: apiKeyController,
+                            hint: '接口密钥',
+                            enabled: !saving && !successMode,
+                            obscureText: true,
+                          ),
+                          const SizedBox(height: 14),
+                          _lightPrimaryButton(
+                            label: successMode
+                                ? '保存成功'
+                                : saving
+                                    ? '正在验证...'
+                                    : '保存',
                             enabled: !saving && !successMode,
                             onTap: saveCustomApi,
                           ),
@@ -986,8 +1730,8 @@ class MineDialogs {
                   : const SizedBox.shrink(),
             ),
             if (errorText != null) ...[
-              const SizedBox(height: 14),
-              _error(errorText!),
+              const SizedBox(height: 12),
+              _lightError(errorText!),
             ],
           ],
         );
@@ -1005,19 +1749,24 @@ class MineDialogs {
     required List<ModelOption> models,
     required String currentId,
   }) {
-    return _show<ModelOption>(
+    return _showLight<ModelOption>(
       context,
       title: title,
       maxWidth: 410,
       builder: (dialogContext, setState) {
+        const textPrimary = Color(0xFF303730);
+        const textSecondary = Color(0xFF70786F);
+        const softBackground = Color(0xFFF4F6F2);
+        const selectedBackground = Color(0xFFEEF7EB);
+
         if (models.isEmpty) {
           return const SizedBox(
-            height: 120,
+            height: 110,
             child: Center(
               child: Text(
-                '暂无可用节点',
+                '暂无可用模型',
                 style: TextStyle(
-                  color: AppColors.textOnDarkMuted,
+                  color: textSecondary,
                   fontSize: 13,
                 ),
               ),
@@ -1029,24 +1778,23 @@ class MineDialogs {
           constraints: const BoxConstraints(maxHeight: 420),
           child: ListView.separated(
             shrinkWrap: true,
+            padding: EdgeInsets.zero,
             itemCount: models.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            separatorBuilder: (_, __) => const SizedBox(height: 7),
             itemBuilder: (_, index) {
               final item = models[index];
               final selected = item.id == currentId;
 
               return Material(
-                color: selected ? AppColors.accent.withOpacity(0.1) : Colors.white.withOpacity(0.03),
-                borderRadius: BorderRadius.zero,
+                color: selected ? selectedBackground : softBackground,
+                borderRadius: BorderRadius.circular(8),
+                clipBehavior: Clip.antiAlias,
                 child: InkWell(
                   onTap: () => Navigator.of(dialogContext).pop(item),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: selected ? AppColors.accent : Colors.white.withOpacity(0.1),
-                        width: 1,
-                      ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 13,
                     ),
                     child: Row(
                       children: [
@@ -1056,17 +1804,21 @@ class MineDialogs {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: AppColors.textOnDark,
+                              color: textPrimary,
                               fontSize: 13,
-                              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                              fontWeight:
+                                  selected ? FontWeight.w600 : FontWeight.w500,
                             ),
                           ),
                         ),
                         if (selected)
-                          const Icon(
-                            LucideIcons.check,
-                            size: 16,
-                            color: AppColors.accent,
+                          const Text(
+                            '当前',
+                            style: TextStyle(
+                              color: textSecondary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                       ],
                     ),
@@ -1077,6 +1829,236 @@ class MineDialogs {
           ),
         );
       },
+    );
+  }
+
+  static Future<T?> _showLight<T>(
+    BuildContext context, {
+    required String title,
+    required Widget Function(
+      BuildContext context,
+      StateSetter setState,
+    ) builder,
+    double maxWidth = 380,
+  }) {
+    const background = Color(0xFFFCFDFB);
+    const textPrimary = Color(0xFF303730);
+    const textSecondary = Color(0xFF70786F);
+
+    return showGeneralDialog<T>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭',
+      barrierColor: Colors.black.withOpacity(0.16),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: SafeArea(
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                final media = MediaQuery.of(context);
+                final keyboard = media.viewInsets.bottom;
+
+                return AnimatedPadding(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.fromLTRB(
+                    18,
+                    20,
+                    18,
+                    20 + keyboard,
+                  ),
+                  child: Center(
+                    child: SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: maxWidth,
+                          maxHeight: media.size.height * 0.82,
+                        ),
+                        child: Container(
+                          width: media.size.width * 0.88,
+                          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                          decoration: BoxDecoration(
+                            color: background,
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.08),
+                                blurRadius: 24,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: SingleChildScrollView(
+                            keyboardDismissBehavior:
+                                ScrollViewKeyboardDismissBehavior.onDrag,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        title,
+                                        style: const TextStyle(
+                                          color: textPrimary,
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(dialogContext).pop(),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: textSecondary,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 4,
+                                        ),
+                                        minimumSize: Size.zero,
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                      child: const Text(
+                                        '关闭',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 18),
+                                builder(dialogContext, setState),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (_, animation, __, child) {
+        return FadeTransition(
+          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.985, end: 1.0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            ),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  static Widget _lightInput({
+    required TextEditingController controller,
+    required String hint,
+    bool autofocus = false,
+    bool enabled = true,
+    bool obscureText = false,
+    int maxLines = 1,
+  }) {
+    const textPrimary = Color(0xFF303730);
+    const textMuted = Color(0xFFA3AAA2);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4F6F2),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: TextField(
+        controller: controller,
+        autofocus: autofocus,
+        enabled: enabled,
+        obscureText: obscureText,
+        maxLines: obscureText ? 1 : maxLines,
+        minLines: maxLines > 1 ? 4 : 1,
+        textAlignVertical:
+            maxLines == 1 ? TextAlignVertical.center : TextAlignVertical.top,
+        cursorColor: const Color(0xFF55A84A),
+        style: const TextStyle(
+          color: textPrimary,
+          fontSize: 13.5,
+          height: 1.5,
+        ),
+        decoration: const InputDecoration(
+          isDense: true,
+          contentPadding: EdgeInsets.zero,
+          hintStyle: TextStyle(
+            color: textMuted,
+            fontSize: 13,
+          ),
+          border: InputBorder.none,
+        ).copyWith(hintText: hint),
+      ),
+    );
+  }
+
+  static Widget _lightPrimaryButton({
+    required String label,
+    required bool enabled,
+    required VoidCallback onTap,
+    bool danger = false,
+  }) {
+    final background = danger
+        ? const Color(0xFFFFEEEB)
+        : enabled
+            ? AppColors.accent
+            : const Color(0xFFE8EBE5);
+    final foreground = danger
+        ? const Color(0xFFB85D54)
+        : enabled
+            ? const Color(0xFF263026)
+            : const Color(0xFFA3AAA2);
+
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(8),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        child: Container(
+          height: 48,
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: foreground,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static Widget _lightError(String message) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3F1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        message,
+        style: const TextStyle(
+          color: Color(0xFFAA5A54),
+          fontSize: 12,
+          height: 1.4,
+        ),
+      ),
     );
   }
 

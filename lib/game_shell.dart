@@ -774,19 +774,9 @@ class GameShellPage extends StatelessWidget {
         return Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: <Color>[
-                    Color(0xFF171918),
-                    Color(0xFF0D0F0E),
-                    Color(0xFF080908),
-                  ],
-                ),
+            const ColoredBox(
+                color: Color(0xFFFDFEFC),
               ),
-            ),
             SafeArea(
               child: Stack(
                 children: <Widget>[

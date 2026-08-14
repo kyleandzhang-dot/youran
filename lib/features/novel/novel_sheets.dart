@@ -156,8 +156,7 @@ Future<void> showNovelInventorySheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  await controller.refreshInventory();
-  if (!context.mounted) return;
+  // 先打开页面，再由页面首帧后的异步任务刷新背包。
   await _showNovelArchivePage<void>(
     context,
     child: _ArchivePageScaffold(
@@ -178,6 +177,23 @@ class _InventorySheet extends StatefulWidget {
 class _InventorySheetState extends State<_InventorySheet> {
   int tab = 0;
   String busy = '';
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // 保证路由先完成首帧，再请求数据；点击后不会卡在原页面等待网络。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_refresh());
+    });
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted) return;
+    setState(() => loading = true);
+    await widget.controller.refreshInventory();
+    if (mounted) setState(() => loading = false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -189,42 +205,57 @@ class _InventorySheetState extends State<_InventorySheet> {
         return Column(
           children: <Widget>[
             Padding(
-                padding: const EdgeInsets.fromLTRB(18, 5, 18, 12),
-                child: _InventoryTabBar(
-                  selected: tab,
-                  consumableCount: data.consumables.length,
-                  onChanged: (value) => setState(() => tab = value),
+              padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
+              child: _InventoryTabBar(
+                selected: tab,
+                storyCount: data.storyItems.length,
+                consumableCount: data.consumables.length,
+                onChanged: (value) => setState(() => tab = value),
+              ),
+            ),
+            if (loading)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: const LinearProgressIndicator(
+                    minHeight: 2,
+                    backgroundColor: Colors.transparent,
+                    color: NovelPalette.accent,
+                  ),
                 ),
               ),
-              const SizedBox(height: 2),
-              Expanded(
-                child: items.isEmpty
-                    ? _EmptyState(text: tab == 0 ? '当前没有故事道具' : '暂无消耗道具')
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+            Expanded(
+              child: items.isEmpty
+                  ? _EmptyState(
+                      text: loading
+                          ? '正在整理背包…'
+                          : (tab == 0 ? '故事里还没有留下物品' : '暂时没有可使用的道具'),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _refresh,
+                      child: ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
                         itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        separatorBuilder: (_, __) => Divider(
+                          height: 22,
+                          thickness: .6,
+                          color: Colors.white.withOpacity(.055),
+                        ),
                         itemBuilder: (context, index) {
                           final item = items[index];
-                          return _ItemCard(
-                            iconUrl: item.imageUrl,
-                            itemType: item.itemType,
+                          return _InventoryItemTile(
+                            item: item,
                             fallback: _itemFallback(item.itemType),
-                            name: item.name,
-                            description: item.description,
-                            badge: item.quantity > 1
-                                ? '×${item.quantity}'
-                                : (item.isEquipped ? '已装备' : ''),
-                            actionText: tab == 0
-                                ? (item.isEquipped ? '卸下' : '装备')
-                                : _consumableAction(item.itemType),
+                            actionText: tab == 0 ? '' : _consumableAction(item.itemType),
                             loading: busy == item.id,
-                            selected: item.isEquipped,
-                            onAction: () => _handleItem(item),
+                            onAction: tab == 0 ? null : () => _handleItem(item),
                           );
                         },
                       ),
-              ),
+                    ),
+            ),
           ],
         );
       },
@@ -232,12 +263,11 @@ class _InventorySheetState extends State<_InventorySheet> {
   }
 
   Future<void> _handleItem(NovelInventoryItem item) async {
-    if (busy.isNotEmpty) return;
+    // 故事物品只展示，不再存在“装备 / 卸下”。
+    if (tab == 0 || busy.isNotEmpty) return;
     setState(() => busy = item.id);
     try {
-      if (tab == 0) {
-        await widget.controller.setEquipped(item, !item.isEquipped);
-      } else if (item.itemType == 'gift') {
+      if (item.itemType == 'gift') {
         final npcs = widget.controller.scenario?.characters.values
                 .where((character) => !character.isMain)
                 .toList() ??
@@ -289,7 +319,11 @@ class _InventorySheetState extends State<_InventorySheet> {
                           ? '获得 ${reward.score} 积分'
                           : '获得 ${reward.name} ×1',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: NovelPalette.text, fontSize: 15, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        color: NovelPalette.text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 18),
                     SizedBox(
@@ -320,14 +354,145 @@ class _InventorySheetState extends State<_InventorySheet> {
   }
 }
 
+class _InventoryItemTile extends StatelessWidget {
+  const _InventoryItemTile({
+    required this.item,
+    required this.fallback,
+    required this.actionText,
+    required this.loading,
+    this.onAction,
+  });
+
+  final NovelInventoryItem item;
+  final String fallback;
+  final String actionText;
+  final bool loading;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        Container(
+          width: 54,
+          height: 54,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.035),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withOpacity(.055)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: NovelArtwork(
+            url: item.imageUrl,
+            assetCandidates: <String>[
+              if (item.itemType.trim().isNotEmpty)
+                'assets/images/${item.itemType.trim()}.webp',
+            ],
+            fit: BoxFit.contain,
+            fallbackText: fallback,
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: NovelPalette.text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (item.quantity > 1)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Text(
+                        '×${item.quantity}',
+                        style: const TextStyle(
+                          color: NovelPalette.muted,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 5),
+              Text(
+                item.description.trim().isEmpty
+                    ? _inventoryTypeLabel(item.itemType)
+                    : item.description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: NovelPalette.muted,
+                  fontSize: 10.8,
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (actionText.isNotEmpty && onAction != null) ...<Widget>[
+          const SizedBox(width: 12),
+          TextButton(
+            onPressed: loading ? null : onAction,
+            style: TextButton.styleFrom(
+              foregroundColor: NovelPalette.accent,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              minimumSize: const Size(48, 34),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: loading
+                ? const SizedBox.square(
+                    dimension: 13,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.7,
+                      color: NovelPalette.accent,
+                    ),
+                  )
+                : Text(
+                    actionText,
+                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+                  ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+String _inventoryTypeLabel(String type) {
+  return switch (type) {
+    'consumable' => '消耗品',
+    'material' => '材料',
+    'quest' => '任务物品',
+    'gift' => '赠礼道具',
+    'blind_box' => '福袋',
+    'lucky_card' => '特殊道具',
+    _ => '故事物品',
+  };
+}
+
 class _InventoryTabBar extends StatelessWidget {
   const _InventoryTabBar({
     required this.selected,
+    required this.storyCount,
     required this.consumableCount,
     required this.onChanged,
   });
 
   final int selected;
+  final int storyCount;
   final int consumableCount;
   final ValueChanged<int> onChanged;
 
@@ -369,9 +534,9 @@ class _InventoryTabBar extends StatelessWidget {
 
     return Row(
       children: <Widget>[
-        item(0, '故事道具', 0),
+        item(0, '故事物品', storyCount),
         const SizedBox(width: 24),
-        item(1, '消耗道具', consumableCount),
+        item(1, '可使用', consumableCount),
       ],
     );
   }
@@ -1389,8 +1554,7 @@ Future<void> showNovelCharactersSheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  await controller.refreshCharacterStatus();
-  if (!context.mounted) return;
+  // 先进入角色页，再在页面首帧后刷新实时角色状态。
   await _showNovelArchivePage<void>(
     context,
     child: _ArchivePageScaffold(
@@ -1411,6 +1575,22 @@ class _CharactersPanel extends StatefulWidget {
 
 class _CharactersPanelState extends State<_CharactersPanel> {
   int filter = 0; // 0 全部 / 1 亲密 / 2 普通
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_refresh());
+    });
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted) return;
+    setState(() => loading = true);
+    await widget.controller.refreshCharacterStatus();
+    if (mounted) setState(() => loading = false);
+  }
 
   bool _isClose(NovelCharacter c) => c.affection >= 60;
 
@@ -1450,7 +1630,7 @@ class _CharactersPanelState extends State<_CharactersPanel> {
         });
 
         if (characters.isEmpty) {
-          return const _EmptyState(text: '还没有角色资料');
+          return _EmptyState(text: loading ? '正在整理角色档案…' : '还没有角色资料');
         }
 
         final closeCount = characters.where(_isClose).length;
@@ -1487,6 +1667,18 @@ class _CharactersPanelState extends State<_CharactersPanel> {
               ),
             ),
             const SizedBox(height: 2),
+            if (loading)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: const LinearProgressIndicator(
+                    minHeight: 2,
+                    backgroundColor: Colors.transparent,
+                    color: NovelPalette.accent,
+                  ),
+                ),
+              ),
             Expanded(
               child: filtered.isEmpty
                   ? const _EmptyState(text: '当前筛选下暂无角色')
@@ -3212,13 +3404,12 @@ Future<void> showNovelJourneySheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  await controller.refreshJourney();
-  if (!context.mounted) return;
+  // 经历页立即打开；真正的数据请求放到页面首帧之后。
   await _showNovelArchivePage<void>(
     context,
     child: _ArchivePageScaffold(
       title: '经历',
-      child: _JourneyBody(data: controller.journey),
+      child: _JourneyPanel(controller: controller),
     ),
   );
 }
@@ -4682,7 +4873,7 @@ class _ItemCard extends StatelessWidget {
 
   String _itemTypeLabel(String type) {
     return switch (type) {
-      'misc' => '装备 / 饰品',
+      'misc' => '普通物品',
       'consumable' => '消耗品',
       'material' => '材料',
       'quest' => '任务道具',
@@ -4984,108 +5175,267 @@ class _CharacterCard extends StatelessWidget {
 }
 
 
-class _JourneyBody extends StatelessWidget {
-  const _JourneyBody({required this.data});
-  final JsonMap data;
+class _JourneyPanel extends StatefulWidget {
+  const _JourneyPanel({required this.controller});
+  final NovelGameController controller;
+
+  @override
+  State<_JourneyPanel> createState() => _JourneyPanelState();
+}
+
+class _JourneyPanelState extends State<_JourneyPanel> {
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_refresh());
+    });
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted) return;
+    setState(() => loading = true);
+    await widget.controller.refreshJourney();
+    if (mounted) setState(() => loading = false);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (data.isEmpty) {
-      return const _EmptyState(text: '书页空白，命运尚未起笔');
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        return Column(
+          children: <Widget>[
+            if (loading)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 0),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: const LinearProgressIndicator(
+                    minHeight: 2,
+                    backgroundColor: Colors.transparent,
+                    color: NovelPalette.accent,
+                  ),
+                ),
+              ),
+            Expanded(
+              child: _JourneyBody(
+                data: widget.controller.journey,
+                loading: loading,
+                onRefresh: _refresh,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _JourneyBody extends StatelessWidget {
+  const _JourneyBody({
+    required this.data,
+    required this.loading,
+    required this.onRefresh,
+  });
+
+  final JsonMap data;
+  final bool loading;
+  final Future<void> Function() onRefresh;
+
+  JsonMap _source() {
+    // 某些后端版本会再包一层 journey / data。只展开真正的内容层，
+    // 不把 scenario_id、success、code 这类元数据误当成“经历”。
+    final nestedJourney = asJsonMap(data['journey']);
+    if (nestedJourney.isNotEmpty) return nestedJourney;
+    final nestedData = asJsonMap(data['data']);
+    if (nestedData.isNotEmpty) return nestedData;
+    return data;
+  }
+
+  List<dynamic> _listOf(JsonMap source, List<String> keys) {
+    for (final key in keys) {
+      final value = source[key];
+      if (value is List && value.isNotEmpty) return value;
+      if (value is Map && value.isNotEmpty) return value.values.toList();
     }
+    return const <dynamic>[];
+  }
+
+  String _plainText(dynamic value) {
+    if (value is String || value is num || value is bool) {
+      return stringValue(value).trim();
+    }
+    return '';
+  }
+
+  String _entryText(dynamic raw) {
+    if (raw == null) return '';
+    if (raw is String || raw is num || raw is bool) {
+      return stringValue(raw).trim();
+    }
+    final map = asJsonMap(raw);
+    if (map.isEmpty) return '';
 
     final title = stringValue(
-      data['scenario_title'] ?? data['title'] ?? data['scenario_name'],
-      '你的旅程',
+      map['event'] ??
+          map['title'] ??
+          map['name'] ??
+          map['content'] ??
+          map['text'] ??
+          map['summary'],
+    ).trim();
+    final detail = stringValue(
+      map['impact'] ??
+          map['result'] ??
+          map['description'] ??
+          map['detail'] ??
+          map['memory'],
+    ).trim();
+    final time = stringValue(
+      map['chapter'] ?? map['time'] ?? map['date'] ?? map['turn_label'],
+    ).trim();
+
+    final core = title.isNotEmpty && detail.isNotEmpty && detail != title
+        ? '$title：$detail'
+        : (title.isNotEmpty ? title : detail);
+    if (core.isEmpty) return '';
+    return time.isEmpty ? core : '$time · $core';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final source = _source();
+    final title = _plainText(
+      source['scenario_title'] ?? source['title'] ?? source['scenario_name'],
     );
-    final achievements = (data['key_achievements'] is List
-            ? data['key_achievements'] as List
-            : data['achievements'] is List
-                ? data['achievements'] as List
-                : const <dynamic>[])
-        .map(stringValue)
-        .where((e) => e.trim().isNotEmpty)
-        .toList(growable: false);
-    final eventsRaw = data['triggered_events'] is List
-        ? data['triggered_events'] as List
-        : data['events'] is List
-            ? data['events'] as List
-            : const <dynamic>[];
-    final milestones = asJsonList(data['milestones']);
+    final summary = _plainText(
+      source['journey_summary'] ??
+          source['story_summary'] ??
+          source['summary'] ??
+          source['description'],
+    );
 
-    final handled = <String>{
-      'scenario_title', 'title', 'scenario_name',
-      'key_achievements', 'achievements',
-      'triggered_events', 'events',
-      'milestones',
-    };
-    final extras = data.entries
-        .where((e) => !handled.contains(e.key) && e.value != null && stringValue(e.value).isNotEmpty)
-        .toList();
+    final achievements = _listOf(
+      source,
+      const <String>['key_achievements', 'achievements', 'important_experiences'],
+    ).map(_entryText).where((e) => e.isNotEmpty).toList(growable: false);
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 28),
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(2, 2, 2, 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                title,
-                style: const TextStyle(
-                  color: NovelPalette.text,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                ),
+    final events = _listOf(
+      source,
+      const <String>['triggered_events', 'events', 'event_history', 'timeline', 'records', 'journey'],
+    ).map(_entryText).where((e) => e.isNotEmpty).toList(growable: false);
+
+    final milestones = _listOf(
+      source,
+      const <String>['milestones', 'key_milestones', 'past_milestones'],
+    ).map(_entryText).where((e) => e.isNotEmpty).toList(growable: false);
+
+    final hasRealContent = summary.isNotEmpty ||
+        achievements.isNotEmpty ||
+        events.isNotEmpty ||
+        milestones.isNotEmpty;
+
+    if (!hasRealContent) {
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(24, 80, 24, 32),
+          children: <Widget>[
+            Center(
+              child: Column(
+                children: <Widget>[
+                  Icon(
+                    Icons.auto_stories_outlined,
+                    size: 30,
+                    color: NovelPalette.muted.withOpacity(.55),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    loading ? '正在翻阅故事…' : '故事刚刚开始',
+                    style: const TextStyle(
+                      color: NovelPalette.text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (!loading) ...<Widget>[
+                    const SizedBox(height: 7),
+                    const Text(
+                      '新的经历会随着剧情推进记录在这里',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: NovelPalette.muted,
+                        fontSize: 10.8,
+                        height: 1.5,
+                      ),
+                    ),
+                  ],
+                ],
               ),
-              const SizedBox(height: 7),
-              Text(
-                '记录故事留下的节点与记忆',
-                style: TextStyle(
-                  color: NovelPalette.muted.withOpacity(.82),
-                  fontSize: 11,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
-        if (achievements.isNotEmpty)
-          _JourneySectionCard(
-            title: '重要经历',
-            children: achievements
-                .map((item) => _JourneyBulletText(text: item))
-                .toList(),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(2, 2, 2, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  title.isEmpty ? '你的旅程' : title,
+                  style: const TextStyle(
+                    color: NovelPalette.text,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  summary.isEmpty ? '故事留下的节点与记忆' : summary,
+                  style: const TextStyle(
+                    color: NovelPalette.muted,
+                    fontSize: 10.8,
+                    height: 1.55,
+                  ),
+                ),
+              ],
+            ),
           ),
-        if (eventsRaw.isNotEmpty)
-          _JourneySectionCard(
-            title: '事件轨迹',
-            children: eventsRaw
-                .map((event) => _JourneyBulletText(text: stringValue(event)))
-                .toList(),
-          ),
-        if (milestones.isNotEmpty)
-          _JourneySectionCard(
-            title: '关键节点',
-            children: milestones.map((raw) {
-              final item = asJsonMap(raw);
-              final event = stringValue(item['event'] ?? item['title'] ?? item['name']);
-              final impact = stringValue(item['impact'] ?? item['result'] ?? item['description']);
-              return _JourneyBulletText(
-                text: impact.isNotEmpty ? '$event：$impact' : event,
-              );
-            }).toList(),
-          ),
-        if (extras.isNotEmpty)
-          _JourneySectionCard(
-            title: '补充记录',
-            children: extras
-                .map((entry) => _JourneyBulletText(
-                      text: '${_journeyTitle(entry.key)}：${stringValue(entry.value)}',
-                    ))
-                .toList(),
-          ),
-      ],
+          if (achievements.isNotEmpty)
+            _JourneySectionCard(
+              title: '重要经历',
+              children: achievements
+                  .map((item) => _JourneyBulletText(text: item))
+                  .toList(),
+            ),
+          if (events.isNotEmpty)
+            _JourneySectionCard(
+              title: '事件轨迹',
+              children: events
+                  .map((item) => _JourneyBulletText(text: item))
+                  .toList(),
+            ),
+          if (milestones.isNotEmpty)
+            _JourneySectionCard(
+              title: '关键节点',
+              children: milestones
+                  .map((item) => _JourneyBulletText(text: item))
+                  .toList(),
+            ),
+        ],
+      ),
     );
   }
 }

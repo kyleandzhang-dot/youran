@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -47,6 +48,7 @@ class NovelBgmService {
   // 逐字动画通常 30ms 推进一次。60ms 一个音效 tick 能保持连续感，
   // 同时避免浏览器 / just_audio 被过于密集的 seek + play 请求淹没。
   static const Duration typingThrottle = Duration(milliseconds: 60);
+  static const Duration nativeTypingThrottle = Duration(milliseconds: 90);
   DateTime? _lastTypingTickAt;
   bool _typingReady = false;
   Future<void>? _typingPrepareFuture;
@@ -71,8 +73,10 @@ class NovelBgmService {
         await _typingPlayer.setVolume(typingVolume);
         await _typingPlayer.setAsset(typingAsset);
         _typingReady = true;
-      } catch (_) {
-        // UI 音效缺失时静默跳过，不影响剧情。
+      } catch (error, stackTrace) {
+        // 手机安装版若资源/解码失败，必须把真实原因打印出来，避免静默无声。
+        debugPrint('novel typing sfx prepare failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
         _typingReady = false;
       } finally {
         _typingPrepareFuture = null;
@@ -107,11 +111,14 @@ class NovelBgmService {
   void playTypingTick() {
     final now = DateTime.now();
     final last = _lastTypingTickAt;
-    if (last != null && now.difference(last) < typingThrottle) return;
+    final throttle = kIsWeb ? typingThrottle : nativeTypingThrottle;
+    if (last != null && now.difference(last) < throttle) return;
     _lastTypingTickAt = now;
 
     if (_typingRestartInFlight) {
-      _typingRestartQueued = true;
+      // 打字音效允许丢 tick。尤其 Android/iOS 原生播放器如果把每个字符都排队重播，
+      // 会出现上一声还没真正输出就再次 seek(0) 的情况，最终听起来像完全静音。
+      if (kIsWeb) _typingRestartQueued = true;
       return;
     }
     unawaited(_playTypingTickInternal());
@@ -119,7 +126,7 @@ class NovelBgmService {
 
   Future<void> _playTypingTickInternal() async {
     if (_typingRestartInFlight) {
-      _typingRestartQueued = true;
+      if (kIsWeb) _typingRestartQueued = true;
       return;
     }
 
@@ -131,21 +138,38 @@ class NovelBgmService {
         await _prepareTypingPlayer();
         if (!_typingReady || epoch != _typingPlaybackEpoch) return;
 
+        // 安装版手机优先稳定：一个短 tick 尚未播放完时，不再强行 seek(0) 重启。
+        // Web 端保留原来的快速 restart 手感。
+        if (!kIsWeb &&
+            _typingPlayer.playing &&
+            _typingPlayer.processingState != ProcessingState.completed) {
+          return;
+        }
+
         _duckWeatherForTyping();
         await _typingPlayer.setVolume(typingVolume);
         await _typingPlayer.seek(Duration.zero);
         if (epoch != _typingPlaybackEpoch) return;
 
-        // play() 在 just_audio 中会持续到本次播放结束；这里不能 await，
-        // 否则下一次 tick 会被整段 wav 的时长阻塞。异常单独吞掉，避免未处理 Future。
-        unawaited(_typingPlayer.play().catchError((_) {}));
-      } while (_typingRestartQueued && epoch == _typingPlaybackEpoch);
-    } catch (_) {
-      // seek / source 状态异常时让下一次 tick 重新准备资源，而不是永久静音。
+        unawaited(
+          _typingPlayer.play().catchError((Object error, StackTrace stackTrace) {
+            debugPrint('novel typing sfx play failed: $error');
+            debugPrintStack(stackTrace: stackTrace);
+          }),
+        );
+      } while (kIsWeb &&
+          _typingRestartQueued &&
+          epoch == _typingPlaybackEpoch);
+    } catch (error, stackTrace) {
+      // seek / source 状态异常时让下一次 tick 重新准备资源，同时输出手机端真实错误。
+      debugPrint('novel typing sfx restart failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
       _typingReady = false;
     } finally {
       _typingRestartInFlight = false;
-      if (_typingRestartQueued && epoch == _typingPlaybackEpoch) {
+      if (kIsWeb &&
+          _typingRestartQueued &&
+          epoch == _typingPlaybackEpoch) {
         _typingRestartQueued = false;
         unawaited(_playTypingTickInternal());
       }

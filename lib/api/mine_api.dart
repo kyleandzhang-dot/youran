@@ -185,12 +185,24 @@ class MineApi {
   }
 
   static Future<MineCheckinResult> dailyCheckin() async {
-    final data = _data(await _client.post('/user/checkin'));
+    final response = await _client.post('/user/checkin');
+    final code = _int(response['code'], fallback: -1);
+    final message = _string(response['message']);
+
+    // 严格以 /user/checkin 的真实业务返回为准。
+    // 后端即使使用 HTTP 200 包装 code=409/403，也不能当成签到成功。
+    if (code != 200) {
+      throw ApiException(message.isEmpty ? '签到失败' : message);
+    }
+
+    final data = _data(response);
+    if (data['reward'] == null) {
+      throw const ApiException('签到成功，但服务器未返回 reward');
+    }
+
     return MineCheckinResult(
-      reward: _int(data['reward'], fallback: 100),
-      balance: data['balance'] == null
-          ? null
-          : _int(data['balance']),
+      reward: _int(data['reward']),
+      balance: data['balance'] == null ? null : _int(data['balance']),
     );
   }
 
