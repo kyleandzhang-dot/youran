@@ -130,8 +130,7 @@ platform :ios do
     )
 
     upload_to_testflight(
-      skip_waiting_for_build_processing: true,
-      apple_id: ENV["APP_STORE_CONNECT_API_KEY_ID"] ? nil : "your-apple-id@example.com" # 用 API Key 认证时无需手动填 apple_id
+      skip_waiting_for_build_processing: true
     )
   end
 
