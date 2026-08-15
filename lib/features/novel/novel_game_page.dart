@@ -49,6 +49,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _fateOpen = false;
   bool _endingOpen = false;
   bool _balanceOpen = false;
+  bool _loadFailureHandled = false;
   NovelWeatherEffect? _weatherPreviewOverride;
   NovelTimePeriod? _timePreviewOverride;
   String _lastWeatherSyncToken = '';
@@ -66,6 +67,9 @@ class _NovelGamePageState extends State<NovelGamePage>
   Future<void> _initializeGame() async {
     await controller.initialize();
     if (!mounted) return;
+
+    // 初始化失败时由页面自动打开菜单，不再继续预加载剧情音频。
+    if (!controller.isInitialized) return;
 
     // 进入剧情后先把短打字音效送进原生播放器，避免第一段流式文字到来时
     // Android / iOS 才临时 setAsset，导致初始化和高频 tick 撞在一起而听不到声音。
@@ -569,6 +573,27 @@ class _NovelGamePageState extends State<NovelGamePage>
     );
   }
 
+  void _handleLoadFailure(VoidCallback openDrawer) {
+    if (_loadFailureHandled) return;
+    _loadFailureHandled = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      // 普通用户不展示“世界暂时无法载入”等技术失败页。
+      // 保留日志方便开发排查，然后直接执行原“打开菜单”动作。
+      debugPrint('剧情初始化失败，已自动打开菜单：${controller.lastError}');
+      controller.clearMessages();
+
+      final callback = widget.onBack;
+      if (callback != null) {
+        callback();
+      } else {
+        openDrawer();
+      }
+    });
+  }
+
   void _back() {
     final callback = widget.onBack;
     if (callback != null) {
@@ -600,6 +625,16 @@ class _NovelGamePageState extends State<NovelGamePage>
         final background = isHomeBackground ? '' : rawBackground;
         final activeWeather = _activeWeatherEffect;
         final activeTime = _activeTimePeriod;
+        final loadFailed = !controller.isInitializing &&
+            !controller.isInitialized &&
+            controller.lastError.isNotEmpty;
+
+        if (controller.isInitialized) {
+          _loadFailureHandled = false;
+        } else if (loadFailed) {
+          _handleLoadFailure(openDrawer);
+        }
+
         return Scaffold(
           resizeToAvoidBottomInset: true,
           backgroundColor: controller.settings.backgroundColor,
@@ -772,14 +807,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                     ),
                   ),
                 ),
-              if (!controller.isInitializing &&
-                  !controller.isInitialized &&
-                  controller.lastError.isNotEmpty)
-                _FatalError(
-                  message: controller.lastError,
-                  onRetry: controller.initialize,
-                  onBack: widget.onBack ?? openDrawer,
-                ),
               if (controller.showDice && controller.diceRoll != null)
                 IgnorePointer(child: NovelDiceOverlay(roll: controller.diceRoll!)),
               if (controller.timeSkipLabel.isNotEmpty)
@@ -807,13 +834,14 @@ class _NovelGamePageState extends State<NovelGamePage>
                     ),
                   ),
                 ),
-              NovelStatusBanner(
-                message: controller.lastError.isNotEmpty
-                    ? controller.lastError
-                    : controller.infoMessage,
-                isError: controller.lastError.isNotEmpty,
-                onDismiss: controller.clearMessages,
-              ),
+              if (!loadFailed)
+                NovelStatusBanner(
+                  message: controller.lastError.isNotEmpty
+                      ? controller.lastError
+                      : controller.infoMessage,
+                  isError: controller.lastError.isNotEmpty,
+                  onDismiss: controller.clearMessages,
+                ),
             ],
           ),
         );
