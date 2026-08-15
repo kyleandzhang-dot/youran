@@ -1,9 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:crop_your_image/crop_your_image.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -109,12 +114,23 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   List<Map<String, dynamic>> _bgmList = <Map<String, dynamic>>[];
   final Set<int> _changedBgmIndexes = <int>{};
   final Set<int> _uploadingBgmIndexes = <int>{};
+  final AudioPlayer _bgmPreviewPlayer = AudioPlayer();
+  StreamSubscription<ProcessingState>? _bgmPreviewCompleteSubscription;
+  int? _previewBgmIndex;
+  bool _previewBgmPlaying = false;
   bool _uploadingCover = false;
 
   @override
   void initState() {
     super.initState();
     _api = widget.api ?? ScenarioEditorApi();
+    _bgmPreviewCompleteSubscription = _bgmPreviewPlayer.processingStateStream.listen((state) {
+      if (state != ProcessingState.completed || !mounted) return;
+      setState(() {
+        _previewBgmIndex = null;
+        _previewBgmPlaying = false;
+      });
+    });
     _load();
   }
 
@@ -127,6 +143,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     _cotController.dispose();
     _responseStyleController.dispose();
     _mainStoryController.dispose();
+    _bgmPreviewCompleteSubscription?.cancel();
+    _bgmPreviewPlayer.dispose();
     super.dispose();
   }
 
@@ -354,6 +372,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   void _setSection(ScenarioEditorSection section) {
     if (_section == section) return;
+    if (section != ScenarioEditorSection.bgm && _previewBgmIndex != null) {
+      _bgmPreviewPlayer.stop();
+      _previewBgmIndex = null;
+      _previewBgmPlaying = false;
+    }
     setState(() => _section = section);
   }
 
@@ -514,13 +537,35 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       ScenarioMediaKind.bgm => 'bgm',
     };
 
-    final contentType = _contentTypeForUpload(file.name, isAudio: isBgm);
-
     try {
+      final Uint8List uploadBytes;
+      final String uploadFileName;
+      final String contentType;
+
+      if (isBgm) {
+        uploadBytes = bytes;
+        uploadFileName = file.name;
+        contentType = _contentTypeForUpload(file.name, isAudio: true);
+      } else {
+        var sourceBytes = bytes;
+        if (target.kind == ScenarioMediaKind.cover) {
+          final cropped = await _cropSquareCover(pickerContext, bytes);
+          if (cropped == null) return null;
+          sourceBytes = cropped;
+        }
+
+        uploadBytes = await _convertImageToWebp(
+          sourceBytes,
+          targetSize: target.kind == ScenarioMediaKind.cover ? 1024 : null,
+        );
+        uploadFileName = _webpFileName(file.name);
+        contentType = 'image/webp';
+      }
+
       final signature = await ApiClient.instance.post(
         '/r2/get-signature',
         body: <String, dynamic>{
-          'filename': file.name,
+          'filename': uploadFileName,
           'content_type': contentType,
           'category': category,
         },
@@ -536,7 +581,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       final response = await http.put(
         Uri.parse(uploadUrl),
         headers: <String, String>{'Content-Type': contentType},
-        body: bytes,
+        body: uploadBytes,
       );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw Exception('R2 上传失败（${response.statusCode}）');
@@ -559,6 +604,43 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       return raw.map((key, value) => MapEntry(key.toString(), value));
     }
     return response;
+  }
+
+  Future<Uint8List> _convertImageToWebp(
+    Uint8List bytes, {
+    int? targetSize,
+  }) async {
+    final converted = await FlutterImageCompress.compressWithList(
+      bytes,
+      minWidth: targetSize ?? 4096,
+      minHeight: targetSize ?? 4096,
+      quality: 88,
+      format: CompressFormat.webp,
+      keepExif: false,
+    );
+    if (converted.isEmpty) {
+      throw Exception('图片转换 WebP 失败');
+    }
+    return converted;
+  }
+
+  Future<Uint8List?> _cropSquareCover(
+    BuildContext context,
+    Uint8List bytes,
+  ) {
+    return showDialog<Uint8List>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _SquareCoverCropDialog(image: bytes),
+    );
+  }
+
+  String _webpFileName(String originalName) {
+    final trimmed = originalName.trim();
+    final dot = trimmed.lastIndexOf('.');
+    final base = dot > 0 ? trimmed.substring(0, dot) : trimmed;
+    final safeBase = base.isEmpty ? 'image' : base;
+    return '$safeBase.webp';
   }
 
   String _contentTypeForUpload(String fileName, {required bool isAudio}) {
@@ -596,8 +678,57 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     _markDirty();
   }
 
+  Future<void> _toggleBgmPreview(int index) async {
+    if (index < 0 || index >= _bgmList.length) return;
+    final url = _bgmList[index]['url']?.toString().trim() ?? '';
+    if (url.isEmpty || _uploadingBgmIndexes.contains(index)) return;
+
+    try {
+      if (_previewBgmIndex == index) {
+        if (_previewBgmPlaying) {
+          await _bgmPreviewPlayer.pause();
+          if (!mounted) return;
+          setState(() => _previewBgmPlaying = false);
+        } else {
+          _bgmPreviewPlayer.play();
+          if (!mounted) return;
+          setState(() => _previewBgmPlaying = true);
+        }
+        return;
+      }
+
+      await _bgmPreviewPlayer.stop();
+      await _bgmPreviewPlayer.setUrl(url);
+      _bgmPreviewPlayer.play();
+      if (!mounted) return;
+      setState(() {
+        _previewBgmIndex = index;
+        _previewBgmPlaying = true;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _previewBgmIndex = null;
+        _previewBgmPlaying = false;
+      });
+      _showSnack('试听失败：${_cleanUploadError(error)}', error: true);
+    }
+  }
+
+  Future<void> _stopBgmPreviewIfNeeded(int index) async {
+    if (_previewBgmIndex != index) return;
+    await _bgmPreviewPlayer.stop();
+    if (!mounted) return;
+    setState(() {
+      _previewBgmIndex = null;
+      _previewBgmPlaying = false;
+    });
+  }
+
   Future<void> _editBgmMedia(int index) async {
     if (_uploadingBgmIndexes.contains(index)) return;
+    await _stopBgmPreviewIfNeeded(index);
+    if (!mounted) return;
     setState(() => _uploadingBgmIndexes.add(index));
     final result = await _mediaPicker(
       context,
@@ -1127,8 +1258,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               clipBehavior: Clip.none,
               children: [
                 Container(
-                  width: 82,
-                  height: 108,
+                  width: 96,
+                  height: 96,
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.02),
                     borderRadius: BorderRadius.circular(4),
@@ -1726,6 +1857,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final item = _bgmList[index];
     final url = item['url']?.toString() ?? '';
     final uploading = _uploadingBgmIndexes.contains(index);
+    final isPreviewing = _previewBgmIndex == index && _previewBgmPlaying;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
@@ -1780,9 +1912,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 Text(
                   uploading
                       ? '正在上传音频…'
-                      : url.isEmpty
-                          ? '未配置'
-                          : '已配置 · MP3/WAV 等',
+                      : isPreviewing
+                          ? '正在试听…'
+                          : url.isEmpty
+                              ? '未配置'
+                              : '已配置 · 点击播放试听',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -1796,7 +1930,34 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           const SizedBox(width: 8),
           if (url.isNotEmpty && !uploading)
             InkWell(
-              onTap: () {
+              onTap: () => _toggleBgmPreview(index),
+              borderRadius: BorderRadius.circular(4),
+              child: Container(
+                width: 30,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: isPreviewing ? AppColors.accent.withOpacity(0.12) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: isPreviewing
+                        ? AppColors.accent.withOpacity(0.45)
+                        : Colors.white.withOpacity(0.08),
+                  ),
+                ),
+                child: Icon(
+                  isPreviewing ? LucideIcons.pause : LucideIcons.play,
+                  size: 13,
+                  color: isPreviewing ? AppColors.accent : AppColors.textOnDark,
+                ),
+              ),
+            ),
+          if (url.isNotEmpty && !uploading) const SizedBox(width: 4),
+          if (url.isNotEmpty && !uploading)
+            InkWell(
+              onTap: () async {
+                await _stopBgmPreviewIfNeeded(index);
+                if (!mounted) return;
                 setState(() {
                   item['url'] = '';
                   item['r2_key'] = '';
@@ -2219,6 +2380,199 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   }
 }
 
+class _SquareCoverCropDialog extends StatefulWidget {
+  const _SquareCoverCropDialog({required this.image});
+
+  final Uint8List image;
+
+  @override
+  State<_SquareCoverCropDialog> createState() => _SquareCoverCropDialogState();
+}
+
+class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
+  final CropController _cropController = CropController();
+  bool _cropping = false;
+  String? _error;
+
+  void _confirmCrop() {
+    if (_cropping) return;
+    setState(() {
+      _cropping = true;
+      _error = null;
+    });
+    _cropController.crop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final dialogWidth = math.min(media.size.width - 28, 520.0);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+      backgroundColor: const Color(0xFF141414),
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: SizedBox(
+        width: dialogWidth,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '裁剪剧本封面',
+                          style: TextStyle(
+                            color: AppColors.textOnDark,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          '固定 1:1 · 双指或滚轮缩放 · 拖动调整位置',
+                          style: TextStyle(
+                            color: AppColors.textOnDarkMuted,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _cropping ? null : () => Navigator.of(context).pop(),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      size: 19,
+                      color: AppColors.textOnDarkMuted,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              AspectRatio(
+                aspectRatio: 1,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Crop(
+                      image: widget.image,
+                      controller: _cropController,
+                      aspectRatio: 1,
+                      interactive: true,
+                      fixCropRect: true,
+                      initialRectBuilder: InitialRectBuilder.withSizeAndRatio(
+                        size: 0.92,
+                        aspectRatio: 1,
+                      ),
+                      baseColor: Colors.black,
+                      maskColor: Colors.black.withOpacity(0.56),
+                      radius: 2,
+                      filterQuality: FilterQuality.medium,
+                      progressIndicator: const Center(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      cornerDotBuilder: (_, __) => const SizedBox.shrink(),
+                      onCropped: (result) {
+                        switch (result) {
+                          case CropSuccess(:final croppedImage):
+                            if (mounted) {
+                              Navigator.of(context).pop(croppedImage);
+                            }
+                          case CropFailure(:final cause):
+                            if (!mounted) return;
+                            setState(() {
+                              _cropping = false;
+                              _error = '裁剪失败：$cause';
+                            });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                '建议把人物主体和重要文字留在中间区域，发现页会按这个方形封面展示。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.textOnDarkMuted,
+                  fontSize: 10.5,
+                  height: 1.4,
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Color(0xFFE0554A), fontSize: 11),
+                ),
+              ],
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _cropping ? null : () => Navigator.of(context).pop(),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.textOnDarkMuted,
+                        side: BorderSide(color: Colors.white.withOpacity(0.10)),
+                        minimumSize: const Size.fromHeight(44),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      ),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _cropping ? null : _confirmCrop,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accent,
+                        foregroundColor: const Color(0xFF0B0B0B),
+                        minimumSize: const Size.fromHeight(44),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      ),
+                      child: _cropping
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF0B0B0B),
+                              ),
+                            )
+                          : const Text(
+                              '使用此封面',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CharacterEditorSheet extends StatefulWidget {
   const _CharacterEditorSheet({
     required this.character,
@@ -2250,6 +2604,8 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
   late final TextEditingController _portraitUrl;
   late final TextEditingController _affection;
   late final TextEditingController _stress;
+  bool _uploadingAvatar = false;
+  bool _uploadingPortrait = false;
 
   Map<String, dynamic> get _jsonData {
     final value = _character['json_data'];
@@ -2320,14 +2676,25 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
 
   Future<void> _pick(ScenarioMediaKind kind) async {
     if (widget.onPickMedia == null) return;
+    if (kind == ScenarioMediaKind.avatar && _uploadingAvatar) return;
+    if (kind == ScenarioMediaKind.portrait && _uploadingPortrait) return;
+
+    setState(() {
+      if (kind == ScenarioMediaKind.avatar) _uploadingAvatar = true;
+      if (kind == ScenarioMediaKind.portrait) _uploadingPortrait = true;
+    });
+
     final result = await widget.onPickMedia!(
       context,
       ScenarioMediaTarget(kind: kind, characterIndex: widget.characterIndex),
     );
-    if (result == null || !mounted) return;
+    if (!mounted) return;
+
     setState(() {
-      if (kind == ScenarioMediaKind.avatar) _avatarUrl.text = result.url;
-      if (kind == ScenarioMediaKind.portrait) _portraitUrl.text = result.url;
+      if (kind == ScenarioMediaKind.avatar) _uploadingAvatar = false;
+      if (kind == ScenarioMediaKind.portrait) _uploadingPortrait = false;
+      if (result != null && kind == ScenarioMediaKind.avatar) _avatarUrl.text = result.url;
+      if (result != null && kind == ScenarioMediaKind.portrait) _portraitUrl.text = result.url;
     });
   }
 
@@ -2436,14 +2803,37 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                                   ),
                                 ),
                         ),
+                        if (_uploadingPortrait)
+                          Positioned.fill(
+                            child: ColoredBox(
+                              color: Colors.black54,
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 28,
+                                  height: 28,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: AppColors.accent,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                         Positioned(
                           right: 10,
                           bottom: 10,
                           child: _mediaButton(
-                            label: widget.onPickMedia != null ? '替换立绘' : '填写地址',
-                            onTap: widget.onPickMedia != null
-                                ? () => _pick(ScenarioMediaKind.portrait)
-                                : () => _showUrlEditor(_portraitUrl, '立绘地址'),
+                            label: _uploadingPortrait
+                                ? '上传中'
+                                : widget.onPickMedia != null
+                                    ? '替换立绘'
+                                    : '填写地址',
+                            loading: _uploadingPortrait,
+                            onTap: _uploadingPortrait
+                                ? null
+                                : widget.onPickMedia != null
+                                    ? () => _pick(ScenarioMediaKind.portrait)
+                                    : () => _showUrlEditor(_portraitUrl, '立绘地址'),
                           ),
                         ),
                       ],
@@ -2454,9 +2844,11 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                     child: Row(
                       children: [
                         GestureDetector(
-                          onTap: widget.onPickMedia != null
-                              ? () => _pick(ScenarioMediaKind.avatar)
-                              : () => _showUrlEditor(_avatarUrl, '头像地址'),
+                          onTap: _uploadingAvatar
+                              ? null
+                              : widget.onPickMedia != null
+                                  ? () => _pick(ScenarioMediaKind.avatar)
+                                  : () => _showUrlEditor(_avatarUrl, '头像地址'),
                           child: Container(
                             width: 60,
                             height: 60,
@@ -2466,13 +2858,35 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                               border: Border.all(color: Colors.white.withOpacity(0.08)),
                             ),
                             clipBehavior: Clip.antiAlias,
-                            child: avatar.isEmpty
-                                ? const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted)
-                                : Image.network(
-                                    avatar,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, __, ___) => const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                avatar.isEmpty
+                                    ? const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted)
+                                    : Image.network(
+                                        avatar,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => const Icon(
+                                          Icons.person_outline_rounded,
+                                          color: AppColors.textOnDarkMuted,
+                                        ),
+                                      ),
+                                if (_uploadingAvatar)
+                                  const ColoredBox(
+                                    color: Colors.black54,
+                                    child: Center(
+                                      child: SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: AppColors.accent,
+                                        ),
+                                      ),
+                                    ),
                                   ),
+                              ],
+                            ),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -2595,7 +3009,11 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     if (value != null && mounted) setState(() => controller.text = value.trim());
   }
 
-  Widget _mediaButton({required String label, required VoidCallback onTap}) {
+  Widget _mediaButton({
+    required String label,
+    required VoidCallback? onTap,
+    bool loading = false,
+  }) {
     return Material(
       color: Colors.black.withOpacity(0.6),
       borderRadius: BorderRadius.circular(4),
@@ -2607,9 +3025,26 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.photo_camera_outlined, size: 14, color: AppColors.textOnDark),
+              if (loading)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.7,
+                    color: AppColors.accent,
+                  ),
+                )
+              else
+                const Icon(Icons.photo_camera_outlined, size: 14, color: AppColors.textOnDark),
               const SizedBox(width: 5),
-              Text(label, style: const TextStyle(color: AppColors.textOnDark, fontSize: 10.5, fontWeight: FontWeight.w600)),
+              Text(
+                label,
+                style: TextStyle(
+                  color: loading ? AppColors.accent : AppColors.textOnDark,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
           ),
         ),

@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../../game_shell.dart';
+import 'novel_ending_page.dart';
 import 'novel_game_controller.dart';
 import 'novel_models.dart';
 import 'novel_sheets.dart';
@@ -28,6 +29,8 @@ class NovelGamePage extends StatefulWidget {
   final NovelGameController controller;
   final String fallbackBackgroundAsset;
   final VoidCallback? onBack;
+  /// 旧版本自定义结局构建器，仅保留接口兼容；当前结局统一使用 NovelEndingPage。
+  @Deprecated('结局页面已统一为 NovelEndingPage，此参数不再生效。')
   final NovelEndingBuilder? endingBuilder;
   final bool disposeController;
 
@@ -143,15 +146,9 @@ class _NovelGamePageState extends State<NovelGamePage>
       _endingOpen = true;
       controller.showEnding = false;
       controller.clearMessages();
-      if (widget.endingBuilder != null) {
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (context) => widget.endingBuilder!(context, controller, controller.ending),
-          ),
-        );
-      } else {
-        await showDefaultNovelEnding(context, controller);
-      }
+      // 正式剧情结局统一进入独立的 NovelEndingPage。
+      // endingBuilder 仅保留为旧调用兼容，不再参与实际结局 UI 选择。
+      await showNovelEndingPage(context, controller);
       _endingOpen = false;
       return;
     }
@@ -289,7 +286,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     if (!controller.isInitialized) return;
     final effect = _activeWeatherEffect;
     final key = _weatherAudioKey(effect);
-    final enabled = controller.settings.weatherEffectsEnabled;
+    final enabled = _weatherPreviewOverride != null ||
+        controller.settings.weatherEffectsEnabled;
     final token = '$key:$enabled:${_weatherPreviewOverride == null ? 'auto' : 'preview'}';
     if (!force && token == _lastWeatherSyncToken) return;
     _lastWeatherSyncToken = token;
@@ -327,6 +325,248 @@ class _NovelGamePageState extends State<NovelGamePage>
       NovelTimePeriod.midnight => null,
     };
     if (mounted) setState(() => _timePreviewOverride = next);
+  }
+
+
+  NovelDeveloperPreviewActions get _developerPreviewActions =>
+      NovelDeveloperPreviewActions(
+        weatherOverride: () => _weatherPreviewOverride,
+        timeOverride: () => _timePreviewOverride,
+        setWeatherOverride: _setWeatherPreviewOverride,
+        setTimeOverride: _setTimePreviewOverride,
+        previewCharacterSetup: _previewCharacterSetup,
+        previewOpening: _previewOpening,
+        previewLoading: _previewLoading,
+        previewFailure: _previewFailure,
+        previewFateRevert: _previewFateRevert,
+        previewBalance: _previewBalance,
+        previewDice: _previewDice,
+        previewTimeSkip: _previewTimeSkip,
+        previewEndingIntro: _previewEndingIntro,
+        previewEnding: _previewEnding,
+      );
+
+  Future<void> _setWeatherPreviewOverride(NovelWeatherEffect? effect) async {
+    if (!mounted) return;
+    setState(() => _weatherPreviewOverride = effect);
+    _lastWeatherSyncToken = '';
+    await _syncActiveWeatherAudio(force: true);
+  }
+
+  void _setTimePreviewOverride(NovelTimePeriod? period) {
+    if (!mounted) return;
+    setState(() => _timePreviewOverride = period);
+  }
+
+  Future<void> _previewCharacterSetup() async {
+    if (!mounted) return;
+    await showNovelCharacterSetupDialog(
+      context,
+      controller,
+      previewOnly: true,
+    );
+  }
+
+  Future<void> _previewOpening() async {
+    if (!mounted) return;
+    await showNovelOpeningDialog(
+      context,
+      controller,
+      previewOnly: true,
+    );
+  }
+
+  Future<void> _previewLoading() async {
+    if (!mounted) return;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierLabel: '关闭载入预览',
+      barrierColor: Colors.black,
+      transitionDuration: const Duration(milliseconds: 160),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(dialogContext).pop(),
+            child: ColoredBox(
+              color: Colors.black.withOpacity(.58),
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    CircularProgressIndicator(color: NovelPalette.accent),
+                    SizedBox(height: 18),
+                    Text(
+                      '正在载入世界…',
+                      style: TextStyle(
+                        color: NovelPalette.text,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _previewFailure() async {
+    if (!mounted) return;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭失败预览',
+      barrierColor: Colors.black.withOpacity(.82),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: _FatalError(
+            message: '开发者预览：模拟场景详情或历史记录请求失败。',
+            onRetry: () async => Navigator.of(dialogContext).pop(),
+            onBack: () => Navigator.of(dialogContext).pop(),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _previewFateRevert() async {
+    if (!mounted) return;
+    await showNovelFateRevertDialog(
+      context,
+      controller,
+      previewOnly: true,
+      previewData: const FateRevertData(
+        deathCount: 2,
+        scoreDeduct: 10,
+        totalScore: 90,
+        message: '你的意识在黑暗中重新聚拢，命运允许你回到仍可改变的转折点。',
+        deathSceneContent: '雨声淹没了最后一句话。',
+      ),
+    );
+  }
+
+  Future<void> _previewBalance() async {
+    if (!mounted) return;
+    controller.insufficientBalance = true;
+    controller.clearMessages();
+  }
+
+  Future<void> _previewDice() async {
+    if (!mounted) return;
+    const previewRoll = NovelDiceRoll(
+      roll: 18,
+      dc: 15,
+      skill: '洞察',
+      grade: 'success',
+      label: '成功',
+      effect: 'success',
+      narration: '你捕捉到了对方神情里一闪而过的迟疑。',
+    );
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierLabel: '关闭判定预览',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 120),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(dialogContext).pop(),
+            child: const NovelDiceOverlay(roll: previewRoll),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _previewTimeSkip() async {
+    if (!mounted) return;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierLabel: '关闭时间跳转预览',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 160),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: NovelTimeSkipOverlay(
+            label: '三日后',
+            onDismiss: () => Navigator.of(dialogContext).pop(),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _previewEndingIntro() async {
+    if (!mounted) return;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierLabel: '关闭终章转场预览',
+      barrierColor: Colors.black,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.black,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(dialogContext).pop(),
+            child: const ColoredBox(
+              color: Colors.black,
+              child: Center(
+                child: Text(
+                  '故事走向终章',
+                  style: TextStyle(
+                    color: NovelPalette.text,
+                    fontSize: 18,
+                    letterSpacing: 5,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _previewEnding() async {
+    if (!mounted) return;
+    const previewEnding = NovelEnding(
+      title: '风停在黎明之前',
+      code: 'ENDING  ·  01',
+      text: '漫长的夜终于退去。你回头望向走过的路，那些选择、失去与相逢，都在晨光里有了新的意义。',
+      milestones: <String>[
+        '第一次并肩走过雨夜',
+        '在最危险的时刻选择相信彼此',
+        '兑现了最初的约定',
+      ],
+      triggeredEvents: <String>[
+        '隐藏线索被完整揭开',
+        '关键角色关系达到最终阶段',
+      ],
+      affection: 86,
+      romance: 72,
+    );
+
+    // 开发者预览与正式剧情共用同一个 NovelEndingPage，
+    // 仅替换为本地测试结局数据，不触发真实剧情副作用。
+    await showNovelEndingPage(
+      context,
+      controller,
+      endingOverride: previewEnding,
+    );
   }
 
   void _back() {
@@ -375,9 +615,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                       controller.currentSpeakerName.isNotEmpty &&
                       !controller.isCinematic,
                   isGenerating: controller.isGenerating,
-                  weatherEffect: controller.settings.weatherEffectsEnabled
+                  weatherEffect: _weatherPreviewOverride != null
                       ? activeWeather
-                      : NovelWeatherEffect.none,
+                      : (controller.settings.weatherEffectsEnabled
+                          ? activeWeather
+                          : NovelWeatherEffect.none),
                   timePeriod: activeTime,
                 ),
               ),
@@ -417,7 +659,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                             controller: controller,
                             onMenu: widget.onBack ?? openDrawer,
                             onOpenProfile: () => showNovelHostProfileSheet(context, controller),
-                            onOpenSettings: () => showNovelSettingsSheet(context, controller),
+                            onOpenSettings: () => showNovelSettingsSheet(
+                              context,
+                              controller,
+                              developerPreview: _developerPreviewActions,
+                            ),
                           ),
                         ),
                         if (controller.storyStarted)

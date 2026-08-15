@@ -255,9 +255,10 @@ class _LoginSheetState extends State<LoginSheet> {
                           ? const Alignment(0, -0.34)
                           : const Alignment(0, -0.28),
                       child: ConstrainedBox(
+                        // 缩小最大宽度，让输入框不会太长
                         constraints:
                             const BoxConstraints(
-                          maxWidth: 420,
+                          maxWidth: 320, 
                         ),
                         child: Column(
                           mainAxisSize:
@@ -314,14 +315,12 @@ class _LoginSheetState extends State<LoginSheet> {
             filterQuality: FilterQuality.high,
             errorBuilder: (_, __, ___) {
               return Container(
-                color:
-                    Colors.white.withOpacity(.55),
+                color: Colors.white.withOpacity(.55),
                 alignment: Alignment.center,
                 child: Icon(
                   LucideIcons.image,
                   size: 26,
-                  color:
-                      _muted.withOpacity(.52),
+                  color: _muted.withOpacity(.52),
                 ),
               );
             },
@@ -335,15 +334,16 @@ class _LoginSheetState extends State<LoginSheet> {
           textAlign: TextAlign.center,
           style: TextStyle(
             color: _ink.withOpacity(.92),
+            // 字号整体调小，显得更精致
             fontSize: narrow
-                ? 28
+                ? 24
                 : compact
-                    ? 31
-                    : 34,
+                    ? 26
+                    : 28,
             height: 1.05,
-            fontWeight: FontWeight.w600,
-            letterSpacing:
-                narrow ? 3.2 : 4.2,
+            // 减轻字重，去除“太粗”的感觉
+            fontWeight: FontWeight.w400,
+            letterSpacing: narrow ? 3.2 : 4.2,
           ),
         ),
         const SizedBox(height: 13),
@@ -353,8 +353,7 @@ class _LoginSheetState extends State<LoginSheet> {
             Container(
               width: 36,
               height: 1,
-              color: const Color(0xFFC9C0A4)
-                  .withOpacity(.72),
+              color: const Color(0xFFC9C0A4).withOpacity(.72),
             ),
             const SizedBox(width: 8),
             Transform.rotate(
@@ -362,28 +361,27 @@ class _LoginSheetState extends State<LoginSheet> {
               child: Container(
                 width: 6,
                 height: 6,
-                color: const Color(0xFFB8AD8C)
-                    .withOpacity(.82),
+                color: const Color(0xFFB8AD8C).withOpacity(.82),
               ),
             ),
             const SizedBox(width: 8),
             Container(
               width: 36,
               height: 1,
-              color: const Color(0xFFC9C0A4)
-                  .withOpacity(.72),
+              color: const Color(0xFFC9C0A4).withOpacity(.72),
             ),
           ],
         ),
         const SizedBox(height: 15),
         Text(
-          '进入你的 AI 剧情世界',
+          // 改为“专属世界”
+          '进入你的专属世界',
           textAlign: TextAlign.center,
           style: TextStyle(
             color: _ink.withOpacity(.72),
-            fontSize: narrow ? 13.5 : 15,
+            fontSize: narrow ? 12 : 13,
             fontWeight: FontWeight.w500,
-            letterSpacing: 1.9,
+            letterSpacing: 1.5,
           ),
         ),
       ],
@@ -543,26 +541,25 @@ class _LoginSheetState extends State<LoginSheet> {
         final focused = focusNode.hasFocus;
 
         return AnimatedContainer(
-          duration:
-              const Duration(milliseconds: 160),
-          height: 50,
+          duration: const Duration(milliseconds: 160),
+          // 稍微调高一点，从 44 增加到 48
+          height: 48,
           decoration: BoxDecoration(
-            // 实白输入框：不透明、不悬浮，直接融入背景。
             color: Colors.white,
             border: Border.all(
               color: focused
                   ? const Color(0xFF9EC89A)
-                  : const Color(0xFFDADFD8),
+                  : const Color(0xFFE1E5DF),
               width: 1,
             ),
-            borderRadius: BorderRadius.zero,
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             children: <Widget>[
               const SizedBox(width: 15),
               Icon(
                 icon,
-                size: 18,
+                size: 17, 
                 color: focused
                     ? const Color(0xFF589D4F)
                     : _muted.withOpacity(.76),
@@ -573,16 +570,14 @@ class _LoginSheetState extends State<LoginSheet> {
                   controller: controller,
                   focusNode: focusNode,
                   keyboardType: keyboardType,
-                  textInputAction:
-                      textInputAction,
+                  textInputAction: textInputAction,
                   autofillHints: autofillHints,
-                  cursorColor:
-                      const Color(0xFF55A84A),
+                  cursorColor: const Color(0xFF55A84A),
                   onChanged: onChanged,
                   onSubmitted: onSubmitted,
                   style: const TextStyle(
                     color: _ink,
-                    fontSize: 13.5,
+                    fontSize: 13,
                     fontWeight: FontWeight.w500,
                   ),
                   decoration: InputDecoration(
@@ -590,11 +585,9 @@ class _LoginSheetState extends State<LoginSheet> {
                     border: InputBorder.none,
                     hintText: hintText,
                     hintStyle: TextStyle(
-                      color:
-                          _muted.withOpacity(.66),
-                      fontSize: 13.5,
-                      fontWeight:
-                          FontWeight.w500,
+                      color: _muted.withOpacity(.66),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ),
@@ -602,9 +595,8 @@ class _LoginSheetState extends State<LoginSheet> {
               if (trailing != null) ...<Widget>[
                 Container(
                   width: 1,
-                  height: 21,
-                  color: Colors.black
-                      .withOpacity(.07),
+                  height: 20,
+                  color: Colors.black.withOpacity(.07),
                 ),
                 trailing,
               ],
@@ -707,41 +699,37 @@ class _LoginPrimaryButton extends StatelessWidget {
     final enabled = onTap != null;
 
     return AnimatedOpacity(
-      duration:
-          const Duration(milliseconds: 150),
+      duration: const Duration(milliseconds: 150),
       opacity: enabled ? 1 : .68,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.zero,
+          borderRadius: BorderRadius.circular(8),
           child: Ink(
-            height: 50,
-            decoration: const BoxDecoration(
+            // 高度同步从 44 调整为 48
+            height: 48,
+            decoration: BoxDecoration(
               color: _LoginSheetState._accent,
-              borderRadius: BorderRadius.zero,
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Center(
               child: isLoading
                   ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child:
-                          CircularProgressIndicator(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color:
-                            _LoginSheetState._ink,
+                        color: _LoginSheetState._ink,
                       ),
                     )
                   : Text(
                       label,
                       style: const TextStyle(
-                        color:
-                            _LoginSheetState._ink,
-                        fontSize: 15.5,
-                        fontWeight:
-                            FontWeight.w700,
-                        letterSpacing: 2,
+                        color: _LoginSheetState._ink,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.5,
                       ),
                     ),
             ),

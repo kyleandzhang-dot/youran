@@ -14,6 +14,22 @@ import 'novel_game_controller.dart';
 import 'novel_models.dart';
 import 'novel_widgets.dart';
 
+/// 防止背包 / 角色 / 经历 / 主角资料被连续点击后重复 push。
+/// 锁从开始打开一直保持到对应页面真正关闭。
+final Set<String> _novelSingleOpenPages = <String>{};
+
+Future<void> _runNovelPageOnce(
+  String pageKey,
+  Future<void> Function() action,
+) async {
+  if (!_novelSingleOpenPages.add(pageKey)) return;
+  try {
+    await action();
+  } finally {
+    _novelSingleOpenPages.remove(pageKey);
+  }
+}
+
 Future<T?> _showNovelSheet<T>(
   BuildContext context, {
   required Widget child,
@@ -76,7 +92,7 @@ Future<T?> _showNovelArchivePage<T>(
       reverseTransitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (routeContext, animation, secondaryAnimation) {
         return Scaffold(
-          backgroundColor: const Color(0xFF0B0C0D),
+          backgroundColor: const Color(0xFF121512),
           body: SafeArea(
             child: child,
           ),
@@ -101,6 +117,99 @@ Future<T?> _showNovelArchivePage<T>(
       },
     ),
   );
+}
+
+class _ArchivePageScaffold extends StatelessWidget {
+  const _ArchivePageScaffold({
+    required this.title,
+    required this.child,
+  });
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    const pageBackground = Color(0xFF151515);
+    const textPrimary = Color(0xFFF2F2F2);
+    const textMuted = Color(0xFF969696);
+
+    return Scaffold(
+      backgroundColor: pageBackground,
+      body: SafeArea(
+        child: Column(
+          children: <Widget>[
+            Container(
+              color: Colors.transparent,
+              padding: const EdgeInsets.fromLTRB(20, 12, 12, 12),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => Navigator.of(context).pop(),
+                      borderRadius: BorderRadius.circular(10),
+                      child: const SizedBox(
+                        width: 38,
+                        height: 38,
+                        child: Icon(
+                          Icons.close_rounded,
+                          size: 20,
+                          color: textMuted,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 820),
+                  child: SizedBox.expand(child: child),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ArchiveEmptyState extends StatelessWidget {
+  const _ArchiveEmptyState({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Color(0xFF929292),
+            fontSize: 12.5,
+            height: 1.5,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 Future<void> showNovelChoicesSheet(
@@ -156,14 +265,16 @@ Future<void> showNovelInventorySheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  // 先打开页面，再由页面首帧后的异步任务刷新背包。
-  await _showNovelArchivePage<void>(
-    context,
-    child: _ArchivePageScaffold(
-      title: '背包',
-      child: _InventorySheet(controller: controller),
-    ),
-  );
+  await _runNovelPageOnce('inventory', () async {
+    // 先打开页面，再由页面首帧后的异步任务刷新背包。
+    await _showNovelArchivePage<void>(
+      context,
+      child: _ArchivePageScaffold(
+        title: '背包',
+        child: _InventorySheet(controller: controller),
+      ),
+    );
+  });
 }
 
 class _InventorySheet extends StatefulWidget {
@@ -213,21 +324,9 @@ class _InventorySheetState extends State<_InventorySheet> {
                 onChanged: (value) => setState(() => tab = value),
               ),
             ),
-            if (loading)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: const LinearProgressIndicator(
-                    minHeight: 2,
-                    backgroundColor: Colors.transparent,
-                    color: NovelPalette.accent,
-                  ),
-                ),
-              ),
             Expanded(
               child: items.isEmpty
-                  ? _EmptyState(
+                  ? _ArchiveEmptyState(
                       text: loading
                           ? '正在整理背包…'
                           : (tab == 0 ? '故事里还没有留下物品' : '暂时没有可使用的道具'),
@@ -236,13 +335,9 @@ class _InventorySheetState extends State<_InventorySheet> {
                       onRefresh: _refresh,
                       child: ListView.separated(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
+                        padding: const EdgeInsets.fromLTRB(18, 14, 18, 32),
                         itemCount: items.length,
-                        separatorBuilder: (_, __) => Divider(
-                          height: 22,
-                          thickness: .6,
-                          color: Colors.white.withOpacity(.055),
-                        ),
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
                           final item = items[index];
                           return _InventoryItemTile(
@@ -333,7 +428,7 @@ class _InventorySheetState extends State<_InventorySheet> {
                         style: FilledButton.styleFrom(
                           backgroundColor: NovelPalette.accent,
                           foregroundColor: NovelPalette.accentDark,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                         onPressed: () => Navigator.of(context).pop(),
                         child: const Text('收下'),
@@ -371,102 +466,125 @@ class _InventoryItemTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: <Widget>[
-        Container(
-          width: 54,
-          height: 54,
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(.035),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withOpacity(.055)),
+    const card = Color(0xFF1D1D1D);
+    const textPrimary = Color(0xFFF1F1F1);
+    const textSecondary = Color(0xFFA0A0A0);
+    const actionBackground = Color(0xFF2A2A2A);
+    const actionTextColor = Color(0xFFD6D6D6);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: card,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              color: const Color(0xFF242424),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: NovelArtwork(
+              url: item.imageUrl,
+              assetCandidates: <String>[
+                if (item.itemType.trim().isNotEmpty)
+                  'assets/images/${item.itemType.trim()}.webp',
+              ],
+              fit: BoxFit.contain,
+              fallbackText: fallback,
+            ),
           ),
-          clipBehavior: Clip.antiAlias,
-          child: NovelArtwork(
-            url: item.imageUrl,
-            assetCandidates: <String>[
-              if (item.itemType.trim().isNotEmpty)
-                'assets/images/${item.itemType.trim()}.webp',
-            ],
-            fit: BoxFit.contain,
-            fallbackText: fallback,
-          ),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      item.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: NovelPalette.text,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  if (item.quantity > 1)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 8),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
                       child: Text(
-                        '×${item.quantity}',
+                        item.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: NovelPalette.muted,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
+                          color: textPrimary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
-                ],
-              ),
-              const SizedBox(height: 5),
-              Text(
-                item.description.trim().isEmpty
-                    ? _inventoryTypeLabel(item.itemType)
-                    : item.description,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: NovelPalette.muted,
-                  fontSize: 10.8,
-                  height: 1.45,
+                    if (item.quantity > 1)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: Text(
+                          '×${item.quantity}',
+                          style: const TextStyle(
+                            color: textSecondary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  item.description.trim().isEmpty
+                      ? _inventoryTypeLabel(item.itemType)
+                      : item.description,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: textSecondary,
+                    fontSize: 11.2,
+                    height: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (actionText.isNotEmpty && onAction != null) ...<Widget>[
+            const SizedBox(width: 10),
+            Material(
+              color: actionBackground,
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: loading ? null : onAction,
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  height: 36,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 13),
+                    child: Center(
+                      child: loading
+                          ? const SizedBox.square(
+                              dimension: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: actionTextColor,
+                              ),
+                            )
+                          : Text(
+                              actionText,
+                              style: const TextStyle(
+                                color: actionTextColor,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                    ),
+                  ),
                 ),
               ),
-            ],
-          ),
-        ),
-        if (actionText.isNotEmpty && onAction != null) ...<Widget>[
-          const SizedBox(width: 12),
-          TextButton(
-            onPressed: loading ? null : onAction,
-            style: TextButton.styleFrom(
-              foregroundColor: NovelPalette.accent,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              minimumSize: const Size(48, 34),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: loading
-                ? const SizedBox.square(
-                    dimension: 13,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.7,
-                      color: NovelPalette.accent,
-                    ),
-                  )
-                : Text(
-                    actionText,
-                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
-                  ),
-          ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
@@ -500,33 +618,43 @@ class _InventoryTabBar extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget item(int index, String label, int count) {
       final active = selected == index;
-      return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => onChanged(index),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Text(
-                label,
-                style: TextStyle(
-                  color: active ? NovelPalette.text : NovelPalette.muted,
-                  fontSize: 13.4,
-                  fontWeight: active ? FontWeight.w800 : FontWeight.w700,
-                ),
-              ),
-              if (count > 0) ...<Widget>[
-                const SizedBox(width: 6),
-                Text(
-                  '$count',
-                  style: TextStyle(
-                    color: active ? NovelPalette.text : NovelPalette.muted,
-                    fontSize: 12.2,
-                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => onChanged(index),
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: active
+                          ? const Color(0xFFEDEDED)
+                          : const Color(0xFF898989),
+                      fontSize: 12.5,
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    ),
                   ),
-                ),
-              ],
-            ],
+                  if (count > 0) ...<Widget>[
+                    const SizedBox(width: 6),
+                    Text(
+                      '$count',
+                      style: TextStyle(
+                        color: active
+                            ? const Color(0xFFB8B8B8)
+                            : const Color(0xFF707070),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       );
@@ -535,7 +663,7 @@ class _InventoryTabBar extends StatelessWidget {
     return Row(
       children: <Widget>[
         item(0, '故事物品', storyCount),
-        const SizedBox(width: 24),
+        const SizedBox(width: 8),
         item(1, '可使用', consumableCount),
       ],
     );
@@ -673,13 +801,52 @@ Future<void> _pickNovelBackground(
   );
 }
 
+class NovelDeveloperPreviewActions {
+  const NovelDeveloperPreviewActions({
+    required this.weatherOverride,
+    required this.timeOverride,
+    required this.setWeatherOverride,
+    required this.setTimeOverride,
+    required this.previewCharacterSetup,
+    required this.previewOpening,
+    required this.previewLoading,
+    required this.previewFailure,
+    required this.previewFateRevert,
+    required this.previewBalance,
+    required this.previewDice,
+    required this.previewTimeSkip,
+    required this.previewEndingIntro,
+    required this.previewEnding,
+  });
+
+  final NovelWeatherEffect? Function() weatherOverride;
+  final NovelTimePeriod? Function() timeOverride;
+  final Future<void> Function(NovelWeatherEffect? value) setWeatherOverride;
+  final void Function(NovelTimePeriod? value) setTimeOverride;
+
+  final Future<void> Function() previewCharacterSetup;
+  final Future<void> Function() previewOpening;
+  final Future<void> Function() previewLoading;
+  final Future<void> Function() previewFailure;
+  final Future<void> Function() previewFateRevert;
+  final Future<void> Function() previewBalance;
+  final Future<void> Function() previewDice;
+  final Future<void> Function() previewTimeSkip;
+  final Future<void> Function() previewEndingIntro;
+  final Future<void> Function() previewEnding;
+}
+
 Future<void> showNovelSettingsSheet(
   BuildContext context,
-  NovelGameController controller,
-) async {
+  NovelGameController controller, {
+  NovelDeveloperPreviewActions? developerPreview,
+}) async {
   await _showNovelEndDrawer<void>(
     context,
-    child: _SettingsPanel(controller: controller),
+    child: _SettingsPanel(
+      controller: controller,
+      developerPreview: developerPreview,
+    ),
   );
 }
 
@@ -687,19 +854,40 @@ class _SettingsDrawerScaffold extends StatelessWidget {
   const _SettingsDrawerScaffold({
     required this.title,
     required this.child,
+    this.onBack,
   });
 
   final String title;
   final Widget child;
+  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: <Widget>[
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 12, 12),
+          padding: EdgeInsets.fromLTRB(onBack == null ? 18 : 12, 14, 12, 12),
           child: Row(
             children: <Widget>[
+              if (onBack != null) ...<Widget>[
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: onBack,
+                    borderRadius: BorderRadius.circular(8),
+                    child: const SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        size: 15,
+                        color: AppColors.textOnDarkMuted,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+              ],
               Expanded(
                 child: Text(
                   title,
@@ -715,7 +903,7 @@ class _SettingsDrawerScaffold extends StatelessWidget {
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: () => Navigator.of(context).pop(),
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(8),
                   child: const SizedBox(
                     width: 32,
                     height: 32,
@@ -742,8 +930,13 @@ class _SettingsDrawerScaffold extends StatelessWidget {
 }
 
 class _SettingsPanel extends StatefulWidget {
-  const _SettingsPanel({required this.controller});
+  const _SettingsPanel({
+    required this.controller,
+    this.developerPreview,
+  });
+
   final NovelGameController controller;
+  final NovelDeveloperPreviewActions? developerPreview;
 
   @override
   State<_SettingsPanel> createState() => _SettingsPanelState();
@@ -751,6 +944,7 @@ class _SettingsPanel extends StatefulWidget {
 
 class _SettingsPanelState extends State<_SettingsPanel> {
   NovelGameController get controller => widget.controller;
+  bool _showDeveloperTools = false;
 
   String _modelLabel() {
     if (controller.currentNovelModel.isEmpty) return '自动选择';
@@ -766,6 +960,13 @@ class _SettingsPanelState extends State<_SettingsPanel> {
       animation: Listenable.merge(<Listenable>[controller, controller.settings]),
       builder: (context, _) {
         final settings = controller.settings;
+        final developerPreview = widget.developerPreview;
+        if (_showDeveloperTools && developerPreview != null) {
+          return _DeveloperToolsPanel(
+            actions: developerPreview,
+            onBack: () => setState(() => _showDeveloperTools = false),
+          );
+        }
         if (settings.artStyle != 'anime') {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (controller.settings.artStyle != 'anime') {
@@ -841,7 +1042,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                             color: AppColors.textOnDark,
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
-                          ),
+            ),
                         ),
                         const Spacer(),
                         Text(
@@ -905,7 +1106,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
               const SizedBox(height: 24),
               const _CleanSettingsHeader(
                 icon: Icons.tune_rounded,
-                title: '声音与 AI',
+                title: '声音与引擎',
                 subtitle: '游戏过程中真正需要调整的选项',
               ),
               const SizedBox(height: 10),
@@ -974,7 +1175,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           .toList(),
                       child: _CleanSettingsRow(
                         icon: Icons.hub_outlined,
-                        title: 'AI 引擎模型',
+                        title: '生成引擎模型',
                         subtitle: _modelLabel(),
                         trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textOnDarkMuted, size: 18),
                       ),
@@ -982,10 +1183,410 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   ],
                 ),
               ),
+              if (developerPreview != null) ...<Widget>[
+                const SizedBox(height: 26),
+                Divider(height: 1, color: Colors.white.withOpacity(.10)),
+                const SizedBox(height: 12),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => setState(() => _showDeveloperTools = true),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
+                      child: Row(
+                        children: <Widget>[
+                          const Icon(
+                            Icons.science_outlined,
+                            size: 17,
+                            color: AppColors.textOnDarkMuted,
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  '开发者测试',
+                                  style: TextStyle(
+                                    color: AppColors.textOnDark,
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                SizedBox(height: 3),
+                                Text(
+                                  '天气、时间与关键页面美术预览',
+                                  style: TextStyle(
+                                    color: AppColors.textOnDarkMuted,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            color: AppColors.textOnDarkMuted,
+                            size: 18,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         );
       },
+    );
+  }
+}
+
+
+class _DeveloperToolsPanel extends StatefulWidget {
+  const _DeveloperToolsPanel({
+    required this.actions,
+    required this.onBack,
+  });
+
+  final NovelDeveloperPreviewActions actions;
+  final VoidCallback onBack;
+
+  @override
+  State<_DeveloperToolsPanel> createState() => _DeveloperToolsPanelState();
+}
+
+class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
+  NovelDeveloperPreviewActions get actions => widget.actions;
+
+  Future<void> _openPreview(Future<void> Function() preview) async {
+    Navigator.of(context).pop();
+    await Future<void>.delayed(const Duration(milliseconds: 280));
+    await preview();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentWeather = actions.weatherOverride();
+    final currentTime = actions.timeOverride();
+    const weatherOptions = <NovelWeatherEffect?>[
+      null,
+      NovelWeatherEffect.none,
+      NovelWeatherEffect.cloudy,
+      NovelWeatherEffect.rain,
+      NovelWeatherEffect.heavyRain,
+      NovelWeatherEffect.thunderstorm,
+      NovelWeatherEffect.snow,
+      NovelWeatherEffect.blizzard,
+    ];
+    const timeOptions = <NovelTimePeriod?>[
+      null,
+      NovelTimePeriod.morning,
+      NovelTimePeriod.noon,
+      NovelTimePeriod.afternoon,
+      NovelTimePeriod.evening,
+      NovelTimePeriod.night,
+      NovelTimePeriod.midnight,
+    ];
+
+    return _SettingsDrawerScaffold(
+      title: '开发者测试',
+      onBack: widget.onBack,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+        children: <Widget>[
+          Text(
+            '仅改变当前客户端的预览状态，不写入剧情数据，也不会主动请求生成接口。',
+            style: TextStyle(
+              color: AppColors.textOnDarkMuted.withOpacity(.88),
+              fontSize: 10.5,
+              height: 1.55,
+            ),
+          ),
+          const SizedBox(height: 22),
+          const _DeveloperSectionTitle(
+            title: '环境预览',
+            subtitle: '直接观察背景、光照与天气效果',
+          ),
+          const SizedBox(height: 10),
+          _CleanSettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  '天气',
+                  style: TextStyle(
+                    color: AppColors.textOnDark,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: weatherOptions.map((effect) {
+                    final selected = currentWeather == effect;
+                    return _DeveloperChoiceChip(
+                      label: effect?.label ?? '自动',
+                      selected: selected,
+                      onTap: () async {
+                        await actions.setWeatherOverride(effect);
+                        if (mounted) setState(() {});
+                      },
+                    );
+                  }).toList(),
+                ),
+                Divider(height: 22, color: Colors.white.withOpacity(.10)),
+                const Text(
+                  '时间',
+                  style: TextStyle(
+                    color: AppColors.textOnDark,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: timeOptions.map((period) {
+                    final selected = currentTime == period;
+                    return _DeveloperChoiceChip(
+                      label: period?.label ?? '自动',
+                      selected: selected,
+                      onTap: () {
+                        actions.setTimeOverride(period);
+                        if (mounted) setState(() {});
+                      },
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 22),
+          const _DeveloperSectionTitle(
+            title: '页面预览',
+            subtitle: '关闭测试抽屉后直接展示目标页面',
+          ),
+          const SizedBox(height: 10),
+          _CleanSettingsCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: <Widget>[
+                _DeveloperPreviewRow(
+                  title: '角色确认',
+                  subtitle: '首次进入世界前的角色确认页',
+                  onTap: () => _openPreview(actions.previewCharacterSetup),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '故事开场',
+                  subtitle: '序章文字与背景过场',
+                  onTap: () => _openPreview(actions.previewOpening),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '载入世界',
+                  subtitle: '初始化中的全屏载入状态',
+                  onTap: () => _openPreview(actions.previewLoading),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '载入失败',
+                  subtitle: '“世界暂时无法载入”失败页面',
+                  onTap: () => _openPreview(actions.previewFailure),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '命运回溯',
+                  subtitle: '死亡后的回溯提示页面',
+                  onTap: () => _openPreview(actions.previewFateRevert),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '余额不足',
+                  subtitle: '无法继续生成剧情时的提示',
+                  onTap: () => _openPreview(actions.previewBalance),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '命运判定',
+                  subtitle: '骰子判定结果全屏反馈',
+                  onTap: () => _openPreview(actions.previewDice),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '时间跳转',
+                  subtitle: '跨日 / 跨时段的转场页面',
+                  onTap: () => _openPreview(actions.previewTimeSkip),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '终章转场',
+                  subtitle: '进入结局前的黑屏提示',
+                  onTap: () => _openPreview(actions.previewEndingIntro),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '结局页面',
+                  subtitle: '最终结局、共同记忆与命运轨迹',
+                  onTap: () => _openPreview(actions.previewEnding),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeveloperSectionTitle extends StatelessWidget {
+  const _DeveloperSectionTitle({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          title,
+          style: const TextStyle(
+            color: AppColors.textOnDark,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          subtitle,
+          style: const TextStyle(
+            color: AppColors.textOnDarkMuted,
+            fontSize: 10,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DeveloperChoiceChip extends StatelessWidget {
+  const _DeveloperChoiceChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(7),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.accent.withOpacity(.12)
+                : Colors.white.withOpacity(.025),
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(
+              color: selected
+                  ? AppColors.accent.withOpacity(.42)
+                  : Colors.white.withOpacity(.07),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? AppColors.accent : AppColors.textOnDarkMuted,
+              fontSize: 10.5,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DeveloperPreviewDivider extends StatelessWidget {
+  const _DeveloperPreviewDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(height: 1, color: Colors.white.withOpacity(.10));
+  }
+}
+
+class _DeveloperPreviewRow extends StatelessWidget {
+  const _DeveloperPreviewRow({
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: AppColors.textOnDark,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.textOnDarkMuted,
+                        fontSize: 9.8,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 17,
+                color: AppColors.textOnDarkMuted,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1012,14 +1613,14 @@ class _ArtStyleCard extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(2),
+        borderRadius: BorderRadius.circular(8),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           width: 108,
           height: 82,
           decoration: BoxDecoration(
             color: Colors.transparent,
-            borderRadius: BorderRadius.circular(2),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: selected
                   ? Colors.white.withOpacity(.35)
@@ -1214,12 +1815,14 @@ class _CleanSettingChoice extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           height: 36,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: selected
                   ? Colors.white.withOpacity(.35)
@@ -1490,7 +2093,7 @@ class _SettingsLine extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(.018),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white.withOpacity(.065)),
       ),
       child: Row(
@@ -1535,41 +2138,44 @@ Future<void> showNovelHostProfileSheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  await controller.refreshCharacterStatus();
-  if (!context.mounted) return;
+  // 顶部主角头像连续点击时，只允许一个主角档案存在。
+  await _runNovelPageOnce('character-profile', () async {
+    await controller.refreshCharacterStatus();
+    if (!context.mounted) return;
 
-  final host = controller.protagonist;
+    final host = controller.protagonist;
 
-  // 主角档案与右侧“偏好设置”使用同一套抽屉容器：
-  // 直角、暗色透明毛玻璃、主背景只压暗、不做全屏模糊。
-  await _showNovelEndDrawer<void>(
-    context,
-    child: _SheetScaffold(
-      title: '主角档案',
-      subtitle: '当前身份与故事状态',
-      child: _CharacterProfileBody(
-        controller: controller,
-        character: host,
-        fallbackName: controller.protagonistName,
-        condition: controller.protagonistCondition,
-        isHostProfile: true,
+    await _showNovelEndDrawer<void>(
+      context,
+      child: _SheetScaffold(
+        title: '主角档案',
+        subtitle: '当前身份与故事状态',
+        child: _CharacterProfileBody(
+          controller: controller,
+          character: host,
+          fallbackName: controller.protagonistName,
+          condition: controller.protagonistCondition,
+          isHostProfile: true,
+        ),
       ),
-    ),
-  );
+    );
+  });
 }
 
 Future<void> showNovelCharactersSheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  // 先进入角色页，再在页面首帧后刷新实时角色状态。
-  await _showNovelArchivePage<void>(
-    context,
-    child: _ArchivePageScaffold(
-      title: '角色档案',
-      child: _CharactersPanel(controller: controller),
-    ),
-  );
+  await _runNovelPageOnce('characters', () async {
+    // 先进入角色页，再在页面首帧后刷新实时角色状态。
+    await _showNovelArchivePage<void>(
+      context,
+      child: _ArchivePageScaffold(
+        title: '角色档案',
+        child: _CharactersPanel(controller: controller),
+      ),
+    );
+  });
 }
 
 
@@ -1638,7 +2244,7 @@ class _CharactersPanelState extends State<_CharactersPanel> {
         });
 
         if (characters.isEmpty) {
-          return _EmptyState(text: loading ? '正在整理角色档案…' : '还没有角色资料');
+          return _ArchiveEmptyState(text: loading ? '正在整理角色档案…' : '还没有角色资料');
         }
 
         final closeCount = characters.where(_isClose).length;
@@ -1657,14 +2263,14 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                     selected: filter == 0,
                     onTap: () => setState(() => filter = 0),
                   ),
-                  const SizedBox(width: 24),
+                  const SizedBox(width: 8),
                   _ArchiveTopTab(
                     label: '亲密',
                     count: closeCount,
                     selected: filter == 1,
                     onTap: () => setState(() => filter = 1),
                   ),
-                  const SizedBox(width: 24),
+                  const SizedBox(width: 8),
                   _ArchiveTopTab(
                     label: '普通',
                     count: normalCount,
@@ -1675,25 +2281,13 @@ class _CharactersPanelState extends State<_CharactersPanel> {
               ),
             ),
             const SizedBox(height: 2),
-            if (loading)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: const LinearProgressIndicator(
-                    minHeight: 2,
-                    backgroundColor: Colors.transparent,
-                    color: NovelPalette.accent,
-                  ),
-                ),
-              ),
             Expanded(
               child: filtered.isEmpty
-                  ? const _EmptyState(text: '当前筛选下暂无角色')
+                  ? const _ArchiveEmptyState(text: '当前筛选下暂无角色')
                   : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(18, 14, 18, 110),
+                      padding: const EdgeInsets.fromLTRB(18, 12, 18, 40),
                       itemCount: filtered.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 14),
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         final c = filtered[index];
                         return _ArchiveCharacterCard(
@@ -1730,32 +2324,42 @@ class _ArchiveTopTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? NovelPalette.text : NovelPalette.muted.withOpacity(.90);
     return Material(
-      color: Colors.transparent,
+      color: selected ? const Color(0xFF252525) : Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
       child: InkWell(
         onTap: onTap,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 13.8,
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected
+                      ? const Color(0xFFEDEDED)
+                      : const Color(0xFF8C8C8C),
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
               ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              '$count',
-              style: TextStyle(
-                color: color,
-                fontSize: 12.5,
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-              ),
-            ),
-          ],
+              if (count > 0) ...<Widget>[
+                const SizedBox(width: 5),
+                Text(
+                  '$count',
+                  style: TextStyle(
+                    color: selected
+                        ? const Color(0xFFB6B6B6)
+                        : const Color(0xFF6F6F6F),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -1778,117 +2382,106 @@ class _ArchiveCharacterCard extends StatelessWidget {
     final fallbackAsset = character.gender.trim() == '男'
         ? 'assets/images/portrait_male.png'
         : 'assets/images/portrait_female.webp';
-    final relationLabel = character.isMain ? '主角' : (character.affection >= 60 ? '亲密' : '普通');
+    final relationLabel = character.isMain
+        ? '主角'
+        : (character.affection >= 60 ? '亲密' : '普通');
 
     return Material(
-      color: Colors.transparent,
+      color: const Color(0xFF1D1D1D),
+      borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(.025),
-            borderRadius: BorderRadius.circular(7),
-          ),
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
               Container(
-                width: 88,
-                height: 122,
+                width: 68,
+                height: 88,
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.28),
-                  borderRadius: BorderRadius.circular(8),
+                  color: const Color(0xFF242424),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: NovelArtwork(
-                  url: character.avatarUrl.isNotEmpty ? character.avatarUrl : character.portraitUrl,
+                  url: character.avatarUrl.isNotEmpty
+                      ? character.avatarUrl
+                      : character.portraitUrl,
                   assetCandidates: <String>[fallbackAsset],
                   fit: BoxFit.cover,
                   fallbackText: character.name,
                   fallbackIcon: Icons.person_outline_rounded,
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 14),
               Expanded(
-                child: SizedBox(
-                  height: 122,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Expanded(
-                            child: Text(
-                              character.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: NovelPalette.text,
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Icon(
-                            Icons.open_in_full_rounded,
-                            size: 16,
-                            color: Colors.white.withOpacity(.84),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: Text(
-                          summary,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: NovelPalette.text.withOpacity(.76),
-                            fontSize: 11.8,
-                            height: 1.58,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: <Widget>[
-                          Text(
-                            '关系： ${character.affection}',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            character.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: NovelPalette.text,
-                              fontSize: 12.2,
+                              color: Color(0xFFF0F2EE),
+                              fontSize: 15,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
-                          const Spacer(),
-                          Container(
-                            constraints: const BoxConstraints(minWidth: 86),
-                            height: 32,
-                            alignment: Alignment.center,
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(.10),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              relationLabel,
-                              style: const TextStyle(
-                                color: NovelPalette.text,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                              ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF292929),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            relationLabel,
+                            style: const TextStyle(
+                              color: Color(0xFF9FA89D),
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      summary,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFFA2AAA0),
+                        fontSize: 11.2,
+                        height: 1.5,
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 9),
+                    Text(
+                      '羁绊 ${character.affection}',
+                      style: const TextStyle(
+                        color: Color(0xFF80907D),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFF6F776E),
+                size: 18,
               ),
             ],
           ),
@@ -1903,30 +2496,35 @@ Future<void> showNovelNpcProfileSheet(
   NovelGameController controller,
   NovelCharacter character,
 ) async {
-  await controller.refreshCharacterStatus();
-  if (!context.mounted) return;
+  await _runNovelPageOnce('character-profile', () async {
+    await controller.refreshCharacterStatus();
+    if (!context.mounted) return;
 
-  var current = character;
-  for (final item in controller.scenario?.characters.values ?? const <NovelCharacter>[]) {
-    if ((character.id.isNotEmpty && item.id == character.id) || item.name == character.name) {
-      current = item;
-      break;
+    var current = character;
+    for (final item
+        in controller.scenario?.characters.values ?? const <NovelCharacter>[]) {
+      if ((character.id.isNotEmpty && item.id == character.id) ||
+          item.name == character.name) {
+        current = item;
+        break;
+      }
     }
-  }
-  final identity = stringValue(current.status['identity']);
-  await _showNovelArchivePage<void>(
-    context,
-    child: _ArchivePageScaffold(
-      title: current.isMain ? '主角档案' : '角色档案',
-      child: _CharacterProfileBody(
-        controller: controller,
-        character: current,
-        fallbackName: current.name,
-        condition: identity,
-        isHostProfile: current.isMain,
+
+    final identity = stringValue(current.status['identity']);
+    await _showNovelArchivePage<void>(
+      context,
+      child: _ArchivePageScaffold(
+        title: current.isMain ? '主角档案' : '角色档案',
+        child: _CharacterProfileBody(
+          controller: controller,
+          character: current,
+          fallbackName: current.name,
+          condition: identity,
+          isHostProfile: current.isMain,
+        ),
       ),
-    ),
-  );
+    );
+  });
 }
 
 class _CharacterProfileBody extends StatelessWidget {
@@ -2015,8 +2613,8 @@ class _CharacterProfileBody extends StatelessWidget {
               width: 70,
               height: 70,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(5),
-                color: Colors.white.withOpacity(.035),
+                borderRadius: BorderRadius.circular(14),
+                color: const Color(0xFF202520),
               ),
               clipBehavior: Clip.antiAlias,
               child: NovelArtwork(
@@ -2040,7 +2638,6 @@ class _CharacterProfileBody extends StatelessWidget {
                       color: NovelPalette.text,
                       fontSize: 19,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: .25,
                     ),
                   ),
                   const SizedBox(height: 7),
@@ -2189,7 +2786,6 @@ class _ProfileLineSection extends StatelessWidget {
               color: NovelPalette.muted.withOpacity(.90),
               fontSize: 10.8,
               fontWeight: FontWeight.w700,
-              letterSpacing: .55,
             ),
           ),
           const SizedBox(height: 9),
@@ -2552,14 +3148,14 @@ class _InlineCharacterVisualEditorState
               color: Colors.transparent,
               child: InkWell(
                 onTap: (_generating || _saving) ? null : _pickLocalImage,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(8),
                 child: Container(
                   width: 180,
                   height: 240,
                   clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(.035),
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(
                       color: Colors.white.withOpacity(.06),
                     ),
@@ -2653,7 +3249,7 @@ class _InlineCharacterVisualEditorState
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(.028),
-              borderRadius: BorderRadius.circular(5),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.white.withOpacity(.055)),
             ),
             child: TextField(
@@ -2706,7 +3302,7 @@ class _InlineCharacterVisualEditorState
                 disabledForegroundColor: NovelPalette.muted,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(5),
+                  borderRadius: BorderRadius.circular(8),
                 ),
               ),
               onPressed: (_generating || _saving) ? null : _generatePortrait,
@@ -2740,7 +3336,7 @@ class _InlineCharacterVisualEditorState
                   disabledBackgroundColor: primaryGreen.withOpacity(.28),
                   elevation: 0,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(5),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                 ),
                 onPressed: (_generating || _saving) ? null : _savePortrait,
@@ -2788,10 +3384,10 @@ class _VisualStyleChoice extends StatelessWidget {
           : disabled
               ? Colors.white.withOpacity(.015)
               : Colors.white.withOpacity(.025),
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(8),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: 14,
@@ -2839,10 +3435,10 @@ class _ProfileSoftAction extends StatelessWidget {
       color: primary
           ? NovelPalette.accent.withOpacity(enabled ? 1 : .25)
           : Colors.white.withOpacity(enabled ? .055 : .025),
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(8),
         child: SizedBox(
           height: 40,
           child: Row(
@@ -3158,7 +3754,7 @@ Future<void> showNovelPortraitSheet(
                     Row(
                       children: <Widget>[
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(8),
                           child: SizedBox(
                             width: 34,
                             height: 34,
@@ -3204,7 +3800,7 @@ Future<void> showNovelPortraitSheet(
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(.022),
-                        borderRadius: BorderRadius.circular(5),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: Stack(
                         fit: StackFit.expand,
@@ -3314,7 +3910,7 @@ Future<void> showNovelPortraitSheet(
                       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(.024),
-                        borderRadius: BorderRadius.circular(5),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: TextField(
                         controller: promptController,
@@ -3412,14 +4008,16 @@ Future<void> showNovelJourneySheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  // 经历页立即打开；真正的数据请求放到页面首帧之后。
-  await _showNovelArchivePage<void>(
-    context,
-    child: _ArchivePageScaffold(
-      title: '经历',
-      child: _JourneyPanel(controller: controller),
-    ),
-  );
+  await _runNovelPageOnce('journey', () async {
+    // 经历页立即打开；真正的数据请求放到页面首帧之后。
+    await _showNovelArchivePage<void>(
+      context,
+      child: _ArchivePageScaffold(
+        title: '经历',
+        child: _JourneyPanel(controller: controller),
+      ),
+    );
+  });
 }
 
 Future<bool> showNovelRevertDialog(
@@ -3455,7 +4053,7 @@ Future<bool> showNovelRevertDialog(
                       foregroundColor: NovelPalette.muted,
                       side: BorderSide(color: Colors.white.withOpacity(.08)),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(5),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                     ),
                     onPressed: () => Navigator.of(context).pop(false),
@@ -3469,7 +4067,7 @@ Future<bool> showNovelRevertDialog(
                       backgroundColor: NovelPalette.accent,
                       foregroundColor: NovelPalette.accentDark,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(5),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                     ),
                     onPressed: () => Navigator.of(context).pop(true),
@@ -3489,8 +4087,9 @@ Future<bool> showNovelRevertDialog(
 
 Future<bool> showNovelCharacterSetupDialog(
   BuildContext context,
-  NovelGameController controller,
-) async {
+  NovelGameController controller, {
+  bool previewOnly = false,
+}) async {
   final host = controller.protagonist;
   final nameController = TextEditingController(text: host?.name ?? '');
   final persona = host?.persona ?? const <String, dynamic>{};
@@ -3505,6 +4104,15 @@ Future<bool> showNovelCharacterSetupDialog(
   final appearance = stringValue(
     persona['portrait_prompt'] ?? persona['appearance'] ?? persona['identity'],
   );
+
+  final normalizedGender = gender.trim().toLowerCase();
+  final isFemale = gender.contains('女') ||
+      normalizedGender == 'female' ||
+      normalizedGender == 'f' ||
+      normalizedGender.contains('female');
+  final setupAvatarAsset = isFemale
+      ? 'assets/images/female.webp'
+      : 'assets/images/male.webp';
 
   var submitting = false;
 
@@ -3529,15 +4137,15 @@ Future<bool> showNovelCharacterSetupDialog(
                       padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
                       decoration: BoxDecoration(
                         color: const Color(0xFF161616),
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(10), // 从 4 改为 10，更柔和
                         border: Border.all(
-                          color: Colors.white.withOpacity(.10),
+                          color: Colors.white.withOpacity(.08), // 边框稍微变淡
                         ),
                         boxShadow: <BoxShadow>[
                           BoxShadow(
-                            color: Colors.black.withOpacity(.42),
+                            color: Colors.black.withOpacity(.30), // 阴影减轻压迫感
                             blurRadius: 24,
-                            offset: const Offset(0, 12),
+                            offset: const Offset(0, 10),
                           ),
                         ],
                       ),
@@ -3548,8 +4156,8 @@ Future<bool> showNovelCharacterSetupDialog(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: <Widget>[
                               Container(
-                                width: 62,
-                                height: 62,
+                                width: 54, // 头像尺寸从 62 调小到 54，削弱对立感
+                                height: 54,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   border: Border.all(
@@ -3558,9 +4166,10 @@ Future<bool> showNovelCharacterSetupDialog(
                                 ),
                                 clipBehavior: Clip.antiAlias,
                                 child: NovelArtwork(
-                                  url: host?.avatarUrl.isNotEmpty == true
-                                      ? host!.avatarUrl
-                                      : host?.portraitUrl ?? '',
+                                  // 首次确认角色时不使用远程头像：
+                                  // 始终按剧本主角性别显示本地 male.webp / female.webp。
+                                  url: '',
+                                  assetCandidates: <String>[setupAvatarAsset],
                                   fit: BoxFit.cover,
                                   fallbackText: host?.name ?? '你',
                                   fallbackIcon: Icons.person_outline_rounded,
@@ -3575,17 +4184,17 @@ Future<bool> showNovelCharacterSetupDialog(
                                       '确认你的角色',
                                       style: TextStyle(
                                         color: NovelPalette.text,
-                                        fontSize: 19,
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: .4,
+                                        fontSize: 17, // 从 19 调小到 17
+                                        fontWeight: FontWeight.w700, // 从 800 超粗体改为 700
+                                        letterSpacing: .2,
                                       ),
                                     ),
                                     const SizedBox(height: 5),
                                     Text(
                                       '这是你在这个世界中的身份，确认后即可进入故事。',
                                       style: TextStyle(
-                                        color: NovelPalette.muted.withOpacity(.86),
-                                        fontSize: 11.5,
+                                        color: NovelPalette.muted.withOpacity(.75), // 从 .86 调低
+                                        fontSize: 11, // 从 11.5 调小
                                         height: 1.45,
                                       ),
                                     ),
@@ -3627,9 +4236,9 @@ Future<bool> showNovelCharacterSetupDialog(
                           const Text(
                             '角色姓名',
                             style: TextStyle(
-                              color: NovelPalette.text,
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
+                              color: NovelPalette.muted, // 从 text 换成柔和的 muted
+                              fontSize: 11, // 标签再调小一点点
+                              fontWeight: FontWeight.w600, // 从 700 减到 600
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -3640,8 +4249,8 @@ Future<bool> showNovelCharacterSetupDialog(
                             cursorColor: NovelPalette.accent,
                             style: const TextStyle(
                               color: NovelPalette.text,
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 13, // 从 14.5 减到 13
+                              fontWeight: FontWeight.w500, // 从 600 减到 500
                             ),
                             decoration: InputDecoration(
                               counterText: '',
@@ -3652,27 +4261,27 @@ Future<bool> showNovelCharacterSetupDialog(
                                 color: NovelPalette.muted.withOpacity(.55),
                               ),
                               filled: true,
-                              fillColor: Colors.white.withOpacity(.035),
+                              fillColor: Colors.white.withOpacity(.02), // 降低背景对比度
                               contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 13,
-                                vertical: 13,
+                                horizontal: 12,
+                                vertical: 10, // 把输入框压扁，显得纤细
                               ),
                               enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(4),
+                                borderRadius: BorderRadius.circular(8), // 微圆角
                                 borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(.09),
+                                  color: Colors.white.withOpacity(.06),
                                 ),
                               ),
                               focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(4),
+                                borderRadius: BorderRadius.circular(8),
                                 borderSide: BorderSide(
                                   color: NovelPalette.accent.withOpacity(.62),
                                 ),
                               ),
                               disabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(4),
+                                borderRadius: BorderRadius.circular(8),
                                 borderSide: BorderSide(
-                                  color: Colors.white.withOpacity(.06),
+                                  color: Colors.white.withOpacity(.04),
                                 ),
                               ),
                             ),
@@ -3681,21 +4290,21 @@ Future<bool> showNovelCharacterSetupDialog(
                           const Text(
                             '角色背景',
                             style: TextStyle(
-                              color: NovelPalette.text,
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
+                              color: NovelPalette.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                           const SizedBox(height: 8),
                           Container(
                             constraints: const BoxConstraints(maxHeight: 170),
                             width: double.infinity,
-                            padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10), // 内边距压细
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(.025),
-                              borderRadius: BorderRadius.circular(4),
+                              color: Colors.white.withOpacity(.02), // 降低背景色对比
+                              borderRadius: BorderRadius.circular(8), // 改成 8 统一圆角
                               border: Border.all(
-                                color: Colors.white.withOpacity(.07),
+                                color: Colors.white.withOpacity(.06),
                               ),
                             ),
                             child: SingleChildScrollView(
@@ -3704,7 +4313,7 @@ Future<bool> showNovelCharacterSetupDialog(
                                 background,
                                 style: TextStyle(
                                   color: NovelPalette.text.withOpacity(.70),
-                                  fontSize: 12,
+                                  fontSize: 11.5, // 稍微缩小字号
                                   height: 1.65,
                                 ),
                               ),
@@ -3713,7 +4322,7 @@ Future<bool> showNovelCharacterSetupDialog(
                           const SizedBox(height: 20),
                           SizedBox(
                             width: double.infinity,
-                            height: 46,
+                            height: 42, // 主按钮从 46 压低到 42，变得纤长精致
                             child: FilledButton(
                               style: FilledButton.styleFrom(
                                 backgroundColor: NovelPalette.accent,
@@ -3721,12 +4330,16 @@ Future<bool> showNovelCharacterSetupDialog(
                                 disabledBackgroundColor:
                                     NovelPalette.accent.withOpacity(.45),
                                 shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(4),
+                                  borderRadius: BorderRadius.circular(8), // 统一 8px
                                 ),
                               ),
                               onPressed: submitting
                                   ? null
                                   : () async {
+                                      if (previewOnly) {
+                                        Navigator.of(dialogContext).pop(false);
+                                        return;
+                                      }
                                       final name = nameController.text.trim();
                                       if (name.isEmpty) return;
                                       setDialogState(() => submitting = true);
@@ -3759,8 +4372,8 @@ Future<bool> showNovelCharacterSetupDialog(
                                     },
                               child: submitting
                                   ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
+                                      width: 16, // loading 图标缩小
+                                      height: 16,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
                                         color: NovelPalette.accentDark,
@@ -3769,9 +4382,9 @@ Future<bool> showNovelCharacterSetupDialog(
                                   : const Text(
                                       '进入故事',
                                       style: TextStyle(
-                                        fontSize: 13.5,
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: .5,
+                                        fontSize: 13, // 从 13.5 降低
+                                        fontWeight: FontWeight.w700, // 从超粗的 800 降低到 700
+                                        letterSpacing: 1.0, // 加一点字间距提升透气感
                                       ),
                                     ),
                             ),
@@ -3815,16 +4428,16 @@ class _CharacterSetupMeta extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(.035),
-        borderRadius: BorderRadius.circular(3),
-        border: Border.all(color: Colors.white.withOpacity(.07)),
+        color: Colors.white.withOpacity(.025), // 稍微压暗背景
+        borderRadius: BorderRadius.circular(6), // 匹配总体微圆角风格
+        border: Border.all(color: Colors.white.withOpacity(.06)),
       ),
       child: Text(
         text,
         style: TextStyle(
-          color: NovelPalette.muted.withOpacity(.92),
+          color: NovelPalette.muted.withOpacity(.82), // 稍微降低字体对比度
           fontSize: 10.5,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500, // 从 600 改为更柔和的 500
         ),
       ),
     );
@@ -3840,7 +4453,7 @@ class _IdentityTag extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(.035),
-        borderRadius: BorderRadius.circular(5),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white.withOpacity(.065)),
       ),
       child: Text(
@@ -3857,8 +4470,9 @@ class _IdentityTag extends StatelessWidget {
 
 Future<void> showNovelOpeningDialog(
   BuildContext context,
-  NovelGameController controller,
-) async {
+  NovelGameController controller, {
+  bool previewOnly = false,
+}) async {
   await showGeneralDialog<void>(
     context: context,
     barrierDismissible: false,
@@ -3866,7 +4480,10 @@ Future<void> showNovelOpeningDialog(
     barrierColor: Colors.black,
     transitionDuration: const Duration(milliseconds: 1200),
     pageBuilder: (context, animation, secondaryAnimation) {
-      return _NovelOpeningExperience(controller: controller);
+      return _NovelOpeningExperience(
+        controller: controller,
+        previewOnly: previewOnly,
+      );
     },
     transitionBuilder: (context, animation, secondaryAnimation, child) {
       return FadeTransition(
@@ -3878,8 +4495,12 @@ Future<void> showNovelOpeningDialog(
 }
 
 class _NovelOpeningExperience extends StatefulWidget {
-  const _NovelOpeningExperience({required this.controller});
+  const _NovelOpeningExperience({
+    required this.controller,
+    required this.previewOnly,
+  });
   final NovelGameController controller;
+  final bool previewOnly;
 
   @override
   State<_NovelOpeningExperience> createState() => _NovelOpeningExperienceState();
@@ -3937,7 +4558,9 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
     }
     _closing = true;
     Navigator.of(context).pop();
-    unawaited(widget.controller.startNarrative());
+    if (!widget.previewOnly) {
+      unawaited(widget.controller.startNarrative());
+    }
   }
 
   @override
@@ -4099,90 +4722,160 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
 
 Future<void> showNovelFateRevertDialog(
   BuildContext context,
-  NovelGameController controller,
-) async {
-  final data = controller.fateRevert;
-  await _showNovelSheet<void>(
-    context,
-    heightFactor: .48,
-    child: _SheetScaffold(
-      title: '命运回溯',
-      subtitle: '死亡并非终点',
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Text(
-              data.message.isEmpty
-                  ? '命运将你送回故事仍可改变之处。'
-                  : data.message,
-              style: const TextStyle(
-                color: NovelPalette.muted,
-                fontSize: 12,
-                height: 1.65,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(.018),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Colors.white.withOpacity(.07)),
-              ),
-              child: Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      '死亡次数  ${data.deathCount}',
-                      style: const TextStyle(
-                        color: NovelPalette.text,
-                        fontSize: 11.5,
+  NovelGameController controller, {
+  bool previewOnly = false,
+  FateRevertData? previewData,
+}) async {
+  final data = previewData ?? controller.fateRevert;
+  // 使用一种苍白、冰冷且易碎的紫色，更符合意识消散的氛围
+  final glowColor = const Color(0xFFA89CB8);
+
+  await showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    barrierLabel: '意识沉沦',
+    // 背景压得更暗一些，模拟死亡时的视觉剥夺
+    barrierColor: Colors.black.withOpacity(.75),
+    // 死亡的转场时间应该拉长，给人沉重感
+    transitionDuration: const Duration(milliseconds: 1200),
+    pageBuilder: (dialogContext, _, __) {
+      return Material(
+        color: Colors.transparent,
+        child: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: ColoredBox(
+              color: Colors.transparent,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      // 使用模糊/消散意象的图标
+                      Icon(
+                        Icons.lens_blur_rounded,
+                        size: 42,
+                        color: Colors.white.withOpacity(.78),
+                        shadows: <Shadow>[
+                          Shadow(color: glowColor.withOpacity(.6), blurRadius: 24)
+                        ],
                       ),
-                    ),
-                  ),
-                  Text(
-                    '扣除 ${data.scoreDeduct}',
-                    style: const TextStyle(
-                      color: NovelPalette.danger,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Spacer(),
-            SizedBox(
-              height: 42,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: NovelPalette.accent,
-                  foregroundColor: NovelPalette.accentDark,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(5),
+                      const SizedBox(height: 18),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Container(width: 48, height: 1, color: glowColor.withOpacity(.2)),
+                          const SizedBox(width: 14),
+                          Text(
+                            '意 识 沉 沦',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(.65),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w400,
+                              letterSpacing: 6.0,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(width: 48, height: 1, color: glowColor.withOpacity(.2)),
+                        ],
+                      ),
+                      const SizedBox(height: 32),
+                      Text(
+                        data.message.isEmpty ? '你的意识在无边的黑暗中逐渐涣散……' : data.message,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: NovelPalette.text.withOpacity(.85),
+                          fontSize: 15.5,
+                          height: 1.8,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 1.2,
+                          shadows: const <Shadow>[
+                            Shadow(color: Colors.black, blurRadius: 8, offset: Offset(0, 2))
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      // 将游戏数据（死亡次数、扣分）做弱化处理
+                      Text(
+                        '死亡次数 ${data.deathCount}   /   法则损耗 ${data.scoreDeduct}',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.38),
+                          fontSize: 10.5,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 72),
+                      // 幽灵感交互按钮，去掉现代UI的实心背景和圆角
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.of(dialogContext).pop();
+                            if (!previewOnly) {
+                              controller.acceptFateRevert();
+                            }
+                          },
+                          splashColor: glowColor.withOpacity(.15),
+                          highlightColor: Colors.transparent,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(.3),
+                              border: Border.all(color: glowColor.withOpacity(.25), width: 1),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Icon(
+                                  Icons.remove_red_eye_outlined,
+                                  size: 16,
+                                  color: glowColor.withOpacity(.75),
+                                ),
+                                const SizedBox(width: 14),
+                                Text(
+                                  '睁 开 双 眼',
+                                  style: TextStyle(
+                                    color: glowColor.withOpacity(.9),
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 4.0,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  controller.acceptFateRevert();
-                },
-                child: const Text('接受命运'),
               ),
             ),
-          ],
+          ),
         ),
-      ),
-    ),
+      );
+    },
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      // 改为缓慢浮现+轻微下坠的动画，不再使用弹簧效果
+      final curvedAnimation = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      return FadeTransition(
+        opacity: curvedAnimation,
+        child: SlideTransition(
+          position: Tween<Offset>(begin: const Offset(0, -0.05), end: Offset.zero).animate(curvedAnimation),
+          child: child,
+        ),
+      );
+    },
   );
 }
 
 Future<void> showDefaultNovelEnding(
   BuildContext context,
-  NovelGameController controller,
-) async {
-  final ending = controller.ending;
+  NovelGameController controller, {
+  NovelEnding? endingOverride,
+}) async {
+  final ending = endingOverride ?? controller.ending;
   await Navigator.of(context).push<void>(
     PageRouteBuilder<void>(
       transitionDuration: const Duration(milliseconds: 800),
@@ -4358,81 +5051,6 @@ class _SheetFrame extends StatelessWidget {
   }
 }
 
-
-class _ArchivePageScaffold extends StatelessWidget {
-  const _ArchivePageScaffold({
-    required this.title,
-    required this.child,
-  });
-
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: <Widget>[
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 820),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-              child: SizedBox(
-                height: 42,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: <Widget>[
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () => Navigator.of(context).pop(),
-                          borderRadius: BorderRadius.circular(3),
-                          child: const SizedBox(
-                            width: 38,
-                            height: 38,
-                            child: Icon(
-                              Icons.arrow_back_ios_new_rounded,
-                              size: 18,
-                              color: NovelPalette.text,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: NovelPalette.text,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: .3,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        Expanded(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 820),
-              child: SizedBox(
-                width: double.infinity,
-                height: double.infinity,
-                child: child,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _SheetScaffold extends StatelessWidget {
   const _SheetScaffold({
     required this.title,
@@ -4513,7 +5131,7 @@ class _PanelCloseButton extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(8),
         child: const SizedBox(
           width: 32,
           height: 32,
@@ -4546,7 +5164,7 @@ class _MiniTabs extends StatelessWidget {
       padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(.025),
-        borderRadius: BorderRadius.circular(5),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white.withOpacity(.07)),
       ),
       child: Row(
@@ -4557,9 +5175,9 @@ class _MiniTabs extends StatelessWidget {
             color: active
                 ? NovelPalette.accent.withOpacity(.12)
                 : Colors.transparent,
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: BorderRadius.circular(6),
             child: InkWell(
-              borderRadius: BorderRadius.circular(3),
+              borderRadius: BorderRadius.circular(6),
               onTap: () => onChanged(index),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -4628,7 +5246,7 @@ class _ActionTile extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
@@ -4636,7 +5254,7 @@ class _ActionTile extends StatelessWidget {
             color: highlighted
                 ? NovelPalette.accent.withOpacity(.055)
                 : Colors.white.withOpacity(.018),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: highlighted
                   ? NovelPalette.accent.withOpacity(.25)
@@ -4653,7 +5271,7 @@ class _ActionTile extends StatelessWidget {
                   color: highlighted
                       ? NovelPalette.accent.withOpacity(.10)
                       : Colors.white.withOpacity(.025),
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(8),
                   border: Border.all(
                     color: highlighted
                         ? NovelPalette.accent.withOpacity(.16)
@@ -4741,15 +5359,8 @@ class _ItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
-      decoration: BoxDecoration(
-        color: selected
-            ? Colors.white.withOpacity(.055)
-            : Colors.white.withOpacity(.025),
-        borderRadius: BorderRadius.circular(7),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: <Widget>[
           Stack(
@@ -4759,8 +5370,8 @@ class _ItemCard extends StatelessWidget {
                 width: 50,
                 height: 50,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.035),
-                  borderRadius: BorderRadius.circular(6),
+                  color: Colors.white.withOpacity(.02),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: NovelArtwork(
@@ -4782,16 +5393,16 @@ class _ItemCard extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 5),
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(.10),
-                      borderRadius: BorderRadius.circular(4),
+                      color: Colors.black.withOpacity(.8),
+                      border: Border.all(color: Colors.white.withOpacity(0.2)),
                     ),
                     child: Text(
                       badge,
                       maxLines: 1,
                       style: TextStyle(
-                        color: NovelPalette.text,
+                        color: Colors.white.withOpacity(0.9),
                         fontSize: 8.5,
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w400,
                       ),
                     ),
                   ),
@@ -4807,21 +5418,22 @@ class _ItemCard extends StatelessWidget {
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: NovelPalette.text,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.9),
                     fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 1.5,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 8),
                 Text(
                   description.trim().isEmpty ? _itemTypeLabel(itemType) : description,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: NovelPalette.muted,
-                    fontSize: 10.7,
-                    height: 1.45,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.5),
+                    fontSize: 11,
+                    height: 1.6,
                   ),
                 ),
               ],
@@ -4830,42 +5442,33 @@ class _ItemCard extends StatelessWidget {
           if (actionText.isNotEmpty) ...<Widget>[
             const SizedBox(width: 10),
             Material(
-              color: Colors.white.withOpacity(.09),
-              borderRadius: BorderRadius.circular(6),
+              color: Colors.transparent,
               child: InkWell(
                 onTap: loading ? null : onAction,
-                borderRadius: BorderRadius.circular(10),
                 child: Container(
-                  constraints: const BoxConstraints(minWidth: 62),
-                  height: 36,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: showPointIcon
-                          ? Colors.white.withOpacity(.09)
-                          : NovelPalette.accent.withOpacity(.19),
-                    ),
+                    border: Border.all(color: Colors.white.withOpacity(.2)), // 幽灵边框
                   ),
                   child: loading
                       ? const SizedBox.square(
                           dimension: 14,
-                          child: CircularProgressIndicator(strokeWidth: 1.8, color: NovelPalette.accent),
+                          child: CircularProgressIndicator(strokeWidth: 1.0, color: Colors.white),
                         )
                       : Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             if (showPointIcon) ...<Widget>[
-                              const Icon(Icons.star_rounded, size: 14, color: Color(0xFFF4C542)),
+                              const Icon(Icons.star_rounded, size: 12, color: Colors.white70),
                               const SizedBox(width: 4),
                             ],
                             Text(
                               actionText,
                               style: TextStyle(
-                                color: showPointIcon ? NovelPalette.text : NovelPalette.accent,
+                                color: Colors.white.withOpacity(0.8),
                                 fontSize: 11,
-                                fontWeight: FontWeight.w700,
+                                fontWeight: FontWeight.w400,
+                                letterSpacing: 2.0,
                               ),
                             ),
                           ],
@@ -4926,7 +5529,7 @@ class _InfoPill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(.018),
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: Colors.white.withOpacity(.07)),
       ),
       child: Text(
@@ -4954,7 +5557,7 @@ class _ProfileHeader extends StatelessWidget {
           width: 58,
           height: 58,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(5),
+            borderRadius: BorderRadius.circular(8),
             color: Colors.white.withOpacity(.025),
             border: Border.all(color: Colors.white.withOpacity(.08)),
           ),
@@ -5011,27 +5614,21 @@ class _ProfileSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(.016),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.white.withOpacity(.065)),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            title,
-            style: const TextStyle(
-              color: NovelPalette.muted,
+            title.split('').join(' '), // 标题拉开字间距
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.3),
               fontSize: 10,
-              letterSpacing: .6,
-              fontWeight: FontWeight.w600,
+              letterSpacing: 4.0,
+              fontWeight: FontWeight.w400,
             ),
           ),
-          const SizedBox(height: 9),
+          const SizedBox(height: 16),
           child,
         ],
       ),
@@ -5054,12 +5651,12 @@ class _CharacterCard extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(7),
+        borderRadius: BorderRadius.circular(8),
         child: Container(
           padding: const EdgeInsets.fromLTRB(8, 9, 8, 9),
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(.016),
-            borderRadius: BorderRadius.circular(7),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(color: Colors.white.withOpacity(.065)),
           ),
           child: Row(
@@ -5068,7 +5665,7 @@ class _CharacterCard extends StatelessWidget {
                 width: 54,
                 height: 54,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(5),
+                  borderRadius: BorderRadius.circular(8),
                   border: Border.all(
                     color: character.isMain
                         ? NovelPalette.accent.withOpacity(.28)
@@ -5216,18 +5813,6 @@ class _JourneyPanelState extends State<_JourneyPanel> {
       builder: (context, _) {
         return Column(
           children: <Widget>[
-            if (loading)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 8, 18, 0),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: const LinearProgressIndicator(
-                    minHeight: 2,
-                    backgroundColor: Colors.transparent,
-                    color: NovelPalette.accent,
-                  ),
-                ),
-              ),
             Expanded(
               child: _JourneyBody(
                 data: widget.controller.journey,
@@ -5349,43 +5934,29 @@ class _JourneyBody extends StatelessWidget {
     if (!hasRealContent) {
       return RefreshIndicator(
         onRefresh: onRefresh,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(24, 80, 24, 32),
-          children: <Widget>[
-            Center(
-              child: Column(
-                children: <Widget>[
-                  Icon(
-                    Icons.auto_stories_outlined,
-                    size: 30,
-                    color: NovelPalette.muted.withOpacity(.55),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    loading ? '正在翻阅故事…' : '故事刚刚开始',
-                    style: const TextStyle(
-                      color: NovelPalette.text,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (!loading) ...<Widget>[
-                    const SizedBox(height: 7),
-                    const Text(
-                      '新的经历会随着剧情推进记录在这里',
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              children: <Widget>[
+                SizedBox(
+                  height: constraints.maxHeight,
+                  child: Center(
+                    child: Text(
+                      loading ? '正在整理经历…' : '故事刚刚开始',
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: NovelPalette.muted,
-                        fontSize: 10.8,
-                        height: 1.5,
+                      style: const TextStyle(
+                        color: Color(0xFF9A9A9A),
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                  ],
-                ],
-              ),
-            ),
-          ],
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       );
     }
@@ -5394,27 +5965,31 @@ class _JourneyBody extends StatelessWidget {
       onRefresh: onRefresh,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 32),
         children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(2, 2, 2, 6),
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 15, 16, 15),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1D1D1D),
+              borderRadius: BorderRadius.circular(14),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
                   title.isEmpty ? '你的旅程' : title,
                   style: const TextStyle(
-                    color: NovelPalette.text,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
+                    color: Color(0xFFF0F2EE),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 7),
                 Text(
                   summary.isEmpty ? '故事留下的节点与记忆' : summary,
                   style: const TextStyle(
-                    color: NovelPalette.muted,
-                    fontSize: 10.8,
+                    color: Color(0xFF9CA49A),
+                    fontSize: 11.2,
                     height: 1.55,
                   ),
                 ),
@@ -5459,26 +6034,31 @@ class _JourneySectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 14),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(.025),
-        borderRadius: BorderRadius.circular(7),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(top: 22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
-            title,
-            style: const TextStyle(
-              color: NovelPalette.text,
-              fontSize: 13.5,
-              fontWeight: FontWeight.w800,
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 10),
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: Color(0xFFB5BDB3),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          ...children,
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1D1D1D),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(children: children),
+          ),
         ],
       ),
     );
@@ -5493,26 +6073,29 @@ class _JourneyBulletText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Padding(
-            padding: const EdgeInsets.only(top: 7),
+            padding: const EdgeInsets.only(top: 8),
             child: Container(
               width: 4,
               height: 4,
-              color: Colors.white.withOpacity(.55),
+              decoration: const BoxDecoration(
+                color: Color(0xFF748273),
+                shape: BoxShape.circle,
+              ),
             ),
           ),
-          const SizedBox(width: 9),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
               text,
-              style: TextStyle(
-                color: NovelPalette.text.withOpacity(.76),
-                fontSize: 11.8,
-                height: 1.58,
+              style: const TextStyle(
+                color: Color(0xFFD4D8D1),
+                fontSize: 12.2,
+                height: 1.65,
               ),
             ),
           ),
@@ -5521,6 +6104,7 @@ class _JourneyBulletText extends StatelessWidget {
     );
   }
 }
+
 
 class _JourneyHeading extends StatelessWidget {
   const _JourneyHeading(this.text);
@@ -5676,14 +6260,31 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Icon(Icons.auto_stories_outlined, color: Colors.white.withOpacity(.18), size: 38),
-          const SizedBox(height: 14),
-          Text(text, style: const TextStyle(color: NovelPalette.muted, fontSize: 12.5)),
-        ],
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 56),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 24,
+              height: 1,
+              color: Colors.white.withOpacity(.22),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              text,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withOpacity(.55),
+                fontSize: 12.5,
+                letterSpacing: 1.2,
+                height: 1.6,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -5696,11 +6297,11 @@ InputDecoration _fieldDecoration({String? label}) {
     filled: true,
     fillColor: Colors.white.withOpacity(.018),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(8),
       borderSide: BorderSide(color: Colors.white.withOpacity(.08)),
     ),
     focusedBorder: const OutlineInputBorder(
-      borderRadius: BorderRadius.all(Radius.circular(6)),
+      borderRadius: BorderRadius.all(Radius.circular(8)),
       borderSide: BorderSide(color: NovelPalette.accent, width: 1),
     ),
   );
@@ -5774,10 +6375,10 @@ class _CleanActionButton extends StatelessWidget {
       color: isPrimary
           ? primaryColor.withOpacity(enabled ? 1 : 0.4)
           : Colors.white.withOpacity(enabled ? 0.06 : 0.02),
-      borderRadius: BorderRadius.circular(5),
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(5),
+        borderRadius: BorderRadius.circular(8),
         child: SizedBox(
           height: 32, // 更纤薄的按钮
           child: Row(

@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'app_shared.dart';
@@ -20,7 +21,7 @@ class MineDialogs {
     var saving = false;
     String? error;
 
-    final result = await _show<String>(
+    final result = await _showLight<String>(
       context,
       title: '修改昵称',
       builder: (dialogContext, setState) {
@@ -37,11 +38,13 @@ class MineDialogs {
               Navigator.of(dialogContext).pop(name);
             }
           } on ApiException catch (e) {
+            if (!dialogContext.mounted) return;
             setState(() {
               saving = false;
               error = e.message;
             });
           } catch (_) {
+            if (!dialogContext.mounted) return;
             setState(() {
               saving = false;
               error = '修改失败，请稍后重试';
@@ -53,17 +56,17 @@ class MineDialogs {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _input(
+            _lightInput(
               controller: controller,
               hint: '输入新的昵称',
               autofocus: true,
             ),
             if (error != null) ...[
               const SizedBox(height: 10),
-              _error(error!),
+              _lightError(error!),
             ],
             const SizedBox(height: 20),
-            _primaryButton(
+            _lightPrimaryButton(
               label: saving ? '保存中...' : '保存',
               enabled: !saving,
               onTap: submit,
@@ -77,225 +80,187 @@ class MineDialogs {
     return result;
   }
 
-  /// 手机端头像编辑
+  /// 手机端头像编辑：使用统一的浅色主题弹窗。
   static Future<String?> editAvatar(BuildContext context) async {
     Uint8List? selectedBytes;
-    String selectedFilename = 'avatar.jpg';
+    String selectedFilename = 'avatar.webp';
     bool uploading = false;
     String? error;
 
-    return showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.68),
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            Future<void> pickImage() async {
-              if (uploading) return;
-              setSheetState(() => error = null);
-              FilePickerResult? picked;
-              try {
-                picked = await FilePicker.pickFiles(
-                  type: FileType.image,
-                  allowMultiple: false,
-                  withData: true,
-                );
-              } catch (_) {
-                return null;
-              }
-              if (picked == null || picked.files.isEmpty) return;
-              final file = picked.files.first;
-              final bytes = file.bytes;
-              if (bytes == null || bytes.isEmpty) {
-                if (!sheetContext.mounted) return;
-                setSheetState(() {
-                  error = '无法读取所选图片，请重新选择';
-                });
-                return;
-              }
-              if (!sheetContext.mounted) return;
-              setSheetState(() {
-                selectedBytes = Uint8List.fromList(bytes);
-                selectedFilename =
-                    file.name.trim().isEmpty ? 'avatar.jpg' : file.name.trim();
-                error = null;
-              });
-            }
+    return _showLight<String>(
+      context,
+      title: '更换头像',
+      builder: (dialogContext, setState) {
+        Future<void> pickImage() async {
+          if (uploading) return;
+          setState(() => error = null);
 
-            Future<void> submit() async {
-              final bytes = selectedBytes;
-              if (uploading || bytes == null || bytes.isEmpty) return;
-              setSheetState(() {
-                uploading = true;
-                error = null;
-              });
-              try {
-                final url = await MineApi.uploadAndUpdateAvatar(
-                  bytes: bytes,
-                  filename: selectedFilename,
-                );
-                if (!sheetContext.mounted) return;
-                Navigator.of(sheetContext).pop(url);
-              } on ApiException catch (e) {
-                if (!sheetContext.mounted) return;
-                setSheetState(() {
-                  uploading = false;
-                  error = e.message;
-                });
-              } catch (e) {
-                if (!sheetContext.mounted) return;
-                final message = e
-                    .toString()
-                    .replaceFirst('Exception: ', '')
-                    .replaceFirst('ApiException: ', '')
-                    .trim();
-                setSheetState(() {
-                  uploading = false;
-                  error = message.isEmpty ? '头像上传失败，请稍后重试' : message;
-                });
-              }
-            }
+          FilePickerResult? picked;
+          try {
+            picked = await FilePicker.pickFiles(
+              type: FileType.image,
+              allowMultiple: false,
+              withData: true,
+            );
+          } catch (_) {
+            return;
+          }
 
-            final media = MediaQuery.of(context);
-            final bottomPadding = media.padding.bottom;
-            final hasImage = selectedBytes != null;
+          if (picked == null || picked.files.isEmpty) return;
+          final file = picked.files.first;
+          final bytes = file.bytes;
 
-            return Container(
-              width: double.infinity,
-              padding: EdgeInsets.fromLTRB(20, 16, 20, 20 + bottomPadding),
-              decoration: BoxDecoration(
-                color: const Color(0xFF161616),
-                border: Border(
-                  top: BorderSide(color: Colors.white.withOpacity(0.12), width: 1),
+          if (bytes == null || bytes.isEmpty) {
+            if (!dialogContext.mounted) return;
+            setState(() {
+              error = '无法读取所选图片，请重新选择';
+            });
+            return;
+          }
+
+          if (!dialogContext.mounted) return;
+          setState(() {
+            selectedBytes = Uint8List.fromList(bytes);
+            selectedFilename = file.name.trim().isEmpty
+                ? 'avatar.webp'
+                : file.name.trim();
+            error = null;
+          });
+        }
+
+        Future<void> submit() async {
+          final bytes = selectedBytes;
+          if (uploading || bytes == null || bytes.isEmpty) return;
+
+          setState(() {
+            uploading = true;
+            error = null;
+          });
+
+          try {
+            final uploadBytes = selectedFilename.toLowerCase().endsWith('.webp')
+                ? bytes
+                : await _convertImageToWebp(bytes);
+            final uploadFilename = _webpFileName(selectedFilename);
+
+            final url = await MineApi.uploadAndUpdateAvatar(
+              bytes: uploadBytes,
+              filename: uploadFilename,
+            );
+            if (!dialogContext.mounted) return;
+            Navigator.of(dialogContext).pop(url);
+          } on ApiException catch (e) {
+            if (!dialogContext.mounted) return;
+            setState(() {
+              uploading = false;
+              error = e.message;
+            });
+          } catch (e) {
+            if (!dialogContext.mounted) return;
+            final message = e
+                .toString()
+                .replaceFirst('Exception: ', '')
+                .replaceFirst('ApiException: ', '')
+                .trim();
+            setState(() {
+              uploading = false;
+              error = message.isEmpty ? '头像上传失败，请稍后重试' : message;
+            });
+          }
+        }
+
+        final hasImage = selectedBytes != null;
+        const textMuted = Color(0xFFA3AAA2);
+
+        return PopScope(
+          canPop: !uploading,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: GestureDetector(
+                  onTap: uploading ? null : pickImage,
+                  child: Container(
+                    width: 112,
+                    height: 112,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFF4F6F2),
+                      border: Border.all(
+                        color: hasImage
+                            ? const Color(0xFF9BD991)
+                            : const Color(0xFFE1E6DE),
+                      ),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: hasImage
+                        ? Image.memory(
+                            selectedBytes!,
+                            width: 112,
+                            height: 112,
+                            fit: BoxFit.cover,
+                          )
+                        : const Icon(
+                            LucideIcons.imagePlus,
+                            size: 30,
+                            color: Color(0xFF7B8579),
+                          ),
+                  ),
                 ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        '更换头像',
-                        style: TextStyle(
-                          color: AppColors.textOnDark,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: uploading ? null : () => Navigator.of(sheetContext).pop(),
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          color: Colors.transparent,
-                          child: const Icon(
-                            LucideIcons.x,
-                            size: 18,
-                            color: AppColors.textOnDarkMuted,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  GestureDetector(
-                    onTap: uploading ? null : pickImage,
-                    child: Container(
-                      width: 120,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.03),
-                        borderRadius: BorderRadius.zero,
-                        border: Border.all(
-                          color: hasImage ? AppColors.accent : Colors.white.withOpacity(0.1),
-                          width: 1,
-                        ),
-                      ),
-                      child: hasImage
-                          ? Image.memory(
-                              selectedBytes!,
-                              width: 120,
-                              height: 120,
-                              fit: BoxFit.cover,
-                            )
-                          : Center(
-                              child: Icon(
-                                LucideIcons.imagePlus,
-                                size: 32,
-                                color: AppColors.textOnDarkMuted.withOpacity(0.7),
-                              ),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    hasImage ? '已选择图片，可再次点击区域重新选择' : '从本地选择一张图片',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: AppColors.textOnDarkMuted,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Material(
-                    color: Colors.white.withOpacity(0.03),
-                    borderRadius: BorderRadius.zero,
-                    child: InkWell(
-                      onTap: uploading ? null : pickImage,
-                      child: Container(
-                        height: 48,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white.withOpacity(0.1)),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              LucideIcons.images,
-                              size: 16,
-                              color: uploading ? AppColors.textOnDarkMuted.withOpacity(0.5) : AppColors.textOnDark,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              hasImage ? '重新选择' : '浏览文件',
-                              style: TextStyle(
-                                color: uploading ? AppColors.textOnDarkMuted.withOpacity(0.5) : AppColors.textOnDark,
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (error != null) ...[
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: _error(error!),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: _primaryButton(
-                      label: uploading ? '上传中...' : (hasImage ? '确认保存' : '请先选择文件'),
-                      enabled: hasImage && !uploading,
-                      onTap: submit,
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 12),
+              Text(
+                hasImage ? '点击头像可以重新选择图片' : '选择一张图片作为新的头像',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: textMuted,
+                  fontSize: 12,
+                ),
               ),
-            );
-          },
+              const SizedBox(height: 18),
+              if (error != null) ...[
+                const SizedBox(height: 10),
+                _lightError(error!),
+              ],
+              const SizedBox(height: 14),
+              _lightPrimaryButton(
+                label: uploading
+                    ? '正在保存...'
+                    : hasImage
+                        ? '确认保存'
+                        : '请先选择图片',
+                enabled: hasImage && !uploading,
+                onTap: submit,
+              ),
+            ],
+          ),
         );
       },
     );
+  }
+
+  static Future<Uint8List> _convertImageToWebp(Uint8List bytes) async {
+    final converted = await FlutterImageCompress.compressWithList(
+      bytes,
+      minWidth: 4096,
+      minHeight: 4096,
+      quality: 88,
+      format: CompressFormat.webp,
+      keepExif: false,
+    );
+    if (converted.isEmpty) {
+      throw Exception('图片转换 WebP 失败');
+    }
+    return converted;
+  }
+
+  static String _webpFileName(String originalName) {
+    final trimmed = originalName.trim();
+    final dot = trimmed.lastIndexOf('.');
+    final base = dot > 0 ? trimmed.substring(0, dot) : trimmed;
+    final safeBase = base.isEmpty ? 'avatar' : base;
+    return '$safeBase.webp';
   }
 
   static Future<MineCheckinResult?> checkin(BuildContext context) async {
@@ -677,7 +642,7 @@ class MineDialogs {
                                     child: Text(
                                       error!,
                                       style: const TextStyle(
-                                        color: Color(0xFFAA5A54),
+                                        color: Color(0xFFE0554A),
                                         fontSize: 11.5,
                                         height: 1.4,
                                       ),
@@ -846,7 +811,7 @@ class MineDialogs {
                                     color: textPrimary,
                                     fontSize: 19,
                                     fontWeight: FontWeight.w700,
-                                  ),
+                                 ),
                                 ),
                               ),
                               InkWell(
@@ -1126,11 +1091,15 @@ class MineDialogs {
     return result == true;
   }
 
+  /// 手机端退出登录确认：使用统一的浅色主题弹窗。
   static Future<bool> confirmLogout(BuildContext context) async {
-    return await _show<bool>(
+    return await _showLight<bool>(
           context,
           title: '退出登录',
           builder: (dialogContext, setState) {
+            // 改用更深的文字颜色，代替原本太淡的 textSecondary
+            const textPrimary = Color(0xFF303730);
+
             return Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1139,12 +1108,14 @@ class MineDialogs {
                   '确定要退出当前账号吗？',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: AppColors.textOnDarkMuted,
-                    fontSize: 13,
+                    color: textPrimary, // 颜色加深
+                    fontSize: 14,       // 字号从 13 调到 14
+                    fontWeight: FontWeight.w500, // 增加一点字重
+                    height: 1.5,
                   ),
                 ),
-                const SizedBox(height: 24),
-                _primaryButton(
+                const SizedBox(height: 24), // 间距稍微拉开一点
+                _lightPrimaryButton(
                   label: '确认退出',
                   enabled: true,
                   danger: true,
@@ -1792,13 +1763,14 @@ class MineDialogs {
     required VoidCallback onTap,
     bool danger = false,
   }) {
+    // 提升背景和文字的对比度
     final background = danger
-        ? const Color(0xFFFFEEEB)
+        ? const Color(0xFFFEE2E2) // 干净明亮的浅红背景
         : enabled
             ? AppColors.accent
             : const Color(0xFFE8EBE5);
     final foreground = danger
-        ? const Color(0xFFB85D54)
+        ? const Color(0xFFDC2626) // 高对比度的深红色，非常清晰
         : enabled
             ? const Color(0xFF263026)
             : const Color(0xFFA3AAA2);
@@ -1839,211 +1811,6 @@ class MineDialogs {
           fontSize: 12,
           height: 1.4,
         ),
-      ),
-    );
-  }
-
-  static Future<T?> _show<T>(
-    BuildContext context, {
-    required String title,
-    required Widget Function(
-      BuildContext context,
-      StateSetter setState,
-    ) builder,
-    double maxWidth = 380,
-  }) {
-    return showGeneralDialog<T>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: Colors.black.withOpacity(0.68),
-      transitionDuration: const Duration(milliseconds: 240),
-      pageBuilder: (dialogContext, _, __) {
-        return Material(
-          color: Colors.transparent,
-          child: SafeArea(
-            child: Center(
-              child: StatefulBuilder(
-                builder: (context, setState) {
-                  return ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: maxWidth,
-                      maxHeight: MediaQuery.sizeOf(context).height * 0.82,
-                    ),
-                    child: Container(
-                      width: MediaQuery.sizeOf(context).width * 0.88,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF161616),
-                        borderRadius: BorderRadius.zero,
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.12),
-                          width: 1,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.5),
-                            blurRadius: 20,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  title,
-                                  style: const TextStyle(
-                                    color: AppColors.textOnDark,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                                GestureDetector(
-                                  onTap: () => Navigator.of(dialogContext).pop(),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(4),
-                                    color: Colors.transparent,
-                                    child: const Icon(
-                                      LucideIcons.x,
-                                      size: 18,
-                                      color: AppColors.textOnDarkMuted,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 24),
-                            builder(dialogContext, setState),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        );
-      },
-      transitionBuilder: (_, animation, __, child) {
-        return FadeTransition(
-          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.95, end: 1.0).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-            ),
-            child: child,
-          ),
-        );
-      },
-    );
-  }
-
-  static Widget _input({
-    required TextEditingController controller,
-    required String hint,
-    bool autofocus = false,
-    bool enabled = true,
-    bool obscureText = false,
-    int maxLines = 1,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-      ),
-      child: TextField(
-        controller: controller,
-        autofocus: autofocus,
-        enabled: enabled,
-        obscureText: obscureText,
-        maxLines: obscureText ? 1 : maxLines,
-        minLines: maxLines > 1 ? 4 : 1,
-        textAlignVertical: maxLines == 1 ? TextAlignVertical.center : TextAlignVertical.top,
-        cursorColor: AppColors.accent,
-        style: const TextStyle(
-          color: AppColors.textOnDark,
-          fontSize: 13.5,
-          height: 1.5,
-        ),
-        decoration: InputDecoration(
-          isDense: true,
-          contentPadding: EdgeInsets.zero,
-          hintText: hint,
-          hintStyle: const TextStyle(
-            color: AppColors.textOnDarkMuted,
-            fontSize: 13,
-          ),
-          border: InputBorder.none,
-        ),
-      ),
-    );
-  }
-
-  static Widget _primaryButton({
-    required String label,
-    required bool enabled,
-    required VoidCallback onTap,
-    bool danger = false,
-  }) {
-    final color = danger
-        ? const Color(0xFFE0554A)
-        : enabled
-            ? AppColors.accent
-            : Colors.white.withOpacity(0.06);
-
-    return Material(
-      color: color,
-      child: InkWell(
-        onTap: enabled ? onTap : null,
-        child: Container(
-          height: 48,
-          alignment: Alignment.center,
-          child: Text(
-            label,
-            style: TextStyle(
-              color: (danger || !enabled) ? AppColors.textOnDarkMuted : const Color(0xFF121212),
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.5,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  static Widget _error(String message) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE0554A).withOpacity(0.08),
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: const Color(0xFFE0554A).withOpacity(0.4), width: 1),
-      ),
-      child: Row(
-        children: [
-          const Icon(LucideIcons.alertCircle, size: 16, color: Color(0xFFE0554A)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(
-                color: Color(0xFFE0554A),
-                fontSize: 12,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -2293,4 +2060,3 @@ class _RedeemDialogState extends State<_RedeemDialog> {
     );
   }
 }
-

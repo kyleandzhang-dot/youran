@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -7,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'app_shared.dart';
 import 'app_notice.dart';
 import 'api/store_api.dart';
+import 'api/api_client.dart';
 import 'api/profile_api.dart';
 import 'api/notification_api.dart';
 import 'discover_detail_sheet.dart';
@@ -405,11 +407,23 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
       _configurePolling();
     }
 
-    // 外层已经收到完成状态，立即结束本地轮询。
+    // 外层已经收到完成状态：先结束本地轮询，再补一次最终列表刷新。
+    //
+    // 之前这里仅停止轮询。如果外层先把 isCreatingWorld 切成 false，
+    // 新世界虽然已经落库，但最后一次 onRefreshWorld 可能根本没有执行，
+    // 导致「世界」列表一直停留在创建前的旧 games 数据。
     if (!widget.isCreatingWorld && oldWidget.isCreatingWorld) {
       _resolvedLocally = false;
       _pollTimer?.cancel();
       _pollTimer = null;
+
+      if (!widget.hasError) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            unawaited(_refreshAfterExternalCompletion());
+          }
+        });
+      }
     }
 
     // 即使完成事件丢失，只要刷新后世界数量增加，也判定创建已落库。
@@ -446,6 +460,17 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
       const Duration(seconds: 3),
       (_) => _syncCreationState(),
     );
+  }
+
+  Future<void> _refreshAfterExternalCompletion() async {
+    final refresh = widget.onRefreshWorld;
+    if (refresh == null) return;
+
+    try {
+      await refresh();
+    } catch (e) {
+      debugPrint('创建世界完成后的最终列表刷新失败：$e');
+    }
   }
 
   Future<void> _syncCreationState() async {
@@ -824,7 +849,9 @@ class _DrawerHeader extends StatelessWidget {
               ),
             ),
           ),
-          if (isLoggedIn && isMine) ...[
+          
+          // 修改点：去掉了 `&& isMine`，只要登录了就全局显示签到按钮
+          if (isLoggedIn) ...[
             const SizedBox(width: 8),
             _HeaderCheckinButton(
               loaded: checkinStatusLoaded,
@@ -973,6 +1000,240 @@ class _ModuleTabs extends StatelessWidget {
   }
 }
 
+
+dynamic _readDiscoverDynamic(dynamic Function() reader) {
+  try {
+    return reader();
+  } catch (_) {
+    return null;
+  }
+}
+
+String _normalizeDiscoverGender(dynamic value) {
+  if (value == null) return '';
+  final raw = value.toString().trim();
+  if (raw.isEmpty) return '';
+
+  final lower = raw.toLowerCase();
+
+  if (raw.contains('女') ||
+      lower == 'female' ||
+      lower == 'f' ||
+      lower == 'woman' ||
+      lower == 'girl' ||
+      lower.contains('female') ||
+      lower.contains('woman')) {
+    return '女';
+  }
+
+  if (raw.contains('男') ||
+      lower == 'male' ||
+      lower == 'm' ||
+      lower == 'man' ||
+      lower == 'boy' ||
+      lower.contains('male') ||
+      lower.contains('man')) {
+    return '男';
+  }
+
+  return '';
+}
+
+String _discoverGenderFromMap(dynamic value) {
+  if (value is String) {
+    final source = value.trim();
+    if (source.isEmpty) return '';
+    try {
+      return _discoverGenderFromMap(jsonDecode(source));
+    } catch (_) {
+      return _normalizeDiscoverGender(source);
+    }
+  }
+
+  if (value is! Map) return '';
+
+  final map = Map<dynamic, dynamic>.from(value);
+
+  dynamic firstOf(List<String> keys) {
+    for (final key in keys) {
+      if (map.containsKey(key) && map[key] != null) {
+        return map[key];
+      }
+    }
+    return null;
+  }
+
+  // 1. 详情/列表直接返回主角性别。
+  final direct = _normalizeDiscoverGender(
+    firstOf(const <String>[
+      'protagonist_gender',
+      'protagonistGender',
+      'main_character_gender',
+      'mainCharacterGender',
+      'host_gender',
+      'hostGender',
+      'player_gender',
+      'playerGender',
+      'gender',
+      'sex',
+    ]),
+  );
+  if (direct.isNotEmpty) return direct;
+
+  // 2. persona 有些接口是 Map，有些是 JSON 字符串。
+  final personaGender = _discoverGenderFromMap(map['persona']);
+  if (personaGender.isNotEmpty) return personaGender;
+
+  // 3. 明确的 protagonist / host / player 对象。
+  for (final key in const <String>[
+    'protagonist',
+    'main_character',
+    'mainCharacter',
+    'host',
+    'player',
+  ]) {
+    final nestedGender = _discoverGenderFromMap(map[key]);
+    if (nestedGender.isNotEmpty) return nestedGender;
+  }
+
+  // 4. 常见包装层。
+  for (final key in const <String>[
+    'data',
+    'scenario',
+    'scenario_data',
+    'scenarioData',
+    'detail',
+    'template',
+  ]) {
+    final nested = map[key];
+    if (nested is Map || nested is String) {
+      final nestedGender = _discoverGenderFromMap(nested);
+      if (nestedGender.isNotEmpty) return nestedGender;
+    }
+  }
+
+  // 5. 从角色列表里找真正的主角。
+  dynamic rawCharacters = firstOf(const <String>[
+    'characters',
+    'characters_detailed',
+    'charactersDetailed',
+    'roles',
+    'character_list',
+    'characterList',
+  ]);
+
+  Iterable<dynamic> entries = const <dynamic>[];
+  if (rawCharacters is List) {
+    entries = rawCharacters;
+  } else if (rawCharacters is Map) {
+    entries = rawCharacters.values;
+  }
+
+  final characterList = entries.whereType<Map>().toList(growable: false);
+  final playerCharacterId = (map['player_character_id'] ??
+          map['playerCharacterId'] ??
+          map['main_character_id'] ??
+          map['mainCharacterId'])
+      ?.toString();
+
+  String genderOfCharacter(Map raw) {
+    final character = Map<dynamic, dynamic>.from(raw);
+
+    final directGender = _normalizeDiscoverGender(
+      character['gender'] ?? character['sex'],
+    );
+    if (directGender.isNotEmpty) return directGender;
+
+    return _discoverGenderFromMap(character['persona']);
+  }
+
+  // 明确主角标记优先。
+  for (final rawCharacter in characterList) {
+    final character = Map<dynamic, dynamic>.from(rawCharacter);
+
+    final isMain = character['is_main'] == true ||
+        character['isMain'] == true ||
+        character['main'] == true ||
+        character['is_main_character'] == true ||
+        character['isMainCharacter'] == true;
+
+    final role = (character['role'] ??
+            character['type'] ??
+            character['identity'] ??
+            character['character_type'] ??
+            character['characterType'])
+        ?.toString()
+        .trim()
+        .toLowerCase();
+
+    final roleIsMain = role == 'main' ||
+        role == 'protagonist' ||
+        role == 'host' ||
+        role == 'player' ||
+        role == '主角';
+
+    if (!isMain && !roleIsMain) continue;
+
+    final gender = genderOfCharacter(character);
+    if (gender.isNotEmpty) return gender;
+  }
+
+  // 有 player_character_id 时按 ID 精确匹配。
+  if (playerCharacterId != null && playerCharacterId.isNotEmpty) {
+    for (final rawCharacter in characterList) {
+      final character = Map<dynamic, dynamic>.from(rawCharacter);
+      final characterId =
+          (character['id'] ?? character['character_id'] ?? character['characterId'])
+              ?.toString();
+      if (characterId != playerCharacterId) continue;
+
+      final gender = genderOfCharacter(character);
+      if (gender.isNotEmpty) return gender;
+    }
+  }
+
+  // 发布模板详情有些版本没有主角标记，但第一个角色就是模板主角。
+  // 作为最后兜底，只取第一个能解析出性别的角色。
+  for (final rawCharacter in characterList) {
+    final gender = genderOfCharacter(rawCharacter);
+    if (gender.isNotEmpty) return gender;
+  }
+
+  return '';
+}
+
+String _discoverGenderOfStoreItem(StoreItem item) {
+  final dynamic source = item;
+
+  // 兼容 StoreItem 已经暴露性别字段的版本。
+  for (final value in <dynamic>[
+    _readDiscoverDynamic(() => source.protagonistGender),
+    _readDiscoverDynamic(() => source.protagonist_gender),
+    _readDiscoverDynamic(() => source.mainCharacterGender),
+    _readDiscoverDynamic(() => source.main_character_gender),
+    _readDiscoverDynamic(() => source.hostGender),
+    _readDiscoverDynamic(() => source.host_gender),
+    _readDiscoverDynamic(() => source.gender),
+    _readDiscoverDynamic(() => source.sex),
+  ]) {
+    final gender = _normalizeDiscoverGender(value);
+    if (gender.isNotEmpty) return gender;
+  }
+
+  // 兼容 StoreItem 保留原始响应数据的版本。
+  for (final raw in <dynamic>[
+    _readDiscoverDynamic(() => source.raw),
+    _readDiscoverDynamic(() => source.data),
+    _readDiscoverDynamic(() => source.scenario),
+    _readDiscoverDynamic(() => source.json),
+  ]) {
+    final gender = _discoverGenderFromMap(raw);
+    if (gender.isNotEmpty) return gender;
+  }
+
+  return '';
+}
+
 class _DiscoverPanel extends StatefulWidget {
   const _DiscoverPanel({
     required this.isLoggedIn,
@@ -992,6 +1253,9 @@ class _DiscoverPanel extends StatefulWidget {
 
 class _DiscoverPanelState extends State<_DiscoverPanel> {
   List<StoreItem> _items = [];
+  final Map<String, String> _genderById = <String, String>{};
+  final Set<String> _genderLoading = <String>{};
+
   bool _loading = true;
   bool _failed = false;
 
@@ -1006,19 +1270,74 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
       _loading = true;
       _failed = false;
     });
+
     try {
       final items = await StoreApi.getStoreList();
       if (!mounted) return;
+
       setState(() {
         _items = items;
         _loading = false;
       });
+
+      // 列表先立即显示，性别随后从公开剧本详情补齐。
+      // 每批 4 个，避免一次性同时发出二十多个详情请求。
+      unawaited(_loadDiscoverGenders(items));
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _failed = true;
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _loadDiscoverGenders(List<StoreItem> items) async {
+    const batchSize = 4;
+
+    for (var start = 0; start < items.length; start += batchSize) {
+      if (!mounted) return;
+
+      final end = math.min(start + batchSize, items.length);
+      final batch = items.sublist(start, end);
+
+      await Future.wait<void>(
+        batch.map(_loadDiscoverGender),
+      );
+    }
+  }
+
+  Future<void> _loadDiscoverGender(StoreItem item) async {
+    final id = item.id.trim();
+    if (id.isEmpty ||
+        _genderById.containsKey(id) ||
+        !_genderLoading.add(id)) {
+      return;
+    }
+
+    try {
+      // 如果未来 StoreItem 自己带了性别，先直接用，避免额外请求。
+      var gender = _discoverGenderOfStoreItem(item);
+
+      if (gender.isEmpty) {
+        // 发现页的 item.id 是发布模板 ID，所以应读取 store/scenario/:templateId，
+        // 而不是用户自己的 scenario/:scenarioId。
+        final detail = await ApiClient.instance.get('/store/scenario/$id');
+        gender = _discoverGenderFromMap(detail);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        // 空字符串也缓存，避免同一条剧本在当前页面不断重复请求。
+        _genderById[id] = gender;
+      });
+    } catch (e) {
+      debugPrint('发现页读取主角性别失败：id=$id error=$e');
+      if (mounted) {
+        setState(() => _genderById[id] = '');
+      }
+    } finally {
+      _genderLoading.remove(id);
     }
   }
 
@@ -1062,7 +1381,7 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
           crossAxisCount: 2,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
-          childAspectRatio: 0.72,
+          childAspectRatio: 0.68,
         ),
         itemCount: _items.length,
         itemBuilder: (context, index) {
@@ -1075,6 +1394,7 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
             isLiked: item.isLiked,
             avatarUrl: item.avatarUrl,
             userName: item.authorName,
+            gender: _genderById[item.id] ?? _discoverGenderOfStoreItem(item),
             isLoggedIn: widget.isLoggedIn,
             currentUserId: widget.currentUserId,
             onScenarioLaunch: widget.onScenarioLaunch,
@@ -1109,6 +1429,7 @@ class _DiscoverItem extends StatelessWidget {
     required this.likes,
     required this.avatarUrl,
     required this.userName,
+    required this.gender,
     required this.isLoggedIn,
     this.currentUserId,
     this.onScenarioLaunch,
@@ -1125,6 +1446,7 @@ class _DiscoverItem extends StatelessWidget {
   final bool isLiked;
   final String avatarUrl;
   final String userName;
+  final String gender;
   final bool isLoggedIn;
   final String? currentUserId;
   final ScenarioLaunchCallback? onScenarioLaunch;
@@ -1188,21 +1510,36 @@ class _DiscoverItem extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-                  child: Image.network(
-                    imageUrl,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      color: Colors.white.withOpacity(0.06),
-                      child: Icon(
-                        Icons.image_outlined,
-                        color: AppColors.textOnDarkMuted,
+              AspectRatio(
+                aspectRatio: 1,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ClipRRect(
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(8)),
+                      child: Image.network(
+                        imageUrl,
+                        width: double.infinity,
+                        height: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: Colors.white.withOpacity(0.06),
+                          alignment: Alignment.center,
+                          child: Icon(
+                            Icons.image_outlined,
+                            color: AppColors.textOnDarkMuted,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                    if (gender == '男' || gender == '女')
+                      Positioned(
+                        right: 7,
+                        bottom: 7,
+                        child: _DiscoverGenderBadge(gender: gender),
+                      ),
+                  ],
                 ),
               ),
               Padding(
@@ -1287,6 +1624,41 @@ class _DiscoverItem extends StatelessWidget {
     );
   }
 }
+
+
+class _DiscoverGenderBadge extends StatelessWidget {
+  const _DiscoverGenderBadge({required this.gender});
+
+  final String gender;
+
+  @override
+  Widget build(BuildContext context) {
+    final isFemale = gender == '女';
+    final background = isFemale
+        ? const Color(0xFFD66F9B).withOpacity(.90)
+        : const Color(0xFF4F8EDB).withOpacity(.90);
+    final foreground =
+        isFemale ? const Color(0xFFFFEDF4) : const Color(0xFFEDF6FF);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        isFemale ? '女主' : '男主',
+        style: TextStyle(
+          color: foreground,
+          fontSize: 9.5,
+          fontWeight: FontWeight.w700,
+          height: 1,
+        ),
+      ),
+    );
+  }
+}
+
 
 enum _MineSection { published, favorites, notifications }
 

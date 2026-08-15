@@ -1,7 +1,7 @@
 export 'http_novel_backend.dart';
 export 'novel_backend.dart';
 export 'novel_bgm_service.dart';
-export 'novel_ending_adapter.dart';
+export 'novel_ending_page.dart';
 export 'novel_game_controller.dart';
 export 'novel_game_page.dart';
 export 'novel_models.dart';

@@ -85,10 +85,7 @@ class MyApp extends StatelessWidget {
       ),
       home: const _StartupGate(),
       onGenerateRoute: (RouteSettings settings) {
-        return novelRuntime.onGenerateRoute(
-          settings,
-          endingBuilder: buildExistingEndingPage,
-        );
+        return novelRuntime.onGenerateRoute(settings);
       },
     );
   }

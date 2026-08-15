@@ -1457,64 +1457,52 @@ class NovelLocationHud extends StatelessWidget {
     return IgnorePointer(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: compact ? 235 : 330),
-        child: SizedBox(
-          height: hasSubtitle ? 38 : 30,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Container(
-                width: 2,
-                height: hasSubtitle ? 30 : 20,
-                margin: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  color: NovelPalette.accent.withOpacity(.72),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Flexible(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                  if (subtitle.trim().isNotEmpty)
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.left,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.46),
-                        fontSize: 8.5,
-                        height: 1.05,
-                        letterSpacing: 1.0,
-                        shadows: const <Shadow>[
-                          Shadow(color: Colors.black87, blurRadius: 8),
-                        ],
-                      ),
-                    ),
-                  if (subtitle.trim().isNotEmpty) const SizedBox(height: 3),
+        child: Padding(
+          // 左上角场景 HUD 改为纯文字：去掉主题绿竖线，
+          // 只保留轻微左侧留白，让标题更干净、更像场景信息而不是功能控件。
+          padding: EdgeInsets.only(left: compact ? 12 : 16),
+          child: SizedBox(
+            height: hasSubtitle ? 38 : 30,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                if (subtitle.trim().isNotEmpty)
                   Text(
-                    title,
+                    subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.left,
-                    style: const TextStyle(
-                      color: NovelPalette.text,
-                      fontSize: 13.2,
-                      height: 1.08,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: .45,
-                      shadows: <Shadow>[
-                        Shadow(color: Colors.black87, blurRadius: 9),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.46),
+                      fontSize: 8.5,
+                      height: 1.05,
+                      letterSpacing: 1.0,
+                      shadows: const <Shadow>[
+                        Shadow(color: Colors.black87, blurRadius: 8),
                       ],
                     ),
                   ),
-                  ],
+                if (subtitle.trim().isNotEmpty) const SizedBox(height: 3),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.left,
+                  style: const TextStyle(
+                    color: NovelPalette.text,
+                    fontSize: 13.2,
+                    height: 1.08,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .45,
+                    shadows: <Shadow>[
+                      Shadow(color: Colors.black87, blurRadius: 9),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -5624,7 +5612,12 @@ class NovelDiceOverlay extends StatelessWidget {
                               return Opacity(opacity: value.clamp(0.0, 1.0).toDouble(), child: Transform.scale(scale: .78 + value * .22, child: child));
                             },
                             child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
-                              Text('◇', style: TextStyle(color: Colors.white.withOpacity(.94), fontSize: 31, height: 1, fontWeight: FontWeight.w300, shadows: <Shadow>[Shadow(color: _glowColor.withOpacity(.85), blurRadius: 20)])),
+                              Icon(
+                                Icons.auto_awesome, 
+                                size: 36, 
+                                color: Colors.white.withOpacity(.94), 
+                                shadows: <Shadow>[Shadow(color: _glowColor.withOpacity(.85), blurRadius: 20)]
+                              ),
                               const SizedBox(height: 14),
                               Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
                                 Container(width: 34, height: 1, color: _glowColor.withOpacity(.36)),
