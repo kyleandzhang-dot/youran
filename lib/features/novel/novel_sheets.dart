@@ -1613,14 +1613,13 @@ class _ArtStyleCard extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.zero,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           width: 108,
           height: 82,
           decoration: BoxDecoration(
             color: Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: selected
                   ? Colors.white.withOpacity(.35)
