@@ -1634,26 +1634,22 @@ class _DiscoverGenderBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isFemale = gender == '女';
-    final background = isFemale
-        ? const Color(0xFFD66F9B).withOpacity(.90)
-        : const Color(0xFF4F8EDB).withOpacity(.90);
-    final foreground =
-        isFemale ? const Color(0xFFFFEDF4) : const Color(0xFFEDF6FF);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        isFemale ? '女主' : '男主',
-        style: TextStyle(
-          color: foreground,
-          fontSize: 9.5,
-          fontWeight: FontWeight.w700,
-          height: 1,
-        ),
+    return Text(
+      isFemale ? '♀' : '♂',
+      style: TextStyle(
+        color: isFemale
+            ? const Color(0xFFF28DB5)
+            : const Color(0xFF72AFFF),
+        fontSize: 19,
+        fontWeight: FontWeight.w700,
+        height: 1,
+        shadows: const <Shadow>[
+          Shadow(
+            color: Color(0x99000000),
+            blurRadius: 5,
+          ),
+        ],
       ),
     );
   }
