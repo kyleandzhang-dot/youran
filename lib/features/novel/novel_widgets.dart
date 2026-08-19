@@ -5874,10 +5874,10 @@ class _NovelInputBarState extends State<NovelInputBar> {
                     constraints: const BoxConstraints(minHeight: 48, maxHeight: 128),
                     padding: const EdgeInsets.fromLTRB(15, 6, 6, 6),
                     decoration: BoxDecoration(
-                      // 聚焦或已有文字时只给输入区域增加轻暗玻璃，不扩散成整块黑色遮罩。
-                      // 这样语音/键盘输入的内容在亮背景上也始终清楚。
+                      // 聚焦或已有文字时只保留一层很浅的暗色玻璃。
+                      // 聚焦态更通透，仍依靠 12px 模糊保证亮背景上的文字可读。
                       color: glassActive
-                          ? Colors.black.withOpacity(.22)
+                          ? Colors.black.withOpacity(focused ? .14 : .12)
                           : Colors.white.withOpacity(speechBusy ? .12 : .085),
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
@@ -5888,8 +5888,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                       ),
                       boxShadow: <BoxShadow>[
                         BoxShadow(
-                          color: Colors.black.withOpacity(glassActive ? .32 : .22),
-                          blurRadius: glassActive ? 20 : 16,
+                          color: Colors.black.withOpacity(glassActive ? .20 : .18),
+                          blurRadius: glassActive ? 18 : 14,
                           offset: const Offset(0, 5),
                         ),
                       ],

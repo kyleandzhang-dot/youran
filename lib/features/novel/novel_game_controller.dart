@@ -977,9 +977,14 @@ class NovelGameController extends ChangeNotifier {
 
   Future<void> selectChoice(NovelChoice choice) async {
     if (choice.text.trim().isEmpty || isGenerating) return;
-    choicesVisible = false;
-    choices = <NovelChoice>[];
-    await _triggerAi(choice.text, isAction: choice.isAction);
+    // 选项提交走“可恢复事务”：
+    // 在真正收到后端流事件前如果连接失败/超时，恢复当前剧情与原选项，
+    // 不让界面永久停在“故事酝酿中”。
+    await _triggerAi(
+      choice.text,
+      isAction: choice.isAction,
+      restoreUiOnEarlyFailure: true,
+    );
   }
 
   Future<void> _triggerAi(
@@ -987,8 +992,25 @@ class NovelGameController extends ChangeNotifier {
     bool isCommand = false,
     bool isAction = false,
     bool allowLuckyCard = true,
+    bool restoreUiOnEarlyFailure = false,
   }) async {
     if (isGenerating) return;
+
+    // 对话选项提交前保存一份完整的前端 UI 快照。
+    // 仅在“尚未收到任何后端有效流事件”时使用，避免网络预连接失败后
+    // 丢失原剧情、原选项或误扣幸运卡。
+    final rollbackMessages = restoreUiOnEarlyFailure
+        ? List<NovelMessage>.of(messages)
+        : null;
+    final rollbackChoices = restoreUiOnEarlyFailure
+        ? List<NovelChoice>.of(choices)
+        : null;
+    final rollbackChoicesVisible = choicesVisible;
+    final rollbackPlayerHint = playerHint;
+    final rollbackSentenceIndex = currentSentenceIndex;
+    final rollbackLuckyCardActive = luckyCardActive;
+    final rollbackLuckyCardCount = luckyCardCount;
+
     final generationId = ++_generationId;
     final prompt = userPayload.isEmpty ? '（请继续描写接下来的剧情发展）' : userPayload;
     final clean = prompt.trim();
@@ -1047,9 +1069,44 @@ class NovelGameController extends ChangeNotifier {
       clientHistory: historyPayload,
     );
 
+    var receivedServerProgress = false;
+
+    void restoreEarlyChoiceUi() {
+      if (!restoreUiOnEarlyFailure ||
+          receivedServerProgress ||
+          rollbackMessages == null ||
+          rollbackChoices == null) {
+        return;
+      }
+
+      _streamUiTimer?.cancel();
+      _streamUiTimer = null;
+      _pendingStreamText = '';
+
+      messages = List<NovelMessage>.of(rollbackMessages);
+      choices = List<NovelChoice>.of(rollbackChoices);
+      choicesVisible = rollbackChoicesVisible;
+      playerHint = rollbackPlayerHint;
+      luckyCardActive = rollbackLuckyCardActive;
+      luckyCardCount = rollbackLuckyCardCount;
+      isGenerating = false;
+
+      _rebuildSentences(resetIndex: true);
+      if (sentences.isNotEmpty) {
+        currentSentenceIndex =
+            rollbackSentenceIndex.clamp(0, sentences.length - 1).toInt();
+      } else {
+        currentSentenceIndex = 0;
+      }
+    }
+
     try {
       await for (final event in backend.sendMessageStream(request)) {
         if (generationId != _generationId || _disposed) return;
+        if (event.type != NovelStreamEventType.error &&
+            event.type != NovelStreamEventType.ignored) {
+          receivedServerProgress = true;
+        }
         switch (event.type) {
           case NovelStreamEventType.text:
             _appendStreamText(event.text);
@@ -1092,19 +1149,39 @@ class NovelGameController extends ChangeNotifier {
       }
     } on NovelBackendException catch (error) {
       if (generationId != _generationId) return;
-      _flushStreamText(notify: false);
-      isGenerating = false;
+      final rollbackEarlyChoice =
+          restoreUiOnEarlyFailure && !receivedServerProgress;
+      if (rollbackEarlyChoice) {
+        restoreEarlyChoiceUi();
+      } else {
+        _flushStreamText(notify: false);
+        isGenerating = false;
+      }
       lastError = error.message;
       insufficientBalance = error.isInsufficientBalance;
       _notify();
-      await syncHistory();
+
+      // 选项请求在后端尚未产生任何有效流事件前就失败时，
+      // 服务端没有可同步的新剧情；此时直接恢复原 UI 即可。
+      // 已经收到过正文/完成事件的中断仍同步历史，避免客户端与服务端分叉。
+      if (!rollbackEarlyChoice) {
+        await syncHistory();
+      }
     } catch (error) {
       if (generationId != _generationId) return;
-      _flushStreamText(notify: false);
-      isGenerating = false;
+      final rollbackEarlyChoice =
+          restoreUiOnEarlyFailure && !receivedServerProgress;
+      if (rollbackEarlyChoice) {
+        restoreEarlyChoiceUi();
+      } else {
+        _flushStreamText(notify: false);
+        isGenerating = false;
+      }
       lastError = '生成中断：$error';
       _notify();
-      await syncHistory();
+      if (!rollbackEarlyChoice) {
+        await syncHistory();
+      }
     }
   }
 

@@ -110,6 +110,12 @@ class HttpNovelBackend implements NovelBackend {
   http.Client? _activeStreamClient;
   bool _streamCancelled = false;
 
+  // 剧情流不能无限卡在“故事酝酿中”。
+  // 连接阶段与首个 SSE 数据分别限时，超过后向 Controller 返回可恢复错误。
+  static const Duration _streamConnectTimeout = Duration(seconds: 12);
+  static const Duration _streamFirstEventTimeout = Duration(seconds: 30);
+  static const Duration _streamInactivityTimeout = Duration(seconds: 45);
+
   Uri _uri(String path, [Map<String, String>? query]) {
     final base = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
     final normalizedPath = path.startsWith('/') ? path : '/$path';
@@ -285,19 +291,85 @@ class HttpNovelBackend implements NovelBackend {
 
     Future<http.StreamedResponse> executeStreamRequest() async {
       final httpRequest = http.Request('POST', _uri(endpoints.sendStream));
-      httpRequest.headers.addAll(await _headers(stream: true));
+      final headers = await _headers(stream: true).timeout(_streamConnectTimeout);
+      httpRequest.headers.addAll(headers);
       httpRequest.body = jsonEncode(request.toJson());
-      return client.send(httpRequest);
+
+      // Future.timeout 本身不会取消底层 socket，但 finally 中 client.close()
+      // 会在超时后立即终止该次连接，避免浏览器一直挂着 pending request。
+      return client.send(httpRequest).timeout(_streamConnectTimeout);
+    }
+
+    NovelStreamEvent timeoutEvent({
+      required String code,
+      required String message,
+    }) {
+      return NovelStreamEvent(
+        type: NovelStreamEventType.error,
+        errorMessage: message,
+        raw: <String, dynamic>{'code': code},
+      );
     }
 
     try {
-      var response = await executeStreamRequest();
-      if (response.statusCode == 401 && await _tryRefreshToken()) {
-        await response.stream.drain<void>();
+      http.StreamedResponse response;
+      try {
         response = await executeStreamRequest();
+      } on TimeoutException {
+        if (!_streamCancelled) {
+          yield timeoutEvent(
+            code: 'STREAM_CONNECT_TIMEOUT',
+            message: '剧情连接超时，请重试。',
+          );
+        }
+        return;
       }
+
+      if (response.statusCode == 401) {
+        bool refreshed = false;
+        try {
+          refreshed =
+              await _tryRefreshToken().timeout(_streamConnectTimeout);
+        } on TimeoutException {
+          if (!_streamCancelled) {
+            yield timeoutEvent(
+              code: 'STREAM_AUTH_TIMEOUT',
+              message: '登录状态刷新超时，请重试。',
+            );
+          }
+          return;
+        }
+
+        if (refreshed) {
+          // 401 body 不值得无限等待；尽量排空后立即重试。
+          try {
+            await response.stream
+                .drain<void>()
+                .timeout(const Duration(seconds: 3));
+          } catch (_) {}
+
+          try {
+            response = await executeStreamRequest();
+          } on TimeoutException {
+            if (!_streamCancelled) {
+              yield timeoutEvent(
+                code: 'STREAM_CONNECT_TIMEOUT',
+                message: '剧情连接超时，请重试。',
+              );
+            }
+            return;
+          }
+        }
+      }
+
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        final body = await utf8.decoder.bind(response.stream).join();
+        String body = '';
+        try {
+          body = await utf8.decoder
+              .bind(response.stream)
+              .join()
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {}
         final map = decodeJsonMap(body);
         yield NovelStreamEvent(
           type: NovelStreamEventType.error,
@@ -311,38 +383,91 @@ class HttpNovelBackend implements NovelBackend {
       final lines = response.stream
           .transform(utf8.decoder)
           .transform(const LineSplitter());
+      final iterator = StreamIterator<String>(lines);
       final eventBuffer = <String>[];
 
-      await for (final originalLine in lines) {
-        if (_streamCancelled) return;
-        final line = originalLine.trimRight();
-        if (line.isEmpty) {
-          if (eventBuffer.isNotEmpty) {
-            final payload = eventBuffer.join('\n');
-            eventBuffer.clear();
-            yield* _parseStreamPayload(payload);
+      try {
+        bool hasLine;
+        try {
+          // HTTP 200 只能证明连接建立；如果 30 秒连第一行 SSE 都没有，
+          // 不能继续让前端永久显示“故事酝酿中”。
+          hasLine =
+              await iterator.moveNext().timeout(_streamFirstEventTimeout);
+        } on TimeoutException {
+          if (!_streamCancelled) {
+            yield timeoutEvent(
+              code: 'STREAM_FIRST_EVENT_TIMEOUT',
+              message: '剧情响应超时，请重试。',
+            );
           }
-          continue;
+          return;
         }
-        if (line.startsWith(':') || line.startsWith('event:')) continue;
-        if (line.startsWith('data:')) {
-          eventBuffer.add(line.substring(5).trimLeft());
-        } else {
-          if (eventBuffer.isNotEmpty) {
-            eventBuffer.add(line);
-          } else {
-            yield* _parseStreamPayload(line);
+
+        if (!hasLine) {
+          if (!_streamCancelled) {
+            yield timeoutEvent(
+              code: 'STREAM_EMPTY_RESPONSE',
+              message: '剧情连接已结束，请重试。',
+            );
+          }
+          return;
+        }
+
+        while (hasLine) {
+          if (_streamCancelled) return;
+
+          final originalLine = iterator.current;
+          final line = originalLine.trimRight();
+
+          if (line.isEmpty) {
+            if (eventBuffer.isNotEmpty) {
+              final payload = eventBuffer.join('\n');
+              eventBuffer.clear();
+              yield* _parseStreamPayload(payload);
+            }
+          } else if (!line.startsWith(':') && !line.startsWith('event:')) {
+            if (line.startsWith('data:')) {
+              eventBuffer.add(line.substring(5).trimLeft());
+            } else if (eventBuffer.isNotEmpty) {
+              eventBuffer.add(line);
+            } else {
+              yield* _parseStreamPayload(line);
+            }
+          }
+
+          try {
+            hasLine =
+                await iterator.moveNext().timeout(_streamInactivityTimeout);
+          } on TimeoutException {
+            if (!_streamCancelled) {
+              yield timeoutEvent(
+                code: 'STREAM_INACTIVITY_TIMEOUT',
+                message: '剧情响应中断，请重试。',
+              );
+            }
+            return;
           }
         }
-      }
-      if (eventBuffer.isNotEmpty && !_streamCancelled) {
-        yield* _parseStreamPayload(eventBuffer.join('\n'));
+
+        if (eventBuffer.isNotEmpty && !_streamCancelled) {
+          yield* _parseStreamPayload(eventBuffer.join('\n'));
+        }
+      } finally {
+        await iterator.cancel();
       }
     } on http.ClientException catch (error) {
       if (!_streamCancelled) {
         yield NovelStreamEvent(
           type: NovelStreamEventType.error,
           errorMessage: error.message,
+          raw: const <String, dynamic>{'code': 'STREAM_CLIENT_ERROR'},
+        );
+      }
+    } on TimeoutException {
+      if (!_streamCancelled) {
+        yield timeoutEvent(
+          code: 'STREAM_TIMEOUT',
+          message: '剧情连接超时，请重试。',
         );
       }
     } catch (error) {
@@ -350,6 +475,7 @@ class HttpNovelBackend implements NovelBackend {
         yield NovelStreamEvent(
           type: NovelStreamEventType.error,
           errorMessage: '网络连接中断：$error',
+          raw: const <String, dynamic>{'code': 'STREAM_NETWORK_ERROR'},
         );
       }
     } finally {
