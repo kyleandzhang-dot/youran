@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../api/message_api.dart';
 import 'novel_backend.dart';
 import 'novel_bgm_service.dart';
 import 'novel_models.dart';
@@ -25,6 +26,23 @@ class NovelHudEvent {
   final String detail;
   final int delta;
   final String tone;
+}
+
+/// 好感变化不再使用全屏 HUD 卡片。
+/// 事件会暂存在 Controller，等对应角色真正出现在当前对白时，
+/// 再让角色名旁边的爱心与数字做一次局部放大反馈。
+class NovelAffectionPulse {
+  const NovelAffectionPulse({
+    required this.id,
+    required this.characterId,
+    required this.characterName,
+    required this.delta,
+  });
+
+  final int id;
+  final String characterId;
+  final String characterName;
+  final int delta;
 }
 
 class NovelGameController extends ChangeNotifier {
@@ -57,6 +75,14 @@ class NovelGameController extends ChangeNotifier {
   String playerHint = '';
   NovelScore score = const NovelScore();
   NovelTask? currentTask;
+
+  // 当前阶段目标：独立于旧 task 系统。后端 StoryNode.goal 会转成玩家视角后传入。
+  String currentGoal = '';
+  String currentGoalNodeId = '';
+  int currentGoalIndex = 0;
+  int currentGoalTotal = 0;
+  bool currentGoalEnded = false;
+
   NovelDiceRoll? diceRoll;
   NovelEnding ending = const NovelEnding();
   FateRevertData fateRevert = const FateRevertData();
@@ -133,6 +159,15 @@ class NovelGameController extends ChangeNotifier {
   Timer? _diceTimer;
   Timer? _taskTimer;
   Timer? _hudEventTimer;
+  Timer? _developerGoalPreviewTimer;
+  Timer? _developerConditionPreviewTimer;
+  String? _developerGoalBackup;
+  String? _developerGoalNodeBackup;
+  int? _developerGoalIndexBackup;
+  int? _developerGoalTotalBackup;
+  bool? _developerGoalEndedBackup;
+  String? _developerConditionBackup;
+  List<dynamic>? _developerInjuriesBackup;
 
   // 流式文本如果每个 token 都立刻解析 + notify，会导致整页在手机上高频 rebuild。
   // 这里把多个小 chunk 合并成约 14fps 的 UI 刷新；网络流本身不降速，也不会丢字。
@@ -142,7 +177,9 @@ class NovelGameController extends ChangeNotifier {
 
   final List<NovelHudEvent> _hudEventQueue = <NovelHudEvent>[];
   final Map<String, DateTime> _recentHudEventKeys = <String, DateTime>{};
+  final List<NovelAffectionPulse> _affectionPulseQueue = <NovelAffectionPulse>[];
   int _hudEventSerial = 0;
+  int _affectionPulseSerial = 0;
   int _generationId = 0;
   bool _disposed = false;
 
@@ -256,6 +293,41 @@ class NovelGameController extends ChangeNotifier {
     return sentence.speakerName;
   }
 
+  /// 只把“属于当前对白角色”的好感变化交给 UI。
+  /// 角色还没出现在对白里时事件会继续保留，不会提前弹出任何提示。
+  NovelAffectionPulse? affectionPulseFor(
+    NovelCharacter? character, [
+    String speakerName = '',
+  ]) {
+    if (character == null && speakerName.trim().isEmpty) return null;
+
+    for (final pulse in _affectionPulseQueue) {
+      if (character != null) {
+        if (pulse.characterId.isNotEmpty &&
+            pulse.characterId == character.id) {
+          return pulse;
+        }
+        if (pulse.characterName.isNotEmpty &&
+            character.matchesName(pulse.characterName)) {
+          return pulse;
+        }
+      }
+
+      final cleanSpeaker = speakerName.trim();
+      if (cleanSpeaker.isNotEmpty &&
+          pulse.characterName.isNotEmpty &&
+          _normalizeSpeakerLookupName(cleanSpeaker) ==
+              _normalizeSpeakerLookupName(pulse.characterName)) {
+        return pulse;
+      }
+    }
+    return null;
+  }
+
+  void consumeAffectionPulse(int pulseId) {
+    _affectionPulseQueue.removeWhere((pulse) => pulse.id == pulseId);
+  }
+
   String get currentPortraitUrl {
     final sentence = currentSentence;
     final character = currentSpeakerCharacter;
@@ -329,6 +401,9 @@ class NovelGameController extends ChangeNotifier {
       final history = await backend.fetchHistory(sessionId, force: true);
       _applyHistory(history);
 
+      // 当前目标不是进入世界的硬依赖；旧存档也可以由后端 /novel/goal 自动补齐。
+      await refreshCurrentGoal(notify: false);
+
       openingText = history.messages.reversed
               .where((message) => message.role == NovelMessageRole.assistant)
               .map((message) => message.content)
@@ -397,6 +472,16 @@ class NovelGameController extends ChangeNotifier {
     playerHint = stringValue(attributes['player_hint'], playerHint);
     final task = asJsonMap(attributes['current_task']);
     if (task.isNotEmpty) currentTask = NovelTask.fromJson(task);
+
+    final historyGoal = stringValue(attributes['current_goal']).trim();
+    if (historyGoal.isNotEmpty) {
+      _applyGoalPayload(<String, dynamic>{
+        'objective': historyGoal,
+        'node_id': attributes['current_goal_node_id'],
+        'index': attributes['current_goal_index'],
+        'total': attributes['current_goal_total'],
+      });
+    }
 
     world = world.copyWith(
       location: stringValue(attributes['location'], world.location),
@@ -1074,6 +1159,15 @@ class NovelGameController extends ChangeNotifier {
     // Vue message_saved 会携带 location / time_desc / weather / atmosphere。
     // 即使 WS 的 world_state_update 稍晚到达，也先同步一次页面，避免场景信息闪回旧值。
     final extra = event.raw;
+    final messageGoal = stringValue(extra['current_goal']).trim();
+    if (messageGoal.isNotEmpty) {
+      _applyGoalPayload(<String, dynamic>{
+        'objective': messageGoal,
+        'node_id': extra['current_goal_node_id'],
+        'index': extra['current_goal_index'],
+        'total': extra['current_goal_total'],
+      });
+    }
     world = world.copyWith(
       location: stringValue(extra['location'], world.location),
       timeDescription: stringValue(extra['time_desc'], world.timeDescription),
@@ -1133,7 +1227,10 @@ class NovelGameController extends ChangeNotifier {
       await cancelGeneration();
       final history = await backend.fetchHistory(sessionId, force: true);
       _applyHistory(history);
-      await refreshCharacterStatus(notify: false);
+      await Future.wait(<Future<void>>[
+        refreshCharacterStatus(notify: false),
+        refreshCurrentGoal(notify: false),
+      ]);
     } catch (error) {
       lastError = '同步故事状态失败：$error';
     } finally {
@@ -1232,6 +1329,19 @@ class NovelGameController extends ChangeNotifier {
   Future<void> refreshInventory({bool notify = true}) async {
     try {
       inventory = await backend.fetchInventory(sessionId);
+      final savedProtagonist = inventory.protagonistState;
+      if (savedProtagonist.isNotEmpty) {
+        final savedCondition = stringValue(
+          savedProtagonist['current_condition'],
+          protagonistCondition,
+        ).trim();
+        if (savedCondition.isNotEmpty) protagonistCondition = savedCondition;
+        if (savedProtagonist['injuries'] is List) {
+          protagonistInjuries =
+              List<dynamic>.of(savedProtagonist['injuries'] as List);
+        }
+        _syncProtagonistStatus(savedProtagonist);
+      }
       luckyCardCount = inventory.consumables
           .where((item) => item.itemType == 'lucky_card')
           .fold<int>(0, (sum, item) => sum + item.quantity);
@@ -1268,12 +1378,10 @@ class NovelGameController extends ChangeNotifier {
     ]);
     final giftName = result.characterName.isEmpty ? character.name : result.characterName;
     if (result.delta != 0) {
-      _enqueueHudEvent(
-        kind: 'affection',
-        title: '$giftName  好感度 ${result.delta > 0 ? '+' : ''}${result.delta}',
-        detail: '赠礼产生了回应',
+      _enqueueAffectionPulse(
+        characterId: character.id,
+        characterName: giftName,
         delta: result.delta,
-        tone: result.delta >= 0 ? 'rose' : 'danger',
         dedupeKey: 'affection:$giftName:${result.delta}',
       );
     }
@@ -1295,16 +1403,7 @@ class NovelGameController extends ChangeNotifier {
       ));
     }
     await refreshInventory(notify: false);
-    if (reward.type == 'score') {
-      _enqueueHudEvent(
-        kind: 'score',
-        title: reward.jackpot ? '超级奖励' : '获得积分',
-        detail: reward.jackpot ? '幸运触发福袋大奖' : '福袋奖励',
-        delta: reward.score,
-        tone: reward.jackpot ? 'gold' : 'accent',
-        dedupeKey: 'score:${reward.newScore}:${reward.score}',
-      );
-    } else {
+    if (reward.type != 'score') {
       _enqueueHudEvent(
         kind: 'inventory',
         title: '获得 ${reward.name}',
@@ -1595,25 +1694,55 @@ class NovelGameController extends ChangeNotifier {
         _applyAffectionUpdate(data);
         break;
       case 'score':
-        _applyScoreUpdate(NovelScore.fromJson(data));
+        final incomingScore = NovelScore.fromJson(data);
+        _applyScoreUpdate(incomingScore);
+        // 积分变化只由右上角星星/数字原位放大反馈，不再额外弹 HUD 卡片。
         break;
       case 'story_milestone':
+        // 新版后端随后还会发 world_feedback(goal.completed)。
+        // 这里保留旧后端兼容，并使用相同 dedupeKey，避免显示两次。
+        final completedGoal = currentGoal.trim().isNotEmpty
+            ? currentGoal.trim()
+            : stringValue(data['text'], '阶段目标已完成');
         _enqueueHudEvent(
-          kind: 'milestone',
-          title: stringValue(data['title'], '剧情推进'),
-          detail: stringValue(data['text']),
-          tone: 'gold',
-          dedupeKey: 'story-milestone:${stringValue(data['text'])}',
+          kind: 'goal_completed',
+          title: '目标完成',
+          detail: completedGoal,
+          tone: 'accent',
+          dedupeKey: 'goal:completed:$completedGoal',
         );
         break;
+      case 'goal_update':
+        _applyGoalPayload(data);
+        break;
+      case 'world_feedback':
+        _applyWorldFeedback(data);
+        break;
       case 'route_shift':
-        _enqueueHudEvent(
-          kind: 'route_shift',
-          title: stringValue(data['title'], '路线发生偏移'),
-          detail: stringValue(data['text'], '你的选择改变了接下来的局面'),
-          tone: 'violet',
-          dedupeKey: 'route-shift:${currentTurn}:${stringValue(data['text'])}',
-        );
+        // route_shift 表示当前阶段路线已经不可逆偏航；这才算“目标失败”。
+        // 普通骰子 fail 只显示风险后果，不把阶段目标判死。
+        final failedGoal = currentGoal.trim();
+        if (failedGoal.isNotEmpty) {
+          _enqueueHudEvent(
+            kind: 'goal_failed',
+            title: '目标失败',
+            detail: failedGoal,
+            tone: 'danger',
+            dedupeKey: 'goal:failed:$failedGoal',
+          );
+          currentGoal = '';
+          currentGoalNodeId = '';
+          currentGoalIndex = 0;
+          currentGoalEnded = false;
+        } else {
+          _enqueueHudEvent(
+            kind: 'route_shift',
+            title: stringValue(data['title'], '路线发生偏移'),
+            detail: stringValue(data['text'], '你的选择改变了接下来的局面'),
+            tone: 'violet',
+            dedupeKey: 'route-shift:${currentTurn}:${stringValue(data['text'])}',
+          );
+        }
         break;
       case 'fate_revert':
         fateRevert = FateRevertData.fromJson(data);
@@ -1630,6 +1759,13 @@ class NovelGameController extends ChangeNotifier {
         break;
       case 'protagonist_state_update':
         _applyProtagonistStateUpdate(data);
+        break;
+      case 'skill_update':
+        if (data['skills'] is List) {
+          _syncProtagonistStatus(<String, dynamic>{
+            'skills': List<dynamic>.of(data['skills'] as List),
+          });
+        }
         break;
       case 'task_update':
         _applyTaskUpdate(data);
@@ -1677,6 +1813,116 @@ class NovelGameController extends ChangeNotifier {
     _notify();
   }
 
+  Future<void> refreshCurrentGoal({bool notify = true}) async {
+    try {
+      final data = await MessageApi.getNovelGoal(sessionId);
+      _applyGoalPayload(data);
+      if (notify) _notify();
+    } catch (error) {
+      // 目标是增强体验，不应该因为单独接口失败阻断剧情页。
+      debugPrint('novel goal refresh skipped: $error');
+    }
+  }
+
+  void _applyGoalPayload(JsonMap data) {
+    final objective = stringValue(data['objective'] ?? data['text'] ?? data['current_goal']).trim();
+    final ended = boolValue(data['ended']);
+    currentGoalEnded = ended;
+    currentGoal = ended ? '' : objective;
+    currentGoalNodeId = stringValue(data['node_id'] ?? data['current_goal_node_id']);
+    currentGoalIndex = intValue(data['index'] ?? data['current_goal_index']);
+    currentGoalTotal = intValue(data['total'] ?? data['current_goal_total']);
+  }
+
+  void _applyWorldFeedback(JsonMap data) {
+    final rawEvents = data['events'];
+    if (rawEvents is! List) return;
+
+    for (final raw in rawEvents) {
+      final item = asJsonMap(raw);
+      if (item.isEmpty) continue;
+      final category = stringValue(item['category']).trim();
+      final action = stringValue(item['action']).trim();
+      final title = stringValue(item['title']).trim();
+      final text = stringValue(item['text']).trim();
+      final detail = stringValue(item['detail']).trim();
+
+      // item / relation / condition 已经有旧协议负责同步真实状态并生成 HUD；
+      // world_feedback 对它们只做统一数据层，不重复显示。
+      if (category == 'item' || category == 'relation' || category == 'condition') {
+        continue;
+      }
+
+      if (category == 'score') {
+        final value = intValue(item['value']);
+        // world_feedback 经常只是对前面的 score 事件做展示说明。
+        // 只有它明确携带最终 total 时才补同步，避免把 value 再加一遍。
+        if (item.containsKey('total') && item['total'] != null) {
+          final total = intValue(item['total'], score.total);
+          if (total != score.total) {
+            _applyScoreUpdate(
+              NovelScore(
+                total: total,
+                delta: value != 0 ? value : total - score.total,
+                reason: text.isNotEmpty ? text : detail,
+              ),
+            );
+          }
+        }
+        continue;
+      }
+
+      if (category == 'goal') {
+        final goalText = text.isNotEmpty ? text : currentGoal;
+        if (action == 'completed') {
+          _enqueueHudEvent(
+            kind: 'goal_completed',
+            title: title.isEmpty ? '目标完成' : title,
+            detail: goalText,
+            tone: 'accent',
+            dedupeKey: 'goal:completed:$goalText',
+          );
+        } else if (action == 'failed') {
+          _enqueueHudEvent(
+            kind: 'goal_failed',
+            title: title.isEmpty ? '目标失败' : title,
+            detail: goalText,
+            tone: 'danger',
+            dedupeKey: 'goal:failed:$goalText',
+          );
+          if (goalText.isEmpty || goalText == currentGoal) {
+            currentGoal = '';
+            currentGoalNodeId = '';
+            currentGoalIndex = 0;
+          }
+        }
+        continue;
+      }
+
+      if (category == 'risk') {
+        final grade = stringValue(item['grade']);
+        _enqueueHudEvent(
+          kind: 'risk',
+          title: title.isEmpty ? '局势发生变化' : title,
+          detail: text.isNotEmpty ? text : detail,
+          tone: grade == 'critical_fail' ? 'critical' : 'warning',
+          dedupeKey: 'risk:$action:${text.isNotEmpty ? text : detail}',
+        );
+        continue;
+      }
+
+      if (category == 'opportunity' || category == 'world') {
+        _enqueueHudEvent(
+          kind: category,
+          title: title.isEmpty ? (category == 'opportunity' ? '新的机会出现' : '世界发生变化') : title,
+          detail: text.isNotEmpty ? text : detail,
+          tone: category == 'opportunity' ? 'accent' : 'neutral',
+          dedupeKey: '$category:$action:${text.isNotEmpty ? text : detail}',
+        );
+      }
+    }
+  }
+
   void _applyRelationUpdate(JsonMap data, {bool allowRefresh = true}) {
     final currentScenario = scenario;
     if (currentScenario == null) return;
@@ -1720,16 +1966,10 @@ class NovelGameController extends ChangeNotifier {
     scenario = currentScenario.copyWith(characters: updated);
 
     if (delta != 0) {
-      final milestoneLabel = newMilestones
-          .map((item) => stringValue(item['label'] ?? item['name']))
-          .where((value) => value.isNotEmpty)
-          .join(' · ');
-      _enqueueHudEvent(
-        kind: 'affection',
-        title: '${current.name}  好感度 ${delta > 0 ? '+' : ''}$delta',
-        detail: milestoneLabel.isNotEmpty ? milestoneLabel : _relationshipHint(updated[key]!),
+      _enqueueAffectionPulse(
+        characterId: current.id,
+        characterName: current.name,
         delta: delta,
-        tone: delta > 0 ? 'rose' : 'danger',
         dedupeKey: 'affection:${current.name}:$delta',
       );
     } else if (newMilestones.isNotEmpty) {
@@ -1819,25 +2059,16 @@ class NovelGameController extends ChangeNotifier {
     final delta = intValue(data['delta']);
     final name = stringValue(data['character_name'], '角色');
     if (delta != 0) {
-      _enqueueHudEvent(
-        kind: 'affection',
-        title: '$name  好感度 ${delta > 0 ? '+' : ''}$delta',
-        detail: '赠礼产生了回应',
+      final characterId = stringValue(
+        data['character_id'] ?? data['character_instance_id'],
+      );
+      _enqueueAffectionPulse(
+        characterId: characterId,
+        characterName: name,
         delta: delta,
-        tone: delta > 0 ? 'rose' : 'danger',
         dedupeKey: 'affection:$name:$delta',
       );
     }
-  }
-
-  String _relationshipHint(NovelCharacter character) {
-    final label = character.affectionLabel.trim();
-    if (label.isNotEmpty) return label;
-    if (character.affection >= 80) return '关系非常亲密';
-    if (character.affection >= 60) return '关系正在靠近';
-    if (character.affection >= 30) return '彼此更加熟悉';
-    if (character.affection < 0) return '关系出现裂痕';
-    return '关系产生了变化';
   }
 
   void _applyScoreUpdate(NovelScore incoming) {
@@ -1861,7 +2092,21 @@ class NovelGameController extends ChangeNotifier {
 
     protagonistCondition = nextCondition.isEmpty ? protagonistCondition : nextCondition;
     protagonistInjuries = nextInjuries;
-    _syncProtagonistStatus();
+    final statusPatch = <String, dynamic>{};
+    if (data['skills'] is List) {
+      statusPatch['skills'] = List<dynamic>.of(data['skills'] as List);
+    }
+    if (data.containsKey('level') && data['level'] != null) {
+      statusPatch['level'] = data['level'];
+    }
+    if (data.containsKey('combat_power') && data['combat_power'] != null) {
+      statusPatch['combat_power'] = data['combat_power'];
+    }
+    if (data['known_limits'] is List) {
+      statusPatch['known_limits'] =
+          List<dynamic>.of(data['known_limits'] as List);
+    }
+    _syncProtagonistStatus(statusPatch);
 
     final injuryLabels = protagonistInjuries.map(_injuryText).where((e) => e.isNotEmpty).toList();
     final added = injuryLabels.where((e) => !oldInjuries.contains(e)).toList();
@@ -1903,7 +2148,9 @@ class NovelGameController extends ChangeNotifier {
     }
   }
 
-  void _syncProtagonistStatus() {
+  void _syncProtagonistStatus([
+    JsonMap extra = const <String, dynamic>{},
+  ]) {
     final currentScenario = scenario;
     if (currentScenario == null) return;
     final updated = Map<String, NovelCharacter>.of(currentScenario.characters);
@@ -1911,6 +2158,7 @@ class NovelGameController extends ChangeNotifier {
     if (host == null) return;
     final status = <String, dynamic>{
       ...host.value.status,
+      ...extra,
       'current_condition': protagonistCondition,
       'injuries': List<dynamic>.of(protagonistInjuries),
     };
@@ -1978,14 +2226,6 @@ class NovelGameController extends ChangeNotifier {
         delta: delta,
         reason: boolValue(reward['jackpot']) ? '福袋超级奖励' : '福袋奖励',
       ));
-      _enqueueHudEvent(
-        kind: 'score',
-        title: boolValue(reward['jackpot']) ? '超级奖励' : '获得积分',
-        detail: boolValue(reward['jackpot']) ? '幸运触发福袋大奖' : '福袋奖励',
-        delta: delta,
-        tone: boolValue(reward['jackpot']) ? 'gold' : 'accent',
-        dedupeKey: 'score:$total:$delta',
-      );
     } else {
       final name = stringValue(reward['name'] ?? reward['item_name'], '道具');
       _enqueueHudEvent(
@@ -2025,6 +2265,270 @@ class NovelGameController extends ChangeNotifier {
     scenario = currentScenario.copyWith(characters: updated);
   }
 
+
+  void _restoreDeveloperGoalPreview() {
+    if (_disposed || _developerGoalBackup == null) return;
+    currentGoal = _developerGoalBackup!;
+    currentGoalNodeId = _developerGoalNodeBackup ?? '';
+    currentGoalIndex = _developerGoalIndexBackup ?? 0;
+    currentGoalTotal = _developerGoalTotalBackup ?? 0;
+    currentGoalEnded = _developerGoalEndedBackup ?? false;
+    _developerGoalBackup = null;
+    _developerGoalNodeBackup = null;
+    _developerGoalIndexBackup = null;
+    _developerGoalTotalBackup = null;
+    _developerGoalEndedBackup = null;
+    _developerGoalPreviewTimer = null;
+    _notify();
+  }
+
+  void _restoreDeveloperConditionPreview() {
+    if (_disposed || _developerConditionBackup == null) return;
+    protagonistCondition = _developerConditionBackup!;
+    protagonistInjuries = List<dynamic>.of(_developerInjuriesBackup ?? const <dynamic>[]);
+    _developerConditionBackup = null;
+    _developerInjuriesBackup = null;
+    _developerConditionPreviewTimer = null;
+    _syncProtagonistStatus();
+    _notify();
+  }
+
+  void _enqueueAffectionPulse({
+    String characterId = '',
+    required String characterName,
+    required int delta,
+    String dedupeKey = '',
+  }) {
+    if (delta == 0) return;
+
+    final cleanName = characterName.trim();
+    final cleanId = characterId.trim();
+    if (cleanName.isEmpty && cleanId.isEmpty) return;
+
+    final now = DateTime.now();
+    _recentHudEventKeys.removeWhere(
+      (_, time) => now.difference(time) > const Duration(seconds: 4),
+    );
+    final key = dedupeKey.trim().isNotEmpty
+        ? dedupeKey.trim()
+        : 'affection-pulse:$cleanId:$cleanName:$delta';
+    final previous = _recentHudEventKeys[key];
+    if (previous != null &&
+        now.difference(previous) < const Duration(milliseconds: 1800)) {
+      return;
+    }
+    _recentHudEventKeys[key] = now;
+
+    // 同一角色尚未出场时如果连续发生多次变化，合并成一次，
+    // 等角色真正进入当前对白后再统一跳一次，避免连续闪烁。
+    var mergedDelta = delta;
+    _affectionPulseQueue.removeWhere((pulse) {
+      final sameId = cleanId.isNotEmpty &&
+          pulse.characterId.isNotEmpty &&
+          pulse.characterId == cleanId;
+      final sameName = cleanName.isNotEmpty &&
+          pulse.characterName.isNotEmpty &&
+          _normalizeSpeakerLookupName(pulse.characterName) ==
+              _normalizeSpeakerLookupName(cleanName);
+      if (sameId || sameName) {
+        mergedDelta += pulse.delta;
+        return true;
+      }
+      return false;
+    });
+
+    _affectionPulseQueue.add(
+      NovelAffectionPulse(
+        id: ++_affectionPulseSerial,
+        characterId: cleanId,
+        characterName: cleanName,
+        delta: mergedDelta,
+      ),
+    );
+  }
+
+  void _previewDeveloperAffectionDelta(int delta) {
+    final currentScenario = scenario;
+    if (currentScenario == null || delta == 0) return;
+
+    MapEntry<String, NovelCharacter>? target;
+    final speaking = currentSpeakerCharacter;
+    if (speaking != null && !speaking.isMain) {
+      for (final entry in currentScenario.characters.entries) {
+        if (entry.value.id == speaking.id ||
+            entry.value.matchesName(speaking.name)) {
+          target = entry;
+          break;
+        }
+      }
+    }
+
+    if (target == null) {
+      for (final entry in currentScenario.characters.entries) {
+        if (!entry.value.isMain) {
+          target = entry;
+          break;
+        }
+      }
+    }
+    if (target == null) return;
+
+    final character = target.value;
+    final updated = Map<String, NovelCharacter>.of(currentScenario.characters);
+    updated[target.key] = character.copyWith(
+      affection: character.affection + delta,
+    );
+    scenario = currentScenario.copyWith(characters: updated);
+
+    _enqueueAffectionPulse(
+      characterId: character.id,
+      characterName: character.name,
+      delta: delta,
+      dedupeKey:
+          'developer:affection:${character.id}:$delta:${DateTime.now().microsecondsSinceEpoch}',
+    );
+    _notify();
+  }
+
+  /// 开发者测试专用：只预览当前客户端反馈，不写入后端、数据库或真实存档。
+  ///
+  /// 这些入口复用正式的局部动效 / 纯文字反馈 / 目标 / 伤势组件，确保预览与正式效果一致。
+  void previewDeveloperFeedback(String type) {
+    if (_disposed) return;
+
+    switch (type) {
+      case 'affection_up':
+        _previewDeveloperAffectionDelta(2);
+        break;
+      case 'affection_down':
+        _previewDeveloperAffectionDelta(-2);
+        break;
+      case 'item_obtained':
+        _enqueueHudEvent(
+          kind: 'inventory',
+          title: '获得物品',
+          detail: '云岚宗令牌 ×1',
+          delta: 1,
+          tone: 'accent',
+          dedupeKey: 'developer:item:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        break;
+      case 'score_gain':
+        // 开发者预览也直接驱动右上角积分星星，不再走通用 HUD。
+        score = NovelScore(
+          total: score.total + 13,
+          delta: 13,
+          reason: '剧情推进',
+        );
+        _notify();
+        break;
+      case 'goal_refresh':
+        _developerGoalPreviewTimer?.cancel();
+        _developerGoalBackup ??= currentGoal;
+        _developerGoalNodeBackup ??= currentGoalNodeId;
+        _developerGoalIndexBackup ??= currentGoalIndex;
+        _developerGoalTotalBackup ??= currentGoalTotal;
+        _developerGoalEndedBackup ??= currentGoalEnded;
+
+        currentGoal = '揭开斗气消失真相并拜药老为师';
+        currentGoalNodeId = 'DEV-N02';
+        currentGoalIndex = 2;
+        currentGoalTotal = 15;
+        currentGoalEnded = false;
+        _enqueueHudEvent(
+          kind: 'milestone',
+          title: '目标更新',
+          detail: currentGoal,
+          tone: 'accent',
+          dedupeKey: 'developer:goal_refresh:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        _notify();
+
+        _developerGoalPreviewTimer =
+            Timer(const Duration(milliseconds: 3200), _restoreDeveloperGoalPreview);
+        break;
+      case 'goal_completed':
+        final goal = currentGoal.trim().isNotEmpty
+            ? currentGoal.trim()
+            : '结束退婚风波并确立三年之约';
+        _enqueueHudEvent(
+          kind: 'goal_completed',
+          title: '目标完成',
+          detail: goal,
+          tone: 'accent',
+          dedupeKey: 'developer:goal_completed:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        break;
+      case 'goal_failed':
+        final goal = currentGoal.trim().isNotEmpty
+            ? currentGoal.trim()
+            : '潜入云岚宗后山';
+        _enqueueHudEvent(
+          kind: 'goal_failed',
+          title: '目标失败',
+          detail: goal,
+          tone: 'danger',
+          dedupeKey: 'developer:goal_failed:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        break;
+      case 'damage':
+        _developerConditionPreviewTimer?.cancel();
+        _developerConditionBackup ??= protagonistCondition;
+        _developerInjuriesBackup ??= List<dynamic>.of(protagonistInjuries);
+
+        protagonistCondition = '重伤';
+        protagonistInjuries = <dynamic>['左肩受创'];
+        _syncProtagonistStatus();
+        _enqueueHudEvent(
+          kind: 'injury',
+          title: '受到重创',
+          detail: '左肩受创 · 当前状态：重伤',
+          tone: 'danger',
+          dedupeKey: 'developer:damage:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        _notify();
+
+        _developerConditionPreviewTimer = Timer(
+          const Duration(milliseconds: 3200),
+          _restoreDeveloperConditionPreview,
+        );
+        break;
+      case 'recovery':
+        _developerConditionPreviewTimer?.cancel();
+        _developerConditionBackup ??= protagonistCondition;
+        _developerInjuriesBackup ??= List<dynamic>.of(protagonistInjuries);
+
+        protagonistCondition = '健康';
+        protagonistInjuries = <dynamic>[];
+        _syncProtagonistStatus();
+        _enqueueHudEvent(
+          kind: 'injury',
+          title: '伤势恢复',
+          detail: '身体状态已恢复',
+          tone: 'accent',
+          dedupeKey: 'developer:recovery:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        _notify();
+
+        _developerConditionPreviewTimer = Timer(
+          const Duration(milliseconds: 3200),
+          _restoreDeveloperConditionPreview,
+        );
+        break;
+      case 'risk':
+        _enqueueHudEvent(
+          kind: 'risk',
+          title: '警戒上升',
+          detail: '守卫已经开始留意你的行动',
+          tone: 'warning',
+          dedupeKey: 'developer:risk:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        break;
+      default:
+        return;
+    }
+  }
+
   void _enqueueHudEvent({
     required String kind,
     required String title,
@@ -2033,10 +2537,42 @@ class NovelGameController extends ChangeNotifier {
     String tone = 'neutral',
     String dedupeKey = '',
   }) {
-    // 游戏主界面不再显示全局 HUD 浮层。
-    // 剧情推进、路线变化、受伤、积分、背包、关系等变化都只更新真实状态，
-    // 不再额外弹出屏幕提示。好感度变化由当前角色对话框旁的爱心动画承担。
-    return;
+    final cleanTitle = title.trim();
+    final cleanDetail = detail.trim();
+    if (cleanTitle.isEmpty && cleanDetail.isEmpty) return;
+
+    final now = DateTime.now();
+    _recentHudEventKeys.removeWhere(
+      (_, time) => now.difference(time) > const Duration(seconds: 4),
+    );
+    final key = dedupeKey.trim().isNotEmpty
+        ? dedupeKey.trim()
+        : '$kind|$cleanTitle|$cleanDetail|$delta';
+    final previous = _recentHudEventKeys[key];
+    if (previous != null && now.difference(previous) < const Duration(milliseconds: 1800)) {
+      return;
+    }
+    _recentHudEventKeys[key] = now;
+
+    final event = NovelHudEvent(
+      id: ++_hudEventSerial,
+      kind: kind,
+      title: cleanTitle,
+      detail: cleanDetail,
+      delta: delta,
+      tone: tone,
+    );
+
+    // 目标完成/失败是阶段级反馈，优先于普通物品/人物状态等轻提示。
+    if (kind == 'goal_completed' || kind == 'goal_failed') {
+      _hudEventQueue.insert(0, event);
+    } else {
+      _hudEventQueue.add(event);
+    }
+
+    if (hudEvent == null) {
+      _showNextHudEvent();
+    }
   }
 
   void _showNextHudEvent() {
@@ -2095,9 +2631,12 @@ class NovelGameController extends ChangeNotifier {
     _diceTimer?.cancel();
     _taskTimer?.cancel();
     _hudEventTimer?.cancel();
+    _developerGoalPreviewTimer?.cancel();
+    _developerConditionPreviewTimer?.cancel();
     _streamUiTimer?.cancel();
     _pendingStreamText = '';
     _hudEventQueue.clear();
+    _affectionPulseQueue.clear();
     _socketSubscription?.cancel();
     unawaited(backend.close());
     unawaited(socket.dispose());

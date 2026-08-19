@@ -23,6 +23,11 @@ class MessageApi {
     );
   }
 
+  /// Novel：读取当前阶段目标。用于首次进入、刷新和 WebSocket 重连后的恢复。
+  static Future<Map<String, dynamic>> getNovelGoal(String sessionId) {
+    return ApiClient.instance.get('/novel/goal/$sessionId');
+  }
+
   /// Vue: deleteMessage(messageId)
   static Future<void> deleteMessage(String messageId) async {
     await ApiClient.instance.delete('/messages/$messageId');

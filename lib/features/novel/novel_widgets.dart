@@ -1,25 +1,37 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
+import 'dart:ui' as ui;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lottie/lottie.dart';
 
+import 'novel_asr_stream_service.dart';
 import 'novel_game_controller.dart';
+import 'novel_socket_service.dart';
 import 'novel_models.dart';
 
 class NovelPalette {
-  // 与 app_shared.dart / share_world_page.dart 对齐。
-  static const Color background = Color(0xFF15131C);
-  static const Color panel = Color.fromARGB(25, 253, 253, 253);
-  static const Color panelStrong = Color.fromARGB(34, 253, 253, 253);
-  static const Color text = Color(0xFFF5F1E6);
-  static const Color muted = Color(0xFF8B8796);
-  static const Color accent = Color.fromARGB(255, 129, 246, 112);
-  static const Color accentDark = Color(0xFF10160F);
-  static const Color warning = Color(0xFFE8C58B);
+  // 小说模式主题强调色统一为低饱和抹茶绿；正文仍以白 / 灰白保证可读性。
+  // 信息页与剧情页统一使用中性冷灰黑基底。
+  // 不再使用偏棕的“羊皮纸黑”，避免角色 / 背包页显旧、显脏。
+  static const Color background = Color(0xFF0C0E10);
+  static const Color panel = Color(0x18FFFFFF);
+  static const Color panelStrong = Color(0x26FFFFFF);
+  static const Color text = Color(0xFFF4F5F2);
+  static const Color muted = Color(0xFF949A96);
+  // Novel 模式统一主绿色。交互选中 / 主按钮 / 成功提示直接引用 accent。
+  // 深色文字和浅色承载层使用派生色，避免在白底上直接用高亮绿导致看不清。
+  // 平衡型主绿色：比荧光绿柔和，但仍保留足够的游戏感和识别度。
+  static const Color accent = Color(0xFF6FD35F);
+  static const Color accentDeep = Color(0xFF4B9142);
+  static const Color accentSoft = Color(0xFFF1F8EF);
+  static const Color accentLine = Color(0xFFD7E8D2);
+  static const Color accentDark = Color(0xFF1C3219);
+  static const Color warning = Color(0xFFE2C27A);
   static const Color danger = Color(0xFFE7685E);
 }
 
@@ -1163,20 +1175,60 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   }
 
   Widget _fallback() {
-    // 剧情页绝不读取任何 APP 主页背景资源。
-    // 剧情背景为空/加载失败时仅显示暗色占位，等待后端剧情背景。
-    return const DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: <Color>[
-            Color(0xFF343027),
-            Color(0xFF171A17),
-            Color(0xFF080908),
-          ],
+    final asset = widget.fallbackAsset.trim();
+    if (asset.isEmpty) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: <Color>[
+              Color(0xFF25282B),
+              Color(0xFF121416),
+              Color(0xFF08090A),
+            ],
+          ),
         ),
-      ),
+      );
+    }
+
+    // 兜底图只负责避免“背景为空 = 黑屏”。
+    // 刻意做较强高斯模糊 + 轻暗遮罩，让它退到视觉背景层，
+    // 不与真正的剧情场景图抢信息。
+    final sigma = _lowPowerEffects ? 0.0 : 0.0;
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        Transform.scale(
+          scale: 1.06,
+          child: Image.asset(
+            asset,
+            fit: BoxFit.cover,
+            filterQuality: FilterQuality.medium,
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[
+                    Color(0xFF25282B),
+                    Color(0xFF121416),
+                    Color(0xFF08090A),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        // 真正叠在兜底图上方的高斯模糊遮罩。
+        ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1296,11 +1348,11 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
               end: Alignment.bottomCenter,
               stops: const <double>[0, .16, .56, .80, 1],
               colors: <Color>[
-                Colors.black54,
+                Color(0x4A000000),
                 Colors.transparent,
                 Colors.transparent,
-                Color(0x42000000),
-                Color(0xD6000000),
+                Color(0x30000000),
+                Color(0xA8000000),
               ],
             ),
           ),
@@ -1313,8 +1365,8 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
               stops: <double>[.46, .82, 1],
               colors: <Color>[
                 Colors.transparent,
-                Color(0x26000000),
-                Color(0xA0000000),
+                Color(0x19000000),
+                Color(0x70000000),
               ],
             ),
           ),
@@ -1360,6 +1412,7 @@ class NovelTopHud extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final generating = controller.isGenerating;
+
     return AnimatedOpacity(
       opacity: generating ? .42 : 1,
       duration: const Duration(milliseconds: 420),
@@ -1389,6 +1442,7 @@ class NovelTopHud extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
                           _ConditionAvatar(
+                            avatarUrl: controller.protagonist?.avatarUrl ?? '',
                             gender: controller.protagonist?.gender ?? '',
                           ),
                           const SizedBox(width: 8),
@@ -1397,21 +1451,45 @@ class NovelTopHud extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
                               ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 78),
-                                child: Text(
-                                  controller.protagonistName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: NovelPalette.text,
-                                    fontSize: 12.5,
-                                    height: 1,
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                                constraints: const BoxConstraints(maxWidth: 156),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    Flexible(
+                                      child: Text(
+                                        controller.protagonistName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: NovelPalette.text,
+                                          // 顶部主角名使用 App 默认黑体 / MiSans，不再强制明朝体。
+                                          fontSize: 12.8,
+                                          height: 1,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: .45,
+                                          // 不做硬描边，只给文字一点柔和的暗部托底。
+                                          shadows: <Shadow>[
+                                            Shadow(
+                                              color: Color(0xA8000000),
+                                              blurRadius: 3.4,
+                                              offset: Offset(0, 1),
+                                            ),
+                                            Shadow(
+                                              color: Color(0x48000000),
+                                              blurRadius: 7,
+                                              offset: Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               const SizedBox(height: 5),
-                              _HealthBar(progress: controller.protagonistHp / 100),
+                              _HealthBar(
+                                progress: controller.protagonistHp / 100,
+                              ),
                             ],
                           ),
                         ],
@@ -1425,12 +1503,258 @@ class NovelTopHud extends StatelessWidget {
               alignment: Alignment.centerRight,
               child: _TopIconButton(
                 tooltip: '设置',
-                icon: Icons.more_horiz_rounded,
+                icon: Icons.settings_outlined,
                 onTap: onOpenSettings,
-                size: 19,
+                size: 20,
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class NovelGoalHud extends StatefulWidget {
+  const NovelGoalHud({
+    super.key,
+    required this.text,
+    this.feedbackEvent,
+  });
+
+  final String text;
+  final NovelHudEvent? feedbackEvent;
+
+  @override
+  State<NovelGoalHud> createState() => _NovelGoalHudState();
+}
+
+class _NovelGoalHudState extends State<NovelGoalHud> {
+  String _displayText = '';
+  String _status = 'normal';
+  bool _visible = false;
+  double _scale = 1;
+  int _lastFeedbackId = -1;
+  int _animationToken = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _displayText = widget.text.trim();
+    _visible = _displayText.isNotEmpty;
+  }
+
+  bool _isGoalFeedback(NovelHudEvent? event) {
+    return event != null &&
+        (event.kind == 'goal_completed' || event.kind == 'goal_failed');
+  }
+
+  @override
+  void didUpdateWidget(covariant NovelGoalHud oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final event = widget.feedbackEvent;
+    if (_isGoalFeedback(event) && event!.id != _lastFeedbackId) {
+      _lastFeedbackId = event.id;
+      unawaited(_playGoalFeedback(event));
+      return;
+    }
+
+    final next = widget.text.trim();
+    if (_status == 'normal' && next != _displayText) {
+      unawaited(_swapGoal(next));
+    }
+  }
+
+  Future<void> _swapGoal(String next) async {
+    final token = ++_animationToken;
+
+    if (_displayText.isNotEmpty) {
+      setState(() {
+        _visible = false;
+        _scale = 1;
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 190));
+      if (!mounted || token != _animationToken) return;
+    }
+
+    setState(() {
+      _status = 'normal';
+      _displayText = next;
+      _visible = next.isNotEmpty;
+      _scale = 1;
+    });
+  }
+
+  Future<void> _playGoalFeedback(NovelHudEvent event) async {
+    final token = ++_animationToken;
+    final feedbackText = event.detail.trim().isNotEmpty
+        ? event.detail.trim()
+        : (_displayText.isNotEmpty ? _displayText : widget.text.trim());
+
+    setState(() {
+      _status = event.kind == 'goal_failed' ? 'failed' : 'completed';
+      _displayText = feedbackText;
+      _visible = feedbackText.isNotEmpty;
+      _scale = 1.15; // ⬅️ 从 1.045 改为 1.15，放大冲击力
+    });
+
+    await Future<void>.delayed(const Duration(milliseconds: 300)); // ⬅️ 从 220 延长到 300 毫秒
+    if (!mounted || token != _animationToken) return;
+    setState(() => _scale = 1);
+
+    // 延长成功/失败状态的停留时间，让玩家有充足时间看清楚左上角的变化
+    await Future<void>.delayed(const Duration(milliseconds: 1400)); // ⬅️ 从 650 延长到 1400 毫秒
+    if (!mounted || token != _animationToken) return;
+    setState(() => _visible = false);
+
+    await Future<void>.delayed(const Duration(milliseconds: 270));
+    if (!mounted || token != _animationToken) return;
+
+    final next = widget.text.trim();
+    setState(() {
+      _status = 'normal';
+      _displayText = next;
+      _visible = next.isNotEmpty;
+      _scale = 1;
+    });
+  }
+
+  @override
+  void dispose() {
+    _animationToken++;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 430;
+    final completed = _status == 'completed';
+    final failed = _status == 'failed';
+
+    final label = completed
+        ? '目标完成'
+        : failed
+            ? '目标失败'
+            : '当前目标';
+
+    final accentColor = failed
+        ? NovelPalette.danger
+        : Colors.white.withOpacity(.86);
+
+    return IgnorePointer(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: compact ? 286 : 372),
+        child: Padding(
+          padding: EdgeInsets.only(left: compact ? 12 : 16),
+          child: AnimatedOpacity(
+            opacity: _visible ? 1 : 0,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            child: AnimatedScale(
+              scale: _scale,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.centerLeft,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Container(
+                        width: 4.2,
+                        height: compact ? 11.0 : 12.0,
+                        decoration: BoxDecoration(
+                          color: accentColor,
+                          borderRadius: BorderRadius.circular(.8),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Stack(
+                        alignment: Alignment.centerLeft,
+                        children: <Widget>[
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: compact ? 9.2 : 9.6,
+                              height: 1,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.35,
+                              foreground: Paint()
+                                ..style = PaintingStyle.stroke
+                                ..strokeWidth = .52
+                                ..color = const Color(0x88000000),
+                            ),
+                          ),
+                          Text(
+                            label,
+                            style: TextStyle(
+                              color: accentColor,
+                              fontSize: compact ? 9.2 : 9.6,
+                              height: 1,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.35,
+                              shadows: const <Shadow>[
+                                Shadow(
+                                  color: Color(0x52000000),
+                                  blurRadius: 2.2,
+                                  offset: Offset(0, 1),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5.5),
+                  Stack(
+                    alignment: Alignment.centerLeft,
+                    children: <Widget>[
+                      Text(
+                        _displayText,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.left,
+                        style: TextStyle(
+                          fontSize: compact ? 11.4 : 12.0,
+                          height: 1.46,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .16,
+                          foreground: Paint()
+                            ..style = PaintingStyle.stroke
+                            ..strokeWidth = .62
+                            ..color = const Color(0x92000000),
+                        ),
+                      ),
+                      Text(
+                        _displayText,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.left,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.97),
+                          fontSize: compact ? 11.4 : 12.0,
+                          height: 1.46,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .16,
+                          shadows: const <Shadow>[
+                            Shadow(
+                              color: Color(0x48000000),
+                              blurRadius: 2.4,
+                              offset: Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1452,57 +1776,135 @@ class NovelLocationHud extends StatelessWidget {
     if (title.trim().isEmpty && subtitle.trim().isEmpty) {
       return const SizedBox.shrink();
     }
+
     final compact = MediaQuery.sizeOf(context).width < 430;
     final hasSubtitle = subtitle.trim().isNotEmpty;
+    final maxWidth = compact ? 262.0 : 356.0;
+
     return IgnorePointer(
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: compact ? 235 : 330),
+        constraints: BoxConstraints(maxWidth: maxWidth),
         child: Padding(
-          // 左上角场景 HUD 改为纯文字：去掉主题绿竖线，
-          // 只保留轻微左侧留白，让标题更干净、更像场景信息而不是功能控件。
           padding: EdgeInsets.only(left: compact ? 12 : 16),
-          child: SizedBox(
-            height: hasSubtitle ? 38 : 30,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                if (subtitle.trim().isNotEmpty)
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.left,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(.46),
-                      fontSize: 8.5,
-                      height: 1.05,
-                      letterSpacing: 1.0,
-                      shadows: const <Shadow>[
-                        Shadow(color: Colors.black87, blurRadius: 8),
-                      ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              SizedBox(
+                width: compact ? 192 : 230,
+                height: 14,
+                child: Row(
+                  children: <Widget>[
+                    Text(
+                      '✦',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.95),
+                        fontSize: compact ? 11.8 : 12.8,
+                        height: 1,
+                        fontWeight: FontWeight.w500,
+                        shadows: const <Shadow>[
+                          Shadow(
+                            color: Color(0x82000000),
+                            blurRadius: 2.4,
+                            offset: Offset(0, 1),
+                          ),
+                          Shadow(
+                            color: Color(0x36000000),
+                            blurRadius: 5,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                if (subtitle.trim().isNotEmpty) const SizedBox(height: 3),
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.left,
-                  style: const TextStyle(
-                    color: NovelPalette.text,
-                    fontSize: 13.2,
-                    height: 1.08,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: .45,
-                    shadows: <Shadow>[
-                      Shadow(color: Colors.black87, blurRadius: 9),
-                    ],
-                  ),
+                    SizedBox(width: compact ? 5 : 6),
+                    Expanded(
+                      child: Container(
+                        height: .8,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: <Color>[
+                              Colors.white.withOpacity(.74),
+                              Colors.white.withOpacity(.42),
+                              Colors.white.withOpacity(.14),
+                              Colors.transparent,
+                            ],
+                            stops: const <double>[0, .30, .68, 1],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.left,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.98),
+                  fontFamily: 'WenJinMinchoP0',
+                  fontSize: compact ? 15.0 : 15.8,
+                  height: 1.10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.08,
+                  shadows: const <Shadow>[
+                    Shadow(
+                      color: Color(0x42000000),
+                      blurRadius: 2.2,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
+                ),
+              ),
+              if (hasSubtitle) ...<Widget>[
+                const SizedBox(height: 4),
+                Stack(
+                  alignment: Alignment.centerLeft,
+                  children: <Widget>[
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.left,
+                      style: TextStyle(
+                        fontSize: compact ? 8.5 : 8.9,
+                        height: 1.08,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 1.10,
+                        foreground: Paint()
+                          ..style = PaintingStyle.stroke
+                          ..strokeWidth = .85
+                          ..color = const Color(0xA8000000),
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.left,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.76),
+                        fontSize: compact ? 8.5 : 8.9,
+                        height: 1.08,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 1.10,
+                        shadows: const <Shadow>[
+                          Shadow(
+                            color: Color(0x3D000000),
+                            blurRadius: 2,
+                            offset: Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
-            ),
+            ],
           ),
         ),
       ),
@@ -1552,9 +1954,15 @@ class _TopIconButton extends StatelessWidget {
   }
 }
 
-class _ConditionAvatar extends StatelessWidget {
-  const _ConditionAvatar({required this.gender});
 
+
+class _ConditionAvatar extends StatelessWidget {
+  const _ConditionAvatar({
+    required this.avatarUrl,
+    required this.gender,
+  });
+
+  final String avatarUrl;
   final String gender;
 
   bool get _isFemale {
@@ -1568,21 +1976,23 @@ class _ConditionAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final asset = _isFemale
+    final fallbackAsset = _isFemale
         ? 'assets/images/female.webp'
         : 'assets/images/male.webp';
 
-    // 顶部头像只显示本地透明 WebP 本身：
-    // 不裁圆、不加背景、不加边框、不加状态圈、不加阴影。
+    // 顶部 HUD 头像只保留头像本身，不再叠加主题色头像框、描边或辉光。
     return SizedBox(
       width: 34,
       height: 34,
-      child: Image.asset(
-        asset,
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-        gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+      child: ClipOval(
+        child: NovelArtwork(
+          url: avatarUrl.trim(),
+          assetCandidates: <String>[fallbackAsset],
+          fit: BoxFit.cover,
+          alignment: Alignment.center,
+          fallbackText: '',
+          filterQuality: FilterQuality.medium,
+        ),
       ),
     );
   }
@@ -1628,7 +2038,7 @@ class NovelSceneArrivalTitle extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Color(0xFFF7F3EA),
-              fontSize: 46,
+              fontSize: 35,
               // 中文场景标题不要把行高压得低于 1，避免上下笔画被裁掉。
               height: 1.12,
               fontWeight: FontWeight.w500,
@@ -2301,6 +2711,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     final mode = isNarration ? _NovelLineMode.narration : isHost ? _NovelLineMode.protagonist : _NovelLineMode.npc;
 
     final affection = mode == _NovelLineMode.npc ? character?.affection : null;
+    final affectionPulse = mode == _NovelLineMode.npc
+        ? controller.affectionPulseFor(character, speaker)
+        : null;
 
     // 剧情页人物层只显示真正的立绘，不再把头像/首字母当成立绘顶上去。
     final portraitUrl = <String>[
@@ -2322,19 +2735,27 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       builder: (context, constraints) {
         final screen = MediaQuery.sizeOf(context);
         final compact = screen.width <= 600;
+        // 只有旁白 / 剧情正文需要轻微避开右侧固定 HUD。
+        // 不再按整列导航宽度硬切正文，避免右边留下过大的空白。
+        final narrationRightSafeWidth = compact ? 46.0 : 54.0;
         final availableHeight = constraints.maxHeight.isFinite ? constraints.maxHeight : screen.height - MediaQuery.paddingOf(context).vertical;
         final browsingStory = controller.hasNext;
 
-        // 回看剧情时底部不再放“角色 / 经历 / 物品”，
-        // 让画面底部只保留自然呼吸区。
-        final footerHeight = browsingStory
-            ? 0.0
-            : _adaptiveFooterHeight(
+        // 一级导航已移回右侧 HUD，不再占据底部。
+        // 回看历史 / 逐字显示 / 生成中只影响输入区；底部只保留系统安全区。
+        final composerVisible =
+            !browsingStory && !controller.isGenerating && !_revealing;
+        final navigationHeight = MediaQuery.viewPaddingOf(context).bottom;
+        final composerHeight = composerVisible
+            ? _adaptiveFooterHeight(
                 availableWidth: constraints.maxWidth,
                 compact: compact,
                 choicesVisible: canShowChoices,
-              );
-        final footerBottom = compact ? 4.0 : 8.0;
+              )
+            : 0.0;
+        final footerHeight = navigationHeight +
+            (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
+        final footerBottom = 0.0;
 
         // 按真实视觉高度预留，不再给选择区留过多空白。
         final choiceCount = controller.choices.length;
@@ -2353,10 +2774,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         // 正文与选择区之间只留一条很小的安全距离。
         final contentChoiceGap = compact ? 5.0 : 6.0;
 
-        // 角色对白整体上提一些。
-        // 只调整普通角色/主角对白的位置，不改变旁白、选项区、输入框和右侧入口。
-        // 底部多留出呼吸空间，避免对白贴着屏幕下沿。
-        final dialogGap = compact ? 88.0 : 102.0;
+        // 右侧 HUD 不占底部空间；对白只保留必要的呼吸距离。
+        // 底部一级导航已撤走，角色对白不再贴着输入区/屏幕底边。
+        // 底部导航撤走后继续把角色对白上提，避免对白视觉重心压在屏幕底边。
+        final dialogGap = compact ? 78.0 : 94.0;
         final panelBottom = footerBottom + footerHeight + dialogGap;
 
         // 最后一句出现选项时，不再把正文整体按选项数量不断往上推。
@@ -2407,29 +2828,27 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                             (maxStage - minStage))
                         .clamp(0.0, 1.0);
 
-                    // ✨ 1. 人物大小：窄屏占比更高（0.9），宽屏占比更低（0.75），
-                    // 随宽度平滑过渡，同时用 clamp 的上下限防止极端尺寸下跑飞。
-                    final widthRatio = lerpDouble(1.10, 0.96, t)!;
-                    final minPortraitWidth = lerpDouble(540.0, 760.0, t)!;
-                    final maxPortraitWidth = lerpDouble(1160.0, 1320.0, t)!;
+                    // 对话构图改为真正的左右分区：
+                    // NPC 占左侧，主角占右侧，中央与另一侧留给对应对白。
+                    // 不再把立绘放大到几乎铺满整个屏幕，否则文字即使移动也仍像“浮在人物身上”。
+                    final widthRatio = lerpDouble(.92, .64, t)!;
+                    final minPortraitWidth = lerpDouble(380.0, 650.0, t)!;
+                    final maxPortraitWidth = lerpDouble(560.0, 960.0, t)!;
                     final portraitWidth = (stageSize.width * widthRatio)
                         .clamp(minPortraitWidth, maxPortraitWidth)
                         .toDouble();
 
-                    final fullPortraitHeight = portraitWidth * 1.16;
+                    final fullPortraitHeight = portraitWidth * 1.22;
                     final showOnRight = mode == _NovelLineMode.protagonist;
 
-                    // ✨ 2. 让人物往上提：数字越小，人物越高。
-                    final sinkOffset = -(fullPortraitHeight * 0.15);
+                    // 立绘稍微沉到底部，保留半身视觉，同时避免头部顶到左上 HUD。
+                    final sinkOffset = -(fullPortraitHeight * 0.08);
 
-                    // ✨ 3. NPC 靠左 / 主角靠右的横向偏移，同样连续插值，
-                    // 不再是 narrowStage ? A : B 的二选一。
-                    // 注意：手机宽度大多落在 360~430 之间，插值区间起点太靠近
-                    // 会导致改基准值时手机端几乎看不出变化，所以这里把窄屏端的
-                    // 基准值调得更负一些，确保在常见手机宽度下也能明显左移。
-                    final npcLeftOffset = lerpDouble(-138.0, -42.0, t)!;
-                    final protagonistRightOffset =
-                        lerpDouble(-54.0, -6.0, t)!;
+                    // NPC 真正贴向最左；主角镜像贴向最右。
+                    // 窄屏把人物再向外推出一点，给另一侧文字腾出可读空间。
+                    final edgePush = lerpDouble(.23, .055, t)!;
+                    final npcLeftOffset = -(portraitWidth * edgePush);
+                    final protagonistRightOffset = -(portraitWidth * edgePush);
 
                     return Positioned(
                       bottom: sinkOffset, // 使用上面计算好的高低偏移
@@ -2468,17 +2887,15 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                 if (canShowChoices)
                   Positioned(
                     left: 0,
-                    right: 0,
+                    right: narrationRightSafeWidth,
                     top: choiceContentTop,
                     bottom: choiceContentBottom,
                     child: _withSwipeMotion(
                       Padding(
-                        // 右侧单独加宽：避开右上角“角色 / 经历 / 背包”竖排入口
-                      // 所在的区域，防止长正文的行尾伸到按钮底下去。
-                      padding: EdgeInsets.only(
-                        left: compact ? 16 : 30,
-                        right: compact ? 22 : 38,
-                      ),
+                        // 右侧 HUD 只占窄列，正文仍保持主体居中。
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compact ? 16 : 30,
+                        ),
                       child: Align(
                         // 短正文始终贴着选择框上方；
                         // 内容增加时只向上扩展，不会跑到屏幕中间悬空。
@@ -2508,16 +2925,18 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     ),
                   )
                 else
-                  Positioned.fill(
+                  Positioned(
+                    left: 0,
+                    right: narrationRightSafeWidth,
+                    top: 0,
                     bottom: footerHeight + footerBottom + 8,
                     child: _withSwipeMotion(
                       Align(
                         alignment: const Alignment(0, -.02),
                       child: Padding(
-                        // 同上：右侧加宽避开角色/经历/背包入口。
-                        padding: EdgeInsets.only(
-                          left: compact ? 16 : 30,
-                          right: compact ? 22 : 38,
+                        // 右侧 HUD 保持轻量，不额外挤压旁白主体。
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compact ? 16 : 30,
                         ),
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
@@ -2549,6 +2968,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
               else
                 Positioned(
                   left: 0,
+                  // 角色对白不做右侧 HUD 宽度限制；保持原有左右构图与完整阅读宽度。
                   right: 0,
                   top: canShowChoices ? choiceContentTop : null,
                   bottom: canShowChoices ? choiceContentBottom : panelBottom,
@@ -2558,6 +2978,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     mode: mode,
                     speakerName: speaker.isEmpty ? (mode == _NovelLineMode.protagonist ? controller.protagonistName : '角色') : speaker,
                     affection: affection,
+                    affectionPulse: affectionPulse,
+                    onAffectionPulseConsumed: controller.consumeAffectionPulse,
                     displayTextListenable: _displayTextNotifier,
                             emptyTextFallback: emptyTextFallback,
                     isGenerating: controller.isGenerating,
@@ -2593,32 +3015,31 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     screen.width,
                   ),
                 ),
-              if (!controller.isGenerating && !_revealing)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: footerBottom,
-                  child: _NovelDialogFooter(
-                    controller: controller,
-                    choicesAvailable: canShowChoices,
-                    inputEnabled: inputEnabled,
-                    textController: widget.textController,
-                    focusNode: widget.focusNode,
-                    onSend: widget.onSend,
-                    onOpenInventory: widget.onOpenInventory,
-                    onOpenCharacters: widget.onOpenCharacters,
-                    onOpenJourney: widget.onOpenJourney,
-                    onContinue: widget.onContinue,
-                  ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: footerBottom,
+                child: _NovelDialogFooter(
+                  controller: controller,
+                  choicesAvailable: canShowChoices,
+                  inputEnabled: inputEnabled,
+                  showComposer: composerVisible,
+                  textController: widget.textController,
+                  focusNode: widget.focusNode,
+                  onSend: widget.onSend,
+                  onOpenInventory: widget.onOpenInventory,
+                  onOpenCharacters: widget.onOpenCharacters,
+                  onOpenJourney: widget.onOpenJourney,
+                  onContinue: widget.onContinue,
                 ),
+              ),
               if (_showSwipeHint &&
                   !canShowChoices &&
                   !controller.isGenerating &&
                   !_revealing &&
                   (controller.hasPrevious || controller.hasNext))
                 Positioned(
-                  // 左右各留出安全边距，跟进度条对齐，避免文字碰到右侧
-                  // 角色/背包等入口按钮。
+                  // 左右保持统一安全边距；右侧功能入口独立悬浮。
                   left: compact ? 18 : 34,
                   right: compact ? 18 : 34,
                   // 回溯历史时进度条会出现在最底部，滑动提示居中放在它正上方。
@@ -2627,13 +3048,11 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     child: _LuxurySwipeHint(),
                   ),
                 ),
-              // ✨ 沉浸式历史刻度：仅在回溯历史时于面板最底部浮现。
-              // 此时 footerHeight 已收起（见上方 browsingStory 判断），
-              // 底部是空的，不会跟“角色 / 经历 / 物品”footer 打架。
+              // 历史刻度贴近底部安全区；回看时输入区会自动收起。
               Positioned(
                 left: compact ? 18 : 34,
                 right: compact ? 18 : 34,
-                bottom: footerBottom + (compact ? 6 : 8),
+                bottom: footerBottom + navigationHeight + (compact ? 6 : 8),
                 child: _StoryProgressLocator(
                   currentIndex: controller.currentSentenceIndex,
                   totalCount: controller.sentences.length,
@@ -2736,6 +3155,8 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
     required this.mode,
     required this.speakerName,
     required this.affection,
+    required this.affectionPulse,
+    required this.onAffectionPulseConsumed,
     required this.displayTextListenable,
     required this.emptyTextFallback,
     required this.isGenerating,
@@ -2757,6 +3178,8 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
   final _NovelLineMode mode;
   final String speakerName;
   final int? affection;
+  final NovelAffectionPulse? affectionPulse;
+  final ValueChanged<int> onAffectionPulseConsumed;
   final ValueListenable<String> displayTextListenable;
   final String emptyTextFallback;
   final bool isGenerating;
@@ -2778,9 +3201,13 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 600;
+    final screen = MediaQuery.sizeOf(context);
+    final compact = screen.width <= 600;
+
+    // 剧情正文只决定颜色、字号和排版；字体由小说设置统一控制。
+    // 角色名等装饰性 UI 继续使用各自固定字体，不跟随剧情阅读字体切换。
     final style = TextStyle(
-      color: const Color(0xFFF7F7F7),
+      color: const Color(0xFFF4F1EA),
       fontFamily: fontFamily,
       fontSize: fontSize + (compact ? 0 : .4),
       height: 1.82,
@@ -2792,135 +3219,271 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
       ],
     );
 
-    // 角色对白不再使用整块黑色/毛玻璃面板。
-    // 让立绘和场景成为主视觉，仅用“居中名字 + 细线 + 正文”建立对白层级。
-    final dialogueContent = ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 720),
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 26),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: maxPanelHeight.clamp(0.0, 520.0).toDouble(),
-          ),
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    Stack(
-                      alignment: Alignment.center,
-                      children: <Widget>[
-                        _CenteredSpeakerIdentity(
-                          name: speakerName,
-                          affection: affection,
-                          isHost: isHost,
-                        ),
-                        if (onOpenPortrait != null)
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: _PortraitSwitchButton(onTap: onOpenPortrait!),
-                          ),
-                      ],
-                    ),
-                    SizedBox(height: compact ? 9 : 11),
-                    Center(
-                      child: Container(
-                        width: compact ? 138 : 176,
-                        height: 1,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: <Color>[
-                              Colors.white.withOpacity(0),
-                              Colors.white.withOpacity(.44),
-                              Colors.white.withOpacity(0),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: compact ? 14 : 18),
-                    ValueListenableBuilder<String>(
-                      valueListenable: displayTextListenable,
-                      builder: (context, value, _) {
-                        final display = value.isEmpty ? emptyTextFallback : value;
-                        return Text.rich(
-                          TextSpan(
-                            children: _buildNovelDialogueDisplaySpans(
-                              display,
-                              style,
+    // NPC 在左 -> 对白固定到右侧。
+    // 主角在右 -> 对白固定到左侧。
+    final sideAlignment = isHost ? Alignment.centerLeft : Alignment.centerRight;
+    final bottomSideAlignment =
+        isHost ? Alignment.bottomLeft : Alignment.bottomRight;
+
+    // 手机也坚持左右关系，但不能把正文压成极窄的一列。
+    // 对话仍然属于左右两侧，而不是往屏幕中央收。
+    // NPC 右侧文字 / 主角左侧文字都保留足够宽度，只和立绘拉开一点点距离。
+    final dialogueWidth = compact
+        ? (screen.width * .56).clamp(194.0, 330.0).toDouble()
+        : (screen.width * .46).clamp(348.0, 610.0).toDouble();
+
+    final outerHorizontal = compact ? 14.0 : 26.0;
+
+    // 只和立绘拉开一点，不把整个对白推向屏幕中央。
+    final portraitFacingGap = compact ? 10.0 : 16.0;
+
+    // 角色名直接嵌在线条中间：不再使用中央星星，也不再把名字放在线条下方。
+    // 左右线条保持轻微方向感，但提高亮度与厚度，复杂背景下也能看清。
+    final shortNameLine = compact ? 28.0 : 38.0;
+    final longNameLine = compact ? 48.0 : 70.0;
+    final leftNameLine = isHost ? longNameLine : shortNameLine;
+    final rightNameLine = isHost ? shortNameLine : longNameLine;
+
+    final speakerHeaderWidth = compact ? 188.0 : 244.0;
+
+    final dialogueContent = SizedBox(
+      width: dialogueWidth,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: maxPanelHeight.clamp(0.0, 520.0).toDouble(),
+        ),
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Stack(
+                children: <Widget>[
+                  // 名字不再居中整个对话区。
+                  // NPC 立绘在左 -> 名字贴在右侧对白区的左端；
+                  // 主角立绘在右 -> 名字贴在左侧对白区的右端。
+                  Align(
+                    alignment:
+                        isHost ? Alignment.centerRight : Alignment.centerLeft,
+                    child: SizedBox(
+                      width: speakerHeaderWidth,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: isHost
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
+                        children: <Widget>[
+                          SizedBox(
+                            height: compact ? 26 : 29,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: <Widget>[
+                                SizedBox(
+                                  width: leftNameLine,
+                                  child: Container(
+                                    height: 1.05,
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.centerLeft,
+                                        end: Alignment.centerRight,
+                                        colors: <Color>[
+                                          Colors.transparent,
+                                          Colors.white.withOpacity(.28),
+                                          Colors.white.withOpacity(.64),
+                                        ],
+                                        stops: const <double>[0, .40, 1],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: compact ? 8 : 10),
+                                Flexible(
+                                  child: _SpeakerIdentity(
+                                    name: speakerName,
+                                    affection: affection,
+                                    isHost: isHost,
+                                    affectionPulse: affectionPulse,
+                                    onAffectionPulseConsumed:
+                                        onAffectionPulseConsumed,
+                                  ),
+                                ),
+                                SizedBox(width: compact ? 8 : 10),
+                                SizedBox(
+                                  width: rightNameLine,
+                                  child: Container(
+                                    height: 1.05,
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.centerLeft,
+                                        end: Alignment.centerRight,
+                                        colors: <Color>[
+                                          Colors.white.withOpacity(.64),
+                                          Colors.white.withOpacity(.28),
+                                          Colors.transparent,
+                                        ],
+                                        stops: const <double>[0, .60, 1],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        );
-                      },
+                        ],
+                      ),
                     ),
-                    if (showPlayerHint && playerHint.trim().isNotEmpty) ...<Widget>[
-                      const SizedBox(height: 12),
-                      _NarratorHint(text: playerHint),
-                    ],
-                  ],
-                ),
+                  ),
+                  if (onOpenPortrait != null)
+                    Align(
+                      alignment: isHost
+                          ? Alignment.centerLeft
+                          : Alignment.centerRight,
+                      child: _PortraitSwitchButton(onTap: onOpenPortrait!),
+                    ),
+                ],
               ),
-            ),
+              SizedBox(height: compact ? 11 : 14),
+
+              ValueListenableBuilder<String>(
+                valueListenable: displayTextListenable,
+                builder: (context, value, _) {
+                  final display =
+                      value.isEmpty ? emptyTextFallback : value;
+                  return Text.rich(
+                    TextSpan(
+                      children: _buildNovelDialogueDisplaySpans(
+                        display,
+                        style,
+                      ),
+                    ),
+                    // NPC 在左：对白区在右，文字左对齐；
+                    // 主角在右：对白区在左，文字右对齐。
+                    // 两边的文字都朝人物方向“收口”，说话归属更直观。
+                    textAlign: isHost ? TextAlign.right : TextAlign.left,
+                  );
+                },
+              ),
+              if (showPlayerHint && playerHint.trim().isNotEmpty) ...<Widget>[
+                const SizedBox(height: 12),
+                _NarratorHint(text: playerHint),
+              ],
+            ],
           ),
-        );
+        ),
+      ),
+    );
+
+    // 角色对白不再铺任何深色背景 / 渐变卡片。
+    // 只依靠正文自身的文字阴影保证复杂场景中的可读性。
+    final readingZone = Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 4 : 8,
+        vertical: compact ? 4 : 7,
+      ),
+      child: dialogueContent,
+    );
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: onTap,
-      child: choices.isNotEmpty
-          ? Align(
-              alignment: Alignment.bottomCenter,
-              heightFactor: 1,
-              child: dialogueContent,
-            )
-          : Center(child: dialogueContent),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: outerHorizontal),
+        child: Align(
+          alignment:
+              choices.isNotEmpty ? bottomSideAlignment : sideAlignment,
+          child: Padding(
+            padding: EdgeInsets.only(
+              right: isHost ? portraitFacingGap : 0,
+              left: isHost ? 0 : portraitFacingGap,
+            ),
+            child: readingZone,
+          ),
+        ),
+      ),
     );
   }
 }
 
-class _CenteredSpeakerIdentity extends StatefulWidget {
-  const _CenteredSpeakerIdentity({
+class _SpeakerIdentity extends StatefulWidget {
+  const _SpeakerIdentity({
     required this.name,
     required this.affection,
     required this.isHost,
+    required this.affectionPulse,
+    required this.onAffectionPulseConsumed,
   });
 
   final String name;
   final int? affection;
   final bool isHost;
+  final NovelAffectionPulse? affectionPulse;
+  final ValueChanged<int> onAffectionPulseConsumed;
 
   @override
-  State<_CenteredSpeakerIdentity> createState() =>
-      _CenteredSpeakerIdentityState();
+  State<_SpeakerIdentity> createState() =>
+      _SpeakerIdentityState();
 }
 
-class _CenteredSpeakerIdentityState extends State<_CenteredSpeakerIdentity> {
+class _SpeakerIdentityState extends State<_SpeakerIdentity> {
   Timer? _affectionPulseTimer;
   int _pulseSerial = 0;
   int _pulseDirection = 0;
+  int _pulseDelta = 0;
 
   @override
-  void didUpdateWidget(covariant _CenteredSpeakerIdentity oldWidget) {
-    super.didUpdateWidget(oldWidget);
+  void initState() {
+    super.initState();
+    _activateInitialPulse(widget.affectionPulse);
+  }
 
-    if (oldWidget.name != widget.name) {
-      _affectionPulseTimer?.cancel();
-      _pulseDirection = 0;
-      return;
-    }
+  void _activateInitialPulse(NovelAffectionPulse? pulse) {
+    if (pulse == null || pulse.delta == 0) return;
+    _pulseSerial = pulse.id;
+    _pulseDirection = pulse.delta > 0 ? 1 : -1;
+    _pulseDelta = pulse.delta;
+    _schedulePulseReset();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onAffectionPulseConsumed(pulse.id);
+    });
+  }
 
-    final previous = oldWidget.affection;
-    final current = widget.affection;
-    if (previous == null || current == null || previous == current) return;
-
-    _pulseDirection = current > previous ? 1 : -1;
-    _pulseSerial += 1;
+  void _activatePulse(NovelAffectionPulse pulse) {
     _affectionPulseTimer?.cancel();
-    _affectionPulseTimer = Timer(const Duration(milliseconds: 720), () {
+    setState(() {
+      _pulseSerial = pulse.id;
+      _pulseDirection = pulse.delta > 0 ? 1 : -1;
+      _pulseDelta = pulse.delta;
+    });
+    _schedulePulseReset();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onAffectionPulseConsumed(pulse.id);
+    });
+  }
+
+  void _schedulePulseReset() {
+    _affectionPulseTimer?.cancel();
+    _affectionPulseTimer = Timer(const Duration(milliseconds: 760), () {
       if (!mounted) return;
       setState(() => _pulseDirection = 0);
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _SpeakerIdentity oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final nextPulse = widget.affectionPulse;
+    final oldPulseId = oldWidget.affectionPulse?.id ?? 0;
+    if (nextPulse != null &&
+        nextPulse.delta != 0 &&
+        nextPulse.id != oldPulseId) {
+      _activatePulse(nextPulse);
+    }
   }
 
   @override
@@ -2929,43 +3492,45 @@ class _CenteredSpeakerIdentityState extends State<_CenteredSpeakerIdentity> {
     super.dispose();
   }
 
+  Widget _pulseScale({
+    required String keyPrefix,
+    required Widget child,
+    double amount = .34,
+  }) {
+    if (_pulseDirection == 0) return child;
+    return TweenAnimationBuilder<double>(
+      key: ValueKey<String>('$keyPrefix-$_pulseSerial'),
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 620),
+      curve: Curves.easeOutCubic,
+      child: child,
+      builder: (context, value, child) {
+        final scale = 1 + math.sin(value * math.pi) * amount;
+        return Transform.scale(scale: scale, child: child);
+      },
+    );
+  }
+
   Widget _buildAffectionHeart(int affection) {
     final restingColor = Colors.white.withOpacity(.78);
     final restingIcon = affection >= 60
         ? Icons.favorite_rounded
         : Icons.favorite_border_rounded;
 
-    if (_pulseDirection == 0) {
-      return Icon(
-        restingIcon,
-        size: 12.5,
-        color: restingColor,
-      );
-    }
-
     final pulseColor = _pulseDirection > 0
         ? const Color(0xFFFF7DA5)
         : NovelPalette.danger;
 
-    return TweenAnimationBuilder<double>(
-      key: ValueKey<int>(_pulseSerial),
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 620),
-      curve: Curves.elasticOut,
-      builder: (context, value, _) {
-        final safeValue = value.clamp(0.0, 1.0).toDouble();
-        final icon = safeValue < .88
-            ? Icons.favorite_rounded
-            : restingIcon;
-        return Transform.scale(
-          scale: .72 + (.28 * value),
-          child: Icon(
-            icon,
-            size: 13.5,
-            color: Color.lerp(pulseColor, restingColor, safeValue),
-          ),
-        );
-      },
+    final icon = Icon(
+      _pulseDirection == 0 ? restingIcon : Icons.favorite_rounded,
+      size: _pulseDirection == 0 ? 12.5 : 13.5,
+      color: _pulseDirection == 0 ? restingColor : pulseColor,
+    );
+
+    return _pulseScale(
+      keyPrefix: 'heart',
+      amount: .38,
+      child: icon,
     );
   }
 
@@ -2980,15 +3545,26 @@ class _CenteredSpeakerIdentityState extends State<_CenteredSpeakerIdentity> {
         Text(
           widget.name,
           style: const TextStyle(
-            color: Color(0xF2FFFFFF),
-            fontSize: 13.5,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.35,
+            // 角色名必须比正文和装饰线更亮，暗背景下第一眼就能识别。
+            color: Color(0xFFF9FAFC),
+            fontFamily: 'WenJinMinchoP0',
+            fontSize: 14.4,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.10,
             shadows: <Shadow>[
               Shadow(
-                color: Color(0xE6000000),
-                blurRadius: 7,
+                color: Color(0x66000000),
+                blurRadius: 3,
+                offset: Offset(0, 1),
+              ),
+              Shadow(
+                color: Color(0xF0000000),
+                blurRadius: 9,
                 offset: Offset(0, 2),
+              ),
+              Shadow(
+                color: Color(0x33FFFFFF),
+                blurRadius: 7,
               ),
             ],
           ),
@@ -2997,35 +3573,87 @@ class _CenteredSpeakerIdentityState extends State<_CenteredSpeakerIdentity> {
           const SizedBox(width: 8),
           _buildAffectionHeart(affection),
           const SizedBox(width: 3),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            transitionBuilder: (child, animation) {
-              final direction = _pulseDirection >= 0 ? 1.0 : -1.0;
-              return FadeTransition(
-                opacity: animation,
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: Offset(0, .24 * direction),
-                    end: Offset.zero,
-                  ).animate(animation),
-                  child: child,
+          Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: <Widget>[
+              _pulseScale(
+                keyPrefix: 'affection-number',
+                amount: .32,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) {
+                    final direction = _pulseDirection >= 0 ? 1.0 : -1.0;
+                    return FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: Offset(0, .24 * direction),
+                          end: Offset.zero,
+                        ).animate(animation),
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: Text(
+                    '$affection',
+                    key: ValueKey<int>(affection),
+                    style: TextStyle(
+                      color: _pulseDirection > 0
+                          ? const Color(0xFFFFA0BC)
+                          : _pulseDirection < 0
+                              ? NovelPalette.danger
+                              : Colors.white.withOpacity(.70),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      shadows: const <Shadow>[
+                        Shadow(color: Color(0xD9000000), blurRadius: 5),
+                      ],
+                    ),
+                  ),
                 ),
-              );
-            },
-            child: Text(
-              '$affection',
-              key: ValueKey<int>(affection),
-              style: TextStyle(
-                color: Colors.white.withOpacity(.70),
-                fontSize: 10.5,
-                fontWeight: FontWeight.w700,
-                shadows: const <Shadow>[
-                  Shadow(color: Color(0xD9000000), blurRadius: 5),
-                ],
               ),
-            ),
+              if (_pulseDirection != 0 && _pulseDelta != 0)
+                Positioned(
+                  top: -16,
+                  child: TweenAnimationBuilder<double>(
+                    key: ValueKey<int>(_pulseSerial),
+                    tween: Tween<double>(begin: 0, end: 1),
+                    duration: const Duration(milliseconds: 760),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, value, child) {
+                      final opacity = value < 0.15
+                          ? value / 0.15
+                          : value > 0.6
+                              ? (1.0 - value) / 0.4
+                              : 1.0;
+                      final offsetY = -12.0 * value;
+
+                      return Opacity(
+                        opacity: opacity.clamp(0.0, 1.0),
+                        child: Transform.translate(
+                          offset: Offset(0, offsetY),
+                          child: Text(
+                            _pulseDelta > 0 ? '+$_pulseDelta' : '$_pulseDelta',
+                            style: TextStyle(
+                              color: _pulseDirection > 0
+                                  ? const Color(0xFFFFA0BC)
+                                  : NovelPalette.danger,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                              shadows: const <Shadow>[
+                                Shadow(color: Color(0xD9000000), blurRadius: 4),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
           ),
         ],
       ],
@@ -3790,6 +4418,7 @@ class _NovelDialogFooter extends StatelessWidget {
     required this.controller,
     required this.choicesAvailable,
     required this.inputEnabled,
+    required this.showComposer,
     required this.textController,
     required this.focusNode,
     required this.onSend,
@@ -3802,6 +4431,7 @@ class _NovelDialogFooter extends StatelessWidget {
   final NovelGameController controller;
   final bool choicesAvailable;
   final bool inputEnabled;
+  final bool showComposer;
   final TextEditingController textController;
   final FocusNode focusNode;
   final ValueChanged<String> onSend;
@@ -3812,43 +4442,268 @@ class _NovelDialogFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final browsingStory = controller.hasNext;
-
-    // 回看历史剧情时底部完全留空。
-    // 角色 / 经历 / 背包已经移到右上积分下方。
-    if (browsingStory) {
-      return const SizedBox.shrink();
-    }
+    final compact = MediaQuery.sizeOf(context).width <= 600;
+    final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 170),
       curve: Curves.easeOutCubic,
       alignment: Alignment.bottomCenter,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 52, maxHeight: 134),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: <Widget>[
-          if (!choicesAvailable) ...<Widget>[
-            _GameContinueButton(onTap: onContinue),
-            const SizedBox(width: 9),
-          ],
-          Expanded(
-            child: NovelInputBar(
-              controller: textController,
-              focusNode: focusNode,
-              enabled: inputEnabled,
-              luckyCardActive: controller.luckyCardActive,
-              luckyCardCount: controller.luckyCardCount,
-              onToggleLuckyCard: controller.toggleLuckyCard,
-              onSend: onSend,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (showComposer) ...<Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: <Widget>[
+                if (!choicesAvailable) ...<Widget>[
+                  _GameContinueButton(onTap: onContinue),
+                  const SizedBox(width: 9),
+                ],
+                Expanded(
+                  child: NovelInputBar(
+                    controller: textController,
+                    focusNode: focusNode,
+                    socketService: controller.socket,
+                    enabled: inputEnabled,
+                    luckyCardActive: controller.luckyCardActive,
+                    luckyCardCount: controller.luckyCardCount,
+                    onToggleLuckyCard: controller.toggleLuckyCard,
+                    onSend: onSend,
+                  ),
+                ),
+              ],
             ),
-          ),
+            SizedBox(height: compact ? 4 : 6),
+          ],
+          // 一级导航已经移到右侧，这里只避开系统底部安全区。
+          SizedBox(height: safeBottom),
         ],
+      ),
+    );
+  }
+}
+
+// 主页面当前一级 Tab。0=剧情；积分星星只允许在剧情 Tab 出现。
+final ValueNotifier<int> _novelPrimaryTabIndex = ValueNotifier<int>(0);
+
+/// 右侧一级导航：放在积分下方，保持游戏 HUD 感。
+/// 无底板、无卡片、无发光，只使用线性 icon + 小文字。
+class NovelSideArchiveBar extends StatelessWidget {
+  const NovelSideArchiveBar({
+    super.key,
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  static const List<String> _labels = <String>[
+    '剧情',
+    '角色',
+    '背包',
+    '经历',
+  ];
+
+  // 恢复项目原有四张导航图标；只使用原图形轮廓，不增加按钮底板。
+  static const List<String> _iconAssets = <String>[
+    'assets/images/novel/nav_story.png',
+    'assets/images/novel/nav_character.png',
+    'assets/images/novel/nav_inventory.png',
+    'assets/images/novel/nav_journey.png',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 600;
+    final activeIndex = selectedIndex.clamp(0, _labels.length - 1).toInt();
+    if (_novelPrimaryTabIndex.value != activeIndex) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_novelPrimaryTabIndex.value != activeIndex) {
+          _novelPrimaryTabIndex.value = activeIndex;
+        }
+      });
+    }
+
+    // 剧情页是深色场景，档案页是浅色背景；只切换前景色，不增加任何底板。
+    final lightArchive = activeIndex != 0;
+
+    return SizedBox(
+      width: compact ? 62 : 68,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          for (var i = 0; i < _labels.length; i++) ...<Widget>[
+            _MinimalSideNavAction(
+              semanticLabel: _labels[i],
+              iconAsset: _iconAssets[i],
+              selected: i == activeIndex,
+              lightTheme: lightArchive,
+              compact: compact,
+              onTap: () {
+                if (_novelPrimaryTabIndex.value != i) {
+                  _novelPrimaryTabIndex.value = i;
+                }
+                onSelected(i);
+              },
+            ),
+            if (i != _labels.length - 1)
+              SizedBox(height: compact ? 5 : 7),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MinimalSideNavAction extends StatelessWidget {
+  const _MinimalSideNavAction({
+    required this.semanticLabel,
+    required this.iconAsset,
+    required this.selected,
+    required this.lightTheme,
+    required this.compact,
+    required this.onTap,
+  });
+
+  final String semanticLabel;
+  final String iconAsset;
+  final bool selected;
+  final bool lightTheme;
+  final bool compact;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    // nav PNG 始终保持素材自身原色；四个入口不再提供任何视觉选中态。
+    // selected 只保留给 Semantics，视觉上所有入口完全一致。
+    final color = lightTheme
+        ? const Color(0xE61D231E)
+        : const Color(0xF0F5F7F4);
+
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: semanticLabel,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: SizedBox(
+          width: compact ? 60 : 66,
+          height: compact ? 70 : 76,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              SizedBox(
+                width: compact ? 44 : 48,
+                height: compact ? 44 : 48,
+                child: Image.asset(
+                  iconAsset,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.medium,
+                  // nav_*.png 保持素材自身原色；选中状态绝不再给 icon 染色。
+                  errorBuilder: (_, __, ___) => Icon(
+                    Icons.circle_outlined,
+                    size: compact ? 40 : 44,
+                    color: color,
+                  ),
+                ),
+              ),
+              SizedBox(height: compact ? 3 : 4),
+              Stack(
+                alignment: Alignment.center,
+                children: <Widget>[
+                  Text(
+                    semanticLabel,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: compact ? 10.6 : 11.2,
+                      height: 1,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: .20,
+                      foreground: Paint()
+                        ..style = PaintingStyle.stroke
+                        ..strokeWidth = compact ? 1.05 : 1.15
+                        ..color = lightTheme
+                            ? const Color(0xCCFFFFFF)
+                            : const Color(0xD9000000),
+                    ),
+                  ),
+                  Text(
+                    semanticLabel,
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: compact ? 10.6 : 11.2,
+                      height: 1,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: .20,
+                      shadows: <Shadow>[
+                        if (!lightTheme)
+                          const Shadow(
+                            color: Color(0x70000000),
+                            blurRadius: 2.5,
+                            offset: Offset(0, 1),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+/// 自由输入框语音按钮：纯白圆形承载层，中间用透明镂空绘制简洁声波。
+/// 不再使用旧版向右扩散的弧线，改成 5 根对称圆角波形柱，视觉更干净。
+class _CutoutVoiceWavePainter extends CustomPainter {
+  const _CutoutVoiceWavePainter({required this.speaking});
+
+  final bool speaking;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    canvas.saveLayer(rect, Paint());
+
+    final center = rect.center;
+    final radius = math.min(size.width, size.height) / 2;
+    canvas.drawCircle(center, radius, Paint()..color = Colors.white);
+
+    final clearPaint = Paint()
+      ..blendMode = BlendMode.clear
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = speaking ? 2.55 : 2.35;
+
+    // 五段对称声波：短 / 中 / 长 / 中 / 短。
+    // speaking 时只轻微放大波幅，不改变整体图形语言。
+    final boost = speaking ? 1.08 : 1.0;
+    final heights = <double>[.18, .34, .50, .34, .18];
+    final spacing = size.width * .105;
+    final startX = center.dx - spacing * 2;
+
+    for (var i = 0; i < heights.length; i++) {
+      final half = size.height * heights[i] * .5 * boost;
+      final x = startX + spacing * i;
+      canvas.drawLine(
+        Offset(x, center.dy - half),
+        Offset(x, center.dy + half),
+        clearPaint,
+      );
+    }
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _CutoutVoiceWavePainter oldDelegate) =>
+      oldDelegate.speaking != speaking;
 }
 
 class _StoryImageAction extends StatelessWidget {
@@ -3999,33 +4854,46 @@ class _StoryProgressLocator extends StatelessWidget {
     // 段与段之间的间距：格子越多，间距越窄，避免拥挤。
     final gap = totalCount > 24 ? 1.5 : totalCount > 12 ? 2.0 : 3.0;
 
-    // 不加任何外层容器/背景/描边——就是一排简洁的细条，直接叠在画面上。
+    // 进度不要铺满整条底部：收成一条较短的“剧情刻度”，视觉会轻很多。
+    final locatorWidth = (MediaQuery.sizeOf(context).width * .58)
+        .clamp(150.0, 320.0)
+        .toDouble();
+
     return IgnorePointer(
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 250),
         opacity: isBrowsingHistory ? 1.0 : 0.0,
         curve: Curves.easeOutCubic,
-        child: Row(
-          children: List<Widget>.generate(totalCount, (index) {
-            final active = index == currentIndex;
-            return Expanded(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                height: 2.5,
-                margin: EdgeInsets.symmetric(horizontal: gap / 2),
-                decoration: BoxDecoration(
-                  color: active ? Colors.white : Colors.white.withOpacity(.25),
-                  borderRadius: BorderRadius.circular(2),
-                  boxShadow: active
-                      ? const <BoxShadow>[
-                          BoxShadow(color: Color(0x99000000), blurRadius: 3),
-                        ]
-                      : null,
-                ),
-              ),
-            );
-          }),
+        child: Center(
+          child: SizedBox(
+            width: locatorWidth,
+            child: Row(
+              children: List<Widget>.generate(totalCount, (index) {
+                final active = index == currentIndex;
+                return Expanded(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    height: active ? 2.4 : 1.6,
+                    margin: EdgeInsets.symmetric(horizontal: gap / 2),
+                    decoration: BoxDecoration(
+                      // 剧情回溯底部进度仅改为白色，其它 UI 不动。
+                      color: Colors.white.withOpacity(active ? .88 : .18),
+                      borderRadius: BorderRadius.circular(2),
+                      boxShadow: active
+                          ? <BoxShadow>[
+                              BoxShadow(
+                                color: Colors.white.withOpacity(.18),
+                                blurRadius: 4,
+                              ),
+                            ]
+                          : null,
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
         ),
       ),
     );
@@ -4373,8 +5241,28 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
                         if (!narration) ...<Widget>[
                           Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                              decoration: BoxDecoration(color: Colors.black.withOpacity(.40), borderRadius: BorderRadius.circular(999), border: Border.all(color: NovelPalette.accent.withOpacity(.34))),
-                              child: Text('「 ${widget.speakerName} 」', style: const TextStyle(color: NovelPalette.accent, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: .8))),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(.32),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(color: Colors.white.withOpacity(.18)),
+                              ),
+                              child: Text(
+                                '「 ${widget.speakerName} 」',
+                                style: const TextStyle(
+                                  color: Color(0xFFF9FAFC),
+                                  fontFamily: 'WenJinMinchoP0',
+                                  fontSize: 13.0,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: .8,
+                                  shadows: <Shadow>[
+                                    Shadow(
+                                      color: Color(0xE6000000),
+                                      blurRadius: 7,
+                                      offset: Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                              )),
                           const SizedBox(height: 14),
                         ],
                         Text(displayText.isEmpty && !widget.isGenerating ? '等待故事继续…' : displayText,
@@ -4416,6 +5304,7 @@ class NovelInputBar extends StatefulWidget {
     super.key,
     required this.controller,
     required this.focusNode,
+    required this.socketService,
     required this.enabled,
     required this.luckyCardActive,
     required this.luckyCardCount,
@@ -4425,6 +5314,7 @@ class NovelInputBar extends StatefulWidget {
 
   final TextEditingController controller;
   final FocusNode focusNode;
+  final NovelSocketService socketService;
   final bool enabled;
   final bool luckyCardActive;
   final int luckyCardCount;
@@ -4436,11 +5326,21 @@ class NovelInputBar extends StatefulWidget {
 }
 
 class _NovelInputBarState extends State<NovelInputBar> {
+  late NovelAsrStreamService _asr;
+
   bool _hasText = false;
+  bool _speechStarting = false;
+  bool _isListening = false;
+  bool _micHeld = false;
+  bool _speechFinishing = false;
+  String _speechBaseText = '';
+  int _speechSessionId = 0;
+  Future<void>? _startFuture;
 
   @override
   void initState() {
     super.initState();
+    _asr = NovelAsrStreamService(socketService: widget.socketService);
     widget.controller.addListener(_update);
     widget.focusNode.addListener(_updateFocus);
     _update();
@@ -4458,6 +5358,16 @@ class _NovelInputBarState extends State<NovelInputBar> {
       oldWidget.focusNode.removeListener(_updateFocus);
       widget.focusNode.addListener(_updateFocus);
     }
+    if (oldWidget.socketService != widget.socketService) {
+      unawaited(_asr.dispose());
+      _asr = NovelAsrStreamService(socketService: widget.socketService);
+    }
+
+    if (oldWidget.enabled && !widget.enabled &&
+        (_isListening || _micHeld || _speechStarting || _asr.isSessionOpen)) {
+      _micHeld = false;
+      unawaited(_finishHoldListening(commit: false));
+    }
   }
 
   void _update() {
@@ -4471,14 +5381,14 @@ class _NovelInputBarState extends State<NovelInputBar> {
 
   void _submit() {
     final text = widget.controller.text.trim();
-    if (!widget.enabled || text.isEmpty) return;
+    if (!widget.enabled || _isListening || _micHeld || _speechStarting || _speechFinishing || text.isEmpty) return;
     widget.onSend(text);
     widget.controller.clear();
     widget.focusNode.requestFocus();
   }
 
   void _insertNewline() {
-    if (!widget.enabled) return;
+    if (!widget.enabled || _isListening || _micHeld || _speechStarting || _speechFinishing) return;
 
     final value = widget.controller.value;
     final selection = value.selection;
@@ -4494,7 +5404,12 @@ class _NovelInputBarState extends State<NovelInputBar> {
   }
 
   KeyEventResult _handleInputKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent || !widget.enabled) {
+    if (event is! KeyDownEvent ||
+        !widget.enabled ||
+        _isListening ||
+        _micHeld ||
+        _speechStarting ||
+        _speechFinishing) {
       return KeyEventResult.ignored;
     }
 
@@ -4502,8 +5417,6 @@ class _NovelInputBarState extends State<NovelInputBar> {
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (!isEnter) return KeyEventResult.ignored;
 
-    // 中文 / 日文等输入法正在组合文字时，Enter 应继续用于确认候选词，
-    // 不能被剧情输入框抢走。
     final composing = widget.controller.value.composing;
     if (composing.isValid && !composing.isCollapsed) {
       return KeyEventResult.ignored;
@@ -4518,17 +5431,175 @@ class _NovelInputBarState extends State<NovelInputBar> {
     return KeyEventResult.handled;
   }
 
+  String _mergeSpeechText(String base, String spoken) {
+    final words = spoken.trim();
+    if (words.isEmpty) return base;
+    if (base.isEmpty) return words;
+    if (RegExp(r'\s$').hasMatch(base)) return '$base$words';
+
+    final last = base.runes.isEmpty ? 0 : base.runes.last;
+    final first = words.runes.isEmpty ? 0 : words.runes.first;
+    bool isCjk(int rune) =>
+        (rune >= 0x3400 && rune <= 0x9FFF) ||
+        (rune >= 0xF900 && rune <= 0xFAFF);
+
+    return isCjk(last) && isCjk(first) ? '$base$words' : '$base $words';
+  }
+
+  void _commitSpeechText(int sessionId, String spoken) {
+    if (!mounted || sessionId != _speechSessionId) return;
+    final words = spoken.trim();
+    if (words.isEmpty) return;
+
+    final nextText = _mergeSpeechText(_speechBaseText, words);
+    widget.controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+      composing: TextRange.empty,
+    );
+  }
+
+  Future<void> _beginHoldListening() async {
+    if (!widget.enabled || _speechFinishing || _speechStarting || _micHeld) return;
+
+    final sessionId = ++_speechSessionId;
+    _speechBaseText = widget.controller.text;
+    widget.focusNode.unfocus();
+    if (mounted) {
+      setState(() {
+        _micHeld = true;
+        _speechStarting = true;
+      });
+    }
+
+    final startFuture = _asr.start();
+    _startFuture = startFuture;
+    try {
+      await startFuture;
+      if (!mounted || sessionId != _speechSessionId) {
+        await _asr.cancel();
+        return;
+      }
+      setState(() {
+        _speechStarting = false;
+        _isListening = _micHeld;
+      });
+    } on NovelAsrStreamException catch (error) {
+      if (!mounted || sessionId != _speechSessionId) return;
+      setState(() {
+        _speechStarting = false;
+        _isListening = false;
+        _micHeld = false;
+      });
+      _showSpeechMessage(error.message);
+    } catch (_) {
+      if (!mounted || sessionId != _speechSessionId) return;
+      setState(() {
+        _speechStarting = false;
+        _isListening = false;
+        _micHeld = false;
+      });
+      _showSpeechMessage('无法启动语音输入，请重试。');
+    } finally {
+      if (identical(_startFuture, startFuture)) _startFuture = null;
+    }
+  }
+
+  Future<void> _finishHoldListening({bool commit = true}) async {
+    if (_speechFinishing) return;
+
+    final sessionId = _speechSessionId;
+    final hadActiveSession = _micHeld || _isListening || _speechStarting || _asr.isSessionOpen;
+    if (!hadActiveSession) return;
+
+    if (mounted) {
+      setState(() {
+        _micHeld = false;
+        // 松手后立即退出“正在连接/正在听”视觉状态。
+        // 即使 WebSocket 握手仍在收尾，也只显示“正在转文字…”，避免看起来像没收到松手事件。
+        _speechStarting = false;
+        _isListening = false;
+        _speechFinishing = true;
+      });
+    } else {
+      _micHeld = false;
+      _speechStarting = false;
+      _isListening = false;
+      _speechFinishing = true;
+    }
+
+    try {
+      final starting = _startFuture;
+      if (starting != null) {
+        try {
+          await starting;
+        } catch (_) {
+          // 启动异常已在 _beginHoldListening 中提示。
+        }
+      }
+      if (sessionId != _speechSessionId) return;
+
+      if (!commit) {
+        await _asr.cancel();
+      } else if (_asr.isSessionOpen) {
+        final finalText = await _asr.stopAndGetFinal();
+        _commitSpeechText(sessionId, finalText);
+      }
+    } on NovelAsrStreamException catch (error) {
+      if (commit && mounted && sessionId == _speechSessionId) {
+        _showSpeechMessage(error.message);
+      }
+    } catch (_) {
+      if (commit && mounted && sessionId == _speechSessionId) {
+        _showSpeechMessage('语音识别失败，请再试一次。');
+      }
+    } finally {
+      if (!mounted || sessionId != _speechSessionId) return;
+      setState(() {
+        _speechStarting = false;
+        _isListening = false;
+        _speechFinishing = false;
+      });
+      widget.focusNode.requestFocus();
+    }
+  }
+
+  void _showSpeechMessage(String message) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
   @override
   void dispose() {
+    _speechSessionId++;
+    _micHeld = false;
     widget.controller.removeListener(_update);
     widget.focusNode.removeListener(_updateFocus);
+    unawaited(_asr.dispose());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final canSend = widget.enabled && _hasText;
+    final speaking = _micHeld || _isListening || _speechStarting;
+    final speechBusy = speaking || _speechFinishing;
+    final canSend = widget.enabled &&
+        _hasText &&
+        !speaking &&
+        !_speechFinishing;
     final focused = widget.enabled && widget.focusNode.hasFocus;
+    // 正在连接时也必须继续接收 pointerUp，否则用户松手会丢失结束事件。
+    final micEnabled = widget.enabled && !_speechFinishing;
 
     return AnimatedOpacity(
         opacity: widget.enabled ? 1 : .50,
@@ -4576,77 +5647,161 @@ class _NovelInputBarState extends State<NovelInputBar> {
               const SizedBox(width: 8),
             ],
             Expanded(
-                child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: _AdaptiveBackdropBlur(
-                        sigma: 22,
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 170),
-                          constraints: const BoxConstraints(minHeight: 48, maxHeight: 128),
-                          padding: const EdgeInsets.fromLTRB(15, 5, 6, 5),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(focused ? .12 : .085),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(focused ? .90 : .62),
-                              width: focused ? 1.35 : 1.05,
-                            ),
-                            boxShadow: const <BoxShadow>[
-                              BoxShadow(
-                                color: Color(0x38000000),
-                                blurRadius: 16,
-                                offset: Offset(0, 5),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: <Widget>[
-                              Expanded(
-                                child: Focus(
-                                  onKeyEvent: _handleInputKey,
-                                  child: TextField(
-                                    controller: widget.controller,
-                                    focusNode: widget.focusNode,
-                                    enabled: widget.enabled,
-                                    minLines: 1,
-                                    maxLines: 5,
-                                    keyboardType: TextInputType.multiline,
-                                    textInputAction: TextInputAction.send,
-                                    onSubmitted: (_) => _submit(),
-                                    cursorColor: NovelPalette.accent,
-                                    textAlignVertical: TextAlignVertical.center,
-                                    style: const TextStyle(color: Color(0xFFF4F3EE), fontSize: 14, height: 1.35, fontWeight: FontWeight.w400),
-                                    decoration: InputDecoration(
-                                      hintText: widget.luckyCardActive ? '运气已加持，输入你的行动…' : '输入你的行动…',
-                                      hintStyle: TextStyle(color: Colors.white.withOpacity(.38), fontSize: 13.5, fontWeight: FontWeight.w400),
-                                      isDense: true,
-                                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                                      border: InputBorder.none,
-                                      enabledBorder: InputBorder.none,
-                                      focusedBorder: InputBorder.none,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: _AdaptiveBackdropBlur(
+                  sigma: 22,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 170),
+                    constraints: const BoxConstraints(minHeight: 48, maxHeight: 128),
+                    padding: const EdgeInsets.fromLTRB(15, 6, 6, 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(focused || speechBusy ? .12 : .085),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: speechBusy
+                            ? NovelPalette.accent.withOpacity(.82)
+                            : Colors.white.withOpacity(focused ? .90 : .62),
+                        width: focused || speechBusy ? 1.35 : 1.05,
+                      ),
+                      boxShadow: const <BoxShadow>[
+                        BoxShadow(
+                          color: Color(0x38000000),
+                          blurRadius: 16,
+                          offset: Offset(0, 5),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: <Widget>[
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 1),
+                          child: Listener(
+                            behavior: HitTestBehavior.opaque,
+                            onPointerDown: micEnabled
+                                ? (_) => unawaited(_beginHoldListening())
+                                : null,
+                            onPointerUp: micEnabled
+                                ? (_) => unawaited(_finishHoldListening())
+                                : null,
+                            onPointerCancel: micEnabled
+                                ? (_) => unawaited(_finishHoldListening(commit: false))
+                                : null,
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 120),
+                              opacity: micEnabled ? 1 : .42,
+                              child: AnimatedScale(
+                                scale: speaking ? 1.08 : 1,
+                                duration: const Duration(milliseconds: 120),
+                                child: SizedBox(
+                                  width: 36,
+                                  height: 36,
+                                  child: CustomPaint(
+                                    painter: _CutoutVoiceWavePainter(
+                                      speaking: speaking,
                                     ),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              AnimatedOpacity(
-                                  duration: const Duration(milliseconds: 150),
-                                  opacity: canSend ? 1 : .34,
-                                  child: Material(
-                                      color: canSend ? NovelPalette.accent : Colors.white.withOpacity(.10),
-                                      shape: const CircleBorder(),
-                                      child: InkWell(
-                                          customBorder: const CircleBorder(),
-                                          onTap: canSend ? _submit : null,
-                                          child: SizedBox(
-                                            width: 36,
-                                            height: 36,
-                                            child: Icon(Icons.arrow_upward_rounded, size: 18, color: canSend ? const Color(0xFF0A110C) : Colors.white.withOpacity(.52)),
-                                          )))),
-                            ],
+                            ),
                           ),
-                        )))),
+                        ),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Focus(
+                            onKeyEvent: _handleInputKey,
+                            child: TextField(
+                              controller: widget.controller,
+                              focusNode: widget.focusNode,
+                              enabled: widget.enabled && !speaking && !_speechFinishing,
+                              minLines: 1,
+                              maxLines: 5,
+                              keyboardType: TextInputType.multiline,
+                              textInputAction: TextInputAction.send,
+                              onSubmitted: (_) => _submit(),
+                              cursorColor: NovelPalette.accent,
+                              style: const TextStyle(color: Color(0xFFF4F3EE), fontSize: 14, height: 1.35, fontWeight: FontWeight.w400),
+                              decoration: InputDecoration(
+                                hintText: _speechFinishing
+                                    ? '正在转文字…'
+                                    : speaking
+                                        ? '正在听… 松开后转成文字'
+                                        : (widget.luckyCardActive ? '运气已加持，输入你的行动…' : '自由输入…'),
+                                hintStyle: TextStyle(
+                                  color: speechBusy
+                                      ? NovelPalette.accent.withOpacity(.78)
+                                      : Colors.white.withOpacity(.38),
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w400,
+                                ),
+                                isDense: true,
+                                contentPadding: const EdgeInsets.only(top: 8, bottom: 12),
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                disabledBorder: InputBorder.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 1),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 150),
+                            opacity: canSend ? 1 : .34,
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 180),
+                              curve: Curves.easeOutCubic,
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: canSend
+                                    ? NovelPalette.accent
+                                    : Colors.white.withOpacity(.10),
+                                boxShadow: canSend
+                                    ? <BoxShadow>[
+                                        BoxShadow(
+                                          color: NovelPalette.accent.withOpacity(.58),
+                                          blurRadius: 11,
+                                          spreadRadius: .7,
+                                        ),
+                                        BoxShadow(
+                                          color: NovelPalette.accent.withOpacity(.22),
+                                          blurRadius: 22,
+                                          spreadRadius: 1.2,
+                                        ),
+                                      ]
+                                    : const <BoxShadow>[],
+                              ),
+                              child: Material(
+                                color: Colors.transparent,
+                                shape: const CircleBorder(),
+                                child: InkWell(
+                                  customBorder: const CircleBorder(),
+                                  onTap: canSend ? _submit : null,
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.arrow_upward_rounded,
+                                      size: 18,
+                                      color: canSend
+                                          ? const Color(0xFF0A110C)
+                                          : Colors.white.withOpacity(.52),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            )
           ],
         ));
   }
@@ -4674,7 +5829,7 @@ class NovelActionRail extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
             _RailButton(icon: Icons.stars_rounded, label: '积分兑换', onTap: onStore, color: const Color(0xFFF4C542)),
-            _RailButton(icon: Icons.backpack_outlined, label: '背包', onTap: onInventory),
+            _RailButton(icon: Icons.inventory_2_outlined, label: '背包', onTap: onInventory),
             _RailButton(icon: Icons.people_outline_rounded, label: '人物', onTap: onCharacters),
             _RailButton(icon: Icons.menu_book_outlined, label: '旅程', onTap: onJourney),
           ]),
@@ -4708,7 +5863,7 @@ class NovelArchiveRail extends StatelessWidget {
       children: <Widget>[
         _StoryImageAction(
           asset: 'assets/images/relation.webp',
-          label: '角色',
+          label: '人物',
           compact: compact,
           onTap: onCharacters,
         ),
@@ -4735,11 +5890,11 @@ class NovelScoreChip extends StatefulWidget {
   const NovelScoreChip({
     super.key,
     required this.score,
-    required this.onTap,
+    this.onTap,
   });
 
   final NovelScore score;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   State<NovelScoreChip> createState() => _NovelScoreChipState();
@@ -4749,47 +5904,28 @@ class _NovelScoreChipState extends State<NovelScoreChip>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _scale;
-  late final Animation<double> _deltaOpacity;
-  late final Animation<double> _deltaLift;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 900),
+      duration: const Duration(milliseconds: 760),
     );
     _scale = TweenSequence<double>(<TweenSequenceItem<double>>[
       TweenSequenceItem<double>(
-        tween: Tween<double>(begin: 1, end: 1.16)
+        tween: Tween<double>(begin: 1, end: 1.28)
             .chain(CurveTween(curve: Curves.easeOutBack)),
-        weight: 30,
+        weight: 34,
       ),
       TweenSequenceItem<double>(
-        tween: Tween<double>(begin: 1.16, end: 1)
+        tween: Tween<double>(begin: 1.28, end: 1)
             .chain(CurveTween(curve: Curves.easeOutCubic)),
-        weight: 70,
+        weight: 66,
       ),
     ]).animate(_controller);
-    _deltaOpacity = TweenSequence<double>(<TweenSequenceItem<double>>[
-      TweenSequenceItem<double>(
-        tween: Tween<double>(begin: 0, end: 1),
-        weight: 18,
-      ),
-      TweenSequenceItem<double>(
-        tween: ConstantTween<double>(1),
-        weight: 42,
-      ),
-      TweenSequenceItem<double>(
-        tween: Tween<double>(begin: 1, end: 0),
-        weight: 40,
-      ),
-    ]).animate(_controller);
-    _deltaLift = Tween<double>(begin: 4, end: -14).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
-    );
-    // 积分条在剧情生成期间会暂时隐藏；如果它重新挂载时已经带着 delta，
-    // 也要播放一次反馈，而不是因为没有 didUpdateWidget 就静默跳数。
+
+    // 积分条重新挂载时如果仍带着 delta，也补播一次原位变化。
     if (widget.score.delta != 0) {
       _controller.forward();
     }
@@ -4811,123 +5947,91 @@ class _NovelScoreChipState extends State<NovelScoreChip>
 
   @override
   Widget build(BuildContext context) {
-    final delta = widget.score.delta;
-    final positive = delta >= 0;
-    return AnimatedBuilder(
-      animation: _controller,
+    final positive = widget.score.delta >= 0;
+
+    return ValueListenableBuilder<int>(
+      valueListenable: _novelPrimaryTabIndex,
+      builder: (context, tabIndex, _) {
+        if (tabIndex != 0) return const SizedBox.shrink();
+        return AnimatedBuilder(
+          animation: _controller,
       builder: (context, _) {
-        return Stack(
-          clipBehavior: Clip.none,
-          alignment: Alignment.topRight,
-          children: <Widget>[
-            Transform.scale(
-              scale: _controller.isAnimating ? _scale.value : 1,
-              alignment: Alignment.centerRight,
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: widget.onTap,
-                  borderRadius: BorderRadius.circular(10),
-                  splashColor: Colors.white.withOpacity(.05),
-                  highlightColor: Colors.white.withOpacity(.025),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Icon(
-                          Icons.star_outline_rounded,
-                          size: 15,
-                          color: Colors.white.withOpacity(.96),
-                        ),
-                        const SizedBox(width: 4),
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 220),
-                          transitionBuilder: (child, animation) => FadeTransition(
-                            opacity: animation,
-                            child: SlideTransition(
-                              position: Tween<Offset>(
-                                begin: const Offset(0, .22),
-                                end: Offset.zero,
-                              ).animate(animation),
-                              child: child,
-                            ),
-                          ),
-                          child: Text(
-                            '${widget.score.total}',
-                            key: ValueKey<int>(widget.score.total),
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(.98),
-                              fontSize: 11.4,
-                              height: 1,
-                              fontWeight: FontWeight.w700,
-                              shadows: const <Shadow>[
-                                Shadow(
-                                  color: Color(0x99000000),
-                                  blurRadius: 4,
-                                  offset: Offset(0, 1),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
+        final animating = _controller.isAnimating;
+        final progress = _controller.value.clamp(0.0, 1.0).toDouble();
+        final pulseColor = positive
+            ? const Color(0xFFF4D06F)
+            : NovelPalette.danger;
+        final color = animating
+            ? Color.lerp(
+                pulseColor,
+                Colors.white.withOpacity(.96),
+                Curves.easeOutCubic.transform(progress),
+              )!
+            : Colors.white.withOpacity(.96);
+
+        return Transform.scale(
+          scale: animating ? _scale.value : 1,
+          alignment: Alignment.centerRight,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onTap,
+              borderRadius: BorderRadius.circular(8),
+              splashColor: Colors.white.withOpacity(.04),
+              highlightColor: Colors.white.withOpacity(.02),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(
+                      animating
+                          ? Icons.star_rounded
+                          : Icons.star_outline_rounded,
+                      size: animating ? 16.5 : 15,
+                      color: color,
                     ),
-                  ),
-                ),
-              ),
-            ),
-            if (_controller.isAnimating && delta != 0)
-              Positioned(
-                right: 2,
-                top: _deltaLift.value,
-                child: Opacity(
-                  opacity: _deltaOpacity.value,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: <Widget>[
-                      Text(
-                        '${positive ? '+' : ''}$delta',
+                    const SizedBox(width: 4),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: ScaleTransition(
+                          scale: Tween<double>(begin: .86, end: 1)
+                              .animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: Text(
+                        '${widget.score.total}',
+                        key: ValueKey<int>(widget.score.total),
                         style: TextStyle(
-                          color: positive
-                              ? const Color(0xFFF2CE78)
-                              : NovelPalette.danger,
-                          fontSize: 11.5,
+                          color: color,
+                          fontSize: animating ? 12 : 11.4,
+                          height: 1,
                           fontWeight: FontWeight.w800,
                           shadows: const <Shadow>[
-                            Shadow(color: Color(0xCC000000), blurRadius: 7),
+                            Shadow(
+                              color: Color(0x99000000),
+                              blurRadius: 4,
+                              offset: Offset(0, 1),
+                            ),
                           ],
                         ),
                       ),
-                      if (widget.score.reason.trim().isNotEmpty)
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 150),
-                          child: Text(
-                            widget.score.reason,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.right,
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(.55),
-                              fontSize: 8.8,
-                              fontWeight: FontWeight.w500,
-                              shadows: const <Shadow>[
-                                Shadow(color: Color(0xD9000000), blurRadius: 5),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-          ],
+            ),
+          ),
+        );
+      },
         );
       },
     );
   }
 }
-
 class NovelTaskBadge extends StatelessWidget {
   const NovelTaskBadge({
     super.key,
@@ -4992,69 +6096,76 @@ class _NovelHudEventOverlayState extends State<NovelHudEventOverlay>
   late final Animation<double> _slide;
   late final Animation<double> _scale;
 
+  bool get _isGoal =>
+      widget.event.kind == 'goal_completed' ||
+      widget.event.kind == 'goal_failed';
+
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2050),
+      duration: const Duration(milliseconds: 1900),
     )..forward();
+
     _opacity = TweenSequence<double>(<TweenSequenceItem<double>>[
       TweenSequenceItem<double>(
         tween: Tween<double>(begin: 0, end: 1)
             .chain(CurveTween(curve: Curves.easeOutCubic)),
-        weight: 14,
+        weight: 16,
       ),
       TweenSequenceItem<double>(
         tween: ConstantTween<double>(1),
-        weight: 62,
+        weight: 58,
       ),
       TweenSequenceItem<double>(
         tween: Tween<double>(begin: 1, end: 0)
             .chain(CurveTween(curve: Curves.easeInCubic)),
-        weight: 24,
+        weight: 26,
       ),
     ]).animate(_controller);
-    _slide = Tween<double>(begin: 10, end: -7).animate(
+
+    _slide = Tween<double>(
+      begin: _isGoal ? 14 : 9,
+      end: -8,
+    ).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
     );
+
     _scale = TweenSequence<double>(<TweenSequenceItem<double>>[
       TweenSequenceItem<double>(
-        tween: Tween<double>(begin: .96, end: 1.02),
-        weight: 24,
+        tween: Tween<double>(
+          begin: _isGoal ? .88 : .96,
+          end: _isGoal ? 1.06 : 1.015,
+        ).chain(CurveTween(curve: Curves.easeOutBack)),
+        weight: _isGoal ? 32 : 26,
       ),
       TweenSequenceItem<double>(
-        tween: Tween<double>(begin: 1.02, end: 1),
-        weight: 76,
+        tween: Tween<double>(
+          begin: _isGoal ? 1.06 : 1.015,
+          end: 1,
+        ).chain(CurveTween(curve: Curves.easeOutCubic)),
+        weight: _isGoal ? 68 : 74,
       ),
     ]).animate(_controller);
   }
 
   Color get _accent {
     return switch (widget.event.tone) {
-      'rose' => const Color(0xFFE6A1B6),
-      'danger' => const Color(0xFFEF6B68),
-      'critical' => const Color(0xFFC15CFF),
-      'warning' => const Color(0xFFF2B648),
+      'rose' => const Color(0xFFFF9FBA),
+      'danger' => const Color(0xFFFF7A75),
+      'critical' => const Color(0xFFD58AFF),
+      'warning' => const Color(0xFFF2C268),
       'gold' => const Color(0xFFF0CB76),
-      'violet' => const Color(0xFFB59BD9),
+      'violet' => const Color(0xFFC4ACE4),
       'accent' => NovelPalette.accent,
-      _ => Colors.white70,
+      _ => Colors.white.withOpacity(.86),
     };
   }
 
-  IconData get _icon {
-    return switch (widget.event.kind) {
-      'affection' => Icons.favorite_rounded,
-      'relation_milestone' => Icons.favorite_border_rounded,
-      'milestone' => Icons.auto_awesome_rounded,
-      'route_shift' => Icons.alt_route_rounded,
-      'injury' => Icons.monitor_heart_outlined,
-      'inventory' => Icons.inventory_2_outlined,
-      'score' => Icons.star_rounded,
-      _ => Icons.circle_outlined,
-    };
-  }
+  IconData get _goalIcon => widget.event.kind == 'goal_failed'
+      ? Icons.close_rounded
+      : Icons.check_rounded;
 
   @override
   void dispose() {
@@ -5062,83 +6173,133 @@ class _NovelHudEventOverlayState extends State<NovelHudEventOverlay>
     super.dispose();
   }
 
+  Widget _buildPlainFeedback(Color accent) {
+    final title = widget.event.title.trim();
+    final detail = widget.event.detail.trim();
+    final text = <String>[
+      if (title.isNotEmpty) title,
+      if (detail.isNotEmpty) detail,
+    ].join('  ·  ');
+
+    return Text(
+      text,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        color: widget.event.kind == 'inventory'
+            ? Colors.white.withOpacity(.94)
+            : accent.withOpacity(.96),
+        fontSize: 11.5,
+        height: 1.5,
+        fontWeight: FontWeight.w700,
+        letterSpacing: .35,
+        shadows: const <Shadow>[
+          Shadow(
+            color: Color(0xF0000000),
+            blurRadius: 5,
+            offset: Offset(0, 2),
+          ),
+          Shadow(
+            color: Color(0xB0000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGoalFeedback(Color accent) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 430),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(_goalIcon, color: accent, size: 18),
+              const SizedBox(width: 7),
+              Text(
+                widget.event.title,
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                  shadows: const <Shadow>[
+                    Shadow(
+                      color: Color(0xF0000000),
+                      blurRadius: 7,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (widget.event.detail.trim().isNotEmpty) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              widget.event.detail,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withOpacity(.78),
+                fontSize: 10.4,
+                height: 1.45,
+                fontWeight: FontWeight.w600,
+                shadows: const <Shadow>[
+                  Shadow(
+                    color: Color(0xE6000000),
+                    blurRadius: 6,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = _accent;
+
     return IgnorePointer(
       child: SafeArea(
         child: Align(
-          alignment: const Alignment(0, -.52),
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, _) {
-              return Opacity(
-                opacity: _opacity.value,
-                child: Transform.translate(
-                  offset: Offset(0, _slide.value),
-                  child: Transform.scale(
-                    scale: _scale.value,
-                    child: Container(
-                      constraints: const BoxConstraints(maxWidth: 360),
-                      padding: const EdgeInsets.fromLTRB(13, 9, 15, 9),
-                      decoration: BoxDecoration(
-                        color: const Color(0xC917181C),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border(
-                          left: BorderSide(color: accent.withOpacity(.92), width: 2),
-                        ),
-                        boxShadow: const <BoxShadow>[
-                          BoxShadow(
-                            color: Color(0x52000000),
-                            blurRadius: 18,
-                            offset: Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Icon(_icon, color: accent, size: 16),
-                          const SizedBox(width: 9),
-                          Flexible(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: <Widget>[
-                                Text(
-                                  widget.event.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: NovelPalette.text,
-                                    fontSize: 11.8,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: .2,
-                                  ),
-                                ),
-                                if (widget.event.detail.isNotEmpty) ...<Widget>[
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    widget.event.detail,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.54),
-                                      fontSize: 9.8,
-                                      height: 1.35,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+          alignment: Alignment(0, _isGoal ? -.34 : -.52),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, _) {
+                final failed = widget.event.kind == 'goal_failed';
+                final shakeX = failed
+                    ? math.sin(_controller.value * math.pi * 8) *
+                        (1 - _controller.value) *
+                        6
+                    : 0.0;
+
+                return Opacity(
+                  opacity: _opacity.value,
+                  child: Transform.translate(
+                    offset: Offset(shakeX, _slide.value),
+                    child: Transform.scale(
+                      scale: _scale.value,
+                      child: _isGoal
+                          ? _buildGoalFeedback(accent)
+                          : _buildPlainFeedback(accent),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -5731,7 +6892,22 @@ class _HealthBar extends StatelessWidget {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 420),
                 curve: Curves.easeOutCubic,
-                decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20), boxShadow: <BoxShadow>[BoxShadow(color: color.withOpacity(.52), blurRadius: 7)]),
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: color.withOpacity(.72),
+                      blurRadius: 10,
+                      spreadRadius: .45,
+                    ),
+                    BoxShadow(
+                      color: color.withOpacity(.28),
+                      blurRadius: 18,
+                      spreadRadius: .8,
+                    ),
+                  ],
+                ),
               )),
         ]));
   }

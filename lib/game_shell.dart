@@ -241,8 +241,16 @@ class _GameShellState extends State<GameShell> {
           )
           .toList();
 
-      final targetScenarioId =
-          focusScenarioId ?? widget.activeScenarioId ?? home.activeScenarioId?.toString();
+      // 只有“当前路由真的正在展示某个世界”或调用方明确要求 focus 时，
+      // 才把世界列表中的某一项标记为已选中。
+      // 空 GameShellPage 只是世界选择页，即使后端仍记着 activeScenarioId，
+      // 也必须保持 selectedIndex = -1；否则用户点击刚刚取消进入的同一世界时，
+      // Drawer 会把它当成“重复点击当前世界”直接 return，表现为完全没反应。
+      final focusId = focusScenarioId?.toString().trim() ?? '';
+      final routeActiveId = widget.activeScenarioId?.toString().trim() ?? '';
+      final targetScenarioId = focusId.isNotEmpty
+          ? focusId
+          : (routeActiveId.isNotEmpty ? routeActiveId : null);
 
       var selectedIndex = -1;
       final targetId = targetScenarioId?.toString().trim() ?? '';
@@ -395,6 +403,35 @@ class _GameShellState extends State<GameShell> {
     }
   }
 
+  Future<void> _reenterScenarioAfterReset(String scenarioId) async {
+    final targetId = scenarioId.trim();
+    if (targetId.isEmpty) return;
+
+    // resetScenario 会清空当前运行时会话/剧情数据，因此不能继续留在旧游戏页。
+    // 先重新同步一次世界列表，确保仍能拿到这个 scenario 的最新信息。
+    await _syncWorldListUntil(
+      scenarioId: targetId,
+      shouldExist: true,
+      focusScenarioId: targetId,
+    );
+    if (!mounted) return;
+
+    final targetIndex = _games.indexWhere(
+      (game) => game.id.toString() == targetId,
+    );
+
+    if (targetIndex < 0) {
+      AppNotice.error(context, '世界已重置，但暂时无法重新载入，请从世界列表重新进入');
+      _scaffoldKey.currentState?.openDrawer();
+      return;
+    }
+
+    // 直接复用正常“进入世界”的完整流程：
+    // setActiveScenario -> 获取新的 sessionId -> pushReplacement 到对应游戏页。
+    // 这里必须主动调用，不能依赖用户再次点击当前世界；Drawer 对当前世界重选会直接 return。
+    await _onGameSelected(targetIndex);
+  }
+
   Future<void> _onEditWorld(int index) async {
     if (index < 0 || index >= _games.length) return;
 
@@ -402,7 +439,8 @@ class _GameShellState extends State<GameShell> {
     final scenarioId = scenario.id.toString();
     var deleted = false;
 
-    // 拿到编辑页面的返回结果 isDataChanged（如果你点了重置，它会返回 true）
+    // 编辑页目前用 true 表示“数据生命周期发生变化”。
+    // 删除通过 onDeleted 单独标记；其余 true 即为重置剧情。
     final isDataChanged = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => ScenarioEditPage(
@@ -426,7 +464,7 @@ class _GameShellState extends State<GameShell> {
       );
       if (!mounted) return;
 
-      // 如果删除的是当前世界，退出当前剧本，回到空 Shell
+      // 如果删除的是当前世界，退出当前剧本，回到空 Shell。
       if (isCurrentWorld) {
         Navigator.of(context, rootNavigator: true).pushReplacement<void, void>(
           MaterialPageRoute<void>(
@@ -440,19 +478,15 @@ class _GameShellState extends State<GameShell> {
       return;
     }
 
-    // 重置剧情退出的情况
+    // 如果重置的是当前正在玩的世界，旧 session / 剧情状态已经失效。
+    // 必须立即重新执行一次“进入世界”，让后端创建/返回新的 session，
+    // 否则旧游戏页会继续读取被清空的运行时数据，最终表现为空白页面。
     if (isDataChanged == true && isCurrentWorld) {
-      Navigator.of(context, rootNavigator: true).pushReplacement<void, void>(
-        MaterialPageRoute<void>(
-          builder: (_) => GameShellPage(
-            initialSession: _session,
-            autoOpenDrawer: true,
-          ),
-        ),
-      );
+      await _reenterScenarioAfterReset(scenarioId);
       return;
     }
 
+    // 重置的不是当前世界，或只是普通退出编辑页：仅刷新世界列表即可。
     await _loadHomeData(
       focusScenarioId: isDataChanged == true ? scenarioId : null,
     );
@@ -770,13 +804,31 @@ class _GameShellState extends State<GameShell> {
       );
     }
 
-    return Scaffold(
-      key: _scaffoldKey,
-      resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
-      backgroundColor: widget.backgroundColor,
-      drawerScrimColor: Colors.black.withOpacity(.78),
-      drawer: drawer,
-      body: pageBody,
+    return PopScope(
+      // 剧情路由永远不允许系统返回键直接 pop。
+      // 否则当它已经是根游戏路由时，会暴露下面的空壳/空白页面。
+      canPop: false,
+      onPopInvoked: (didPop) {
+        if (didPop) return;
+        final scaffold = _scaffoldKey.currentState;
+        if (scaffold == null) return;
+
+        if (scaffold.isDrawerOpen) {
+          // 菜单已经打开时，返回键只负责把菜单收起。
+          Navigator.of(context).pop();
+        } else {
+          // 正常剧情中按返回：只打开左侧菜单，不离开当前世界。
+          scaffold.openDrawer();
+        }
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
+        backgroundColor: widget.backgroundColor,
+        drawerScrimColor: Colors.black.withOpacity(.78),
+        drawer: drawer,
+        body: pageBody,
+      ),
     );
   }
 }

@@ -271,7 +271,7 @@ class NovelScenario {
       title: stringValue(json['title'], '互动世界'),
       description: stringValue(json['description']),
       openingMessage: stringValue(
-        json['opening_message_preview'] ?? json['opening_message'],
+        json['opening_message'],
       ),
       hostAvatarUrl: stringValue(json['host_avatar']),
       artStyle: stringValue(
@@ -721,19 +721,29 @@ class NovelInventoryData {
   const NovelInventoryData({
     this.storyItems = const <NovelInventoryItem>[],
     this.consumables = const <NovelInventoryItem>[],
+    this.protagonistState = const <String, dynamic>{},
   });
 
   final List<NovelInventoryItem> storyItems;
   final List<NovelInventoryItem> consumables;
 
+  /// 与背包一起返回的主角权威状态。
+  /// 这样重新打开游戏后，不依赖上一轮 WS 也能恢复技能/境界/伤势。
+  final JsonMap protagonistState;
+
   factory NovelInventoryData.fromJson(JsonMap json) {
+    final storyJson = <JsonMap>[
+      ...asJsonList(json['inventory'] ?? json['items']),
+      ...asJsonList(json['currencies']),
+    ];
     return NovelInventoryData(
-      storyItems: asJsonList(json['inventory'] ?? json['items'])
-          .map(NovelInventoryItem.fromJson)
-          .toList(),
+      storyItems: storyJson.map(NovelInventoryItem.fromJson).toList(),
       consumables: asJsonList(json['consumables'])
           .map(NovelInventoryItem.fromJson)
           .toList(),
+      protagonistState: asJsonMap(
+        json['protagonist'] ?? json['protagonist_state'],
+      ),
     );
   }
 }

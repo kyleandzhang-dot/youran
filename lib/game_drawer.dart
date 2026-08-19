@@ -15,6 +15,9 @@ import 'discover_detail_sheet.dart';
 import 'share_world_page.dart';
 import 'mine_dialogs.dart';
 
+// 抽屉与 Novel 页面统一使用当前全局主绿色。
+const Color _drawerAccent = Color(0xFF6FD35F);
+
 /// 抽屉顶部的三个功能模块
 enum DrawerModule { world, discover, mine }
 
@@ -252,7 +255,7 @@ class GameDrawer extends StatelessWidget {
 }
 
 
-class _WorldPanel extends StatelessWidget {
+class _WorldPanel extends StatefulWidget {
   const _WorldPanel({
     required this.games,
     required this.selectedGameIndex,
@@ -269,20 +272,68 @@ class _WorldPanel extends StatelessWidget {
   final Future<void> Function()? onRefresh;
   final bool dismissOnReselect;
 
+  @override
+  State<_WorldPanel> createState() => _WorldPanelState();
+}
+
+class _WorldPanelState extends State<_WorldPanel> {
+  // 世界切换属于导航操作，不能只依赖 selectedGameIndex 做拦截。
+  // 用户连续点击时，父层还没来得及更新 selectedGameIndex，旧代码会重复触发
+  // onGameSelected，最终造成同一个世界被连续 push 多次。这里先同步上锁，
+  // 再执行外层切换；1.2 秒后仅作为兜底解锁。正常进入新页面时本 State 会销毁。
+  static const Duration _worldLaunchGuardDuration = Duration(milliseconds: 1200);
+
+  bool _worldLaunchLocked = false;
+  Timer? _worldLaunchUnlockTimer;
+
+  @override
+  void dispose() {
+    _worldLaunchUnlockTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _refresh() async {
-    final callback = onRefresh;
+    final callback = widget.onRefresh;
     if (callback == null) return;
     await callback();
   }
 
+  void _selectWorld(BuildContext context, int index) {
+    // 当前世界仍沿用原逻辑：剧情 Drawer 中只关闭抽屉。
+    if (widget.selectedGameIndex == index) {
+      if (widget.dismissOnReselect && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      return;
+    }
+
+    // 防重复进入：第一次点击后立刻锁住，后续连续点击全部丢弃。
+    if (_worldLaunchLocked) return;
+    _worldLaunchLocked = true;
+    _worldLaunchUnlockTimer?.cancel();
+
+    try {
+      widget.onGameSelected(index);
+    } catch (_) {
+      _worldLaunchLocked = false;
+      rethrow;
+    }
+
+    // 兜底：如果外层因为异常没有发生页面切换，也不会永久锁死。
+    _worldLaunchUnlockTimer = Timer(_worldLaunchGuardDuration, () {
+      if (!mounted) return;
+      _worldLaunchLocked = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (games.isEmpty) {
+    if (widget.games.isEmpty) {
       return LayoutBuilder(
         builder: (context, constraints) {
           return RefreshIndicator(
             onRefresh: _refresh,
-            color: AppColors.accent,
+            color: _drawerAccent,
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 28),
               physics: const AlwaysScrollableScrollPhysics(
@@ -315,36 +366,23 @@ class _WorldPanel extends StatelessWidget {
 
     return RefreshIndicator(
       onRefresh: _refresh,
-      color: AppColors.accent,
+      color: _drawerAccent,
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
         physics: const AlwaysScrollableScrollPhysics(
           parent: BouncingScrollPhysics(),
         ),
-        itemCount: games.length,
+        itemCount: widget.games.length,
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
           return _WorldItem(
-            game: games[index],
-            selected: selectedGameIndex == index,
-            onTap: () {
-              // 核心拦截：如果点击的就是当前正在游玩的剧本
-              if (selectedGameIndex == index) {
-                // 剧情 Drawer 中重复点击当前世界：只关闭抽屉。
-                // 大厅固定侧栏中不能 pop，否则会误退出当前页面。
-                if (dismissOnReselect && Navigator.of(context).canPop()) {
-                  Navigator.of(context).pop();
-                }
-                return;
-              }
-              
-              // 点击了其他剧本，正常走切换逻辑
-              onGameSelected(index);
-            },
+            game: widget.games[index],
+            selected: widget.selectedGameIndex == index,
+            onTap: () => _selectWorld(context, index),
             onDetailTap: () {
-              final callback = onEditWorld;
+              final callback = widget.onEditWorld;
               if (callback == null) {
-                debugPrint('未配置 onEditWorld：${games[index].title}');
+                debugPrint('未配置 onEditWorld：${widget.games[index].title}');
                 return;
               }
 
@@ -635,7 +673,7 @@ class _CreationProgressPanelState extends State<_CreationProgressPanel>
                 Text(
                   '${widget.progress.round()}%',
                   style: const TextStyle(
-                    color: AppColors.accent,
+                    color: _drawerAccent,
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     fontFamily: 'Courier',
@@ -663,10 +701,10 @@ class _CreationProgressPanelState extends State<_CreationProgressPanel>
                           builder: (context, child) {
                             return Container(
                               decoration: BoxDecoration(
-                                color: AppColors.accent,
+                                color: _drawerAccent,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppColors.accent.withOpacity(_glowAnimation.value),
+                                    color: _drawerAccent.withOpacity(_glowAnimation.value),
                                     blurRadius: 6,
                                     spreadRadius: 0.5,
                                   ),
@@ -758,7 +796,7 @@ class _DrawerHeader extends StatelessWidget {
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: AppColors.accent,
+                        color: _drawerAccent,
                         border: Border.all(
                           color: const Color.fromARGB(255, 20, 20, 20),
                           width: 1.5,
@@ -897,7 +935,7 @@ class _HeaderCheckinButton extends StatelessWidget {
     return Material(
       color: checked
           ? Colors.white.withOpacity(0.028)
-          : AppColors.accent.withOpacity(0.08),
+          : _drawerAccent.withOpacity(0.08),
       borderRadius: BorderRadius.circular(6),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -911,7 +949,7 @@ class _HeaderCheckinButton extends StatelessWidget {
             border: Border.all(
               color: checked
                   ? Colors.white.withOpacity(0.06)
-                  : AppColors.accent.withOpacity(0.18),
+                  : _drawerAccent.withOpacity(0.18),
             ),
             borderRadius: BorderRadius.circular(6),
           ),
@@ -924,7 +962,7 @@ class _HeaderCheckinButton extends StatelessWidget {
             style: TextStyle(
               color: checked
                   ? AppColors.textOnDarkMuted
-                  : AppColors.accent,
+                  : _drawerAccent,
               fontSize: 10.5,
               fontWeight: FontWeight.w600,
             ),
@@ -970,7 +1008,9 @@ class _ModuleTabs extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
             border: Border.all(
-              color: isSelected ? Colors.white.withOpacity(0.35) : Colors.transparent,
+              color: isSelected
+                  ? Colors.white.withOpacity(0.34)
+                  : Colors.transparent,
               width: 1,
             ),
           ),
@@ -981,7 +1021,7 @@ class _ModuleTabs extends StatelessWidget {
               Icon(
                 icon,
                 size: 16,
-                color: isSelected ? AppColors.textOnDark : AppColors.textOnDarkMuted,
+                color: isSelected ? Colors.white : AppColors.textOnDarkMuted,
               ),
               const SizedBox(height: 3),
               Text(
@@ -989,7 +1029,7 @@ class _ModuleTabs extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: isSelected ? AppColors.textOnDark : AppColors.textOnDarkMuted,
+                  color: isSelected ? Colors.white : AppColors.textOnDarkMuted,
                 ),
               ),
             ],
@@ -1348,7 +1388,7 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
         child: SizedBox(
           width: 22,
           height: 22,
-          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent),
+          child: CircularProgressIndicator(strokeWidth: 2, color: _drawerAccent),
         ),
       );
     }
@@ -1373,7 +1413,7 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
 
     return RefreshIndicator(
       onRefresh: _load,
-      color: AppColors.accent,
+      color: _drawerAccent,
       child: GridView.builder(
         padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
         physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
@@ -2203,7 +2243,7 @@ class _MinePanelState extends State<_MinePanel> {
                   child: Text(
                     _markingAll ? '处理中…' : '全标已读',
                     style: const TextStyle(
-                      color: AppColors.accent,
+                      color: _drawerAccent,
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                     ),
@@ -2489,7 +2529,7 @@ class _MinePanelState extends State<_MinePanel> {
         Expanded(
           child: RefreshIndicator(
             onRefresh: _refreshAll,
-            color: AppColors.accent,
+            color: _drawerAccent,
             child: ListView(
               padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
               physics: const AlwaysScrollableScrollPhysics(
@@ -2501,7 +2541,7 @@ class _MinePanelState extends State<_MinePanel> {
                     padding: EdgeInsets.only(bottom: 8),
                     child: LinearProgressIndicator(
                       minHeight: 1.5,
-                      color: AppColors.accent,
+                      color: _drawerAccent,
                       backgroundColor: Colors.transparent,
                     ),
                   ),
@@ -2705,7 +2745,7 @@ class _MineQuickAction extends StatelessWidget {
           decoration: BoxDecoration(
             border: Border.all(
               color: highlighted
-                  ? AppColors.accent.withOpacity(0.20)
+                  ? _drawerAccent.withOpacity(0.20)
                   : Colors.white.withOpacity(0.055),
             ),
             borderRadius: BorderRadius.circular(8),
@@ -2716,7 +2756,7 @@ class _MineQuickAction extends StatelessWidget {
                 icon,
                 size: 16,
                 color: highlighted
-                    ? AppColors.accent
+                    ? _drawerAccent
                     : AppColors.textOnDarkMuted,
               ),
               const SizedBox(width: 8),
@@ -2741,7 +2781,7 @@ class _MineQuickAction extends StatelessWidget {
                         subtitle!,
                         style: TextStyle(
                           color: highlighted
-                              ? AppColors.accent
+                              ? _drawerAccent
                               : AppColors.textOnDarkMuted,
                           fontSize: 9.5,
                           fontWeight: FontWeight.w500,
@@ -2923,7 +2963,7 @@ class _BottomActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: AppColors.accent,
+      color: _drawerAccent,
       child: InkWell(
         onTap: onTap,
         child: Container(

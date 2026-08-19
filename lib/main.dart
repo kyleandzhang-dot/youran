@@ -11,6 +11,9 @@ import 'login_sheet.dart'; // 引入登录面板组件
 
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
+// 防止多个并发 401 / WebSocket 踢下线事件重复叠加登录路由。
+bool _forcedLoginRouteActive = false;
+
 const NovelEndpointConfig _novelEndpoints = NovelEndpointConfig(
   scenarioDetail: '/scenario/{scenarioId}/info',
   characterStatus: '/scenario/{scenarioId}/characters/status',
@@ -47,12 +50,23 @@ final NovelRuntime novelRuntime = NovelRuntime(
 );
 
 Future<void> _handleForcedLogout() async {
-  await SessionManager.logout();
+  if (_forcedLoginRouteActive) return;
+  _forcedLoginRouteActive = true;
+
+  await SessionManager.expireSession();
+
   final navigator = appNavigatorKey.currentState;
-  if (navigator == null) return;
+  if (navigator == null) {
+    _forcedLoginRouteActive = false;
+    return;
+  }
+
   navigator.pushAndRemoveUntil<void>(
     MaterialPageRoute<void>(
-      builder: (_) => const GameShellPage(autoOpenDrawer: true),
+      builder: (_) => const _StartupGate(
+        forceLogin: true,
+        loginMessage: '身份已过期，请重新登录',
+      ),
     ),
     (route) => false,
   );
@@ -104,7 +118,13 @@ class _StartupLaunch {
 }
 
 class _StartupGate extends StatefulWidget {
-  const _StartupGate();
+  const _StartupGate({
+    this.forceLogin = false,
+    this.loginMessage,
+  });
+
+  final bool forceLogin;
+  final String? loginMessage;
 
   @override
   State<_StartupGate> createState() => _StartupGateState();
@@ -126,10 +146,15 @@ class _StartupGateState extends State<_StartupGate> {
     // restore() 只允许用于 App 冷启动。
     // 用户刚完成验证码登录时已经拿到了完整 token，不能再次 restore()，
     // 否则 restore() 会先清空内存 token，再刷新，造成第一次登录的状态竞争。
-    final session = await SessionManager.restore();
+    final session = widget.forceLogin
+        ? null
+        : await SessionManager.restore();
     if (!mounted) return;
 
     if (session == null) {
+      final expiredDuringRestore = SessionManager.consumeSessionExpiredNotice();
+      final loginMessage = widget.loginMessage ??
+          (expiredDuringRestore ? '身份已过期，请重新登录' : null);
       _session = null;
       _launch = null;
       setState(() => _loading = false);
@@ -139,9 +164,11 @@ class _StartupGateState extends State<_StartupGate> {
         if (!mounted) return;
         LoginSheet.show(
           context,
+          initialErrorText: loginMessage,
           onLoginSuccess: (result) async {
             // LoginSheet 会先完整退出，再执行到这里，因此这里可以安全刷新/跳转。
             await SessionManager.persist(result);
+            _forcedLoginRouteActive = false;
             if (!mounted) return;
 
             final loggedInSession = UserSession(

@@ -30,8 +30,28 @@ class SessionManager {
   // 多个 401 同时发生时只刷新一次，等价于 Vue request.js 的 failedQueue。
   static Future<String?>? _refreshingAccessToken;
 
+  // 仅用于告诉 UI：这次回到登录页是“身份过期”，不是普通未登录。
+  static bool _sessionExpiredNoticePending = false;
+
+  /// 读取并消费一次“身份已过期”提示。
+  static bool consumeSessionExpiredNotice() {
+    final pending = _sessionExpiredNoticePending;
+    _sessionExpiredNoticePending = false;
+    return pending;
+  }
+
+  /// 服务端明确判定凭证失效时调用。
+  /// 与普通 logout() 分开，避免用户主动退出也显示“身份已过期”。
+  static Future<void> expireSession() async {
+    _sessionExpiredNoticePending = true;
+    await logout();
+  }
+
   /// 登录成功后调用。
   static Future<void> persist(LoginResult result) async {
+    // 新登录成功后，清掉可能残留的“身份过期”提示。
+    _sessionExpiredNoticePending = false;
+
     // 服务端已经确认登录成功后，先让当前运行时身份立即生效。
     // 后续页面即使马上发请求，也能立刻带上 Authorization / X-User-ID。
     ApiClient.instance.setAccessToken(result.accessToken);
@@ -69,7 +89,7 @@ class SessionManager {
   static Future<String?> _refreshAccessTokenInternal() async {
     final refreshToken = await TokenStorage.readRefreshToken();
     if (refreshToken == null || refreshToken.trim().isEmpty) {
-      await logout();
+      await expireSession();
       return null;
     }
 
@@ -86,7 +106,7 @@ class SessionManager {
       if (error.statusCode == 400 ||
           error.statusCode == 401 ||
           error.statusCode == 403) {
-        await logout();
+        await expireSession();
         return null;
       }
       rethrow;
@@ -131,7 +151,7 @@ class SessionManager {
       if (error.statusCode == 400 ||
           error.statusCode == 401 ||
           error.statusCode == 403) {
-        await TokenStorage.clear();
+        await expireSession();
       }
       return null;
     } catch (error) {

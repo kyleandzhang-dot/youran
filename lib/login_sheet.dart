@@ -15,13 +15,19 @@ import 'api/auth_api.dart';
 import 'app_shared.dart';
 
 class LoginSheet extends StatefulWidget {
-  const LoginSheet({super.key, required this.onLoginSuccess});
+  const LoginSheet({
+    super.key,
+    required this.onLoginSuccess,
+    this.initialErrorText,
+  });
 
   final FutureOr<void> Function(LoginResult) onLoginSuccess;
+  final String? initialErrorText;
 
   static void show(
     BuildContext context, {
     required FutureOr<void> Function(LoginResult) onLoginSuccess,
+    String? initialErrorText,
   }) {
     // 登录页只负责验证账号。验证成功后先完整关闭 root 登录路由，
     // 再执行外部登录成功回调，避免回调中的页面跳转与登录页 pop 互相竞争。
@@ -35,7 +41,10 @@ class LoginSheet extends StatefulWidget {
         pageBuilder: (_, __, ___) {
           return PopScope(
             canPop: false,
-            child: LoginSheet(onLoginSuccess: onLoginSuccess),
+            child: LoginSheet(
+              onLoginSuccess: onLoginSuccess,
+              initialErrorText: initialErrorText,
+            ),
           );
         },
         transitionsBuilder: (_, animation, __, child) {
@@ -86,6 +95,13 @@ class _LoginSheetState extends State<LoginSheet> {
   bool _sendingCode = false;
   bool _submitting = false;
   String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialErrorText?.trim() ?? '';
+    _errorText = initial.isEmpty ? null : initial;
+  }
 
   bool get _emailValid {
     final email = _emailController.text.trim();
