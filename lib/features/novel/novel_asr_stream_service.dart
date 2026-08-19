@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -37,6 +38,17 @@ class NovelAsrStreamService {
   final List<Uint8List> _preReadyAudio = <Uint8List>[];
   int _preReadyBytes = 0;
   static const int _maxPreReadyBytes = 480000; // 约 15 秒 PCM，覆盖后端最坏握手预算且防止无限占内存。
+
+  // 本地 VAD：先确认确实有人声，再允许 PCM 穿过网络闸门。
+  // 16k / PCM16 / mono 下每个 stream buffer 约 100ms；连续 3 个块达到 -42dBFS
+  // 才认为是有效说话，能过滤纯静音和多数稳定底噪。
+  static const Duration minimumSpeechDuration = Duration(seconds: 1);
+  static const double _voiceRmsThresholdDb = -42.0;
+  static const int _voiceChunksRequired = 3;
+  bool _voiceDetected = false;
+  bool _audioGateOpen = false;
+  int _consecutiveVoiceChunks = 0;
+  double _maxPcmRmsDb = -160.0;
 
   static const Duration _gatewayConnectTimeout = Duration(seconds: 5);
   static const Duration _providerReadyTimeout = Duration(seconds: 12);
@@ -139,6 +151,7 @@ class NovelAsrStreamService {
 
   bool get isSessionOpen => _sessionOpen;
   bool get isRecording => _recording;
+  bool get hasDetectedVoice => _voiceDetected;
   String get latestPartial => _latestPartial;
 
   String _asrPath() {
@@ -216,8 +229,12 @@ class NovelAsrStreamService {
     unawaited(_finalCompleter!.future.then<void>((_) {}, onError: (Object _, StackTrace __) {}));
     _latestPartial = '';
     _maxAmplitudeDb = -160.0;
+    _maxPcmRmsDb = -160.0;
     _localAudioBytes = 0;
     _sawNonZeroPcm = false;
+    _voiceDetected = false;
+    _audioGateOpen = false;
+    _consecutiveVoiceChunks = 0;
     _inputDeviceLabel = '';
     _channelReady = false;
     _ending = false;
@@ -299,24 +316,69 @@ class NovelAsrStreamService {
     }
   }
 
+  double _pcmRmsDb(Uint8List chunk) {
+    if (chunk.length < 2) return -160.0;
+
+    var samples = 0;
+    var sumSquares = 0.0;
+    for (var i = 0; i + 1 < chunk.length; i += 2) {
+      var sample = chunk[i] | (chunk[i + 1] << 8);
+      if (sample >= 0x8000) sample -= 0x10000;
+      final normalized = sample / 32768.0;
+      sumSquares += normalized * normalized;
+      samples++;
+    }
+    if (samples == 0) return -160.0;
+    final rms = math.sqrt(sumSquares / samples);
+    if (rms <= 0.0000001) return -160.0;
+    return 20.0 * math.log(rms) / math.ln10;
+  }
+
+  void _updateLocalVoiceActivity(Uint8List chunk) {
+    final rmsDb = _pcmRmsDb(chunk);
+    if (rmsDb > _maxPcmRmsDb) _maxPcmRmsDb = rmsDb;
+
+    if (rmsDb >= _voiceRmsThresholdDb) {
+      _consecutiveVoiceChunks++;
+      if (_consecutiveVoiceChunks >= _voiceChunksRequired) {
+        _voiceDetected = true;
+      }
+    } else {
+      _consecutiveVoiceChunks = 0;
+    }
+  }
+
   void _handleAudioChunk(Uint8List chunk) {
-    // stop() 期间仍允许 recorder 把最后几个 PCM buffer 冲出来；
-    // 旧版在 _ending=true 后直接丢弃尾包，短语音很容易只剩静音/残片。
+    // stop() 期间仍允许 recorder 把最后几个 PCM buffer 冲出来。
     if (!_sessionOpen || _discardAudio || chunk.isEmpty) return;
+
     _localAudioBytes += chunk.length;
     if (!_sawNonZeroPcm) {
       _sawNonZeroPcm = chunk.any((value) => value != 0);
     }
-    if (_channelReady && _channel != null) {
-      _channel!.sink.add(chunk);
-      return;
-    }
+    _updateLocalVoiceActivity(chunk);
 
+    // 无论网络是否 ready，先在本地保存。只有同时满足：
+    // 1) 检测到连续有效人声；2) 已按住至少 1 秒，才打开网络音频闸门。
     _preReadyAudio.add(Uint8List.fromList(chunk));
     _preReadyBytes += chunk.length;
     while (_preReadyBytes > _maxPreReadyBytes && _preReadyAudio.isNotEmpty) {
       final removed = _preReadyAudio.removeAt(0);
       _preReadyBytes -= removed.length;
+    }
+
+    final captureMs = _captureWatch?.elapsedMilliseconds ?? 0;
+    if (!_audioGateOpen &&
+        _voiceDetected &&
+        captureMs >= minimumSpeechDuration.inMilliseconds) {
+      _audioGateOpen = true;
+      debugPrint(
+        '[ASR] local VAD passed: capture=${captureMs}ms maxRms=${_maxPcmRmsDb.toStringAsFixed(1)}dBFS',
+      );
+    }
+
+    if (_audioGateOpen && _channelReady && _channel != null) {
+      _flushPreReadyAudio();
     }
   }
 
@@ -347,7 +409,7 @@ class NovelAsrStreamService {
 
       if (type == 'ready') {
         _channelReady = true;
-        _flushPreReadyAudio();
+        if (_audioGateOpen) _flushPreReadyAudio();
         final ready = _readyCompleter;
         if (ready != null && !ready.isCompleted) ready.complete();
         return;
@@ -405,6 +467,29 @@ class NovelAsrStreamService {
       await _amplitudeSubscription?.cancel();
       _amplitudeSubscription = null;
 
+      // 双保险：短按或全程没有检测到有效人声时，绝不发送 end，
+      // 更不会把本地缓存的静音 PCM 冲给识别服务。只发 cancel 关闭空会话。
+      if (captureMs < minimumSpeechDuration.inMilliseconds) {
+        try {
+          _channel?.sink.add(jsonEncode(const <String, dynamic>{'type': 'cancel'}));
+        } catch (_) {}
+        throw const NovelAsrStreamException(
+          '说话太短了',
+          code: 'AUDIO_TOO_SHORT',
+        );
+      }
+      if (!_voiceDetected) {
+        try {
+          _channel?.sink.add(jsonEncode(const <String, dynamic>{'type': 'cancel'}));
+        } catch (_) {}
+        throw const NovelAsrStreamException(
+          '没有检测到有效说话声，请靠近麦克风再试。',
+          code: 'NO_VOICE',
+        );
+      }
+
+      _audioGateOpen = true;
+
       if (_channel == null) {
         throw const NovelAsrStreamException('语音连接已断开，请重试。', code: 'SOCKET_CLOSED');
       }
@@ -423,6 +508,7 @@ class NovelAsrStreamService {
       _flushPreReadyAudio();
       debugPrint(
         '[ASR] capture summary: bytes=$_localAudioBytes nonzero=$_sawNonZeroPcm '
+        'voice=$_voiceDetected maxRms=${_maxPcmRmsDb.toStringAsFixed(1)}dBFS '
         'maxDb=${_maxAmplitudeDb.toStringAsFixed(1)} device=$_inputDeviceLabel',
       );
       _channel!.sink.add(jsonEncode(<String, dynamic>{
@@ -430,6 +516,8 @@ class NovelAsrStreamService {
         'capture_ms': captureMs,
         'frontend_audio_bytes': _localAudioBytes,
         'frontend_nonzero_pcm': _sawNonZeroPcm,
+        'frontend_voice_detected': _voiceDetected,
+        'frontend_pcm_rms_db': _maxPcmRmsDb,
         'frontend_max_db': _maxAmplitudeDb,
         'input_device': _inputDeviceLabel,
       }));
@@ -495,8 +583,12 @@ class NovelAsrStreamService {
     _audioDoneCompleter = null;
     _captureWatch = null;
     _maxAmplitudeDb = -160.0;
+    _maxPcmRmsDb = -160.0;
     _localAudioBytes = 0;
     _sawNonZeroPcm = false;
+    _voiceDetected = false;
+    _audioGateOpen = false;
+    _consecutiveVoiceChunks = 0;
     _inputDeviceLabel = '';
   }
 

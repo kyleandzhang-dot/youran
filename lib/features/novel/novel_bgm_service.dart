@@ -16,24 +16,11 @@ class NovelBgmService {
     this.debounceCount = 2,
   })  : _player = player ?? AudioPlayer(),
         _weatherPlayer = weatherPlayer ?? AudioPlayer(),
-        _typingPlayer = typingPlayer ?? AudioPlayer() {
-    // Web 继续使用单播放器快速 restart。
-    // Android / iOS 使用一个很小的播放器池轮播短音，避免必须等上一声 WAV 播完
-    // 才能听到下一声，从而出现“滴——滴——滴——”的长间隔。
-    _typingPlayers = kIsWeb
-        ? <AudioPlayer>[_typingPlayer]
-        : <AudioPlayer>[
-            _typingPlayer,
-            AudioPlayer(),
-            AudioPlayer(),
-            AudioPlayer(),
-          ];
-  }
+        _typingPlayer = typingPlayer ?? AudioPlayer();
 
   final AudioPlayer _player;
   final AudioPlayer _weatherPlayer;
   final AudioPlayer _typingPlayer;
-  late final List<AudioPlayer> _typingPlayers;
   final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
   final double defaultVolume;
   final Duration fadeDuration;
@@ -56,22 +43,22 @@ class NovelBgmService {
   bool isWeatherPlaying = false;
 
   static const String typingAsset = 'assets/audio/ui/typing.wav';
-  static const double typingVolume = 0.46;
 
-  // 逐字动画通常 30ms 推进一次。
-  // Web 保持约 60ms 一声；原生端也压到接近这一节奏，但通过播放器池避免互相抢 seek。
-  static const Duration typingThrottle = Duration(milliseconds: 60);
-  static const Duration nativeTypingThrottle = Duration(milliseconds: 55);
-  DateTime? _lastTypingTickAt;
+  // 打字声改为一句话期间的连续低音量纹理，不再按字符反复 seek + play。
+  // 旧实现高频重启播放器，在手机上容易产生音频线程抖动和不连续感。
+  static const double typingVolume = 0.20;
+  static const Duration typingIdleGrace = Duration(milliseconds: 110);
+  static const Duration typingFadeDuration = Duration(milliseconds: 90);
+
   bool _typingReady = false;
+  bool _typingPlaying = false;
   Future<void>? _typingPrepareFuture;
-  bool _typingRestartInFlight = false;
-  bool _typingRestartQueued = false;
+  Future<void>? _typingStartFuture;
+  Timer? _typingIdleTimer;
   int _typingPlaybackEpoch = 0;
-  int _nativeTypingCursor = 0;
-  Timer? _weatherDuckRestoreTimer;
+  int _typingFadeEpoch = 0;
 
-  /// 预加载流式打字音效。资源缺失时静默降级。
+  /// 预加载连续打字音效。资源缺失时静默降级。
   Future<void> preloadTypingSfx() async {
     await _prepareTypingPlayer();
   }
@@ -83,16 +70,12 @@ class NovelBgmService {
 
     final future = () async {
       try {
-        await Future.wait(
-          _typingPlayers.map((player) async {
-            await player.setLoopMode(LoopMode.off);
-            await player.setVolume(typingVolume);
-            await player.setAsset(typingAsset);
-          }),
-        );
+        // 单播放器常驻，整段逐字显示期间只启动一次。
+        await _typingPlayer.setLoopMode(LoopMode.one);
+        await _typingPlayer.setVolume(0);
+        await _typingPlayer.setAsset(typingAsset);
         _typingReady = true;
       } catch (error, stackTrace) {
-        // 手机安装版若资源/解码失败，必须把真实原因打印出来，避免静默无声。
         debugPrint('novel typing sfx prepare failed: $error');
         debugPrintStack(stackTrace: stackTrace);
         _typingReady = false;
@@ -104,131 +87,116 @@ class NovelBgmService {
     return future;
   }
 
-  double _currentWeatherTargetVolume() =>
-      _weatherVolume(currentWeatherKey).clamp(0.0, 1.0).toDouble();
-
-  void _duckWeatherForTyping() {
-    _weatherDuckRestoreTimer?.cancel();
-    if (isWeatherPlaying && _weatherPlayer.playing) {
-      final ducked = (_currentWeatherTargetVolume() * 0.45)
-          .clamp(0.0, 1.0)
-          .toDouble();
-      unawaited(_weatherPlayer.setVolume(ducked));
-    }
-    _weatherDuckRestoreTimer = Timer(const Duration(milliseconds: 240), () {
-      if (isWeatherPlaying && _weatherPlayer.playing) {
-        unawaited(_weatherPlayer.setVolume(_currentWeatherTargetVolume()));
-      }
-    });
-  }
-
-  /// 流式文字的短促前景音效。高频调用会自动节流。
+  /// 保留旧接口名，调用方仍可在逐字动画每次推进时调用。
   ///
-  /// Web 使用单播放器 restart；Android / iOS 使用播放器池轮播，
-  /// 让相邻打字声可以自然重叠，不再受单个 WAV 完整时长限制。
+  /// 新实现不会每次播放一个 tick；第一次调用启动循环，后续调用只刷新
+  /// “仍在打字”的保活时间。超过 [typingIdleGrace] 没有新字符就自动淡出。
   void playTypingTick() {
-    final now = DateTime.now();
-    final last = _lastTypingTickAt;
-    final throttle = kIsWeb ? typingThrottle : nativeTypingThrottle;
-    if (last != null && now.difference(last) < throttle) return;
-    _lastTypingTickAt = now;
+    _typingIdleTimer?.cancel();
+    _cancelTypingFade(restoreVolume: true);
 
-    if (!kIsWeb) {
-      unawaited(_playNativeTypingTick());
-      return;
-    }
+    _typingIdleTimer = Timer(typingIdleGrace, () {
+      _typingIdleTimer = null;
+      unawaited(_fadeTypingOut());
+    });
 
-    if (_typingRestartInFlight) {
-      _typingRestartQueued = true;
-      return;
-    }
-    unawaited(_playWebTypingTick());
+    if (_typingPlaying || _typingStartFuture != null) return;
+    _typingStartFuture = _startTypingLoop();
   }
 
-  Future<void> _playNativeTypingTick() async {
+  Future<void> _startTypingLoop() async {
     final epoch = _typingPlaybackEpoch;
     try {
       await _prepareTypingPlayer();
       if (!_typingReady || epoch != _typingPlaybackEpoch) return;
 
-      final player = _typingPlayers[
-          _nativeTypingCursor % _typingPlayers.length];
-      _nativeTypingCursor =
-          (_nativeTypingCursor + 1) % _typingPlayers.length;
-
-      _duckWeatherForTyping();
-      await player.setVolume(typingVolume);
-      await player.seek(Duration.zero);
+      await _typingPlayer.setVolume(typingVolume);
       if (epoch != _typingPlaybackEpoch) return;
 
+      _typingPlaying = true;
       unawaited(
-        player.play().catchError((Object error, StackTrace stackTrace) {
+        _typingPlayer.play().catchError((Object error, StackTrace stackTrace) {
           debugPrint('novel typing sfx play failed: $error');
           debugPrintStack(stackTrace: stackTrace);
+          _typingPlaying = false;
         }),
       );
     } catch (error, stackTrace) {
-      debugPrint('novel typing sfx native tick failed: $error');
+      debugPrint('novel typing sfx start failed: $error');
       debugPrintStack(stackTrace: stackTrace);
+      _typingReady = false;
+      _typingPlaying = false;
+    } finally {
+      _typingStartFuture = null;
     }
   }
 
-  Future<void> _playWebTypingTick() async {
-    if (_typingRestartInFlight) {
-      _typingRestartQueued = true;
+  void _cancelTypingFade({bool restoreVolume = false}) {
+    _typingFadeEpoch += 1;
+    if (restoreVolume && _typingPlaying) {
+      unawaited(_typingPlayer.setVolume(typingVolume));
+    }
+  }
+
+  Future<void> _fadeTypingOut({bool explicitStop = false}) async {
+    if (!_typingPlaying && _typingStartFuture == null) return;
+
+    final fadeEpoch = ++_typingFadeEpoch;
+    final playbackEpoch = _typingPlaybackEpoch;
+    final startVolume = _typingPlayer.volume.clamp(0.0, typingVolume).toDouble();
+    final steps = explicitStop ? 5 : 6;
+    final stepDelay = Duration(
+      milliseconds: (typingFadeDuration.inMilliseconds / steps).round(),
+    );
+
+    for (var i = 1; i <= steps; i += 1) {
+      await Future<void>.delayed(stepDelay);
+      if (fadeEpoch != _typingFadeEpoch ||
+          playbackEpoch != _typingPlaybackEpoch) {
+        return;
+      }
+      final progress = i / steps;
+      await _typingPlayer.setVolume(
+        (startVolume * (1 - progress)).clamp(0.0, typingVolume).toDouble(),
+      );
+    }
+
+    if (fadeEpoch != _typingFadeEpoch ||
+        playbackEpoch != _typingPlaybackEpoch) {
       return;
     }
 
-    _typingRestartInFlight = true;
-    final epoch = _typingPlaybackEpoch;
     try {
-      do {
-        _typingRestartQueued = false;
-        await _prepareTypingPlayer();
-        if (!_typingReady || epoch != _typingPlaybackEpoch) return;
-
-        _duckWeatherForTyping();
-        await _typingPlayer.setVolume(typingVolume);
-        await _typingPlayer.seek(Duration.zero);
-        if (epoch != _typingPlaybackEpoch) return;
-
-        unawaited(
-          _typingPlayer.play().catchError((Object error, StackTrace stackTrace) {
-            debugPrint('novel typing sfx play failed: $error');
-            debugPrintStack(stackTrace: stackTrace);
-          }),
-        );
-      } while (_typingRestartQueued && epoch == _typingPlaybackEpoch);
-    } catch (error, stackTrace) {
-      debugPrint('novel typing sfx restart failed: $error');
-      debugPrintStack(stackTrace: stackTrace);
-      _typingReady = false;
-    } finally {
-      _typingRestartInFlight = false;
-      if (_typingRestartQueued && epoch == _typingPlaybackEpoch) {
-        _typingRestartQueued = false;
-        unawaited(_playWebTypingTick());
-      }
-    }
+      await _typingPlayer.pause();
+      await _typingPlayer.setVolume(0);
+    } catch (_) {}
+    _typingPlaying = false;
   }
 
   Future<void> stopTypingSound() async {
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = null;
+
+    // 让尚在 await 预加载/启动的旧请求失效，避免 stop 后又突然响起来。
     _typingPlaybackEpoch += 1;
-    _typingRestartQueued = false;
-    _lastTypingTickAt = null;
-    _nativeTypingCursor = 0;
-    _weatherDuckRestoreTimer?.cancel();
-    _weatherDuckRestoreTimer = null;
-    await Future.wait(
-      _typingPlayers.map((player) async {
-        try {
-          await player.stop();
-        } catch (_) {}
-      }),
-    );
-    if (isWeatherPlaying && _weatherPlayer.playing) {
-      await _weatherPlayer.setVolume(_currentWeatherTargetVolume());
+    _cancelTypingFade();
+
+    final pendingStart = _typingStartFuture;
+    if (pendingStart != null) {
+      try {
+        await pendingStart;
+      } catch (_) {}
     }
+
+    if (_typingPlaying) {
+      await _fadeTypingOut(explicitStop: true);
+    } else {
+      try {
+        await _typingPlayer.pause();
+        await _typingPlayer.setVolume(0);
+      } catch (_) {}
+    }
+    _typingPlaying = false;
   }
 
   Future<void> loadPreference() async {
@@ -556,8 +524,8 @@ class NovelBgmService {
     _weatherSwitchId += 1;
     _cancelFade();
     _cancelWeatherFade();
-    _weatherDuckRestoreTimer?.cancel();
-    _weatherDuckRestoreTimer = null;
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = null;
     await _player.stop();
     await _weatherPlayer.stop();
     await stopTypingSound();
@@ -567,15 +535,13 @@ class NovelBgmService {
 
   Future<void> dispose() async {
     _typingPlaybackEpoch += 1;
-    _typingRestartQueued = false;
+    _typingFadeEpoch += 1;
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = null;
     _cancelFade();
     _cancelWeatherFade();
-    _weatherDuckRestoreTimer?.cancel();
-    _weatherDuckRestoreTimer = null;
     await _player.dispose();
     await _weatherPlayer.dispose();
-    await Future.wait(
-      _typingPlayers.map((player) => player.dispose()),
-    );
+    await _typingPlayer.dispose();
   }
 }

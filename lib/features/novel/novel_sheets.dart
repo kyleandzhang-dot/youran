@@ -3745,11 +3745,7 @@ class _CharacterQuickPortraitEditorState
   void initState() {
     super.initState();
     _promptController = TextEditingController();
-    _promptFocusNode = FocusNode()..addListener(_handlePromptFocusChanged);
-  }
-
-  void _handlePromptFocusChanged() {
-    if (mounted) setState(() {});
+    _promptFocusNode = FocusNode();
   }
 
   @override
@@ -3766,7 +3762,6 @@ class _CharacterQuickPortraitEditorState
 
   @override
   void dispose() {
-    _promptFocusNode.removeListener(_handlePromptFocusChanged);
     _promptFocusNode.dispose();
     _promptController.dispose();
     super.dispose();
@@ -3893,19 +3888,12 @@ class _CharacterQuickPortraitEditorState
 
   @override
   Widget build(BuildContext context) {
-    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    final liftForKeyboard = widget.compact &&
-        _promptFocusNode.hasFocus &&
-        keyboardInset > 0
-        ? math.min(keyboardInset * .28, 88.0)
-        : 0.0;
-
-    // 主页面不再随键盘整体缩高。角色页只把正在编辑的立绘输入区轻微上移，
-    // 底部“全部 / 亲密 / 普通”和角色头像保持固定位置，不再被一起顶上来。
+    // 游戏页本身已经关闭 resizeToAvoidBottomInset。
+    // 这里不再根据键盘高度手动平移编辑区：手机聚焦输入框时保持原坐标，
+    // 避免“更换立绘”区域向上撞进角色资料；键盘只覆盖屏幕底部内容。
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
-      transform: Matrix4.translationValues(0, -liftForKeyboard, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -3928,14 +3916,17 @@ class _CharacterQuickPortraitEditorState
               width: 1,
             ),
           ),
-          constraints: const BoxConstraints(minHeight: 76),
-          padding: const EdgeInsets.fromLTRB(11, 10, 11, 9),
+          constraints: BoxConstraints(
+            minHeight: widget.compact ? 104 : 112,
+          ),
+          padding: const EdgeInsets.fromLTRB(11, 11, 11, 10),
           child: TextField(
             controller: _promptController,
             focusNode: _promptFocusNode,
             enabled: !_generating,
-            minLines: 3,
-            maxLines: widget.compact ? 3 : 4,
+            minLines: 4,
+            maxLines: widget.compact ? 4 : 5,
+            scrollPadding: EdgeInsets.zero,
             cursorColor: NovelPalette.accent,
             style: TextStyle(
               color: _archiveText,
@@ -4029,46 +4020,50 @@ class _CharacterQuickPortraitEditorState
           ),
         ),
         const SizedBox(height: 7),
-        Align(
-          alignment: Alignment.centerRight,
+        SizedBox(
+          width: double.infinity,
+          height: 38,
           child: Material(
             color: Colors.transparent,
             child: InkWell(
               onTap: (_generating || _uploading)
                   ? null
                   : _pickAndApplyLocalPortrait,
-              borderRadius: BorderRadius.circular(5),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 5,
-                  vertical: 4,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: _uploading
+                      ? _archiveSurfaceSoft
+                      : Colors.transparent,
+                  border: Border.all(
+                    color: _uploading
+                        ? _archiveLine
+                        : _archiveAccent.withOpacity(.55),
+                    width: .9,
+                  ),
                 ),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
                     if (_uploading) ...<Widget>[
                       const SizedBox.square(
-                        dimension: 10,
+                        dimension: 11,
                         child: CircularProgressIndicator(
-                          strokeWidth: 1.35,
+                          strokeWidth: 1.4,
                           color: NovelPalette.accentDeep,
                         ),
                       ),
-                      const SizedBox(width: 5),
-                    ] else ...<Widget>[
-                      const Icon(
-                        Icons.upload_file_outlined,
-                        size: 13,
-                        color: _archiveAccent,
-                      ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 6),
                     ],
                     Text(
                       _uploading ? '上传中…' : '本地上传',
                       style: const TextStyle(
                         color: _archiveAccent,
-                        fontSize: 9.6,
+                        fontSize: 10.4,
                         fontWeight: FontWeight.w700,
+                        letterSpacing: .35,
                       ),
                     ),
                   ],
@@ -9238,13 +9233,24 @@ class _GameStyleCharacterProfilePage extends StatelessWidget {
             lightTheme: true,
           ),
           Expanded(
-            child: Center(
+            child: Align(
+              alignment: Alignment.topCenter,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 900),
-                child: ListView(
-                  physics: const BouncingScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 36),
-                  children: <Widget>[
+                // 主角档案使用真正的全屏内容宽度；普通角色档案仍保留阅读宽度。
+                constraints: BoxConstraints(
+                  maxWidth: isHostProfile ? double.infinity : 900,
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ListView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      isHostProfile ? 16 : 20,
+                      4,
+                      isHostProfile ? 16 : 20,
+                      36,
+                    ),
+                    children: <Widget>[
                     // 主角/角色档案顶部改成紧凑头像信息区：
                     // 不再把整张立绘铺成 300px 高的大头像，降低压迫感。
                     LayoutBuilder(
@@ -9407,7 +9413,8 @@ class _GameStyleCharacterProfilePage extends StatelessWidget {
                         ),
                       ),
                     ],
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -2836,9 +2836,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     // 对话构图改为真正的左右分区：
                     // NPC 占左侧，主角占右侧，中央与另一侧留给对应对白。
                     // 不再把立绘放大到几乎铺满整个屏幕，否则文字即使移动也仍像“浮在人物身上”。
-                    final widthRatio = lerpDouble(.92, .64, t)!;
-                    final minPortraitWidth = lerpDouble(380.0, 650.0, t)!;
-                    final maxPortraitWidth = lerpDouble(560.0, 960.0, t)!;
+                    final widthRatio = lerpDouble(.98, .68, t)!;
+                    final minPortraitWidth = lerpDouble(400.0, 700.0, t)!;
+                    final maxPortraitWidth = lerpDouble(600.0, 1020.0, t)!;
                     final portraitWidth = (stageSize.width * widthRatio)
                         .clamp(minPortraitWidth, maxPortraitWidth)
                         .toDouble();
@@ -2846,8 +2846,11 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     final fullPortraitHeight = portraitWidth * 1.22;
                     final showOnRight = mode == _NovelLineMode.protagonist;
 
-                    // 立绘稍微沉到底部，保留半身视觉，同时避免头部顶到左上 HUD。
-                    final sinkOffset = -(fullPortraitHeight * 0.08);
+                    // 对话立绘采用偏半身构图：人物整体向屏幕底部沉，
+                    // 让腿部自然超出画面，只保留约 7–8 成上半身。
+                    // 手机更窄，额外多下沉一点；宽屏则稍微克制，避免人物显得过低。
+                    final sinkRatio = lerpDouble(.12, .09, t)!;
+                    final sinkOffset = -(fullPortraitHeight * sinkRatio);
 
                     // NPC 真正贴向最左；主角镜像贴向最右。
                     // 窄屏把人物再向外推出一点，给另一侧文字腾出可读空间。
@@ -3433,6 +3436,11 @@ class _SpeakerIdentity extends StatefulWidget {
 }
 
 class _SpeakerIdentityState extends State<_SpeakerIdentity> {
+  // 沿用旧版“好感增加”动画的粉色，默认状态也直接使用这支颜色。
+  static const Color _affectionPink = Color(0xFFFF7DA5);
+  static const Color _affectionPinkGlow = Color(0xFFFFB0C8);
+  static const Color _affectionLoss = Color(0xFFCB667B);
+
   Timer? _affectionPulseTimer;
   int _pulseSerial = 0;
   int _pulseDirection = 0;
@@ -3472,7 +3480,7 @@ class _SpeakerIdentityState extends State<_SpeakerIdentity> {
 
   void _schedulePulseReset() {
     _affectionPulseTimer?.cancel();
-    _affectionPulseTimer = Timer(const Duration(milliseconds: 760), () {
+    _affectionPulseTimer = Timer(const Duration(milliseconds: 900), () {
       if (!mounted) return;
       setState(() => _pulseDirection = 0);
     });
@@ -3497,45 +3505,227 @@ class _SpeakerIdentityState extends State<_SpeakerIdentity> {
     super.dispose();
   }
 
-  Widget _pulseScale({
+  /// 正反馈：弹起、回弹、轻微上浮，不抖动。
+  /// 负反馈：只做短促左右震动 + 轻微收缩，不与正反馈共用同一种动作语言。
+  Widget _feedbackTransform({
     required String keyPrefix,
     required Widget child,
-    double amount = .34,
   }) {
     if (_pulseDirection == 0) return child;
+
     return TweenAnimationBuilder<double>(
       key: ValueKey<String>('$keyPrefix-$_pulseSerial'),
       tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 620),
-      curve: Curves.easeOutCubic,
+      duration: const Duration(milliseconds: 720),
+      curve: Curves.linear,
       child: child,
       builder: (context, value, child) {
-        final scale = 1 + math.sin(value * math.pi) * amount;
-        return Transform.scale(scale: scale, child: child);
+        if (_pulseDirection > 0) {
+          final double scale;
+          if (value < .22) {
+            scale = lerpDouble(1.0, 1.25, value / .22)!;
+          } else if (value < .46) {
+            scale = lerpDouble(1.25, .97, (value - .22) / .24)!;
+          } else {
+            scale = lerpDouble(.97, 1.0, (value - .46) / .54)!;
+          }
+          final lift = -2.5 * math.sin(value * math.pi);
+          return Transform.translate(
+            offset: Offset(0, lift),
+            child: Transform.scale(scale: scale, child: child),
+          );
+        }
+
+        final envelope = 1.0 - value;
+        final shakeX = math.sin(value * math.pi * 6) * 3.0 * envelope;
+        final scale = 1.0 + math.sin(value * math.pi) * .065;
+        return Transform.translate(
+          offset: Offset(shakeX, 0),
+          child: Transform.scale(scale: scale, child: child),
+        );
       },
     );
   }
 
   Widget _buildAffectionHeart(int affection) {
-    final restingColor = Colors.white.withOpacity(.78);
-    final restingIcon = affection >= 60
-        ? Icons.favorite_rounded
-        : Icons.favorite_border_rounded;
+    // 好感度默认态始终使用实心粉色爱心，不再根据数值切换为空心。
+    // 正负反馈只改变颜色 / 动画，不改变爱心的实心形态。
+    final activeColor = _pulseDirection < 0 ? _affectionLoss : _affectionPink;
 
-    final pulseColor = _pulseDirection > 0
-        ? const Color(0xFFFF7DA5)
-        : NovelPalette.danger;
-
-    final icon = Icon(
-      _pulseDirection == 0 ? restingIcon : Icons.favorite_rounded,
-      size: _pulseDirection == 0 ? 12.5 : 13.5,
-      color: _pulseDirection == 0 ? restingColor : pulseColor,
+    final heart = Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: <Widget>[
+        if (_pulseDirection > 0)
+          TweenAnimationBuilder<double>(
+            key: ValueKey<String>('heart-glow-$_pulseSerial'),
+            tween: Tween<double>(begin: 0, end: 1),
+            duration: const Duration(milliseconds: 650),
+            builder: (context, value, child) {
+              final opacity = math.sin(value * math.pi).clamp(0.0, 1.0).toDouble();
+              return Opacity(
+                opacity: opacity * .30,
+                child: Transform.scale(
+                  scale: 1.0 + value * .70,
+                  child: const Icon(
+                    Icons.favorite_rounded,
+                    size: 14.5,
+                    color: _affectionPinkGlow,
+                  ),
+                ),
+              );
+            },
+          ),
+        Icon(
+          Icons.favorite_rounded,
+          size: _pulseDirection == 0 ? 12.8 : 13.8,
+          color: activeColor,
+        ),
+      ],
     );
 
-    return _pulseScale(
+    return _feedbackTransform(
       keyPrefix: 'heart',
-      amount: .38,
-      child: icon,
+      child: heart,
+    );
+  }
+
+  Widget _buildDeltaFeedback() {
+    if (_pulseDirection == 0 || _pulseDelta == 0) {
+      return const SizedBox.shrink();
+    }
+
+    final positive = _pulseDirection > 0;
+    return Positioned(
+      top: positive ? -19 : 14,
+      child: TweenAnimationBuilder<double>(
+        key: ValueKey<int>(_pulseSerial),
+        tween: Tween<double>(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 880),
+        curve: Curves.linear,
+        builder: (context, value, child) {
+          final opacity = value < .12
+              ? value / .12
+              : value > .66
+                  ? (1.0 - value) / .34
+                  : 1.0;
+
+          if (positive) {
+            final travel = Curves.easeOutCubic.transform(value);
+            final offsetY = -18.0 * travel;
+
+            final double scale;
+            if (value < .18) {
+              scale = lerpDouble(.72, 1.28, value / .18)!;
+            } else if (value < .38) {
+              scale = lerpDouble(1.28, 1.0, (value - .18) / .20)!;
+            } else {
+              scale = 1.0;
+            }
+
+            final particleOpacity = ((1.0 - value) * .72).clamp(0.0, .72).toDouble();
+            return Opacity(
+              opacity: opacity.clamp(0.0, 1.0).toDouble(),
+              child: Transform.translate(
+                offset: Offset(0, offsetY),
+                child: Transform.scale(
+                  scale: scale,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      Text(
+                        '+$_pulseDelta',
+                        style: const TextStyle(
+                          color: _affectionPink,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w900,
+                          shadows: <Shadow>[
+                            Shadow(
+                              color: Color(0x99FF7DA5),
+                              blurRadius: 9,
+                            ),
+                            Shadow(
+                              color: Color(0xD9000000),
+                              blurRadius: 4,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Transform.translate(
+                        offset: Offset(-10 - 7 * value, -5 - 8 * value),
+                        child: Opacity(
+                          opacity: particleOpacity,
+                          child: const Icon(
+                            Icons.favorite_rounded,
+                            size: 4.8,
+                            color: _affectionPinkGlow,
+                          ),
+                        ),
+                      ),
+                      Transform.translate(
+                        offset: Offset(11 + 8 * value, -2 - 11 * value),
+                        child: Opacity(
+                          opacity: particleOpacity * .85,
+                          child: const Icon(
+                            Icons.circle,
+                            size: 3.4,
+                            color: _affectionPinkGlow,
+                          ),
+                        ),
+                      ),
+                      Transform.translate(
+                        offset: Offset(4 + 4 * value, -10 - 7 * value),
+                        child: Opacity(
+                          opacity: particleOpacity * .65,
+                          child: const Icon(
+                            Icons.circle,
+                            size: 2.6,
+                            color: _affectionPinkGlow,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+
+          // 负反馈：-X 轻微下坠，同时短促左右抖 3 次。
+          final dropY = 8.0 * Curves.easeOut.transform(value);
+          final shakeX = math.sin(value * math.pi * 6) * 2.7 * (1.0 - value);
+          final double scale;
+          if (value < .20) {
+            scale = lerpDouble(.86, 1.12, value / .20)!;
+          } else if (value < .42) {
+            scale = lerpDouble(1.12, .95, (value - .20) / .22)!;
+          } else {
+            scale = lerpDouble(.95, 1.0, (value - .42) / .58)!;
+          }
+
+          return Opacity(
+            opacity: opacity.clamp(0.0, 1.0).toDouble(),
+            child: Transform.translate(
+              offset: Offset(shakeX, dropY),
+              child: Transform.scale(
+                scale: scale,
+                child: Text(
+                  '$_pulseDelta',
+                  style: const TextStyle(
+                    color: _affectionLoss,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w900,
+                    shadows: <Shadow>[
+                      Shadow(color: Color(0xD9000000), blurRadius: 5),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -3582,9 +3772,8 @@ class _SpeakerIdentityState extends State<_SpeakerIdentity> {
             clipBehavior: Clip.none,
             alignment: Alignment.center,
             children: <Widget>[
-              _pulseScale(
+              _feedbackTransform(
                 keyPrefix: 'affection-number',
-                amount: .32,
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 220),
                   switchInCurve: Curves.easeOutCubic,
@@ -3595,7 +3784,7 @@ class _SpeakerIdentityState extends State<_SpeakerIdentity> {
                       opacity: animation,
                       child: SlideTransition(
                         position: Tween<Offset>(
-                          begin: Offset(0, .24 * direction),
+                          begin: Offset(0, .20 * direction),
                           end: Offset.zero,
                         ).animate(animation),
                         child: child,
@@ -3606,58 +3795,28 @@ class _SpeakerIdentityState extends State<_SpeakerIdentity> {
                     '$affection',
                     key: ValueKey<int>(affection),
                     style: TextStyle(
-                      color: _pulseDirection > 0
-                          ? const Color(0xFFFFA0BC)
-                          : _pulseDirection < 0
-                              ? NovelPalette.danger
-                              : Colors.white.withOpacity(.70),
-                      fontSize: 10.5,
+                      // 默认就是旧版增加动画使用的粉色，不再回到半透明白。
+                      color: _pulseDirection < 0
+                          ? _affectionLoss
+                          : _affectionPink,
+                      fontSize: 10.7,
                       fontWeight: FontWeight.w800,
-                      shadows: const <Shadow>[
-                        Shadow(color: Color(0xD9000000), blurRadius: 5),
+                      shadows: <Shadow>[
+                        if (_pulseDirection > 0)
+                          const Shadow(
+                            color: Color(0x66FF7DA5),
+                            blurRadius: 8,
+                          ),
+                        const Shadow(
+                          color: Color(0xD9000000),
+                          blurRadius: 5,
+                        ),
                       ],
                     ),
                   ),
                 ),
               ),
-              if (_pulseDirection != 0 && _pulseDelta != 0)
-                Positioned(
-                  top: -16,
-                  child: TweenAnimationBuilder<double>(
-                    key: ValueKey<int>(_pulseSerial),
-                    tween: Tween<double>(begin: 0, end: 1),
-                    duration: const Duration(milliseconds: 760),
-                    curve: Curves.easeOutCubic,
-                    builder: (context, value, child) {
-                      final opacity = value < 0.15
-                          ? value / 0.15
-                          : value > 0.6
-                              ? (1.0 - value) / 0.4
-                              : 1.0;
-                      final offsetY = -12.0 * value;
-
-                      return Opacity(
-                        opacity: opacity.clamp(0.0, 1.0),
-                        child: Transform.translate(
-                          offset: Offset(0, offsetY),
-                          child: Text(
-                            _pulseDelta > 0 ? '+$_pulseDelta' : '$_pulseDelta',
-                            style: TextStyle(
-                              color: _pulseDirection > 0
-                                  ? const Color(0xFFFFA0BC)
-                                  : NovelPalette.danger,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w900,
-                              shadows: const <Shadow>[
-                                Shadow(color: Color(0xD9000000), blurRadius: 4),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
+              _buildDeltaFeedback(),
             ],
           ),
         ],
@@ -4621,45 +4780,17 @@ class _MinimalSideNavAction extends StatelessWidget {
                 ),
               ),
               SizedBox(height: compact ? 3 : 4),
-              Stack(
-                alignment: Alignment.center,
-                children: <Widget>[
-                  Text(
-                    semanticLabel,
-                    maxLines: 1,
-                    style: TextStyle(
-                      fontSize: compact ? 10.6 : 11.2,
-                      height: 1,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: .20,
-                      foreground: Paint()
-                        ..style = PaintingStyle.stroke
-                        ..strokeWidth = compact ? 1.05 : 1.15
-                        ..color = lightTheme
-                            ? const Color(0xCCFFFFFF)
-                            : const Color(0xD9000000),
-                    ),
-                  ),
-                  Text(
-                    semanticLabel,
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: compact ? 10.6 : 11.2,
-                      height: 1,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: .20,
-                      shadows: <Shadow>[
-                        if (!lightTheme)
-                          const Shadow(
-                            color: Color(0x70000000),
-                            blurRadius: 2.5,
-                            offset: Offset(0, 1),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
+              Text(
+                semanticLabel,
+                maxLines: 1,
+                style: TextStyle(
+                  color: color,
+                  fontFamily: 'WenJinMinchoP0',
+                  fontSize: compact ? 10.8 : 11.4,
+                  height: 1,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: .20,
+                ),
               ),
             ],
           ),
@@ -5346,6 +5477,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
   String _speechBaseText = '';
   int _speechSessionId = 0;
   Future<void>? _startFuture;
+  Stopwatch? _speechHoldWatch;
 
   @override
   void initState() {
@@ -5472,8 +5604,14 @@ class _NovelInputBarState extends State<NovelInputBar> {
   Future<void> _beginHoldListening() async {
     if (!widget.enabled || _speechFinishing || _speechStarting || _micHeld) return;
 
+    // 新一轮语音开始时立即清掉上一条轻提示，用户无需等 SnackBar 动画结束。
+    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar(
+      reason: SnackBarClosedReason.hide,
+    );
+
     final sessionId = ++_speechSessionId;
     _speechBaseText = widget.controller.text;
+    _speechHoldWatch = Stopwatch()..start();
     widget.focusNode.unfocus();
     if (mounted) {
       setState(() {
@@ -5522,22 +5660,27 @@ class _NovelInputBarState extends State<NovelInputBar> {
     final hadActiveSession = _micHeld || _isListening || _speechStarting || _asr.isSessionOpen;
     if (!hadActiveSession) return;
 
+    final heldFor = _speechHoldWatch?.elapsed ?? Duration.zero;
+    _speechHoldWatch?.stop();
+    _speechHoldWatch = null;
+    final tooShort = commit && heldFor < NovelAsrStreamService.minimumSpeechDuration;
+
     if (mounted) {
       setState(() {
         _micHeld = false;
-        // 松手后立即退出“正在连接/正在听”视觉状态。
-        // 即使 WebSocket 握手仍在收尾，也只显示“正在转文字…”，避免看起来像没收到松手事件。
+        // 少于 1 秒属于误触：直接取消，不进入“正在转文字…”状态。
         _speechStarting = false;
         _isListening = false;
-        _speechFinishing = true;
+        _speechFinishing = commit && !tooShort;
       });
     } else {
       _micHeld = false;
       _speechStarting = false;
       _isListening = false;
-      _speechFinishing = true;
+      _speechFinishing = commit && !tooShort;
     }
 
+    var speechCommitted = false;
     try {
       final starting = _startFuture;
       if (starting != null) {
@@ -5549,15 +5692,32 @@ class _NovelInputBarState extends State<NovelInputBar> {
       }
       if (sessionId != _speechSessionId) return;
 
-      if (!commit) {
+      if (!commit || tooShort) {
         await _asr.cancel();
+        if (tooShort && mounted && sessionId == _speechSessionId) {
+          _showSpeechMessage('说话太短了', lightweight: true);
+        }
       } else if (_asr.isSessionOpen) {
         final finalText = await _asr.stopAndGetFinal();
-        _commitSpeechText(sessionId, finalText);
+        if (finalText.trim().isNotEmpty) {
+          _commitSpeechText(sessionId, finalText);
+          speechCommitted = true;
+        }
       }
     } on NovelAsrStreamException catch (error) {
       if (commit && mounted && sessionId == _speechSessionId) {
-        _showSpeechMessage(error.message);
+        final code = error.code.trim().toUpperCase();
+        if (code == 'AUDIO_TOO_SHORT') {
+          _showSpeechMessage('说话太短了', lightweight: true);
+        } else if (code == 'NO_VOICE' ||
+            code == 'EMPTY_RESULT' ||
+            code == 'EMPTY_AUDIO') {
+          // “没说到话 / 没识别出来”都属于可立即重试的轻反馈，
+          // 不使用黑色 SnackBar 卡片，避免打断下一次按住说话。
+          _showSpeechMessage('未识别到语音', lightweight: true);
+        } else {
+          _showSpeechMessage(error.message);
+        }
       }
     } catch (_) {
       if (commit && mounted && sessionId == _speechSessionId) {
@@ -5570,21 +5730,55 @@ class _NovelInputBarState extends State<NovelInputBar> {
         _isListening = false;
         _speechFinishing = false;
       });
-      widget.focusNode.requestFocus();
+      // 误触 / 太短 / 无声时不要自动重新聚焦输入框，避免弹键盘阻碍再次按住语音。
+      if (speechCommitted) {
+        widget.focusNode.requestFocus();
+      }
     }
   }
 
-  void _showSpeechMessage(String message) {
+  void _showSpeechMessage(String message, {bool lightweight = false}) {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
     messenger
-      ..hideCurrentSnackBar()
+      ..hideCurrentSnackBar(reason: SnackBarClosedReason.hide)
       ..showSnackBar(
         SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 2),
+          content: Text(
+            message,
+            textAlign: lightweight ? TextAlign.center : TextAlign.start,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: lightweight ? 13 : 13,
+              fontWeight: lightweight ? FontWeight.w600 : FontWeight.w400,
+              shadows: lightweight
+                  ? const <Shadow>[
+                      Shadow(
+                        color: Color(0xB3000000),
+                        blurRadius: 5,
+                        offset: Offset(0, 1),
+                      ),
+                    ]
+                  : null,
+            ),
+          ),
+          duration: Duration(milliseconds: lightweight ? 650 : 1400),
           behavior: SnackBarBehavior.floating,
+          // 可立即重试的语音轻提示（如“说话太短了 / 未识别到语音”）
+          // 不显示黑色卡片背景，只保留白字 + 轻微阴影。
+          backgroundColor: lightweight
+              ? Colors.transparent
+              : Colors.black.withOpacity(.72),
+          elevation: lightweight ? 0 : 4,
+          padding: EdgeInsets.symmetric(
+            horizontal: lightweight ? 4 : 14,
+            vertical: lightweight ? 2 : 9,
+          ),
+          width: lightweight ? 112 : null,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(lightweight ? 0 : 12),
+          ),
         ),
       );
   }
@@ -5593,6 +5787,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
   void dispose() {
     _speechSessionId++;
     _micHeld = false;
+    _speechHoldWatch?.stop();
+    _speechHoldWatch = null;
     widget.controller.removeListener(_update);
     widget.focusNode.removeListener(_updateFocus);
     unawaited(_asr.dispose());
@@ -5608,6 +5804,9 @@ class _NovelInputBarState extends State<NovelInputBar> {
         !speaking &&
         !_speechFinishing;
     final focused = widget.enabled && widget.focusNode.hasFocus;
+    // 只要输入框已有文字（键盘输入或语音转写），即使失焦也保持深色玻璃，
+    // 避免场景背景直接穿透导致已输入内容看不清。
+    final glassActive = focused || _hasText;
     // 正在连接时也必须继续接收 pointerUp，否则用户松手会丢失结束事件。
     final micEnabled = widget.enabled && !_speechFinishing;
 
@@ -5659,26 +5858,39 @@ class _NovelInputBarState extends State<NovelInputBar> {
             Expanded(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(14),
-                child: _AdaptiveBackdropBlur(
-                  sigma: 22,
+                // 自由输入获得焦点，或已经存在文字时，都强制启用局部背景模糊。
+                // 语音转写完成后即使输入框失焦，文字仍保持在清晰的深色玻璃层上。
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(
+                    sigmaX: glassActive
+                        ? 12
+                        : (_useLowPowerNovelEffects(context) ? 0 : 22),
+                    sigmaY: glassActive
+                        ? 12
+                        : (_useLowPowerNovelEffects(context) ? 0 : 22),
+                  ),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 170),
                     constraints: const BoxConstraints(minHeight: 48, maxHeight: 128),
                     padding: const EdgeInsets.fromLTRB(15, 6, 6, 6),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(focused || speechBusy ? .12 : .085),
+                      // 聚焦或已有文字时只给输入区域增加轻暗玻璃，不扩散成整块黑色遮罩。
+                      // 这样语音/键盘输入的内容在亮背景上也始终清楚。
+                      color: glassActive
+                          ? Colors.black.withOpacity(.22)
+                          : Colors.white.withOpacity(speechBusy ? .12 : .085),
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: speechBusy
                             ? NovelPalette.accent.withOpacity(.82)
-                            : Colors.white.withOpacity(focused ? .90 : .62),
-                        width: focused || speechBusy ? 1.35 : 1.05,
+                            : Colors.white.withOpacity(glassActive ? .34 : .18),
+                        width: glassActive || speechBusy ? 1.2 : 1.0,
                       ),
-                      boxShadow: const <BoxShadow>[
+                      boxShadow: <BoxShadow>[
                         BoxShadow(
-                          color: Color(0x38000000),
-                          blurRadius: 16,
-                          offset: Offset(0, 5),
+                          color: Colors.black.withOpacity(glassActive ? .32 : .22),
+                          blurRadius: glassActive ? 20 : 16,
+                          offset: const Offset(0, 5),
                         ),
                       ],
                     ),
