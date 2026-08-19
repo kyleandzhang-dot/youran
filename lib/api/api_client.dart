@@ -34,7 +34,7 @@ class ApiClient {
   ///    defaultValue: 'https://yoran.freedreamky.com/api/v1',
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:3000/api/v1',
+    defaultValue: 'http://172.20.10.3:3000/api/v1',
   );
 
   static String get baseUrl => _trimTrailingSlash(_envBaseUrl);
