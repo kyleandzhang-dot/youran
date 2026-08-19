@@ -3732,6 +3732,7 @@ class _CharacterQuickPortraitEditor extends StatefulWidget {
 class _CharacterQuickPortraitEditorState
     extends State<_CharacterQuickPortraitEditor> {
   late final TextEditingController _promptController;
+  late final FocusNode _promptFocusNode;
   bool _generating = false;
   bool _uploading = false;
   String _errorText = '';
@@ -3744,6 +3745,11 @@ class _CharacterQuickPortraitEditorState
   void initState() {
     super.initState();
     _promptController = TextEditingController();
+    _promptFocusNode = FocusNode()..addListener(_handlePromptFocusChanged);
+  }
+
+  void _handlePromptFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -3760,6 +3766,8 @@ class _CharacterQuickPortraitEditorState
 
   @override
   void dispose() {
+    _promptFocusNode.removeListener(_handlePromptFocusChanged);
+    _promptFocusNode.dispose();
     _promptController.dispose();
     super.dispose();
   }
@@ -3885,9 +3893,22 @@ class _CharacterQuickPortraitEditorState
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final liftForKeyboard = widget.compact &&
+        _promptFocusNode.hasFocus &&
+        keyboardInset > 0
+        ? math.min(keyboardInset * .28, 88.0)
+        : 0.0;
+
+    // 主页面不再随键盘整体缩高。角色页只把正在编辑的立绘输入区轻微上移，
+    // 底部“全部 / 亲密 / 普通”和角色头像保持固定位置，不再被一起顶上来。
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      transform: Matrix4.translationValues(0, -liftForKeyboard, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
         const Text(
           '更换立绘',
           style: TextStyle(
@@ -3911,6 +3932,7 @@ class _CharacterQuickPortraitEditorState
           padding: const EdgeInsets.fromLTRB(11, 10, 11, 9),
           child: TextField(
             controller: _promptController,
+            focusNode: _promptFocusNode,
             enabled: !_generating,
             minLines: 3,
             maxLines: widget.compact ? 3 : 4,
@@ -4055,7 +4077,8 @@ class _CharacterQuickPortraitEditorState
             ),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 }

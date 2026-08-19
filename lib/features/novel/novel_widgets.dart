@@ -2737,7 +2737,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         final compact = screen.width <= 600;
         // 只有旁白 / 剧情正文需要轻微避开右侧固定 HUD。
         // 不再按整列导航宽度硬切正文，避免右边留下过大的空白。
-        final narrationRightSafeWidth = compact ? 46.0 : 54.0;
+        final narrationRightSafeWidth = compact ? 24.0 : 34.0;
         final availableHeight = constraints.maxHeight.isFinite ? constraints.maxHeight : screen.height - MediaQuery.paddingOf(context).vertical;
         final browsingStory = controller.hasNext;
 
@@ -2755,7 +2755,12 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             : 0.0;
         final footerHeight = navigationHeight +
             (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
-        final footerBottom = 0.0;
+        final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+        final keyboardActive = compact && keyboardInset > 0;
+        // 页面本身不再 resize。只有输入栏在手机键盘出现时抬到键盘上沿，
+        // 剧情正文、选项、角色立绘和其它 HUD 都保持原坐标。
+        final composerBottom = keyboardActive ? keyboardInset : 0.0;
+        const footerBottom = 0.0;
 
         // 按真实视觉高度预留，不再给选择区留过多空白。
         final choiceCount = controller.choices.length;
@@ -2777,7 +2782,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         // 右侧 HUD 不占底部空间；对白只保留必要的呼吸距离。
         // 底部一级导航已撤走，角色对白不再贴着输入区/屏幕底边。
         // 底部导航撤走后继续把角色对白上提，避免对白视觉重心压在屏幕底边。
-        final dialogGap = compact ? 78.0 : 94.0;
+        final dialogGap = compact ? 92.0 : 106.0;
         final panelBottom = footerBottom + footerHeight + dialogGap;
 
         // 最后一句出现选项时，不再把正文整体按选项数量不断往上推。
@@ -3018,7 +3023,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
               Positioned(
                 left: 0,
                 right: 0,
-                bottom: footerBottom,
+                bottom: composerBottom,
                 child: _NovelDialogFooter(
                   controller: controller,
                   choicesAvailable: canShowChoices,
@@ -3232,10 +3237,10 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
         ? (screen.width * .56).clamp(194.0, 330.0).toDouble()
         : (screen.width * .46).clamp(348.0, 610.0).toDouble();
 
-    final outerHorizontal = compact ? 14.0 : 26.0;
+    final outerHorizontal = compact ? 9.0 : 20.0;
 
     // 只和立绘拉开一点，不把整个对白推向屏幕中央。
-    final portraitFacingGap = compact ? 10.0 : 16.0;
+    final portraitFacingGap = compact ? 7.0 : 12.0;
 
     // 角色名直接嵌在线条中间：不再使用中央星星，也不再把名字放在线条下方。
     // 左右线条保持轻微方向感，但提高亮度与厚度，复杂背景下也能看清。
@@ -3345,7 +3350,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                     ),
                 ],
               ),
-              SizedBox(height: compact ? 11 : 14),
+              SizedBox(height: compact ? 7 : 10),
 
               ValueListenableBuilder<String>(
                 valueListenable: displayTextListenable,
@@ -3380,8 +3385,8 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
     // 只依靠正文自身的文字阴影保证复杂场景中的可读性。
     final readingZone = Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: compact ? 4 : 8,
-        vertical: compact ? 4 : 7,
+        horizontal: compact ? 2 : 5,
+        vertical: compact ? 2 : 4,
       ),
       child: dialogueContent,
     );
@@ -4443,7 +4448,12 @@ class _NovelDialogFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 600;
-    final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
+    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+    // 输入栏已经由外层 Positioned 抬到键盘上沿；键盘出现时不再额外叠加
+    // home indicator 的安全区高度，避免输入框被抬得过头。
+    final safeBottom = keyboardVisible
+        ? 0.0
+        : MediaQuery.viewPaddingOf(context).bottom;
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 170),

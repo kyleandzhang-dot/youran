@@ -727,7 +727,9 @@ class _NovelGamePageState extends State<NovelGamePage>
         }
 
         return Scaffold(
-          resizeToAvoidBottomInset: true,
+          // 键盘只抬高正在编辑的输入区，不再压缩整个剧情 / 角色页面。
+          // 否则右侧一级导航、顶部场景 HUD、角色筛选和头像都会一起被顶上来。
+          resizeToAvoidBottomInset: false,
           backgroundColor: controller.settings.backgroundColor,
           body: Stack(
             fit: StackFit.expand,
@@ -756,6 +758,8 @@ class _NovelGamePageState extends State<NovelGamePage>
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final compact = constraints.maxWidth < 430;
+                    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+                    final keyboardActive = constraints.maxWidth <= 600 && keyboardInset > 0;
                     return Stack(
                       children: <Widget>[
                         // 电影模式是全屏交互层，但放在 HUD 下面，
@@ -792,7 +796,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                             ),
                           ),
                         ),
-                        if (controller.storyStarted)
+                        if (controller.storyStarted && !keyboardActive)
                           Positioned(
                             left: 0,
                             top: 56,
@@ -801,9 +805,10 @@ class _NovelGamePageState extends State<NovelGamePage>
                               subtitle: controller.locationSubtitle,
                             ),
                           ),
-                        if (controller.storyStarted)
+                        if (controller.storyStarted && !keyboardActive)
                           Positioned(
                             left: 0,
+                            // 键盘出现时隐藏场景目标，避免和被抬高的输入区 / 正文抢空间。
                             // 当前目标收紧到场景标题下方，减少两块 HUD 之间的空档。
                             // 完成/失败仍在这里原位反馈；底部人物/经历/背包美术完全不动。
                             top: controller.locationSubtitle.trim().isNotEmpty
@@ -814,7 +819,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                               feedbackEvent: controller.hudEvent,
                             ),
                           ),
-                        if (controller.storyStarted)
+                        if (controller.storyStarted && !keyboardActive)
                           Positioned(
                             left: compact ? 7 : 19,
                             right: compact ? 50 : constraints.maxWidth * .28,
@@ -909,7 +914,10 @@ class _NovelGamePageState extends State<NovelGamePage>
 
               // 一级导航放回积分正下方：得分在右上角，四个入口沿右侧向下排列。
               // 不再垂直居中，避免与剧情主体抢占中段视觉空间。
-              if (controller.storyStarted && !controller.isCinematic)
+              if (controller.storyStarted &&
+                  !controller.isCinematic &&
+                  !(MediaQuery.sizeOf(context).width <= 600 &&
+                      MediaQuery.viewInsetsOf(context).bottom > 0))
                 Positioned(
                   top: (MediaQuery.paddingOf(context).top < 10
                           ? 10
