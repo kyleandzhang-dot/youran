@@ -92,10 +92,10 @@ Future<T?> _showNovelArchivePage<T>(
       reverseTransitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (routeContext, animation, secondaryAnimation) {
         return Scaffold(
-          backgroundColor: const Color(0xFF121512),
-          body: SafeArea(
-            child: child,
-          ),
+          // 将深色背景换为纯白，填满上下间隙
+          backgroundColor: const Color(0xFFFFFFFF),
+          // 移除 SafeArea，将安全区处理下放到 _GameStyleBackdrop 和 _CharacterArchiveBackground 中
+          body: child,
         );
       },
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
@@ -2885,18 +2885,19 @@ Future<void> showNovelHostProfileSheet(
   NovelGameController controller,
 ) async {
   await _runNovelPageOnce('host-profile', () async {
-    await controller.refreshCharacterStatus();
-    if (!context.mounted) return;
-
     final host = controller.protagonist;
+    // 获取主角的唯一标识，用于在人物列表中精准定位
+    final hostKey = host != null && host.id.trim().isNotEmpty
+        ? host.id.trim()
+        : (host?.name.trim() ?? controller.protagonistName);
+
+    // 直接打开包含大立绘的“角色总览页”，并聚焦到主角
     await _showNovelArchivePage<void>(
       context,
-      child: _GameStyleCharacterProfilePage(
+      child: _CharactersPanel(
         controller: controller,
-        character: host,
-        fallbackName: controller.protagonistName,
-        condition: controller.protagonistCondition,
-        isHostProfile: true,
+        focusCharacterKey: hostKey,
+        focusRequestId: DateTime.now().millisecondsSinceEpoch,
       ),
     );
   });
@@ -3266,7 +3267,7 @@ class _CharacterArchiveBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     final content = embedded
         ? _NovelPrimaryTabSafeContent(child: child)
-        : child;
+        : SafeArea(child: child);
 
     return ColoredBox(
       color: _archiveBackground,
@@ -4191,28 +4192,14 @@ Future<void> showNovelNpcProfileSheet(
   NovelCharacter character,
 ) async {
   await _runNovelPageOnce('character-profile', () async {
-    await controller.refreshCharacterStatus();
-    if (!context.mounted) return;
-
-    var current = character;
-    for (final item
-        in controller.scenario?.characters.values ?? const <NovelCharacter>[]) {
-      if ((character.id.isNotEmpty && item.id == character.id) ||
-          item.name == character.name) {
-        current = item;
-        break;
-      }
-    }
-
-    final identity = stringValue(current.status['identity']);
+    final key = character.id.trim().isNotEmpty ? character.id.trim() : character.name.trim();
+    // 同样直接打开“角色总览页”，并聚焦到该 NPC
     await _showNovelArchivePage<void>(
       context,
-      child: _GameStyleCharacterProfilePage(
+      child: _CharactersPanel(
         controller: controller,
-        character: current,
-        fallbackName: current.name,
-        condition: identity,
-        isHostProfile: false,
+        focusCharacterKey: key,
+        focusRequestId: DateTime.now().millisecondsSinceEpoch,
       ),
     );
   });
@@ -4818,264 +4805,233 @@ class _InlineCharacterVisualEditorState
   Widget build(BuildContext context) {
     const Color primaryGreen = NovelPalette.accent;
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 8, bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const Text(
-            '形象设定',
-            style: TextStyle(
-              color: _archiveText,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: [
+            Container(
+              width: 3,
+              height: 14,
+              decoration: BoxDecoration(
+                color: primaryGreen,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
+            const SizedBox(width: 8),
+            const Text(
+              '形象设定',
+              style: TextStyle(
+                color: _archiveText,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
 
-          // 上方只展示立绘，保持主角档案结构清楚。
-          Center(
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: (_generating || _saving) ? null : _pickLocalImage,
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  width: 180,
-                  height: 240,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    color: _archiveSurfaceSoft,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: _archiveLine),
-                  ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: <Widget>[
-                      _buildPreview(),
-                      if (_generating)
-                        ColoredBox(
-                          color: Colors.black.withOpacity(.42),
-                          child: const Center(
-                            child: SizedBox.square(
-                              dimension: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: primaryGreen,
+        // 依靠 AspectRatio 保证比例，用 constraints 约束平板上的极限宽度，防止溢出
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: AspectRatio(
+              aspectRatio: 3 / 4,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: (_generating || _saving) ? null : _pickLocalImage,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: Colors.white, // 纯白底
+                      borderRadius: BorderRadius.circular(12),
+                      // 去掉了所有外框
+                    ),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        _buildPreview(),
+                        if (_generating)
+                          ColoredBox(
+                            color: Colors.black.withOpacity(.42),
+                            child: const Center(
+                              child: SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: primaryGreen,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          if (_hasPortrait) ...<Widget>[
-            const SizedBox(height: 7),
-            Center(
-              child: Text(
-                '点击立绘可更换',
-                style: TextStyle(
-                  color: _archiveMutedSoft,
-                  fontSize: 10.2,
-                ),
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 22),
-
-          // 立绘下面才显示当前画风。
-          Text(
-            '当前画风',
-            style: TextStyle(
-              color: _archiveMuted,
-              fontSize: 10.8,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: <Widget>[
-              _VisualStyleChoice(
-                label: '动漫',
-                selected: true,
-                onTap: (_generating || _saving)
-                    ? null
-                    : () => setState(() => _imageStyle = 'anime'),
-              ),
-              const SizedBox(width: 8),
-              const _VisualStyleChoice(
-                label: '3D（已锁定）',
-                selected: false,
-                onTap: null,
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '立绘会自动读取完整角色资料；下方只需填写本次想额外调整的方向。',
-            style: TextStyle(
-              color: _archiveMutedSoft,
-              fontSize: 10.2,
-            ),
-          ),
-
-          const SizedBox(height: 18),
-
-          Text(
-            '额外形象要求（可选）',
-            style: TextStyle(
-              color: _archiveMuted,
-              fontSize: 10.8,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            decoration: BoxDecoration(
-              color: _archiveSurfaceSoft,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _archiveLine),
-            ),
-            child: TextField(
-              controller: _promptController,
-              enabled: !_generating && !_saving,
-              minLines: 3,
-              maxLines: 5,
-              cursorColor: primaryGreen,
-              style: const TextStyle(
-                color: _archiveText,
-                fontSize: 12,
-                height: 1.5,
-              ),
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-                hintText: '留空按角色完整设定生成；例如：裙摆更轻盈、气质更清冷、仙气更强……',
-                hintStyle: TextStyle(
-                  color: _archiveMutedSoft,
-                  fontSize: 11,
-                ),
-              ),
-            ),
-          ),
-
-          if (_errorText.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 8),
-            Text(
-              _errorText,
-              style: const TextStyle(
-                color: Color(0xFFE07A78),
-                fontSize: 10.5,
-                height: 1.4,
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 14),
-
-          // 只用文字按钮，不再放魔法、相机、勾选等装饰图标。
-          SizedBox(
-            width: double.infinity,
-            height: 42,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: (_generating || _saving) ? null : _generatePortrait,
-                borderRadius: BorderRadius.circular(7),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    color: (_generating || _saving)
-                        ? _archiveSurfaceSoft
-                        : primaryGreen,
-                    border: Border.all(
-                      color: (_generating || _saving)
-                          ? _archiveLine
-                          : primaryGreen,
-                      width: 1,
+                      ],
                     ),
                   ),
-                  child: _generating
-                      ? const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            SizedBox.square(
-                              dimension: 14,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.6,
-                                color: _archiveMuted,
-                              ),
-                            ),
-                            SizedBox(width: 8),
-                            Text(
-                              '生成中…',
-                              style: TextStyle(
-                                color: _archiveMuted,
-                                fontSize: 11.2,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        )
-                      : const Text(
-                          '生成立绘',
-                          style: TextStyle(
-                            color: NovelPalette.accentDark,
-                            fontSize: 11.8,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: .55,
-                          ),
-                        ),
                 ),
               ),
             ),
           ),
+        ),
+        if (_hasPortrait) ...<Widget>[
+          const SizedBox(height: 7),
+          Center(
+            child: Text(
+              '点击立绘可上传',
+              style: TextStyle(
+                color: _archiveMutedSoft,
+                fontSize: 10.2,
+              ),
+            ),
+          ),
+        ],
 
-          if (_hasPendingChanges) ...<Widget>[
-            const SizedBox(height: 9),
-            SizedBox(
-              width: double.infinity,
-              height: 42,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: _archiveText,
-                  foregroundColor: _archiveSurface,
-                  disabledBackgroundColor: _archiveSurfaceSoft,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+        const SizedBox(height: 22),
+        
+        Text(
+          '额外形象要求（可选）',
+          style: TextStyle(
+            color: _archiveMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: Colors.white, // 融入在极浅灰卡片上的纯白输入框
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: TextField(
+            controller: _promptController,
+            enabled: !_generating && !_saving,
+            minLines: 3,
+            maxLines: 5,
+            cursorColor: primaryGreen,
+            style: const TextStyle(
+              color: _archiveText,
+              fontSize: 12,
+              height: 1.5,
+            ),
+            decoration: InputDecoration(
+              border: InputBorder.none,
+              isDense: true,
+              contentPadding: EdgeInsets.zero,
+              hintText: '留空按角色完整设定生成；例如：裙摆更轻盈、气质更清冷、仙气更强……',
+              hintStyle: TextStyle(
+                color: _archiveMutedSoft,
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ),
+
+        if (_errorText.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          Text(
+            _errorText,
+            style: const TextStyle(
+              color: Color(0xFFE07A78),
+              fontSize: 10.5,
+              height: 1.4,
+            ),
+          ),
+        ],
+
+        const SizedBox(height: 16),
+
+        SizedBox(
+          width: double.infinity,
+          height: 42,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: (_generating || _saving) ? null : _generatePortrait,
+              borderRadius: BorderRadius.circular(8),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  color: (_generating || _saving)
+                      ? _archiveMutedSoft.withOpacity(0.3)
+                      : primaryGreen,
                 ),
-                onPressed: (_generating || _saving) ? null : _savePortrait,
-                child: _saving
-                    ? const SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.8,
-                          color: _archiveMuted,
-                        ),
+                child: _generating
+                    ? const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          SizedBox.square(
+                            dimension: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.6,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            '生成中…',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 11.2,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       )
                     : const Text(
-                        '保存立绘',
+                        '生成立绘',
                         style: TextStyle(
-                          fontSize: 12,
+                          color: Colors.white,
+                          fontSize: 13,
                           fontWeight: FontWeight.w700,
+                          letterSpacing: 1.0,
                         ),
                       ),
               ),
             ),
-          ],
+          ),
+        ),
+
+        if (_hasPendingChanges) ...<Widget>[
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 42,
+            child: FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: _archiveText,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: _archiveMutedSoft.withOpacity(0.3),
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: (_generating || _saving) ? null : _savePortrait,
+              child: _saving
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      '保存立绘',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+            ),
+          ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -8181,15 +8137,14 @@ class _GameStyleBackdrop extends StatelessWidget {
   final Widget child;
   final bool embedded;
   final Color overlayColor;
-
-  /// 背包一级页使用浅色；经历与二级档案默认继续沿用深色。
   final bool lightTheme;
 
   @override
   Widget build(BuildContext context) {
+    // 独立全屏打开时，由它负责提供安全区
     final content = embedded
         ? _NovelPrimaryTabSafeContent(child: child)
-        : child;
+        : SafeArea(child: child);
 
     return Stack(
       fit: StackFit.expand,
@@ -8231,6 +8186,8 @@ class _GameStyleBackdrop extends StatelessWidget {
     );
   }
 }
+
+
 
 class _GameStyleHeader extends StatelessWidget {
   const _GameStyleHeader({
@@ -9122,18 +9079,27 @@ class _GameStyleMetaText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: TextStyle(
-        color: lightTheme
-            ? (accent
-                ? _archiveAccent
-                : _archiveMuted)
-            : (accent
-                ? const Color(0xFFD9DEE4)
-                : const Color(0xFFA5ABB3)),
-        fontSize: 10.2,
-        fontWeight: FontWeight.w600,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        // 白绿主题下使用淡绿底色
+        color: lightTheme 
+            ? NovelPalette.accent.withOpacity(.12) 
+            : Colors.white.withOpacity(.08),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          // 白绿主题下使用绿色文字
+          color: lightTheme
+              ? NovelPalette.accentDeep
+              : (accent
+                  ? const Color(0xFFD9DEE4)
+                  : const Color(0xFFA5ABB3)),
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -9164,27 +9130,47 @@ class _GameStyleCharacterProfilePage extends StatelessWidget {
     if (v.contains('濒死') || v.contains('dying') || v.contains('near_death')) {
       return const Color(0xFF9E4F78);
     }
-    if (v.contains('重伤') || v.contains('heavy')) return const Color(0xFFB84E49);
+    if (v.contains('重伤') || v.contains('heavy')) return const Color(0xFFE07A78);
     if (v.contains('轻伤') || v.contains('light')) return const Color(0xFFA16A2B);
     return _archiveTextSoft;
   }
 
+  // 小标题：大写字母间距，替代原来的“色块 + 加粗标题”表单式写法
+  Widget _sectionLabel(String title) {
+    return Text(
+      title,
+      style: const TextStyle(
+        color: _archiveMuted,
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.8,
+      ),
+    );
+  }
+
+  // 一条极细的分隔线，用留白 + 发丝线区分区块，而不是灰底色块
+  Widget _hairline() {
+    return Container(height: .7, color: _archiveLine);
+  }
+
+  // 正文段落：不再套灰色卡片容器，靠留白与小标题建立层级
   Widget _paragraphSection(String title, String text) {
     if (text.trim().isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 20),
+      padding: const EdgeInsets.only(top: 36),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          _GameStyleSectionTitle(title: title, lightTheme: true),
-          const SizedBox(height: 9),
+          _sectionLabel(title),
+          const SizedBox(height: 14),
           Text(
             text.trim(),
             style: const TextStyle(
               color: _archiveTextSoft,
-              fontSize: 11.8,
-              height: 1.72,
+              fontSize: 14,
+              height: 1.9,
               fontWeight: FontWeight.w500,
+              letterSpacing: .1,
             ),
           ),
         ],
@@ -9210,13 +9196,15 @@ class _GameStyleCharacterProfilePage extends StatelessWidget {
     final injuries = _stringList(status['injuries']);
     final limits = _stringList(status['known_limits']);
     final conditionColor = _conditionColor(rawCondition);
+    final hasStatus = injuries.isNotEmpty || limits.isNotEmpty;
+    final hasParagraphs = description.isNotEmpty ||
+        personality.isNotEmpty ||
+        background.isNotEmpty ||
+        appearance.isNotEmpty;
 
-    // 档案顶部优先显示真正头像；没有头像时才退回立绘。
     final avatar = c?.avatarUrl.trim().isNotEmpty == true
         ? c!.avatarUrl.trim()
-        : (c?.portraitUrl.trim().isNotEmpty == true
-            ? c!.portraitUrl.trim()
-            : '');
+        : (c?.portraitUrl.trim().isNotEmpty == true ? c!.portraitUrl.trim() : '');
     final fallback = c?.gender.trim() == '男'
         ? 'assets/images/portrait_male.png'
         : 'assets/images/portrait_female.webp';
@@ -9236,7 +9224,6 @@ class _GameStyleCharacterProfilePage extends StatelessWidget {
             child: Align(
               alignment: Alignment.topCenter,
               child: ConstrainedBox(
-                // 主角档案使用真正的全屏内容宽度；普通角色档案仍保留阅读宽度。
                 constraints: BoxConstraints(
                   maxWidth: isHostProfile ? double.infinity : 900,
                 ),
@@ -9245,174 +9232,169 @@ class _GameStyleCharacterProfilePage extends StatelessWidget {
                   child: ListView(
                     physics: const BouncingScrollPhysics(),
                     padding: EdgeInsets.fromLTRB(
-                      isHostProfile ? 16 : 20,
-                      4,
-                      isHostProfile ? 16 : 20,
-                      36,
+                      isHostProfile ? 26 : 30,
+                      18,
+                      isHostProfile ? 26 : 30,
+                      64,
                     ),
                     children: <Widget>[
-                    // 主角/角色档案顶部改成紧凑头像信息区：
-                    // 不再把整张立绘铺成 300px 高的大头像，降低压迫感。
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final compact = constraints.maxWidth < 620;
-                        // 头像可以更大，但严格限制在档案头部行内；
-                        // 不加描边、不加额外外框，保持图片本身干净。
-                        final avatarSize = compact ? 88.0 : 102.0;
-
-                        return Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            compact ? 2 : 8,
-                            compact ? 10 : 14,
-                            compact ? 2 : 8,
-                            compact ? 20 : 24,
+                      // --- 1. 人物头部：头像 + 名字，不再套灰底卡片 ---
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: <Widget>[
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(20),
+                            child: SizedBox.square(
+                              dimension: 96,
+                              child: NovelArtwork(
+                                url: avatar,
+                                assetCandidates: <String>[fallback],
+                                fit: BoxFit.cover,
+                                alignment: Alignment.topCenter,
+                                fallbackText: name,
+                                fallbackIcon: Icons.person_outline_rounded,
+                              ),
+                            ),
                           ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: <Widget>[
-                              SizedBox.square(
-                                dimension: avatarSize,
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(compact ? 16 : 18),
-                                  child: NovelArtwork(
-                                    url: avatar,
-                                    assetCandidates: <String>[fallback],
-                                    fit: BoxFit.cover,
-                                    alignment: Alignment.topCenter,
-                                    fallbackText: name,
-                                    fallbackIcon: Icons.person_outline_rounded,
+                          const SizedBox(width: 20),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: _archiveText,
+                                    fontSize: 25,
+                                    height: 1.15,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: .2,
                                   ),
                                 ),
-                              ),
-                              SizedBox(width: compact ? 14 : 18),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: <Widget>[
-                                    Text(
-                                      name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: _archiveText,
-                                        fontSize: compact ? 22 : 26,
-                                        height: 1.05,
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: .45,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      identity.isEmpty
-                                          ? (isHostProfile ? '故事主角' : '故事人物')
-                                          : identity,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: _archiveMuted,
-                                        fontSize: 10.8,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 9),
-                                    Container(height: 1, color: _archiveLine),
-                                    const SizedBox(height: 8),
-                                    Wrap(
-                                      spacing: 9,
-                                      runSpacing: 5,
-                                      children: <Widget>[
-                                        if (c?.gender.trim().isNotEmpty == true)
-                                          _GameStyleMetaText(c!.gender.trim(), lightTheme: true),
-                                        if (level.isNotEmpty)
-                                          _GameStyleMetaText('境界 · $level', lightTheme: true),
-                                        if (deathCount >= 0)
-                                          _GameStyleMetaText(
-                                            '轮回 · $deathCount',
-                                            accent: deathCount > 0,
-                                            lightTheme: true,
-                                          ),
-                                        if (c != null && !c.isMain)
-                                          _GameStyleMetaText(
-                                            '${c.affectionLabel.isEmpty ? '好感' : c.affectionLabel} · ${c.affection}',
-                                            accent: true,
-                                            lightTheme: true,
-                                          ),
-                                      ],
-                                    ),
-                                    if (rawCondition.isNotEmpty || combatPower.isNotEmpty) ...<Widget>[
-                                      const SizedBox(height: 10),
-                                      Row(
-                                        children: <Widget>[
-                                          Container(
-                                            width: 5,
-                                            height: 5,
-                                            decoration: BoxDecoration(
-                                              color: conditionColor,
-                                              shape: BoxShape.circle,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 7),
-                                          Expanded(
-                                            child: Text(
-                                              rawCondition.isEmpty ? '状态未知' : rawCondition,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: conditionColor,
-                                                fontSize: 10.8,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ),
-                                          if (combatPower.isNotEmpty)
-                                            Text(
-                                              '战力 $combatPower',
-                                              style: const TextStyle(
-                                                color: _archiveMuted,
-                                                fontSize: 9.6,
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ],
-                                  ],
+                                const SizedBox(height: 8),
+                                Text(
+                                  identity.isEmpty ? (isHostProfile ? '故事主角' : '故事人物') : identity,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: _archiveMuted,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: .4,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      // --- 2. 标签行：性别 / 境界 / 轮回 / 好感，留出充足呼吸感 ---
+                      const SizedBox(height: 26),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: <Widget>[
+                          if (c?.gender.trim().isNotEmpty == true)
+                            _GameStyleMetaText(c!.gender.trim(), lightTheme: true),
+                          if (level.isNotEmpty)
+                            _GameStyleMetaText('境界 · $level', lightTheme: true),
+                          if (deathCount >= 0)
+                            _GameStyleMetaText(
+                              '轮回 · $deathCount',
+                              accent: deathCount > 0,
+                              lightTheme: true,
+                            ),
+                          if (c != null && !c.isMain)
+                            _GameStyleMetaText(
+                              '${c.affectionLabel.isEmpty ? '好感' : c.affectionLabel} · ${c.affection}',
+                              accent: true,
+                              lightTheme: true,
+                            ),
+                        ],
+                      ),
+
+                      // --- 3. 状态 / 战力，一行淡淡带过，不再装进色块 ---
+                      if (rawCondition.isNotEmpty || combatPower.isNotEmpty) ...<Widget>[
+                        const SizedBox(height: 18),
+                        Row(
+                          children: <Widget>[
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(color: conditionColor, shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                rawCondition.isEmpty ? '状态未知' : rawCondition,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: conditionColor,
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
-                            ],
+                            ),
+                            if (combatPower.isNotEmpty)
+                              Text(
+                                '战力 $combatPower',
+                                style: const TextStyle(
+                                  color: _archiveMuted,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+
+                      // --- 4. 状态记录：去掉灰底卡片，用留白 + 细线区隔 ---
+                      if (hasStatus) ...<Widget>[
+                        const SizedBox(height: 36),
+                        _hairline(),
+                        const SizedBox(height: 24),
+                        _sectionLabel('状态记录'),
+                        const SizedBox(height: 14),
+                        for (final injury in injuries)
+                          _GameStyleProfileStatusLine(text: injury, color: const Color(0xFFE07A78)),
+                        for (final limit in limits)
+                          _GameStyleProfileStatusLine(text: '限制：$limit', color: _archiveMuted),
+                      ],
+
+                      // --- 5. 简介 / 性格 / 身世 / 外貌，逐段留白，不再逐个套卡片 ---
+                      if (!hasStatus && hasParagraphs) ...<Widget>[
+                        const SizedBox(height: 36),
+                        _hairline(),
+                      ],
+                      _paragraphSection('人物简介', description),
+                      _paragraphSection('性格特征', personality),
+                      _paragraphSection(isHostProfile ? '身世' : '人物背景', background),
+                      _paragraphSection('外貌设定', appearance),
+
+                      // --- 6. 形象编辑：唯一保留浅底容器的区块，因为它承载可交互控件 ---
+                      if (c != null) ...<Widget>[
+                        const SizedBox(height: 40),
+                        _hairline(),
+                        const SizedBox(height: 24),
+                        _sectionLabel('形象设定'),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF6F7F6),
+                            borderRadius: BorderRadius.circular(18),
                           ),
-                        );
-                      },
-                    ),
-                    if (injuries.isNotEmpty || limits.isNotEmpty) ...<Widget>[
-                      _GameStyleSectionTitle(title: '状态记录', lightTheme: true),
-                      const SizedBox(height: 9),
-                      for (final injury in injuries)
-                        _GameStyleProfileStatusLine(text: injury, color: const Color(0xFFB85E58)),
-                      for (final limit in limits)
-                        _GameStyleProfileStatusLine(text: '限制：$limit', color: _archiveMuted),
-                    ],
-                    _paragraphSection('人物简介', description),
-                    _paragraphSection('性格特征', personality),
-                    _paragraphSection(isHostProfile ? '身世' : '人物背景', background),
-                    _paragraphSection('外貌设定', appearance),
-                    if (c != null) ...<Widget>[
-                      const SizedBox(height: 22),
-                      _GameStyleSectionTitle(title: '形象', lightTheme: true),
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: _archiveSurface,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _archiveLine, width: 1),
+                          child: _InlineCharacterVisualEditor(
+                            controller: controller,
+                            character: c,
+                          ),
                         ),
-                        child: _InlineCharacterVisualEditor(
-                          controller: controller,
-                          character: c,
-                        ),
-                      ),
-                    ],
+                      ],
                     ],
                   ),
                 ),
@@ -9439,14 +9421,18 @@ class _GameStyleProfileStatusLine extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Padding(
-            padding: const EdgeInsets.only(top: 7),
-            child: Container(width: 3, height: 3, color: color),
+            padding: const EdgeInsets.only(top: 6),
+            child: Container(
+              width: 4, 
+              height: 4, 
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
           ),
-          const SizedBox(width: 9),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
               text,
-              style: TextStyle(color: color, fontSize: 11.2, height: 1.55),
+              style: TextStyle(color: color, fontSize: 12, height: 1.55, fontWeight: FontWeight.w500),
             ),
           ),
         ],

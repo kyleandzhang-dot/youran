@@ -1,8 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
-import 'dart:ui';
-import 'dart:ui' as ui;
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +13,46 @@ import 'novel_asr_stream_service.dart';
 import 'novel_game_controller.dart';
 import 'novel_socket_service.dart';
 import 'novel_models.dart';
+
+class NovelPortraitCache {
+  NovelPortraitCache._();
+
+  static final NovelPortraitCache instance =
+      NovelPortraitCache._();
+
+  final LinkedHashMap<String, ImageProvider> _cache =
+      LinkedHashMap<String, ImageProvider>();
+
+  static const int maxSize = 200;
+
+
+  ImageProvider get(String url) {
+    final key = url.trim();
+
+    final old = _cache.remove(key);
+    if (old != null) {
+      _cache[key] = old;
+      return old;
+    }
+
+    final ImageProvider provider;
+
+    if (key.startsWith('http://') ||
+        key.startsWith('https://')) {
+      provider = NetworkImage(key);
+    } else {
+      provider = AssetImage(key);
+    }
+
+    _cache[key] = provider;
+
+    if (_cache.length > maxSize) {
+      _cache.remove(_cache.keys.first);
+    }
+
+    return provider;
+  }
+}
 
 class NovelPalette {
   // 小说模式主题强调色统一为低饱和抹茶绿；正文仍以白 / 灰白保证可读性。
@@ -69,7 +109,7 @@ List<InlineSpan> _buildNovelDialogueDisplaySpans(
     color: (baseStyle.color ?? const Color(0xFFF7F7F7)).withOpacity(.58),
     fontWeight: FontWeight.w400,
     shadows: const <Shadow>[
-      Shadow(color: Color(0xB0000000), blurRadius: 4, offset: Offset(0, 2)),
+      Shadow(color: Color(0x30000000), blurRadius: 1.5, offset: Offset(0, 1)),
     ],
   );
 
@@ -275,8 +315,8 @@ class _StagePortraitArtwork extends StatelessWidget {
     }
 
     if (value.startsWith('http://') || value.startsWith('https://')) {
-      return Image.network(
-        value,
+      return Image(
+        image: NovelPortraitCache.instance.get(value),
         fit: fit,
         alignment: alignment,
         filterQuality: filterQuality,
@@ -285,8 +325,8 @@ class _StagePortraitArtwork extends StatelessWidget {
       );
     }
 
-    return Image.asset(
-      value,
+    return Image(
+      image: NovelPortraitCache.instance.get(value),
       fit: fit,
       alignment: alignment,
       filterQuality: filterQuality,
@@ -1696,13 +1736,7 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
                               height: 1,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 1.35,
-                              shadows: const <Shadow>[
-                                Shadow(
-                                  color: Color(0x52000000),
-                                  blurRadius: 2.2,
-                                  offset: Offset(0, 1),
-                                ),
-                              ],
+                              shadows: const <Shadow>[],
                             ),
                           ),
                         ],
@@ -1725,8 +1759,8 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
                           letterSpacing: .16,
                           foreground: Paint()
                             ..style = PaintingStyle.stroke
-                            ..strokeWidth = .62
-                            ..color = const Color(0x92000000),
+                            ..strokeWidth = .42
+                            ..color = const Color(0x66D8D8D8),
                         ),
                       ),
                       Text(
@@ -1740,13 +1774,7 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
                           height: 1.46,
                           fontWeight: FontWeight.w700,
                           letterSpacing: .16,
-                          shadows: const <Shadow>[
-                            Shadow(
-                              color: Color(0x48000000),
-                              blurRadius: 2.4,
-                              offset: Offset(0, 1),
-                            ),
-                          ],
+                          shadows: const <Shadow>[],
                         ),
                       ),
                     ],
@@ -1802,18 +1830,7 @@ class NovelLocationHud extends StatelessWidget {
                         fontSize: compact ? 11.8 : 12.8,
                         height: 1,
                         fontWeight: FontWeight.w500,
-                        shadows: const <Shadow>[
-                          Shadow(
-                            color: Color(0x82000000),
-                            blurRadius: 2.4,
-                            offset: Offset(0, 1),
-                          ),
-                          Shadow(
-                            color: Color(0x36000000),
-                            blurRadius: 5,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
+                        shadows: const <Shadow>[],
                       ),
                     ),
                     SizedBox(width: compact ? 5 : 6),
@@ -1851,13 +1868,7 @@ class NovelLocationHud extends StatelessWidget {
                   height: 1.10,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 1.08,
-                  shadows: const <Shadow>[
-                    Shadow(
-                      color: Color(0x42000000),
-                      blurRadius: 2.2,
-                      offset: Offset(0, 1),
-                    ),
-                  ],
+                  shadows: const <Shadow>[],
                 ),
               ),
               if (hasSubtitle) ...<Widget>[
@@ -1875,10 +1886,7 @@ class NovelLocationHud extends StatelessWidget {
                         height: 1.08,
                         fontWeight: FontWeight.w500,
                         letterSpacing: 1.10,
-                        foreground: Paint()
-                          ..style = PaintingStyle.stroke
-                          ..strokeWidth = .85
-                          ..color = const Color(0xA8000000),
+                        foreground: null,
                       ),
                     ),
                     Text(
@@ -1892,13 +1900,7 @@ class NovelLocationHud extends StatelessWidget {
                         height: 1.08,
                         fontWeight: FontWeight.w500,
                         letterSpacing: 1.10,
-                        shadows: const <Shadow>[
-                          Shadow(
-                            color: Color(0x3D000000),
-                            blurRadius: 2,
-                            offset: Offset(0, 1),
-                          ),
-                        ],
+                        shadows: const <Shadow>[],
                       ),
                     ),
                   ],
@@ -2043,10 +2045,8 @@ class NovelSceneArrivalTitle extends StatelessWidget {
               height: 1.12,
               fontWeight: FontWeight.w500,
               letterSpacing: 4,
-              // 不再给场景大标题铺大面积黑色阴影，文字直接显示在场景背景上。
-              shadows: <Shadow>[
-                Shadow(color: Color(0x52000000), blurRadius: 5, offset: Offset(0, 1)),
-              ],
+              // 场景名称保持干净通透，不添加描边和阴影。
+              shadows: const <Shadow>[], 
             ),
           ),
           const SizedBox(height: 14),
@@ -3119,8 +3119,7 @@ class _NovelNarrationSurface extends StatelessWidget {
       fontWeight: FontWeight.w500,
       letterSpacing: .55,
       shadows: const <Shadow>[
-        Shadow(color: Color(0xE6000000), blurRadius: 4, offset: Offset(0, 2)),
-        Shadow(color: Color(0xB3000000), blurRadius: 12, offset: Offset(0, 4)),
+        Shadow(color: Color(0x18000000), blurRadius: 1.0, offset: Offset(0, 1)),
       ],
     );
 
@@ -3222,8 +3221,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
       fontWeight: FontWeight.w500,
       letterSpacing: .15,
       shadows: const <Shadow>[
-        Shadow(color: Color(0xF0000000), blurRadius: 4, offset: Offset(0, 2)),
-        Shadow(color: Color(0xA6000000), blurRadius: 12, offset: Offset(0, 4)),
+        Shadow(color: Color(0x16000000), blurRadius: 1.0, offset: Offset(0, 1)),
       ],
     );
 
@@ -5408,7 +5406,7 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
                         ],
                         Text(displayText.isEmpty && !widget.isGenerating ? '等待故事继续…' : displayText,
                             textAlign: narration ? TextAlign.center : TextAlign.left,
-                            style: TextStyle(color: NovelPalette.text, fontFamily: widget.fontFamily, fontSize: widget.fontSize + (narration ? 3 : 2), height: narration ? 1.95 : 1.8, fontWeight: narration ? FontWeight.w500 : FontWeight.w400, letterSpacing: narration ? .7 : .25, shadows: const <Shadow>[Shadow(color: Color(0xE0000000), blurRadius: 18, offset: Offset(0, 3))])),
+                            style: TextStyle(color: NovelPalette.text, fontFamily: widget.fontFamily, fontSize: widget.fontSize + (narration ? 3 : 2), height: narration ? 1.95 : 1.8, fontWeight: narration ? FontWeight.w500 : FontWeight.w400, letterSpacing: narration ? .7 : .25, shadows: const <Shadow>[Shadow(color: Color(0x24000000), blurRadius: 2, offset: Offset(0, 1))])),
                       ])),
                 )),
             Align(
