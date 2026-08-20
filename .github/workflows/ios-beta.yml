@@ -41,6 +41,9 @@ jobs:
       - name: Install Flutter dependencies
         run: flutter pub get
 
+      - name: Disable Swift Package Manager (flutter_secure_storage 暂不支持,避免混合模式签名报错)
+        run: flutter config --no-enable-swift-package-manager
+
       # - name: Set build number
       #   run: |
       #     VERSION_NAME=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d '+' -f 1)
