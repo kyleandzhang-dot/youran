@@ -28,6 +28,8 @@
 	<string>用于选择或保存角色立绘、场景图片等内容,需要访问你的相册。</string>
 	<key>NSCameraUsageDescription</key>
 	<string>用于拍照上传头像或图片素材,需要访问你的相机。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>选择相册图片时可能需要读取图片的位置信息,用于展示或标注,不会主动获取你的实时定位。</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
