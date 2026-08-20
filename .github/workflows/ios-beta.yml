@@ -54,11 +54,13 @@ jobs:
       - name: Install Flutter dependencies
         run: flutter pub get
 
-      # - name: Set build number
-      #   run: |
-      #     VERSION_NAME=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d '+' -f 1)
-      #     sed -i.bak "s/^version: .*/version: ${VERSION_NAME}+${{ github.run_number }}/" pubspec.yaml
-      #     cat pubspec.yaml | grep version
+      - name: Set build number
+        # 每次上传 TestFlight 的 CFBundleVersion(build number)必须严格递增,
+        # 用 GitHub Actions 的 run_number 保证每次 run 都不重复
+        run: |
+          VERSION_NAME=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d '+' -f 1)
+          sed -i.bak "s/^version: .*/version: ${VERSION_NAME}+${{ github.run_number }}/" pubspec.yaml
+          cat pubspec.yaml | grep version
 
       - name: Build Flutter iOS (no codesign)
         run: flutter build ios --release --no-codesign
