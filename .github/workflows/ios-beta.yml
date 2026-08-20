@@ -7,14 +7,18 @@ on:
       - main
 
 env:
-  # Xcode 26 的 Explicit Modules 默认开启会导致 flutter_secure_storage 等
-  # Swift 插件报 "Unable to find module dependency: 'Flutter'" (flutter/flutter#185210)
-  # 官方还未修复,暂时固定使用 Xcode 16.4 绕开这个问题
-  XCODE_VERSION: '16.4'
+  # Apple 现在强制要求上传 App Store Connect/TestFlight 必须用 iOS 26 SDK
+  # (即 Xcode 26+),macos-15 这个 runner 镜像因为磁盘空间限制没有 Xcode 26,
+  # 所以必须切到 macos-26 runner。
+  # Xcode 26 默认开启 Explicit Modules,会导致 flutter_secure_storage 等
+  # Swift 插件报 "Unable to find module dependency: 'Flutter'" (flutter/flutter#185210,
+  # 官方还未修复)——这个问题改在 ios/Podfile 的 post_install 里对所有 Pod
+  # 关闭 SWIFT_ENABLE_EXPLICIT_MODULES 来解决,详见 Podfile。
+  XCODE_VERSION: '26.4.1'
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
 
     steps:
