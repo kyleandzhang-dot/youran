@@ -7,7 +7,10 @@ on:
       - main
 
 env:
-  XCODE_VERSION: 'latest-stable'
+  # Xcode 26 的 Explicit Modules 默认开启会导致 flutter_secure_storage 等
+  # Swift 插件报 "Unable to find module dependency: 'Flutter'" (flutter/flutter#185210)
+  # 官方还未修复,暂时固定使用 Xcode 16.4 绕开这个问题
+  XCODE_VERSION: '16.4'
 
 jobs:
   build:
