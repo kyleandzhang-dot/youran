@@ -53,15 +53,17 @@ jobs:
       - name: Build Flutter iOS (no codesign)
         run: flutter build ios --release --no-codesign
 
-      - name: Cache CocoaPods
+      # 只缓存 CocoaPods 下载源,不缓存 ios/Pods 产物本身,
+      # 避免旧缓存在 flutter build ios 之后把刚生成的、和本次 Flutter 引擎
+      # 严格匹配的 Pods 覆盖掉,导致 flutter_secure_storage 等插件报
+      # 'Flutter/Flutter.h' file not found
+      - name: Cache CocoaPods repo
         uses: actions/cache@v4
         with:
-          path: |
-            ios/Pods
-            ~/Library/Caches/CocoaPods
-          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
+          path: ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-pods-repo-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            ${{ runner.os }}-pods-
+            ${{ runner.os }}-pods-repo-
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
