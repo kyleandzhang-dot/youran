@@ -7,7 +7,7 @@ on:
       - main
 
 env:
-  XCODE_VERSION: 'latest-stable'
+  XCODE_VERSION: '16.2'
 
 jobs:
   build:
