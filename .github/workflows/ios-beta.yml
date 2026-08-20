@@ -41,6 +41,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
+      - name: Clean stale pub-cache temp dir
+        # ~/.pub-cache/_temp 是 pub get 运行时的临时工作区,不应该被跨 run 缓存复用,
+        # 上次 run 如果中途失败/被打断,残留的 _temp 会导致
+        # 'Creation of temporary directory failed ... errno = 22'
+        run: rm -rf ~/.pub-cache/_temp
+
       - name: Install Flutter dependencies
         run: flutter pub get
 
