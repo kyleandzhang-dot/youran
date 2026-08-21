@@ -1386,13 +1386,13 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              stops: const <double>[0, .16, .56, .80, 1],
+              // 深蓝灰阅读遮罩：保留场景层次，同时让中下部正文在
+              // 明亮或细节复杂的背景上也有稳定对比度。
+              stops: const <double>[0, .45, 1],
               colors: <Color>[
-                Color(0x4A000000),
-                Colors.transparent,
-                Colors.transparent,
-                Color(0x30000000),
-                Color(0xA8000000),
+                const Color(0xFF0F172A).withOpacity(.12),
+                const Color(0xFF0F172A).withOpacity(.36),
+                const Color(0xFF0F172A).withOpacity(.72),
               ],
             ),
           ),
@@ -3119,7 +3119,11 @@ class _NovelNarrationSurface extends StatelessWidget {
       fontWeight: FontWeight.w500,
       letterSpacing: .55,
       shadows: const <Shadow>[
-        Shadow(color: Color(0x18000000), blurRadius: 1.0, offset: Offset(0, 1)),
+        Shadow(
+          color: Color(0x99000000),
+          blurRadius: 6,
+          offset: Offset(0, 1),
+        ),
       ],
     );
 
@@ -3221,7 +3225,11 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
       fontWeight: FontWeight.w500,
       letterSpacing: .15,
       shadows: const <Shadow>[
-        Shadow(color: Color(0x16000000), blurRadius: 1.0, offset: Offset(0, 1)),
+        Shadow(
+          color: Color(0x99000000),
+          blurRadius: 6,
+          offset: Offset(0, 1),
+        ),
       ],
     );
 
