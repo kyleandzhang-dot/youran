@@ -5473,6 +5473,9 @@ class NovelInputBar extends StatefulWidget {
 }
 
 class _NovelInputBarState extends State<NovelInputBar> {
+  static const Duration _maximumSpeechDuration = Duration(seconds: 30);
+  static const Duration _speechTranscriptionTimeout = Duration(seconds: 10);
+
   late NovelAsrStreamService _asr;
 
   bool _hasText = false;
@@ -5484,6 +5487,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
   int _speechSessionId = 0;
   Future<void>? _startFuture;
   Stopwatch? _speechHoldWatch;
+  Timer? _speechLimitTimer;
 
   @override
   void initState() {
@@ -5618,6 +5622,16 @@ class _NovelInputBarState extends State<NovelInputBar> {
     final sessionId = ++_speechSessionId;
     _speechBaseText = widget.controller.text;
     _speechHoldWatch = Stopwatch()..start();
+    _speechLimitTimer?.cancel();
+    _speechLimitTimer = Timer(_maximumSpeechDuration, () {
+      if (!mounted ||
+          sessionId != _speechSessionId ||
+          (!_micHeld && !_isListening && !_speechStarting)) {
+        return;
+      }
+      // 最长录音 30 秒；到时自动按正常松手流程结束并开始转文字。
+      unawaited(_finishHoldListening());
+    });
     widget.focusNode.unfocus();
     if (mounted) {
       setState(() {
@@ -5626,12 +5640,15 @@ class _NovelInputBarState extends State<NovelInputBar> {
       });
     }
 
-    final startFuture = _asr.start();
+    // 捕获本轮服务实例；超时后会替换 _asr，旧任务只能清理自己的实例，
+    // 不会误取消用户紧接着开始的新一轮录音。
+    final asr = _asr;
+    final startFuture = asr.start();
     _startFuture = startFuture;
     try {
       await startFuture;
       if (!mounted || sessionId != _speechSessionId) {
-        await _asr.cancel();
+        await asr.cancel();
         return;
       }
       setState(() {
@@ -5640,6 +5657,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
       });
     } on NovelAsrStreamException catch (error) {
       if (!mounted || sessionId != _speechSessionId) return;
+      _speechLimitTimer?.cancel();
+      _speechLimitTimer = null;
       setState(() {
         _speechStarting = false;
         _isListening = false;
@@ -5648,6 +5667,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
       _showSpeechMessage(error.message);
     } catch (_) {
       if (!mounted || sessionId != _speechSessionId) return;
+      _speechLimitTimer?.cancel();
+      _speechLimitTimer = null;
       setState(() {
         _speechStarting = false;
         _isListening = false;
@@ -5662,8 +5683,13 @@ class _NovelInputBarState extends State<NovelInputBar> {
   Future<void> _finishHoldListening({bool commit = true}) async {
     if (_speechFinishing) return;
 
+    _speechLimitTimer?.cancel();
+    _speechLimitTimer = null;
+
     final sessionId = _speechSessionId;
-    final hadActiveSession = _micHeld || _isListening || _speechStarting || _asr.isSessionOpen;
+    final asr = _asr;
+    final hadActiveSession =
+        _micHeld || _isListening || _speechStarting || asr.isSessionOpen;
     if (!hadActiveSession) return;
 
     final heldFor = _speechHoldWatch?.elapsed ?? Duration.zero;
@@ -5688,27 +5714,52 @@ class _NovelInputBarState extends State<NovelInputBar> {
 
     var speechCommitted = false;
     try {
-      final starting = _startFuture;
-      if (starting != null) {
-        try {
-          await starting;
-        } catch (_) {
-          // 启动异常已在 _beginHoldListening 中提示。
-        }
-      }
-      if (sessionId != _speechSessionId) return;
-
       if (!commit || tooShort) {
-        await _asr.cancel();
+        final starting = _startFuture;
+        if (starting != null) {
+          try {
+            await starting;
+          } catch (_) {
+            // 启动异常已在 _beginHoldListening 中提示。
+          }
+        }
+        if (sessionId != _speechSessionId) return;
+        await asr.cancel();
         if (tooShort && mounted && sessionId == _speechSessionId) {
           _showSpeechMessage('说话太短了', lightweight: true);
         }
-      } else if (_asr.isSessionOpen) {
-        final finalText = await _asr.stopAndGetFinal();
+      } else {
+        // “正在转文字…”从松手开始计时：等待 ASR 启动完成和最终结果
+        // 合计最多 10 秒，超时后直接取消并忽略迟到结果。
+        final finalText = await (() async {
+          final starting = _startFuture;
+          if (starting != null) {
+            try {
+              await starting;
+            } catch (_) {
+              // 启动异常已在 _beginHoldListening 中提示。
+            }
+          }
+          if (sessionId != _speechSessionId || !asr.isSessionOpen) {
+            return '';
+          }
+          return asr.stopAndGetFinal();
+        })().timeout(_speechTranscriptionTimeout);
+
         if (finalText.trim().isNotEmpty) {
           _commitSpeechText(sessionId, finalText);
           speechCommitted = true;
         }
+      }
+    } on TimeoutException {
+      // Future.timeout 不会终止底层任务，主动取消 ASR 会话；上面的
+      // sessionId 校验和本地 await 链保证迟到结果不会写回输入框。
+      unawaited(asr.dispose());
+      if (identical(_asr, asr)) {
+        _asr = NovelAsrStreamService(socketService: widget.socketService);
+      }
+      if (commit && mounted && sessionId == _speechSessionId) {
+        _showSpeechMessage('识别超时，已放弃', lightweight: true);
       }
     } on NovelAsrStreamException catch (error) {
       if (commit && mounted && sessionId == _speechSessionId) {
@@ -5793,6 +5844,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
   void dispose() {
     _speechSessionId++;
     _micHeld = false;
+    _speechLimitTimer?.cancel();
+    _speechLimitTimer = null;
     _speechHoldWatch?.stop();
     _speechHoldWatch = null;
     widget.controller.removeListener(_update);

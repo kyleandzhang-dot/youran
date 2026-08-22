@@ -2,7 +2,7 @@ name: youran_ai
 description: "Youran AI interactive story platform."
 publish_to: 'none'
 
-version: 1.0.0+42
+version: 1.0.0+43
 
 environment:
   sdk: '>=3.8.0 <4.0.0'

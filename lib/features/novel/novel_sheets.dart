@@ -3131,8 +3131,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                             onClose: widget.embedded
                                 ? null
                                 : () => Navigator.of(context).pop(),
-                            loading: loading,
-                            onRefresh: () => unawaited(_refresh()),
                           ),
                           const Expanded(
                             child: _ArchiveEmptyState(text: '当前筛选下暂无角色'),
@@ -3183,8 +3181,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                           onClose: widget.embedded
                               ? null
                               : () => Navigator.of(context).pop(),
-                          loading: loading,
-                          onRefresh: () => unawaited(_refresh()),
                         ),
                         Expanded(
                           child: _CharacterShowcaseStage(
@@ -3279,13 +3275,9 @@ class _CharacterArchiveBackground extends StatelessWidget {
 class _CharacterArchiveHeader extends StatelessWidget {
   const _CharacterArchiveHeader({
     this.onClose,
-    this.loading = false,
-    this.onRefresh,
   });
 
   final VoidCallback? onClose;
-  final bool loading;
-  final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -3320,14 +3312,7 @@ class _CharacterArchiveHeader extends StatelessWidget {
               ],
             ),
           ),
-          if (onRefresh != null)
-            _CharacterHeaderButton(
-              tooltip: '刷新人物',
-              icon: loading ? Icons.sync_rounded : Icons.refresh_rounded,
-              onTap: loading ? null : onRefresh,
-            ),
           if (onClose != null) ...<Widget>[
-            const SizedBox(width: 4),
             _CharacterHeaderButton(
               tooltip: '关闭',
               icon: Icons.close_rounded,
@@ -3361,11 +3346,11 @@ class _CharacterHeaderButton extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(999),
           child: SizedBox(
-            width: 38,
-            height: 38,
+            width: 42,
+            height: 42,
             child: Icon(
               icon,
-              size: 19,
+              size: 22,
               color: onTap == null
                   ? _archiveMutedSoft
                   : _archiveTextSoft,
@@ -8194,16 +8179,12 @@ class _GameStyleHeader extends StatelessWidget {
     required this.title,
     required this.english,
     this.onClose,
-    this.onRefresh,
-    this.refreshing = false,
     this.lightTheme = false,
   });
 
   final String title;
   final String english;
   final VoidCallback? onClose;
-  final VoidCallback? onRefresh;
-  final bool refreshing;
   final bool lightTheme;
 
   @override
@@ -8253,15 +8234,7 @@ class _GameStyleHeader extends StatelessWidget {
               ],
             ),
           ),
-          if (onRefresh != null)
-            _GameStyleHeaderIcon(
-              tooltip: '刷新',
-              icon: refreshing ? Icons.sync_rounded : Icons.refresh_rounded,
-              onTap: refreshing ? null : onRefresh,
-              lightTheme: lightTheme,
-            ),
           if (onClose != null) ...<Widget>[
-            const SizedBox(width: 3),
             _GameStyleHeaderIcon(
               tooltip: '关闭',
               icon: Icons.close_rounded,
@@ -8298,11 +8271,11 @@ class _GameStyleHeaderIcon extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(999),
           child: SizedBox(
-            width: 38,
-            height: 38,
+            width: 42,
+            height: 42,
             child: Icon(
               icon,
-              size: 19,
+              size: 22,
               color: onTap == null
                   ? (lightTheme
                       ? _archiveMutedSoft
@@ -8872,8 +8845,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
               _GameStyleHeader(
                 title: '背包',
                 english: 'INVENTORY',
-                refreshing: loading,
-                onRefresh: () => unawaited(_refresh()),
                 onClose: widget.embedded
                     ? null
                     : () => Navigator.of(context).pop(),
@@ -9630,8 +9601,6 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
               _GameStyleHeader(
                 title: '经历',
                 english: 'JOURNEY',
-                refreshing: loading,
-                onRefresh: () => unawaited(_refresh()),
                 onClose: widget.embedded
                     ? null
                     : () => Navigator.of(context).pop(),
