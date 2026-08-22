@@ -47,6 +47,9 @@ enum _NovelPrimaryTab {
 
 class _NovelGamePageState extends State<NovelGamePage>
     with WidgetsBindingObserver {
+  static const Duration _sceneArrivalDuration =
+      Duration(milliseconds: 2800);
+
   final TextEditingController _inputController = TextEditingController();
   final FocusNode _inputFocusNode = FocusNode();
 
@@ -66,6 +69,12 @@ class _NovelGamePageState extends State<NovelGamePage>
   NovelWeatherEffect? _weatherPreviewOverride;
   NovelTimePeriod? _timePreviewOverride;
   String _lastWeatherSyncToken = '';
+  Timer? _sceneArrivalTimer;
+  String _lastSceneArrivalToken = '';
+  bool _sceneArrivalActive = false;
+  String? _sceneArrivalPreviewTitle;
+  String? _sceneArrivalPreviewSubtitle;
+  int _sceneArrivalRunId = 0;
 
   NovelGameController get controller => widget.controller;
 
@@ -80,6 +89,8 @@ class _NovelGamePageState extends State<NovelGamePage>
   Future<void> _initializeGame() async {
     await controller.initialize();
     if (!mounted) return;
+
+    _syncSceneArrival();
 
     // 初始化失败时由页面自动打开菜单，不再继续预加载剧情音频。
     if (!controller.isInitialized) return;
@@ -113,10 +124,46 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   void _onControllerChanged() {
     if (!mounted) return;
+    _syncSceneArrival();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _processOverlayRequests();
       unawaited(_syncActiveWeatherAudio());
+    });
+  }
+
+  void _syncSceneArrival() {
+    final title = controller.locationTitle.trim();
+    final subtitle = controller.locationSubtitle.trim();
+
+    // 回看历史时不重复播放场景揭示；只有抵达最新剧情中的新地点才触发。
+    if (!controller.storyStarted || title.isEmpty || controller.hasNext) return;
+
+    final token = '$title\u0000$subtitle';
+    if (token == _lastSceneArrivalToken) return;
+    _lastSceneArrivalToken = token;
+
+    _startSceneArrival();
+  }
+
+  void _startSceneArrival({
+    String? previewTitle,
+    String? previewSubtitle,
+  }) {
+    _sceneArrivalTimer?.cancel();
+    setState(() {
+      _sceneArrivalActive = true;
+      _sceneArrivalPreviewTitle = previewTitle;
+      _sceneArrivalPreviewSubtitle = previewSubtitle;
+      _sceneArrivalRunId++;
+    });
+    _sceneArrivalTimer = Timer(_sceneArrivalDuration, () {
+      if (!mounted) return;
+      setState(() {
+        _sceneArrivalActive = false;
+        _sceneArrivalPreviewTitle = null;
+        _sceneArrivalPreviewSubtitle = null;
+      });
     });
   }
 
@@ -294,6 +341,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     controller.removeListener(_onControllerChanged);
+    _sceneArrivalTimer?.cancel();
     _inputController.dispose();
     _inputFocusNode.dispose();
     if (widget.disposeController) controller.dispose();
@@ -376,6 +424,8 @@ class _NovelGamePageState extends State<NovelGamePage>
         setTimeOverride: _setTimePreviewOverride,
         previewCharacterSetup: _previewCharacterSetup,
         previewOpening: _previewOpening,
+        previewSceneArrival: _previewSceneArrival,
+        previewStoryBrewing: _previewStoryBrewing,
         previewLoading: _previewLoading,
         previewFailure: _previewFailure,
         previewFateRevert: _previewFateRevert,
@@ -423,6 +473,56 @@ class _NovelGamePageState extends State<NovelGamePage>
       context,
       controller,
       previewOnly: true,
+    );
+  }
+
+  Future<void> _previewSceneArrival() async {
+    if (!mounted) return;
+    _startSceneArrival(
+      previewTitle: '雾隐长街',
+      previewSubtitle: '夜雨 · 南城旧区',
+    );
+  }
+
+  Future<void> _previewStoryBrewing() async {
+    if (!mounted) return;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭故事加载预览',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 120),
+      pageBuilder: (dialogContext, _, __) {
+        return Material(
+          color: Colors.transparent,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(dialogContext).pop(),
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                const NovelBrewingOverlay(),
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 18),
+                      child: Text(
+                        '轻触任意位置结束预览',
+                        style: TextStyle(
+                          color: NovelPalette.text.withOpacity(.46),
+                          fontSize: 10.5,
+                          letterSpacing: .8,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -760,6 +860,14 @@ class _NovelGamePageState extends State<NovelGamePage>
                     final compact = constraints.maxWidth < 430;
                     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
                     final keyboardActive = constraints.maxWidth <= 600 && keyboardInset > 0;
+                    final sceneArrivalTitle =
+                        _sceneArrivalPreviewTitle ?? controller.locationTitle;
+                    final sceneArrivalSubtitle =
+                        _sceneArrivalPreviewSubtitle ??
+                            controller.locationSubtitle;
+                    final sceneHudTransitionDuration = _sceneArrivalActive
+                        ? const Duration(milliseconds: 180)
+                        : const Duration(milliseconds: 620);
                     return Stack(
                       children: <Widget>[
                         // 电影模式是全屏交互层，但放在 HUD 下面，
@@ -768,7 +876,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                           Positioned.fill(
                             child: NovelCinematicControls(
                               controller: controller,
-                              text: controller.currentSentence?.text ?? '',
+                              text: controller.currentSentence?.readerText ?? '',
                               speakerName: controller.currentSpeakerName,
                               isGenerating: controller.isGenerating,
                               isFirst: !controller.hasPrevious,
@@ -800,9 +908,21 @@ class _NovelGamePageState extends State<NovelGamePage>
                           Positioned(
                             left: 0,
                             top: 56,
-                            child: NovelLocationHud(
-                              title: controller.locationTitle,
-                              subtitle: controller.locationSubtitle,
+                            child: AnimatedSlide(
+                              duration: sceneHudTransitionDuration,
+                              curve: Curves.easeOutCubic,
+                              offset: _sceneArrivalActive
+                                  ? const Offset(-.04, 0)
+                                  : Offset.zero,
+                              child: AnimatedOpacity(
+                                duration: sceneHudTransitionDuration,
+                                curve: Curves.easeOutCubic,
+                                opacity: _sceneArrivalActive ? 0 : 1,
+                                child: NovelLocationHud(
+                                  title: controller.locationTitle,
+                                  subtitle: controller.locationSubtitle,
+                                ),
+                              ),
                             ),
                           ),
                         if (controller.storyStarted && !keyboardActive)
@@ -814,22 +934,47 @@ class _NovelGamePageState extends State<NovelGamePage>
                             top: controller.locationSubtitle.trim().isNotEmpty
                                 ? 108
                                 : 96,
-                            child: NovelGoalHud(
-                              text: controller.currentGoal,
-                              feedbackEvent: controller.hudEvent,
+                            child: AnimatedSlide(
+                              duration: sceneHudTransitionDuration,
+                              curve: Curves.easeOutCubic,
+                              offset: _sceneArrivalActive
+                                  ? const Offset(-.04, 0)
+                                  : Offset.zero,
+                              child: AnimatedOpacity(
+                                duration: sceneHudTransitionDuration,
+                                curve: Curves.easeOutCubic,
+                                opacity: _sceneArrivalActive ? 0 : 1,
+                                child: NovelGoalHud(
+                                  text: controller.currentGoal,
+                                  feedbackEvent: controller.hudEvent,
+                                ),
+                              ),
                             ),
                           ),
-                        if (controller.storyStarted && !keyboardActive)
+                        if (controller.storyStarted &&
+                            !keyboardActive &&
+                            _sceneArrivalActive)
                           Positioned(
-                            left: compact ? 7 : 19,
-                            right: compact ? 50 : constraints.maxWidth * .28,
-                            // 场景转场标题稍微上提，避免压到人物/正文区域。
-                            // NovelSceneArrivalTitle 内部同时放宽了中文行高，解决上下笔画被切的问题。
-                            top: constraints.maxHeight * (compact ? .13 : .15),
+                            left: compact ? 12 : 16,
+                            right: compact
+                                ? 50
+                                : constraints.maxWidth * .28,
+                            top: 56,
                             child: IgnorePointer(
-                              child: NovelSceneArrivalTitle(
-                                title: controller.locationTitle,
-                                subtitle: controller.locationSubtitle,
+                              child: Align(
+                                // 场景揭示回到左上角，原地点与目标在此期间已淡出，
+                                // 因此仍保留同一视觉锚点，但不会再发生文字重叠。
+                                alignment: Alignment.centerLeft,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 620,
+                                  ),
+                                  child: NovelSceneArrivalTitle(
+                                    key: ValueKey<int>(_sceneArrivalRunId),
+                                    title: sceneArrivalTitle,
+                                    subtitle: sceneArrivalSubtitle,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -936,7 +1081,7 @@ class _NovelGamePageState extends State<NovelGamePage>
               if (_primaryTab == _NovelPrimaryTab.story &&
                   controller.storyStarted &&
                   controller.isGenerating &&
-                  (controller.currentSentence?.text.trim().isEmpty ?? true) &&
+                  (controller.currentSentence?.readerText.trim().isEmpty ?? true) &&
                   !controller.showDice)
                 const NovelBrewingOverlay(),
 
@@ -1177,4 +1322,3 @@ class _NovelPreviewButton extends StatelessWidget {
     );
   }
 }
-

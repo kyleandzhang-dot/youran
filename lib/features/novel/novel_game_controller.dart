@@ -197,8 +197,8 @@ class NovelGameController extends ChangeNotifier {
     return sentences[currentSentenceIndex];
   }
 
-  bool get hasNext =>
-      !isGenerating && currentSentenceIndex < sentences.length - 1;
+  // 已经完整生成的页面可立即阅读；后台流继续进入队列，不再锁住翻页。
+  bool get hasNext => currentSentenceIndex < sentences.length - 1;
 
   bool get hasPrevious => currentSentenceIndex > 0;
 
@@ -524,15 +524,12 @@ class NovelGameController extends ChangeNotifier {
   }
 
   void _rebuildSentences({bool resetIndex = false}) {
-    final oldLength = sentences.length;
     sentences = parser.buildSentences(
       message: lastAssistantMessage,
       isGenerating: isGenerating,
     );
     if (resetIndex) {
       currentSentenceIndex = 0;
-    } else if (isGenerating && sentences.length > oldLength && sentences.isNotEmpty) {
-      currentSentenceIndex = sentences.length - 1;
     } else if (sentences.isEmpty) {
       currentSentenceIndex = 0;
     } else if (currentSentenceIndex >= sentences.length) {
@@ -1222,6 +1219,8 @@ class NovelGameController extends ChangeNotifier {
 
   Future<void> _completeGeneration(NovelStreamEvent event) async {
     if (messages.isEmpty) return;
+    final visibleSentence = currentSentence;
+    final visibleSentenceIndex = currentSentenceIndex;
     final last = messages.last;
     final cleanContent = event.content.isNotEmpty
         ? parser.cleanAiTags(event.content).trim()
@@ -1269,10 +1268,22 @@ class NovelGameController extends ChangeNotifier {
     }
 
     isGenerating = false;
-    // Speaker 分批展示时，最终 message_saved 与最后一个进度帧内容相同。
-    // 保留当前句位置，避免完成瞬间突然跳回第一句并重复播放。
-    final wasSpeakerStreamed = boolValue(event.raw['speaker_streamed']);
-    _rebuildSentences(resetIndex: !wasSpeakerStreamed);
+    // 完成事件可能把流式纯文本替换为结构化 sentenceItems。
+    // 优先按内容找回玩家正在看的页，找不到再按旧下标夹紧；绝不抢回第一页。
+    _rebuildSentences();
+    if (sentences.isNotEmpty) {
+      final matchingIndex = visibleSentence == null
+          ? -1
+          : sentences.indexWhere(
+              (item) =>
+                  item.readerText == visibleSentence.readerText &&
+                  item.speakerName == visibleSentence.speakerName &&
+                  item.type == visibleSentence.type,
+            );
+      currentSentenceIndex = matchingIndex >= 0
+          ? matchingIndex
+          : visibleSentenceIndex.clamp(0, sentences.length - 1).toInt();
+    }
     _notify();
 
     if (event.messageId.isNotEmpty) {
@@ -1325,6 +1336,7 @@ class NovelGameController extends ChangeNotifier {
     _flushStreamText(notify: false);
     await backend.cancelActiveStream();
     isGenerating = false;
+    _rebuildSentences();
     _notify();
   }
 

@@ -1436,6 +1436,8 @@ class NovelDeveloperPreviewActions {
     required this.setTimeOverride,
     required this.previewCharacterSetup,
     required this.previewOpening,
+    required this.previewSceneArrival,
+    required this.previewStoryBrewing,
     required this.previewLoading,
     required this.previewFailure,
     required this.previewFateRevert,
@@ -1463,6 +1465,8 @@ class NovelDeveloperPreviewActions {
 
   final Future<void> Function() previewCharacterSetup;
   final Future<void> Function() previewOpening;
+  final Future<void> Function() previewSceneArrival;
+  final Future<void> Function() previewStoryBrewing;
   final Future<void> Function() previewLoading;
   final Future<void> Function() previewFailure;
   final Future<void> Function() previewFateRevert;
@@ -1770,6 +1774,48 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                             onTap: () => settings.setFont('font-wenkai'),
                           ),
                         ),
+                      ],
+                    ),
+                    Divider(height: 18, color: Colors.white.withOpacity(.14)),
+                    Row(
+                      children: <Widget>[
+                        const Text(
+                          '文字速度',
+                          style: TextStyle(
+                            color: AppColors.textOnDark,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          settings.textSpeedLabel,
+                          style: TextStyle(
+                            color: AppColors.textOnDark.withOpacity(.88),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: <Widget>[
+                        for (final option in const <(String, String)>[
+                          ('instant', '即时'),
+                          ('fast', '快速'),
+                          ('standard', '标准'),
+                          ('slow', '慢速'),
+                        ]) ...<Widget>[
+                          Expanded(
+                            child: _CleanSettingChoice(
+                              label: option.$2,
+                              selected: settings.textSpeedKey == option.$1,
+                              onTap: () => settings.setTextSpeed(option.$1),
+                            ),
+                          ),
+                          if (option.$1 != 'slow') const SizedBox(width: 4),
+                        ],
                       ],
                     ),
                   ],
@@ -2131,6 +2177,18 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                   title: '故事开场',
                   subtitle: '序章文字与背景过场',
                   onTap: () => _openPreview(actions.previewOpening),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '更换场景',
+                  subtitle: '预览中央场景名，以及左上角地点与目标的淡出、恢复',
+                  onTap: () => _openPreview(actions.previewSceneArrival),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '加载故事',
+                  subtitle: '预览“故事正在展开”的流光动画；轻触页面即可结束',
+                  onTap: () => _openPreview(actions.previewStoryBrewing),
                 ),
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(

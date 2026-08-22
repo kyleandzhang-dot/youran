@@ -321,6 +321,8 @@ class NovelSentence {
   const NovelSentence({
     required this.text,
     this.type = 'narration',
+    this.leadingNarration = '',
+    this.trailingNarration = '',
     this.speakerName = '',
     this.characterId = '',
     this.avatarUrl = '',
@@ -337,6 +339,9 @@ class NovelSentence {
 
   final String text;
   final String type;
+  /// 阅读页允许在同一角色对白前后承载短旁白，减少碎片化翻页。
+  final String leadingNarration;
+  final String trailingNarration;
   final String speakerName;
   final String characterId;
   final String avatarUrl;
@@ -350,7 +355,28 @@ class NovelSentence {
   final String nextAvatarUrl;
   final JsonMap speakerInfo;
 
-  bool get isNarration => type == 'narration' || speakerName.isEmpty;
+  bool get isNarration {
+    final kind = type.toLowerCase().trim();
+    if (const <String>{'dialogue', 'speech', 'character'}.contains(kind)) {
+      return false;
+    }
+    return const <String>{
+          'narration',
+          'narrative',
+          'action',
+          'description',
+        }.contains(kind) ||
+        (speakerName.trim().isEmpty && characterId.trim().isEmpty);
+  }
+
+  bool get hasMixedContent =>
+      leadingNarration.trim().isNotEmpty || trailingNarration.trim().isNotEmpty;
+
+  String get readerText => <String>[
+        leadingNarration.trim(),
+        text.trim(),
+        trailingNarration.trim(),
+      ].where((value) => value.isNotEmpty).join('\n\n');
 
   factory NovelSentence.fromJson(JsonMap json) {
     return NovelSentence(
@@ -358,6 +384,12 @@ class NovelSentence {
         json['currentSentence'] ?? json['current_sentence'] ?? json['text'] ?? json['content'],
       ),
       type: stringValue(json['type'], 'narration'),
+      leadingNarration: stringValue(
+        json['leadingNarration'] ?? json['leading_narration'],
+      ),
+      trailingNarration: stringValue(
+        json['trailingNarration'] ?? json['trailing_narration'],
+      ),
       speakerName: stringValue(json['speakerName'] ?? json['speaker_name']),
       characterId: stringValue(json['characterId'] ?? json['character_id']),
       avatarUrl: stringValue(json['avatarUrl'] ?? json['avatar_url']),
@@ -378,6 +410,8 @@ class NovelSentence {
   NovelSentence copyWith({
     String? text,
     String? type,
+    String? leadingNarration,
+    String? trailingNarration,
     String? speakerName,
     String? characterId,
     String? avatarUrl,
@@ -394,6 +428,8 @@ class NovelSentence {
     return NovelSentence(
       text: text ?? this.text,
       type: type ?? this.type,
+      leadingNarration: leadingNarration ?? this.leadingNarration,
+      trailingNarration: trailingNarration ?? this.trailingNarration,
       speakerName: speakerName ?? this.speakerName,
       characterId: characterId ?? this.characterId,
       avatarUrl: avatarUrl ?? this.avatarUrl,

@@ -181,6 +181,26 @@ String _novelPrefixByRunes(String value, int count) {
   return String.fromCharCodes(runes.take(safeCount));
 }
 
+const String _novelPunctuation = '，。！？；：、…,.!?;:';
+
+/// 逐字播放只服从本地阅读速度，不再跟随 SSE token 到达频率。
+/// 标点后的短暂停顿能保留剧情节奏，同时不会让整页等待过久。
+Duration _novelRevealDelay(int charactersPerSecond, String afterCharacter) {
+  final cps = charactersPerSecond.clamp(1, 120);
+  final baseMilliseconds = (1000 / cps).round().clamp(10, 90).toInt();
+  var punctuationPause = 0;
+  if ('。！？!?'.contains(afterCharacter)) {
+    punctuationPause = 110;
+  } else if ('…'.contains(afterCharacter)) {
+    punctuationPause = 90;
+  } else if ('；：;:'.contains(afterCharacter)) {
+    punctuationPause = 60;
+  } else if ('，、,'.contains(afterCharacter)) {
+    punctuationPause = 42;
+  }
+  return Duration(milliseconds: baseMilliseconds + punctuationPause);
+}
+
 class NovelArtwork extends StatelessWidget {
   const NovelArtwork({
     super.key,
@@ -2279,6 +2299,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   double _horizontalDragDistance = 0;
   double _swipeVisualOffset = 0;
   bool _swipeTransitioning = false;
+  bool _animationsDisabled = false;
+  int _lastTextSpeedCps = -1;
   late final AnimationController _swipeController;
 
   NovelGameController get controller => widget.controller;
@@ -2288,6 +2310,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     super.initState();
     _displayTextNotifier = ValueNotifier<String>('');
     widget.textController.addListener(_handleInputTextChanged);
+    _lastTextSpeedCps = widget.controller.settings.textSpeedCps;
+    widget.controller.settings.addListener(_handleRevealSettingsChanged);
     _swipeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -2303,6 +2327,11 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   @override
   void didUpdateWidget(covariant NovelDialogPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller.settings != widget.controller.settings) {
+      oldWidget.controller.settings.removeListener(_handleRevealSettingsChanged);
+      _lastTextSpeedCps = widget.controller.settings.textSpeedCps;
+      widget.controller.settings.addListener(_handleRevealSettingsChanged);
+    }
     if (oldWidget.textController != widget.textController) {
       oldWidget.textController.removeListener(_handleInputTextChanged);
       widget.textController.addListener(_handleInputTextChanged);
@@ -2310,8 +2339,35 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     _syncReveal();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = MediaQuery.of(context).disableAnimations;
+    if (next != _animationsDisabled) {
+      _animationsDisabled = next;
+      _syncReveal(force: true);
+    }
+  }
+
   void _handleInputTextChanged() {
     if (mounted) setState(() {});
+  }
+
+  bool get _revealInstantly =>
+      _animationsDisabled || controller.settings.textSpeedCps <= 0;
+
+  void _handleRevealSettingsChanged() {
+    if (!mounted) return;
+    final nextSpeed = controller.settings.textSpeedCps;
+    if (nextSpeed == _lastTextSpeedCps) return;
+    _lastTextSpeedCps = nextSpeed;
+    if (_revealInstantly) {
+      _visibleLength = _fullRuneLength;
+      _publishVisibleText();
+      if (_revealing) _finishReveal();
+      return;
+    }
+    if (_revealing) _scheduleReveal();
   }
 
   double _adaptiveFooterHeight({
@@ -2359,15 +2415,20 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
   String get _currentAssistantMessageKey {
     final message = controller.lastAssistantMessage;
+    // 本地临时消息的毫秒时间戳在 completed copyWith 后保持不变，
+    // 因而不会因为 temp id 被服务端正式 id 替换而重播当前页。
+    final timestamp = message?.timestamp ?? 0;
+    if (timestamp > 0) return 'timestamp:$timestamp';
     final id = message?.id.trim() ?? '';
     if (id.isNotEmpty) return id;
-    return 'timestamp:${message?.timestamp ?? 0}';
+    return 'assistant-message';
   }
 
   void _syncReveal({bool force = false}) {
     final sentence = controller.currentSentence;
     // 后端已输出最终可展示的 currentSentence；前端不再做角色名/动作/引号解析。
-    final full = _sanitizeNovelStreamingText(sentence?.text.trim() ?? '');
+    final full =
+        _sanitizeNovelStreamingText(sentence?.readerText.trim() ?? '');
 
     // 必须把 assistant message id 放进 identity。
     // 否则新一轮回复如果仍是“第 0 句 + 同一个说话人 + 同一种类型”，
@@ -2384,17 +2445,16 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       _visibleLength = 0;
       _displayTextNotifier.value = '';
 
-      // 每一段“第一次逐字展示”都允许播放打字声。
-      // 生成过程中允许实时响；生成完成后按“本轮消息 + 句子序号”记忆，
-      // 因此向前阅读新句会响，向后回看已经展示过的句子不会重复响。
-      if (controller.isGenerating) {
-        _typingSoundForReveal = true;
-      } else {
-        // 用 message id 而不是 timestamp。服务端时间戳可能只有秒级精度，
-        // 连续两轮回复可能撞 key，造成整句被误判为“已经响过”。
-        final soundKey = '$messageKey|${controller.currentSentenceIndex}';
-        _typingSoundForReveal = _typingSoundVisited.add(soundKey);
+      if (_revealInstantly) {
+        _visibleLength = _fullRuneLength;
+        _publishVisibleText();
+        _revealing = false;
+        return;
       }
+
+      // 每页第一次展示时播放；即使当时仍在生成，完成后回看也不会重复响。
+      final soundKey = '$messageKey|${controller.currentSentenceIndex}';
+      _typingSoundForReveal = _typingSoundVisited.add(soundKey);
 
       _revealing = full.isNotEmpty;
       _scheduleReveal();
@@ -2408,6 +2468,15 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       final previousLength = _lastFullText.runes.length;
       final nextLength = full.runes.length;
       _lastFullText = full;
+
+      if (_revealInstantly) {
+        _revealTimer?.cancel();
+        _revealTimer = null;
+        _visibleLength = nextLength;
+        _publishVisibleText();
+        if (_revealing && mounted) setState(() => _revealing = false);
+        return;
+      }
 
       if (_visibleLength > nextLength) {
         _visibleLength = nextLength;
@@ -2423,10 +2492,17 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     }
   }
 
-  void _scheduleReveal() {
+  void _scheduleReveal({String afterCharacter = ''}) {
     _revealTimer?.cancel();
 
     final runes = _fullText.runes.toList(growable: false);
+    if (_revealInstantly) {
+      _visibleLength = runes.length;
+      _publishVisibleText();
+      _revealTimer = null;
+      if (_revealing && mounted) setState(() => _revealing = false);
+      return;
+    }
     if (!mounted || _visibleLength >= runes.length) {
       _revealTimer = null;
       if (_revealing && mounted) {
@@ -2435,8 +2511,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       return;
     }
 
-    const punctuation = '，。！？；：、…,.!?;:';
-    _revealTimer = Timer(const Duration(milliseconds: 30), () {
+    final delay =
+        _novelRevealDelay(controller.settings.textSpeedCps, afterCharacter);
+    _revealTimer = Timer(delay, () {
       if (!mounted) return;
 
       final latestRunes = _fullText.runes.toList(growable: false);
@@ -2447,23 +2524,21 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
       final current =
           String.fromCharCode(latestRunes[_visibleLength.clamp(0, latestRunes.length - 1)]);
-      final step = punctuation.contains(current) ? 1 : 2;
-
-      _visibleLength =
-          (_visibleLength + step).clamp(0, latestRunes.length);
+      _visibleLength = (_visibleLength + 1).clamp(0, latestRunes.length);
       _publishVisibleText();
 
       // 每一段首次逐字展示都播放；回退重看已经展示过的句子保持安静。
       if (controller.settings.typingSoundEnabled &&
           _typingSoundForReveal &&
-          current.trim().isNotEmpty) {
+          current.trim().isNotEmpty &&
+          (_visibleLength.isEven || _novelPunctuation.contains(current))) {
         controller.bgm.playTypingTick();
       }
 
       if (_visibleLength >= latestRunes.length) {
         _finishReveal();
       } else {
-        _scheduleReveal();
+        _scheduleReveal(afterCharacter: current);
       }
     });
   }
@@ -2617,7 +2692,6 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
   void _handleHorizontalDragStart(DragStartDetails details) {
     if (widget.focusNode.hasFocus ||
-        controller.isGenerating ||
         _swipeTransitioning) {
       return;
     }
@@ -2627,7 +2701,6 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
   void _handleHorizontalDragUpdate(DragUpdateDetails details) {
     if (widget.focusNode.hasFocus ||
-        controller.isGenerating ||
         _swipeTransitioning) {
       return;
     }
@@ -2649,7 +2722,6 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
   void _handleHorizontalDragEnd(DragEndDetails details) {
     if (widget.focusNode.hasFocus ||
-        controller.isGenerating ||
         _swipeTransitioning) {
       _horizontalDragDistance = 0;
       if (_swipeVisualOffset != 0) {
@@ -2692,6 +2764,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     _revealTimer?.cancel();
     _swipeHintTimer?.cancel();
     widget.textController.removeListener(_handleInputTextChanged);
+    widget.controller.settings.removeListener(_handleRevealSettingsChanged);
     _swipeController.dispose();
     _displayTextNotifier.dispose();
     super.dispose();
@@ -2862,33 +2935,90 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                       bottom: sinkOffset, // 使用上面计算好的高低偏移
                       left: showOnRight ? null : npcLeftOffset,
                       right: showOnRight ? protagonistRightOffset : null,
-                      child: _withSwipeMotion(
-                        IgnorePointer(
-                          child: SizedBox(
-                            width: portraitWidth,
-                          height: fullPortraitHeight,
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 220),
-                            switchInCurve: Curves.easeOutCubic,
-                            switchOutCurve: Curves.easeInCubic,
-                            transitionBuilder: (child, animation) =>
-                                FadeTransition(
-                              opacity: animation,
-                              child: child,
+                      child: ValueListenableBuilder<String>(
+                        valueListenable: _displayTextNotifier,
+                        builder: (context, visibleText, _) {
+                          final dialogueStarted =
+                              _novelDialogueHasStarted(
+                            sentence,
+                            visibleText,
+                          );
+                          return AnimatedSlide(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOutCubic,
+                            offset: dialogueStarted
+                                ? Offset.zero
+                                : Offset(showOnRight ? .025 : -.025, 0),
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 180),
+                              curve: Curves.easeOutCubic,
+                              opacity: dialogueStarted ? 1 : 0,
+                              child: _withSwipeMotion(
+                                IgnorePointer(
+                                  child: SizedBox(
+                                    width: portraitWidth,
+                                    height: fullPortraitHeight,
+                                    child: AnimatedSwitcher(
+                                      duration:
+                                          const Duration(milliseconds: 220),
+                                      switchInCurve: Curves.easeOutCubic,
+                                      switchOutCurve: Curves.easeInCubic,
+                                      transitionBuilder: (child, animation) =>
+                                          FadeTransition(
+                                        opacity: animation,
+                                        child: child,
+                                      ),
+                                      child: _StagePortraitArtwork(
+                                        key: ValueKey<String>(portraitUrl),
+                                        url: portraitUrl,
+                                        fit: BoxFit.cover,
+                                        alignment: Alignment.topCenter,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                stageSize.width,
+                              ),
                             ),
-                            child: _StagePortraitArtwork(
-                              key: ValueKey<String>(portraitUrl),
-                              url: portraitUrl,
-                              fit: BoxFit.cover,
-                              alignment: Alignment.topCenter,
-                            ),
-                            ),
-                          ),
-                        ),
-                        stageSize.width,
+                          );
+                        },
                       ),
                     );
                   },
+                ),
+
+              // 混合页只是把正文与对白安排在同一页，并不改变各自的视觉语义：
+              // 正文仍留在独立的叙事区域，对白仍留在角色对白区域。
+              if (mode != _NovelLineMode.narration &&
+                  sentence?.hasMixedContent == true)
+                Positioned(
+                  left: 0,
+                  right: narrationRightSafeWidth,
+                  // 不再使用固定 top/height。普通混合页以整屏为基准居中；
+                  // 有选项时则在顶部 HUD 与选项区之间的真实可用区域居中。
+                  top: canShowChoices ? choiceContentTop : 0,
+                  bottom: canShowChoices ? choiceContentBottom : 0,
+                  child: _withSwipeMotion(
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: compact ? 20 : 34,
+                      ),
+                      child: Align(
+                        alignment: Alignment.center,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 650),
+                          child: _NovelMixedNarrationSurface(
+                            sentence: sentence!,
+                            displayTextListenable: _displayTextNotifier,
+                            fontFamily: controller.settings.fontFamily,
+                            fontSize: controller.settings.fontSize,
+                            onTap: _handleStoryTap,
+                          ),
+                        ),
+                      ),
+                    ),
+                    screen.width,
+                  ),
                 ),
 
               if (mode == _NovelLineMode.narration)
@@ -2980,34 +3110,77 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   right: 0,
                   top: canShowChoices ? choiceContentTop : null,
                   bottom: canShowChoices ? choiceContentBottom : panelBottom,
-                  child: _withSwipeMotion(
-                    _NovelCharacterDialogueSurface(
-                      key: ValueKey<String>('${mode.name}-${controller.currentSentenceIndex}-$speaker'),
-                    mode: mode,
-                    speakerName: speaker.isEmpty ? (mode == _NovelLineMode.protagonist ? controller.protagonistName : '角色') : speaker,
-                    affection: affection,
-                    affectionPulse: affectionPulse,
-                    onAffectionPulseConsumed: controller.consumeAffectionPulse,
-                    displayTextListenable: _displayTextNotifier,
-                            emptyTextFallback: emptyTextFallback,
-                    isGenerating: controller.isGenerating,
-                    isRevealing: _revealing,
-                    fontFamily: controller.settings.fontFamily,
-                    fontSize: controller.settings.fontSize,
-                    hasNext: controller.hasNext,
-                    choices: canShowChoices ? controller.choices : const <NovelChoice>[],
-                    playerHint: controller.playerHint,
-                    showPlayerHint: !_revealing && !controller.hasNext && !controller.isGenerating,
-                    maxPanelHeight: canShowChoices
-                        ? choiceAvailableContentHeight
-                        : availableHeight * (compact ? .30 : .27),
-                    onSelected: controller.selectChoice,
-                    onCustomInput: () => widget.focusNode.requestFocus(),
-                    onForceContinue: widget.onForceContinue,
-                      onTap: _handleStoryTap,
-                      onOpenPortrait: widget.onOpenPortrait,
-                    ),
-                    screen.width,
+                  child: ValueListenableBuilder<String>(
+                    valueListenable: _displayTextNotifier,
+                    builder: (context, visibleText, _) {
+                      final dialogueStarted = _novelDialogueHasStarted(
+                        sentence,
+                        visibleText,
+                      );
+                      return IgnorePointer(
+                        ignoring: !dialogueStarted,
+                        child: AnimatedSlide(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          offset: dialogueStarted
+                              ? Offset.zero
+                              : Offset(
+                                  mode == _NovelLineMode.protagonist
+                                      ? -.025
+                                      : .025,
+                                  0,
+                                ),
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOutCubic,
+                            opacity: dialogueStarted ? 1 : 0,
+                            child: _withSwipeMotion(
+                              _NovelCharacterDialogueSurface(
+                                key: ValueKey<String>(
+                                  '${mode.name}-${controller.currentSentenceIndex}-$speaker',
+                                ),
+                                mode: mode,
+                                sentence: sentence,
+                                speakerName: speaker.isEmpty
+                                    ? (mode == _NovelLineMode.protagonist
+                                        ? controller.protagonistName
+                                        : '角色')
+                                    : speaker,
+                                affection: affection,
+                                affectionPulse: affectionPulse,
+                                onAffectionPulseConsumed:
+                                    controller.consumeAffectionPulse,
+                                displayTextListenable: _displayTextNotifier,
+                                emptyTextFallback: emptyTextFallback,
+                                isGenerating: controller.isGenerating,
+                                isRevealing: _revealing,
+                                fontFamily: controller.settings.fontFamily,
+                                fontSize: controller.settings.fontSize,
+                                hasNext: controller.hasNext,
+                                choices: canShowChoices
+                                    ? controller.choices
+                                    : const <NovelChoice>[],
+                                playerHint: controller.playerHint,
+                                showPlayerHint: !_revealing &&
+                                    !controller.hasNext &&
+                                    !controller.isGenerating,
+                                maxPanelHeight: canShowChoices
+                                    ? choiceAvailableContentHeight
+                                    : availableHeight *
+                                        (compact ? .38 : .31),
+                                onSelected: controller.selectChoice,
+                                onCustomInput: () =>
+                                    widget.focusNode.requestFocus(),
+                                onForceContinue: widget.onForceContinue,
+                                onTap: _handleStoryTap,
+                                onOpenPortrait: widget.onOpenPortrait,
+                              ),
+                              screen.width,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               if (canShowChoices && !controller.isGenerating && !_revealing)
@@ -3126,7 +3299,6 @@ class _NovelNarrationSurface extends StatelessWidget {
         ),
       ],
     );
-
     // Vue 的 is-narrative-mode：完全没有面板背景、边框、模糊和标题，
     // 文字直接浮在场景画面中央。
     return GestureDetector(
@@ -3160,10 +3332,147 @@ class _NovelNarrationSurface extends StatelessWidget {
   }
 }
 
+class _NovelVisibleReaderParts {
+  const _NovelVisibleReaderParts({
+    this.leadingNarration = '',
+    this.dialogue = '',
+    this.trailingNarration = '',
+  });
+
+  final String leadingNarration;
+  final String dialogue;
+  final String trailingNarration;
+}
+
+_NovelVisibleReaderParts _visibleReaderParts(
+  NovelSentence? sentence,
+  String visibleText,
+) {
+  if (sentence == null || !sentence.hasMixedContent) {
+    return _NovelVisibleReaderParts(dialogue: visibleText);
+  }
+
+  final leading = sentence.leadingNarration.trim();
+  final dialogue = sentence.text.trim();
+  final trailing = sentence.trailingNarration.trim();
+  var remaining = visibleText.runes.length;
+
+  String take(String value) {
+    if (value.isEmpty || remaining <= 0) return '';
+    final length = value.runes.length;
+    final count = math.min(remaining, length).toInt();
+    remaining -= count;
+    return _novelPrefixByRunes(value, count);
+  }
+
+  void consumeGap() {
+    if (remaining <= 0) return;
+    remaining = math.max(0, remaining - 2).toInt();
+  }
+
+  final visibleLeading = take(leading);
+  if (leading.isNotEmpty && visibleLeading.runes.length >= leading.runes.length) {
+    consumeGap();
+  }
+  final visibleDialogue = take(dialogue);
+  if (dialogue.isNotEmpty &&
+      visibleDialogue.runes.length >= dialogue.runes.length) {
+    consumeGap();
+  }
+  final visibleTrailing = take(trailing);
+
+  return _NovelVisibleReaderParts(
+    leadingNarration: visibleLeading,
+    dialogue: visibleDialogue,
+    trailingNarration: visibleTrailing,
+  );
+}
+
+bool _novelDialogueHasStarted(
+  NovelSentence? sentence,
+  String visibleText,
+) {
+  // 纯对白页从页面出现时就按原样展示；只有“正文 + 对白”混合页需要
+  // 等逐字进度真正进入对白部分后，才让角色立绘、名字和对白区登场。
+  if (sentence?.hasMixedContent != true) return true;
+  return _visibleReaderParts(sentence, visibleText).dialogue.trim().isNotEmpty;
+}
+
+class _NovelMixedNarrationSurface extends StatelessWidget {
+  const _NovelMixedNarrationSurface({
+    required this.sentence,
+    required this.displayTextListenable,
+    required this.fontFamily,
+    required this.fontSize,
+    required this.onTap,
+  });
+
+  final NovelSentence sentence;
+  final ValueListenable<String> displayTextListenable;
+  final String? fontFamily;
+  final double fontSize;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      color: const Color(0xFFF3F4F6),
+      fontFamily: fontFamily,
+      fontSize: fontSize + 1.4,
+      height: 1.86,
+      fontWeight: FontWeight.w500,
+      letterSpacing: .48,
+      shadows: const <Shadow>[
+        Shadow(
+          color: Color(0x99000000),
+          blurRadius: 6,
+          offset: Offset(0, 1),
+        ),
+      ],
+    );
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: onTap,
+      child: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        child: ValueListenableBuilder<String>(
+          valueListenable: displayTextListenable,
+          builder: (context, value, _) {
+            final parts = _visibleReaderParts(sentence, value);
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (parts.leadingNarration.isNotEmpty)
+                  Text(
+                    parts.leadingNarration,
+                    style: style,
+                    textAlign: TextAlign.left,
+                  ),
+                if (parts.leadingNarration.isNotEmpty &&
+                    parts.trailingNarration.isNotEmpty)
+                  const SizedBox(height: 12),
+                if (parts.trailingNarration.isNotEmpty)
+                  Text(
+                    parts.trailingNarration,
+                    style: style,
+                    textAlign: TextAlign.left,
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class _NovelCharacterDialogueSurface extends StatelessWidget {
   const _NovelCharacterDialogueSurface({
     super.key,
     required this.mode,
+    required this.sentence,
     required this.speakerName,
     required this.affection,
     required this.affectionPulse,
@@ -3187,6 +3496,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
   });
 
   final _NovelLineMode mode;
+  final NovelSentence? sentence;
   final String speakerName;
   final int? affection;
   final NovelAffectionPulse? affectionPulse;
@@ -3232,7 +3542,6 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
         ),
       ],
     );
-
     // NPC 在左 -> 对白固定到右侧。
     // 主角在右 -> 对白固定到左侧。
     final sideAlignment = isHost ? Alignment.centerLeft : Alignment.centerRight;
@@ -3243,7 +3552,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
     // 对话仍然属于左右两侧，而不是往屏幕中央收。
     // NPC 右侧文字 / 主角左侧文字都保留足够宽度，只和立绘拉开一点点距离。
     final dialogueWidth = compact
-        ? (screen.width * .56).clamp(194.0, 330.0).toDouble()
+        ? (screen.width * .60).clamp(208.0, 350.0).toDouble()
         : (screen.width * .46).clamp(348.0, 610.0).toDouble();
 
     final outerHorizontal = compact ? 9.0 : 20.0;
@@ -3364,19 +3673,30 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
               ValueListenableBuilder<String>(
                 valueListenable: displayTextListenable,
                 builder: (context, value, _) {
-                  final display =
-                      value.isEmpty ? emptyTextFallback : value;
-                  return Text.rich(
-                    TextSpan(
-                      children: _buildNovelDialogueDisplaySpans(
-                        display,
-                        style,
-                      ),
-                    ),
-                    // NPC 在左：对白区在右，文字左对齐；
-                    // 主角在右：对白区在左，文字右对齐。
-                    // 两边的文字都朝人物方向“收口”，说话归属更直观。
-                    textAlign: isHost ? TextAlign.right : TextAlign.left,
+                  final hasStoryText = sentence?.readerText.isNotEmpty == true;
+                  final display = value.isEmpty && !hasStoryText
+                      ? emptyTextFallback
+                      : value;
+                  final parts = _visibleReaderParts(sentence, display);
+                  final alignment =
+                      isHost ? TextAlign.right : TextAlign.left;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      if (parts.dialogue.isNotEmpty)
+                        Text.rich(
+                          TextSpan(
+                            children: _buildNovelDialogueDisplaySpans(
+                              parts.dialogue,
+                              style,
+                            ),
+                          ),
+                          // NPC 在左：对白区在右，文字左对齐；
+                          // 主角在右：对白区在左，文字右对齐。
+                          textAlign: alignment,
+                        ),
+                    ],
                   );
                 },
               ),
@@ -5208,14 +5528,18 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
   bool _revealing = false;
   bool _typingSoundForReveal = false;
   final Set<String> _typingSoundVisited = <String>{};
+  bool _animationsDisabled = false;
+  int _lastTextSpeedCps = -1;
 
   NovelGameController get controller => widget.controller;
 
   String get _currentAssistantMessageKey {
     final message = controller.lastAssistantMessage;
+    final timestamp = message?.timestamp ?? 0;
+    if (timestamp > 0) return 'timestamp:$timestamp';
     final id = message?.id.trim() ?? '';
     if (id.isNotEmpty) return id;
-    return 'timestamp:${message?.timestamp ?? 0}';
+    return 'assistant-message';
   }
 
   String get _currentRevealKey =>
@@ -5224,13 +5548,45 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
   @override
   void initState() {
     super.initState();
+    _lastTextSpeedCps = widget.controller.settings.textSpeedCps;
+    widget.controller.settings.addListener(_handleRevealSettingsChanged);
     _syncReveal(force: true);
   }
 
   @override
   void didUpdateWidget(covariant NovelCinematicControls oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller.settings != widget.controller.settings) {
+      oldWidget.controller.settings.removeListener(_handleRevealSettingsChanged);
+      _lastTextSpeedCps = widget.controller.settings.textSpeedCps;
+      widget.controller.settings.addListener(_handleRevealSettingsChanged);
+    }
     _syncReveal();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = MediaQuery.of(context).disableAnimations;
+    if (next != _animationsDisabled) {
+      _animationsDisabled = next;
+      _syncReveal(force: true);
+    }
+  }
+
+  bool get _revealInstantly =>
+      _animationsDisabled || controller.settings.textSpeedCps <= 0;
+
+  void _handleRevealSettingsChanged() {
+    if (!mounted) return;
+    final nextSpeed = controller.settings.textSpeedCps;
+    if (nextSpeed == _lastTextSpeedCps) return;
+    _lastTextSpeedCps = nextSpeed;
+    if (_revealInstantly) {
+      _finishReveal(revealAll: true);
+      return;
+    }
+    if (_revealing) _scheduleReveal();
   }
 
   /// 电影模式与普通剧情使用同一套原则：
@@ -5248,11 +5604,14 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
       _lastSafeText = safeText;
       _visibleLength = 0;
 
-      if (widget.isGenerating) {
-        _typingSoundForReveal = true;
-      } else {
-        _typingSoundForReveal = _typingSoundVisited.add(revealKey);
+      if (_revealInstantly) {
+        _visibleLength = safeText.runes.length;
+        _revealing = false;
+        if (!force && mounted) setState(() {});
+        return;
       }
+
+      _typingSoundForReveal = _typingSoundVisited.add(revealKey);
 
       _revealing = safeText.isNotEmpty;
       _scheduleReveal();
@@ -5264,6 +5623,14 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
       final previousLength = _lastSafeText.runes.length;
       final nextLength = safeText.runes.length;
       _lastSafeText = safeText;
+
+      if (_revealInstantly) {
+        _typingTimer?.cancel();
+        _typingTimer = null;
+        _visibleLength = nextLength;
+        if (_revealing && mounted) setState(() => _revealing = false);
+        return;
+      }
 
       if (_visibleLength > nextLength) {
         _visibleLength = nextLength;
@@ -5279,16 +5646,25 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
     }
   }
 
-  void _scheduleReveal() {
+  void _scheduleReveal({String afterCharacter = ''}) {
     _typingTimer?.cancel();
     final runes = _lastSafeText.runes.toList(growable: false);
+    if (_revealInstantly) {
+      _visibleLength = runes.length;
+      _typingTimer = null;
+      _revealing = false;
+      if (mounted) setState(() {});
+      return;
+    }
     if (!mounted || _visibleLength >= runes.length) {
       _typingTimer = null;
       _revealing = false;
       return;
     }
 
-    _typingTimer = Timer(const Duration(milliseconds: 30), () {
+    final delay =
+        _novelRevealDelay(controller.settings.textSpeedCps, afterCharacter);
+    _typingTimer = Timer(delay, () {
       if (!mounted) return;
       final latestRunes = _lastSafeText.runes.toList(growable: false);
       if (latestRunes.isEmpty || _visibleLength >= latestRunes.length) {
@@ -5303,7 +5679,8 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
 
       if (controller.settings.typingSoundEnabled &&
           _typingSoundForReveal &&
-          current.trim().isNotEmpty) {
+          current.trim().isNotEmpty &&
+          (_visibleLength.isEven || _novelPunctuation.contains(current))) {
         controller.bgm.playTypingTick();
       }
 
@@ -5311,7 +5688,7 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
       if (_visibleLength >= latestRunes.length) {
         _finishReveal();
       } else {
-        _scheduleReveal();
+        _scheduleReveal(afterCharacter: current);
       }
     });
   }
@@ -5332,7 +5709,7 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
       unawaited(controller.bgm.stopTypingSound());
       return;
     }
-    if (!widget.isGenerating) {
+    if (!widget.isGenerating || !widget.isLast) {
       unawaited(_navigateAfterTypingStops(widget.onContinue));
     }
   }
@@ -5354,6 +5731,7 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
   @override
   void dispose() {
     _typingTimer?.cancel();
+    widget.controller.settings.removeListener(_handleRevealSettingsChanged);
     super.dispose();
   }
 
@@ -5366,7 +5744,6 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
         behavior: HitTestBehavior.translucent,
         onTap: _handleScreenTap,
         onHorizontalDragEnd: (details) {
-          if (widget.isGenerating) return;
           final velocity = details.primaryVelocity ?? 0;
           if (velocity.abs() < 260) return;
           if (velocity < 0 && !widget.isLast) {
@@ -5435,7 +5812,13 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
                         children: <Widget>[
                           const SizedBox(width: 38),
                           const Spacer(),
-                          _GameContinueButton(onTap: widget.isGenerating ? null : _handleScreenTap),
+                          _GameContinueButton(
+                            onTap: _revealing ||
+                                    !widget.isGenerating ||
+                                    !widget.isLast
+                                ? _handleScreenTap
+                                : null,
+                          ),
                           const Spacer(),
                           IgnorePointer(child: Opacity(opacity: (widget.isFirst && widget.isLast) ? 0 : 1, child: const _LuxurySwipeHint())),
                         ],
@@ -6602,11 +6985,9 @@ class _NovelBrewingOverlayState extends State<NovelBrewingOverlay>
   @override
   void initState() {
     super.initState();
-    // 不使用“来回呼吸”的静态 Loading，而是让进度光持续向前流动。
-    // 光段完整离开轨道后才重新进入，循环时不会有明显跳帧感。
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1650),
+      duration: const Duration(milliseconds: 2200),
     )..repeat();
   }
 
@@ -6618,66 +6999,64 @@ class _NovelBrewingOverlayState extends State<NovelBrewingOverlay>
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+
     return IgnorePointer(
       child: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          ColoredBox(color: Colors.black.withOpacity(.27)),
+          ColoredBox(color: Colors.black.withOpacity(.18)),
           Center(
             child: Transform.translate(
               offset: const Offset(0, -18),
               child: AnimatedBuilder(
                 animation: _controller,
                 builder: (context, _) {
-                  const trackWidth = 154.0;
-                  const runnerWidth = 36.0;
-                  final progress = Curves.easeInOutCubic.transform(
-                    _controller.value,
-                  );
-                  final runnerLeft =
-                      -runnerWidth + progress * (trackWidth + runnerWidth);
-                  final dotCount = ((_controller.value * 4).floor() % 4);
+                  final progress = reduceMotion ? .5 : _controller.value;
 
                   return Column(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       SizedBox(
-                        width: trackWidth,
-                        height: 12,
+                        width: 116,
+                        height: 8,
                         child: Stack(
-                          alignment: Alignment.centerLeft,
+                          alignment: Alignment.center,
                           clipBehavior: Clip.none,
                           children: <Widget>[
-                            // 中性轨道只负责告诉用户“流程还在继续”，不抢主题色。
-                            Center(
-                              child: Container(
-                                width: trackWidth,
-                                height: 1,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(.11),
-                                  borderRadius: BorderRadius.circular(99),
+                            Container(
+                              height: 1,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: <Color>[
+                                    Colors.transparent,
+                                    NovelPalette.text.withOpacity(.18),
+                                    Colors.transparent,
+                                  ],
                                 ),
                               ),
                             ),
-                            Positioned(
-                              left: runnerLeft,
+                            Align(
+                              alignment: Alignment(
+                                -1.25 + progress * 2.5,
+                                0,
+                              ),
                               child: Container(
-                                width: runnerWidth,
-                                height: 2.4,
+                                width: 30,
+                                height: 1.4,
                                 decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(99),
                                   gradient: LinearGradient(
                                     colors: <Color>[
-                                      NovelPalette.accent.withOpacity(0),
-                                      NovelPalette.accent.withOpacity(.92),
-                                      NovelPalette.accent.withOpacity(0),
+                                      Colors.transparent,
+                                      NovelPalette.accentSoft.withOpacity(.92),
+                                      Colors.transparent,
                                     ],
-                                    stops: const <double>[0, .50, 1],
                                   ),
                                   boxShadow: <BoxShadow>[
                                     BoxShadow(
-                                      color: NovelPalette.accent.withOpacity(.18),
-                                      blurRadius: 9,
+                                      color: NovelPalette.accent.withOpacity(.32),
+                                      blurRadius: 8,
+                                      spreadRadius: 1,
                                     ),
                                   ],
                                 ),
@@ -6686,41 +7065,21 @@ class _NovelBrewingOverlayState extends State<NovelBrewingOverlay>
                           ],
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: <Widget>[
-                          Text(
-                            '故事酝酿中',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(.84),
-                              fontSize: 11.6,
-                              fontWeight: FontWeight.w500,
-                              letterSpacing: 2.4,
-                              shadows: const <Shadow>[
-                                Shadow(
-                                  color: Color(0xA8000000),
-                                  blurRadius: 9,
-                                ),
-                              ],
+                      const SizedBox(height: 16),
+                      Text(
+                        '故事正在展开',
+                        style: TextStyle(
+                          color: NovelPalette.text.withOpacity(.78),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 2.8,
+                          shadows: const <Shadow>[
+                            Shadow(
+                              color: Color(0x66000000),
+                              blurRadius: 6,
                             ),
-                          ),
-                          const SizedBox(width: 5),
-                          SizedBox(
-                            width: 22,
-                            child: Text(
-                              List<String>.filled(dotCount, '.').join(),
-                              textAlign: TextAlign.left,
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(.68),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.1,
-                              ),
-                            ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   );
@@ -6733,7 +7092,6 @@ class _NovelBrewingOverlayState extends State<NovelBrewingOverlay>
     );
   }
 }
-
 /// 主角伤势状态的屏幕级反馈。
 ///
 /// 屏幕边缘长期跟随当前伤势等级：轻伤琥珀黄、重伤红、濒危紫红；

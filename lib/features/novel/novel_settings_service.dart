@@ -12,6 +12,26 @@ class NovelSettingsService extends ChangeNotifier {
   String artStyle = 'anime';
   bool weatherEffectsEnabled = true;
   bool typingSoundEnabled = true;
+  // 文字播放速度与网络流速彻底解耦。0 表示整页立即显示。
+  String textSpeedKey = 'standard';
+
+  static const Map<String, int> textSpeedCpsValues = <String, int>{
+    'instant': 0,
+    'fast': 52,
+    'standard': 36,
+    'slow': 22,
+  };
+
+  static const Map<String, String> textSpeedLabels = <String, String>{
+    'instant': '即时',
+    'fast': '快速',
+    'standard': '标准',
+    'slow': '慢速',
+  };
+
+  int get textSpeedCps => textSpeedCpsValues[textSpeedKey] ?? 36;
+
+  String get textSpeedLabel => textSpeedLabels[textSpeedKey] ?? '标准';
 
   Future<void> load() async {
     fontKey = await _prefs.getString('novel-font') ?? 'font-hei';
@@ -28,6 +48,12 @@ class NovelSettingsService extends ChangeNotifier {
         await _prefs.getBool('novel-weather-effects-enabled') ?? true;
     typingSoundEnabled =
         await _prefs.getBool('novel-typing-sound-enabled') ?? true;
+    textSpeedKey =
+        await _prefs.getString('novel-text-speed') ?? 'standard';
+    if (!textSpeedCpsValues.containsKey(textSpeedKey)) {
+      textSpeedKey = 'standard';
+      await _prefs.setString('novel-text-speed', textSpeedKey);
+    }
     // 剧情阅读字体支持：黑体 / MiSans / 宋体 / 文楷。
     // 兼容旧版本曾使用过的 key；未知 key 回到默认系统黑体。
     fontKey = switch (fontKey) {
@@ -91,6 +117,12 @@ class NovelSettingsService extends ChangeNotifier {
   Future<void> setTypingSoundEnabled(bool value) async {
     typingSoundEnabled = value;
     await _prefs.setBool('novel-typing-sound-enabled', value);
+    notifyListeners();
+  }
+
+  Future<void> setTextSpeed(String value) async {
+    textSpeedKey = textSpeedCpsValues.containsKey(value) ? value : 'standard';
+    await _prefs.setString('novel-text-speed', textSpeedKey);
     notifyListeners();
   }
 
