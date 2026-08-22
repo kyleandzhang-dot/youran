@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -47,7 +48,7 @@ class GameShell extends StatefulWidget {
   State<GameShell> createState() => _GameShellState();
 }
 
-class _GameShellState extends State<GameShell> {
+class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   UserSession? _session;
@@ -83,11 +84,41 @@ class _GameShellState extends State<GameShell> {
   double _createWorldProgress = 0;
   String _createWorldStep = '';
   bool _createWorldError = false;
+  String? _activeCreationTaskId;
+  bool _creationPolling = false;
+  bool _recoveringCreation = false;
+  bool _appInForeground = true;
+  int _creationPollEpoch = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    _creationPollEpoch++;
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _appInForeground = true;
+      if (_isLoggedIn) unawaited(_recoverCreationTask());
+      return;
+    }
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _appInForeground = false;
+      _creationPollEpoch++;
+      _creationPolling = false;
+    }
   }
 
   @override
@@ -139,6 +170,11 @@ class _GameShellState extends State<GameShell> {
     if (!mounted) return;
     setState(() => _loaded = true);
     _maybeAutoOpenDrawer();
+    if (_isLoggedIn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_recoverCreationTask());
+      });
+    }
   }
 
   void _applySession(UserSession? session) {
@@ -518,107 +554,219 @@ class _GameShellState extends State<GameShell> {
       onTaskSubmitted: (submittedTaskId) {
         if (!mounted || pollingStarted) return;
         pollingStarted = true;
-        _startPollingCreation(submittedTaskId);
+        unawaited(_startPollingCreation(submittedTaskId));
       },
     );
 
     if (!mounted || taskId == null || pollingStarted) return;
-    _startPollingCreation(taskId);
+    unawaited(_startPollingCreation(taskId));
   }
 
-  Future<void> _startPollingCreation(String taskId) async {
+  Future<void> _recoverCreationTask() async {
+    if (!mounted ||
+        !_isLoggedIn ||
+        !_appInForeground ||
+        _recoveringCreation ||
+        _creationPolling) {
+      return;
+    }
+
+    _recoveringCreation = true;
+    try {
+      final response = await ApiClient.instance.get(
+        '/chat/ai/generate-scenario/active',
+      );
+      if (!mounted || !_appInForeground) return;
+
+      final raw = response['data'];
+      if (raw is! Map) return;
+      final taskId = raw['task_id']?.toString().trim() ?? '';
+      if (taskId.isEmpty) return;
+
+      unawaited(_startPollingCreation(taskId, recovered: true));
+    } catch (error) {
+      // 恢复查询失败不能伪装成“生成失败”；下次回前台或刷新时会再次查询。
+      debugPrint('GameShell restore creation task failed: $error');
+    } finally {
+      _recoveringCreation = false;
+    }
+  }
+
+  Future<void> _acknowledgeCreationTask(String taskId) async {
+    try {
+      await ApiClient.instance.post(
+        '/chat/ai/generate-scenario/status/$taskId/acknowledge',
+      );
+    } catch (error) {
+      // 未确认成功时后端会在下次启动继续返回该结果，避免完成通知永久丢失。
+      debugPrint('GameShell acknowledge creation task failed: $error');
+    }
+  }
+
+  Future<void> _showCreationFailure(String taskId, String message) async {
+    if (!mounted) return;
+    setState(() {
+      _createWorldError = true;
+      _createWorldStep = message;
+      _activeCreationTaskId = null;
+    });
+    AppNotice.error(context, message);
+    await _acknowledgeCreationTask(taskId);
+    await Future<void>.delayed(const Duration(seconds: 4));
+    if (mounted) {
+      setState(() {
+        _isCreatingWorld = false;
+        _createWorldError = false;
+      });
+    }
+  }
+
+  Future<void> _startPollingCreation(
+    String taskId, {
+    bool recovered = false,
+  }) async {
+    final normalizedTaskId = taskId.trim();
+    if (normalizedTaskId.isEmpty || !mounted) return;
+    if (_creationPolling && _activeCreationTaskId == normalizedTaskId) return;
+
+    final pollEpoch = ++_creationPollEpoch;
+    _creationPolling = true;
+    final isSameTask = _activeCreationTaskId == normalizedTaskId;
+    _activeCreationTaskId = normalizedTaskId;
+
     setState(() {
       _isCreatingWorld = true;
-      _createWorldProgress = 0;
-      _createWorldStep = '任务已提交，正在构筑世界...';
+      if (!isSameTask) _createWorldProgress = 0;
+      _createWorldStep = recovered ? '正在恢复世界创建进度...' : '任务已提交，正在构筑世界...';
       _createWorldError = false;
     });
 
     var currentInterval = 2000;
-    const maxRetries = 120;
+    var consecutiveErrors = 0;
+    var missingTaskErrors = 0;
 
-    for (var attempts = 0; attempts < maxRetries; attempts++) {
-      if (!mounted) return;
-      try {
-        final statusResponse = await ApiClient.instance.get(
-          '/chat/ai/generate-scenario/status/$taskId',
-        );
-        if (!mounted) return;
-
-        final statusData =
-            statusResponse is Map ? statusResponse['data'] ?? statusResponse : <String, dynamic>{};
-        final status = (statusData['status']?.toString() ?? '').toLowerCase();
-        final progress = statusData['progress'] as Map?;
-
-        if (progress != null) {
-          setState(() {
-            _createWorldStep = progress['step']?.toString() ?? _createWorldStep;
-            final pct = double.tryParse(progress['percent']?.toString() ?? '');
-            if (pct != null) {
-              _createWorldProgress = math.max(_createWorldProgress, pct);
-            }
-          });
-        }
-
-        if (status == 'completed') {
-          setState(() {
-            _createWorldProgress = 100;
-            _createWorldStep = '生成完成！';
-          });
-          await Future<void>.delayed(const Duration(milliseconds: 650));
-          if (!mounted) return;
-
-          final result = statusData['result'] as Map?;
-          final createdScenarioId = result?['scenario_id']?.toString().trim() ?? '';
-
-          var synced = true;
-          if (createdScenarioId.isNotEmpty) {
-            synced = await _syncWorldListUntil(
-              scenarioId: createdScenarioId,
-              shouldExist: true,
-              focusScenarioId: createdScenarioId,
-            );
-          } else {
-            await _loadHomeData();
-          }
-
-          if (!mounted) return;
-          setState(() => _isCreatingWorld = false);
-
-          if (synced) {
-            AppNotice.success(context, '世界创建完成，已加入世界列表');
-          } else {
-            AppNotice.info(context, '世界已生成，列表同步稍有延迟，可下拉刷新');
-          }
-          return;
-        }
-
-        if (status == 'failed') {
-          throw Exception(
-            statusData['error']?.toString() ?? '构筑中断：检测到敏感词或余额不足',
+    try {
+      // 只要 App 在前台且任务未结束就持续查询；进入后台时由 epoch 立即失效。
+      while (mounted && _appInForeground && pollEpoch == _creationPollEpoch) {
+        try {
+          final statusResponse = await ApiClient.instance.get(
+            '/chat/ai/generate-scenario/status/$normalizedTaskId',
           );
+          if (!mounted || pollEpoch != _creationPollEpoch) return;
+
+          consecutiveErrors = 0;
+          missingTaskErrors = 0;
+          final rawStatusData = statusResponse['data'];
+          final statusData = rawStatusData is Map
+              ? rawStatusData
+              : <String, dynamic>{};
+          final status = (statusData['status']?.toString() ?? '').toLowerCase();
+          final progress = statusData['progress'] as Map?;
+
+          if (progress != null) {
+            setState(() {
+              _createWorldStep = progress['step']?.toString() ?? _createWorldStep;
+              final pct = double.tryParse(progress['percent']?.toString() ?? '');
+              if (pct != null) {
+                _createWorldProgress = math.max(_createWorldProgress, pct);
+              }
+            });
+          }
+
+          if (status == 'completed') {
+            setState(() {
+              _createWorldProgress = 100;
+              _createWorldStep = '生成完成！';
+            });
+
+            final result = statusData['result'] as Map?;
+            final createdScenarioId =
+                result?['scenario_id']?.toString().trim() ?? '';
+            final title = result?['title']?.toString().trim() ?? '';
+
+            var synced = true;
+            if (createdScenarioId.isNotEmpty) {
+              synced = await _syncWorldListUntil(
+                scenarioId: createdScenarioId,
+                shouldExist: true,
+                focusScenarioId: createdScenarioId,
+              );
+            } else {
+              await _loadHomeData();
+            }
+
+            if (!mounted || pollEpoch != _creationPollEpoch) return;
+            setState(() {
+              _isCreatingWorld = false;
+              _activeCreationTaskId = null;
+            });
+
+            if (synced) {
+              AppNotice.success(
+                context,
+                title.isEmpty ? '世界创建完成，已加入世界列表' : '《$title》创建完成，已加入世界列表',
+              );
+            } else {
+              AppNotice.info(context, '世界已生成，列表同步稍有延迟，可下拉刷新');
+            }
+            await _acknowledgeCreationTask(normalizedTaskId);
+            return;
+          }
+
+          if (status == 'failed') {
+            final message = statusData['error']?.toString().trim();
+            await _showCreationFailure(
+              normalizedTaskId,
+              message == null || message.isEmpty
+                  ? '世界创建失败，请稍后重试'
+                  : message,
+            );
+            return;
+          }
+
+          final suggested = int.tryParse(
+            statusData['next_poll_interval']?.toString() ?? '',
+          );
+          if (suggested != null && suggested > 0) {
+            currentInterval = suggested.clamp(1000, 10000).toInt();
+          }
+        } on ApiException catch (error) {
+          consecutiveErrors++;
+          if (error.statusCode == 404) missingTaskErrors++;
+
+          if (missingTaskErrors >= 3) {
+            await _showCreationFailure(
+              normalizedTaskId,
+              '创建任务记录已失效，请重新创建',
+            );
+            return;
+          }
+
+          if (mounted && pollEpoch == _creationPollEpoch) {
+            setState(() {
+              _createWorldStep = '网络不稳定，正在重新连接...';
+              _createWorldError = false;
+            });
+          }
+          currentInterval = math.min(10000, 1500 * (consecutiveErrors + 1));
+        } catch (error) {
+          consecutiveErrors++;
+          debugPrint('GameShell creation polling retry: $error');
+          if (mounted && pollEpoch == _creationPollEpoch) {
+            setState(() {
+              _createWorldStep = '连接暂时中断，正在恢复进度...';
+              _createWorldError = false;
+            });
+          }
+          currentInterval = math.min(10000, 1500 * (consecutiveErrors + 1));
         }
 
-        if (statusData['next_poll_interval'] != null) {
-          currentInterval =
-              int.tryParse(statusData['next_poll_interval'].toString()) ?? currentInterval;
-        }
-      } catch (error) {
-        if (mounted) {
-          setState(() {
-            _createWorldError = true;
-            _createWorldStep = error.toString().replaceAll('Exception: ', '');
-          });
-        }
-        break;
+        await Future<void>.delayed(Duration(milliseconds: currentInterval));
       }
-
-      await Future<void>.delayed(Duration(milliseconds: currentInterval));
-    }
-
-    if (mounted && _createWorldError) {
-      await Future<void>.delayed(const Duration(seconds: 4));
-      if (mounted) setState(() => _isCreatingWorld = false);
+    } finally {
+      if (pollEpoch == _creationPollEpoch) {
+        _creationPolling = false;
+      }
     }
   }
 
@@ -676,6 +824,9 @@ class _GameShellState extends State<GameShell> {
   }
 
   Future<void> _logout() async {
+    _creationPollEpoch++;
+    _creationPolling = false;
+    _activeCreationTaskId = null;
     await SessionManager.logout();
     ApiClient.instance.accessToken = null;
     ApiClient.instance.userId = null;
@@ -707,6 +858,7 @@ class _GameShellState extends State<GameShell> {
           _userPoints = result.tokenBalance.toInt();
         });
         await _refreshUserData();
+        if (mounted) unawaited(_recoverCreationTask());
         if (!mounted) return;
         await _openActiveScenarioAfterLogin();
       },
