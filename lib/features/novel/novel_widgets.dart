@@ -201,6 +201,17 @@ Duration _novelRevealDelay(int charactersPerSecond, String afterCharacter) {
   return Duration(milliseconds: baseMilliseconds + punctuationPause);
 }
 
+/// 每个非空白字符都为内存打字声轨续时；真正的 tick 间隔由音频声轨控制。
+/// 不能再只在字符数恰好为 3 的倍数时调用：流式补字、标点停顿和页面重建
+/// 会让部分手机只收到开头一两次脉冲，随后声轨便被当作空闲而暂停。
+bool _shouldPlayNovelTypingTick({
+  required int visibleLength,
+  required String currentCharacter,
+}) {
+  if (currentCharacter.trim().isEmpty) return false;
+  return visibleLength > 0;
+}
+
 class NovelArtwork extends StatelessWidget {
   const NovelArtwork({
     super.key,
@@ -2530,8 +2541,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       // 每一段首次逐字展示都播放；回退重看已经展示过的句子保持安静。
       if (controller.settings.typingSoundEnabled &&
           _typingSoundForReveal &&
-          current.trim().isNotEmpty &&
-          (_visibleLength.isEven || _novelPunctuation.contains(current))) {
+          _shouldPlayNovelTypingTick(
+            visibleLength: _visibleLength,
+            currentCharacter: current,
+          )) {
         controller.bgm.playTypingTick();
       }
 
@@ -2922,12 +2935,12 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     // 对话立绘采用偏半身构图：人物整体向屏幕底部沉，
                     // 让腿部自然超出画面，只保留约 7–8 成上半身。
                     // 手机更窄，额外多下沉一点；宽屏则稍微克制，避免人物显得过低。
-                    final sinkRatio = lerpDouble(.12, .09, t)!;
+                    final sinkRatio = lerpDouble(.25, .09, t)!;
                     final sinkOffset = -(fullPortraitHeight * sinkRatio);
 
                     // NPC 真正贴向最左；主角镜像贴向最右。
                     // 窄屏把人物再向外推出一点，给另一侧文字腾出可读空间。
-                    final edgePush = lerpDouble(.23, .055, t)!;
+                    final edgePush = lerpDouble(.35, .055, t)!;
                     final npcLeftOffset = -(portraitWidth * edgePush);
                     final protagonistRightOffset = -(portraitWidth * edgePush);
 
@@ -5679,8 +5692,10 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
 
       if (controller.settings.typingSoundEnabled &&
           _typingSoundForReveal &&
-          current.trim().isNotEmpty &&
-          (_visibleLength.isEven || _novelPunctuation.contains(current))) {
+          _shouldPlayNovelTypingTick(
+            visibleLength: _visibleLength,
+            currentCharacter: current,
+          )) {
         controller.bgm.playTypingTick();
       }
 

@@ -95,8 +95,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     // 初始化失败时由页面自动打开菜单，不再继续预加载剧情音频。
     if (!controller.isInitialized) return;
 
-    // 进入剧情后先把短打字音效送进原生播放器，避免第一段流式文字到来时
-    // Android / iOS 才临时 setAsset，导致初始化和高频 tick 撞在一起而听不到声音。
+    // 进入剧情后先生成并预热内存打字音，避免第一段流式文字到来时
+    // Android / iOS 才初始化播放器池而丢失前几个 tick。
     await controller.bgm.preloadTypingSfx();
     if (!mounted) return;
 

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
@@ -42,23 +44,104 @@ class NovelBgmService {
   String currentWeatherKey = 'none';
   bool isWeatherPlaying = false;
 
-  static const String typingAsset = 'assets/audio/ui/typing.wav';
-
-  // 打字声改为一句话期间的连续低音量纹理，不再按字符反复 seek + play。
-  // 旧实现高频重启播放器，在手机上容易产生音频线程抖动和不连续感。
-  static const double typingVolume = 0.20;
-  static const Duration typingIdleGrace = Duration(milliseconds: 110);
-  static const Duration typingFadeDuration = Duration(milliseconds: 90);
+  // 参考 Web 版 AudioContext：每个 tick 是约 25ms 的随机噪声，
+  // 经 4–4.5kHz 带通滤波并快速指数衰减。
+  //
+  // 手机原生媒体播放器并不擅长反复重播 25ms 的独立音频；部分机型只会
+  // 响一两次便停在 completed 状态。因此这里把多个 tick 预先排进一条
+  // 较长的内存声轨并循环播放，文字出现时只负责“续时”，不再反复 seek。
+  static const int _typingSampleRate = 44100;
+  static const int _typingDurationMs = 25;
+  static const int _typingSpacingMs = 90;
+  static const int _typingRailTickCount = 16;
+  // 手机扬声器对 4kHz 左右的瞬态很敏感；稍微压低，保留清晰度但不刺耳。
+  static const double typingVolume = 0.38;
+  static const Duration _typingIdleTimeout = Duration(milliseconds: 230);
 
   bool _typingReady = false;
-  bool _typingPlaying = false;
   Future<void>? _typingPrepareFuture;
-  Future<void>? _typingStartFuture;
   Timer? _typingIdleTimer;
+  bool _typingRailPlaying = false;
   int _typingPlaybackEpoch = 0;
-  int _typingFadeEpoch = 0;
+  int _typingPulseId = 0;
 
-  /// 预加载连续打字音效。资源缺失时静默降级。
+  Uint8List _buildTypingRailBytes() {
+    final tickSamples =
+        (_typingSampleRate * _typingDurationMs / 1000).round();
+    final spacingSamples =
+        (_typingSampleRate * _typingSpacingMs / 1000).round();
+    final pcm = Int16List(spacingSamples * _typingRailTickCount);
+
+    for (var tick = 0; tick < _typingRailTickCount; tick++) {
+      final random = math.Random(0x51F15E + tick * 7919);
+
+      // 对应参考项目的 4000 + Math.random() * 500；每个 tick 略有变化，
+      // 避免长时间播放时像完全相同的机械哔声。
+      final centerHz = 4000.0 + (tick % 4) * 145.0;
+      const q = 1.15;
+      final w0 = 2 * math.pi * centerHz / _typingSampleRate;
+      final alpha = math.sin(w0) / (2 * q);
+      final a0 = 1 + alpha;
+      final b0 = alpha / a0;
+      const b1 = 0.0;
+      final b2 = -alpha / a0;
+      final a1 = (-2 * math.cos(w0)) / a0;
+      final a2 = (1 - alpha) / a0;
+
+      var x1 = 0.0;
+      var x2 = 0.0;
+      var y1 = 0.0;
+      var y2 = 0.0;
+      final offset = tick * spacingSamples;
+      for (var i = 0; i < tickSamples; i++) {
+        final input = random.nextDouble() * 2 - 1;
+        final filtered =
+            b0 * input + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1;
+        x1 = input;
+        y2 = y1;
+        y1 = filtered;
+
+        // 2ms 淡入去掉爆音，随后在约 20ms 内指数衰减到近乎静音。
+        final progress = tickSamples <= 1 ? 1.0 : i / (tickSamples - 1);
+        final attack = (i / (_typingSampleRate * .002)).clamp(0.0, 1.0);
+        final decay = math.pow(0.001 / 0.15, progress).toDouble();
+        final value = (filtered * attack * decay * .72).clamp(-1.0, 1.0);
+        pcm[offset + i] = (value * 32767).round();
+      }
+    }
+
+    // just_audio 的各原生后端需要一个可识别的内存音频容器。
+    // 这里只包装运行时 PCM 字节，不存在或读取任何 wav 资源文件。
+    final dataSize = pcm.lengthInBytes;
+    final bytes = ByteData(44 + dataSize);
+
+    void ascii(int offset, String value) {
+      for (var i = 0; i < value.length; i++) {
+        bytes.setUint8(offset + i, value.codeUnitAt(i));
+      }
+    }
+
+    ascii(0, 'RIFF');
+    bytes.setUint32(4, 36 + dataSize, Endian.little);
+    ascii(8, 'WAVE');
+    ascii(12, 'fmt ');
+    bytes.setUint32(16, 16, Endian.little);
+    bytes.setUint16(20, 1, Endian.little);
+    bytes.setUint16(22, 1, Endian.little);
+    bytes.setUint32(24, _typingSampleRate, Endian.little);
+    bytes.setUint32(28, _typingSampleRate * 2, Endian.little);
+    bytes.setUint16(32, 2, Endian.little);
+    bytes.setUint16(34, 16, Endian.little);
+    ascii(36, 'data');
+    bytes.setUint32(40, dataSize, Endian.little);
+    for (var i = 0; i < pcm.length; i++) {
+      bytes.setInt16(44 + i * 2, pcm[i], Endian.little);
+    }
+    return bytes.buffer.asUint8List();
+  }
+
+  /// 预加载短促打字音效。资源缺失时静默降级。
   Future<void> preloadTypingSfx() async {
     await _prepareTypingPlayer();
   }
@@ -70,10 +153,12 @@ class NovelBgmService {
 
     final future = () async {
       try {
-        // 单播放器常驻，整段逐字显示期间只启动一次。
         await _typingPlayer.setLoopMode(LoopMode.one);
-        await _typingPlayer.setVolume(0);
-        await _typingPlayer.setAsset(typingAsset);
+        await _typingPlayer.setVolume(typingVolume);
+        await _typingPlayer.setAudioSource(
+          _MemoryTypingAudioSource(_buildTypingRailBytes()),
+          preload: true,
+        );
         _typingReady = true;
       } catch (error, stackTrace) {
         debugPrint('novel typing sfx prepare failed: $error');
@@ -87,116 +172,84 @@ class NovelBgmService {
     return future;
   }
 
-  /// 保留旧接口名，调用方仍可在逐字动画每次推进时调用。
+  /// 告知内存打字声轨“文字仍在出现”。
   ///
-  /// 新实现不会每次播放一个 tick；第一次调用启动循环，后续调用只刷新
-  /// “仍在打字”的保活时间。超过 [typingIdleGrace] 没有新字符就自动淡出。
+  /// 第一次调用启动循环声轨；后续调用只刷新空闲计时器。最后一个字符后
+  /// 230ms 自动暂停，因此不会残留声音，也不会反复重启原生解码器。
   void playTypingTick() {
+    if (!_typingReady) {
+      // 初始化期间直接跳过当前 tick，不把字符事件排队；否则预加载完成后
+      // 多个等待请求会挤在同一时刻播放，听起来像一次爆音。
+      unawaited(_prepareTypingPlayer());
+      return;
+    }
+    final pulseId = ++_typingPulseId;
     _typingIdleTimer?.cancel();
-    _cancelTypingFade(restoreVolume: true);
-
-    _typingIdleTimer = Timer(typingIdleGrace, () {
-      _typingIdleTimer = null;
-      unawaited(_fadeTypingOut());
+    _typingIdleTimer = Timer(_typingIdleTimeout, () {
+      if (pulseId != _typingPulseId) return;
+      unawaited(_pauseTypingRail(idlePulseId: pulseId));
     });
 
-    if (_typingPlaying || _typingStartFuture != null) return;
-    _typingStartFuture = _startTypingLoop();
+    if (_typingRailPlaying) return;
+    _typingRailPlaying = true;
+    unawaited(_startTypingRail());
   }
 
-  Future<void> _startTypingLoop() async {
+  Future<void> _startTypingRail() async {
     final epoch = _typingPlaybackEpoch;
     try {
       await _prepareTypingPlayer();
       if (!_typingReady || epoch != _typingPlaybackEpoch) return;
 
-      await _typingPlayer.setVolume(typingVolume);
+      await _typingPlayer.seek(Duration.zero);
       if (epoch != _typingPlaybackEpoch) return;
-
-      _typingPlaying = true;
       unawaited(
         _typingPlayer.play().catchError((Object error, StackTrace stackTrace) {
           debugPrint('novel typing sfx play failed: $error');
           debugPrintStack(stackTrace: stackTrace);
-          _typingPlaying = false;
+          _typingRailPlaying = false;
         }),
       );
     } catch (error, stackTrace) {
-      debugPrint('novel typing sfx start failed: $error');
+      debugPrint('novel typing sfx play failed: $error');
       debugPrintStack(stackTrace: stackTrace);
+      _typingRailPlaying = false;
       _typingReady = false;
-      _typingPlaying = false;
-    } finally {
-      _typingStartFuture = null;
     }
   }
 
-  void _cancelTypingFade({bool restoreVolume = false}) {
-    _typingFadeEpoch += 1;
-    if (restoreVolume && _typingPlaying) {
-      unawaited(_typingPlayer.setVolume(typingVolume));
-    }
-  }
-
-  Future<void> _fadeTypingOut({bool explicitStop = false}) async {
-    if (!_typingPlaying && _typingStartFuture == null) return;
-
-    final fadeEpoch = ++_typingFadeEpoch;
-    final playbackEpoch = _typingPlaybackEpoch;
-    final startVolume = _typingPlayer.volume.clamp(0.0, typingVolume).toDouble();
-    final steps = explicitStop ? 5 : 6;
-    final stepDelay = Duration(
-      milliseconds: (typingFadeDuration.inMilliseconds / steps).round(),
-    );
-
-    for (var i = 1; i <= steps; i += 1) {
-      await Future<void>.delayed(stepDelay);
-      if (fadeEpoch != _typingFadeEpoch ||
-          playbackEpoch != _typingPlaybackEpoch) {
-        return;
-      }
-      final progress = i / steps;
-      await _typingPlayer.setVolume(
-        (startVolume * (1 - progress)).clamp(0.0, typingVolume).toDouble(),
-      );
-    }
-
-    if (fadeEpoch != _typingFadeEpoch ||
-        playbackEpoch != _typingPlaybackEpoch) {
-      return;
-    }
-
+  Future<void> _pauseTypingRail({int? idlePulseId}) async {
+    if (idlePulseId != null && idlePulseId != _typingPulseId) return;
+    _typingIdleTimer?.cancel();
+    _typingIdleTimer = null;
     try {
       await _typingPlayer.pause();
-      await _typingPlayer.setVolume(0);
-    } catch (_) {}
-    _typingPlaying = false;
+
+      // pause 等待原生播放器响应期间可能正好又显示了新字符。新字符看到
+      // _typingRailPlaying 仍为 true，不会重复启动播放器；这里恢复即可。
+      if (idlePulseId != null && idlePulseId != _typingPulseId) {
+        unawaited(
+          _typingPlayer.play().catchError((Object error, StackTrace stackTrace) {
+            debugPrint('novel typing sfx resume failed: $error');
+            debugPrintStack(stackTrace: stackTrace);
+            _typingRailPlaying = false;
+          }),
+        );
+        return;
+      }
+
+      _typingRailPlaying = false;
+      await _typingPlayer.seek(Duration.zero);
+    } catch (_) {
+      _typingRailPlaying = false;
+    }
   }
 
   Future<void> stopTypingSound() async {
-    _typingIdleTimer?.cancel();
-    _typingIdleTimer = null;
-
-    // 让尚在 await 预加载/启动的旧请求失效，避免 stop 后又突然响起来。
+    // 让尚在 await 预加载/播放的旧请求失效，避免 stop 后又突然响起来。
     _typingPlaybackEpoch += 1;
-    _cancelTypingFade();
-
-    final pendingStart = _typingStartFuture;
-    if (pendingStart != null) {
-      try {
-        await pendingStart;
-      } catch (_) {}
-    }
-
-    if (_typingPlaying) {
-      await _fadeTypingOut(explicitStop: true);
-    } else {
-      try {
-        await _typingPlayer.pause();
-        await _typingPlayer.setVolume(0);
-      } catch (_) {}
-    }
-    _typingPlaying = false;
+    _typingPulseId += 1;
+    await _pauseTypingRail();
   }
 
   Future<void> loadPreference() async {
@@ -524,8 +577,6 @@ class NovelBgmService {
     _weatherSwitchId += 1;
     _cancelFade();
     _cancelWeatherFade();
-    _typingIdleTimer?.cancel();
-    _typingIdleTimer = null;
     await _player.stop();
     await _weatherPlayer.stop();
     await stopTypingSound();
@@ -535,13 +586,33 @@ class NovelBgmService {
 
   Future<void> dispose() async {
     _typingPlaybackEpoch += 1;
-    _typingFadeEpoch += 1;
+    _typingPulseId += 1;
     _typingIdleTimer?.cancel();
-    _typingIdleTimer = null;
     _cancelFade();
     _cancelWeatherFade();
     await _player.dispose();
     await _weatherPlayer.dispose();
     await _typingPlayer.dispose();
+  }
+}
+
+class _MemoryTypingAudioSource extends StreamAudioSource {
+  _MemoryTypingAudioSource(this.bytes);
+
+  final Uint8List bytes;
+
+  @override
+  Future<StreamAudioResponse> request([int? start, int? end]) async {
+    final safeStart = (start ?? 0).clamp(0, bytes.length).toInt();
+    final safeEnd = (end ?? bytes.length).clamp(safeStart, bytes.length).toInt();
+    return StreamAudioResponse(
+      sourceLength: bytes.length,
+      contentLength: safeEnd - safeStart,
+      offset: safeStart,
+      stream: Stream<List<int>>.value(
+        bytes.sublist(safeStart, safeEnd),
+      ),
+      contentType: 'audio/wav',
+    );
   }
 }
