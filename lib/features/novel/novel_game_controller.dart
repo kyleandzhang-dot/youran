@@ -1115,7 +1115,13 @@ class NovelGameController extends ChangeNotifier {
             // complete 可能紧跟在最后一个 token 后面；先把缓冲刷进 message，
             // 避免服务端 completed 没带 content 时漏掉尾部文本。
             _flushStreamText(notify: false);
-            await _completeGeneration(event);
+            if (boolValue(event.raw['speaker_streaming'])) {
+              // 后端复用 message_saved 分批推送 SpeakerAI 的累计结构。
+              // 这只是展示进度，不能提前关闭 isGenerating。
+              await _applySpeakerStreamProgress(event);
+            } else {
+              await _completeGeneration(event);
+            }
             break;
           case NovelStreamEventType.suggestions:
             choices = event.suggestions;
@@ -1263,12 +1269,38 @@ class NovelGameController extends ChangeNotifier {
     }
 
     isGenerating = false;
-    _rebuildSentences(resetIndex: true);
+    // Speaker 分批展示时，最终 message_saved 与最后一个进度帧内容相同。
+    // 保留当前句位置，避免完成瞬间突然跳回第一句并重复播放。
+    final wasSpeakerStreamed = boolValue(event.raw['speaker_streamed']);
+    _rebuildSentences(resetIndex: !wasSpeakerStreamed);
     _notify();
 
     if (event.messageId.isNotEmpty) {
       unawaited(backend.markMessageRead(scenarioId, event.messageId));
     }
+  }
+
+  Future<void> _applySpeakerStreamProgress(NovelStreamEvent event) async {
+    if (messages.isEmpty || event.sentenceItems.isEmpty) return;
+
+    final visibleSentenceIndex = currentSentenceIndex;
+    final last = messages.last;
+    messages[messages.length - 1] = last.copyWith(
+      id: event.messageId.isEmpty ? last.id : event.messageId,
+      sentenceItems: event.sentenceItems,
+      status: 'streaming',
+    );
+    _markLatestUserSuccess();
+    _rebuildSentences();
+    // 新批次只是在补齐后续结构。保持用户正在看的句子，不自动追到最后一项。
+    if (sentences.isNotEmpty) {
+      currentSentenceIndex =
+          visibleSentenceIndex.clamp(0, sentences.length - 1).toInt();
+    }
+    _notify();
+
+    // 给 Flutter 一帧刷新首个结构项；不按正文长度阻塞网络流。
+    await Future<void>.delayed(const Duration(milliseconds: 16));
   }
 
   void _markLatestUserSuccess() {
