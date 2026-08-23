@@ -11,6 +11,9 @@ import 'package:http/http.dart' as http;
 import 'app_shared.dart';
 import 'api/api_client.dart';
 
+import 'package:crop_your_image/crop_your_image.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+
 // --- 与 CreateWorldDialog 对齐的色彩体系 ---
 const Color _background = Color(0xFFFCFDFB);
 const Color _fieldBackground = Color(0xFFF4F6F2);
@@ -336,57 +339,10 @@ class _ShareWorldPageState extends State<ShareWorldPage>
     }
   }
 
-  Future<void> _pickAndUploadCover() async {
-    if (_uploadingCover || _publishing) return;
+  
+  
 
-    FilePickerResult? result;
-    try {
-      result = await FilePicker.pickFiles(
-        type: FileType.image,
-        allowMultiple: false,
-        withData: true,
-      );
-    } catch (error) {
-      _triggerShake('无法打开相册：${_cleanError(error)}');
-      return;
-    }
-
-    if (result == null || result.files.isEmpty || !mounted) return;
-    final file = result.files.first;
-    final bytes = file.bytes;
-    if (bytes == null || bytes.isEmpty) {
-      _triggerShake('${file.name} 读取失败');
-      return;
-    }
-
-    setState(() {
-      _errorTextMsg = null;
-      _uploadingCover = true;
-    });
-
-    try {
-      final draft = await _uploadOneMedia(
-        fileName: file.name,
-        bytes: bytes,
-        contentType: _contentTypeFor(file.name),
-        r2Category: _r2CoverCategory,
-      );
-      if (!mounted) return;
-      setState(() {
-        _coverUrl = draft.url;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      _triggerShake('封面上传失败：${_cleanError(error)}');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _uploadingCover = false;
-        });
-      }
-    }
-  }
-
+  
   Future<ShareWorldMediaDraft> _uploadOneMedia({
     required String fileName,
     required Uint8List bytes,
@@ -1243,6 +1199,80 @@ class _ShareWorldPageState extends State<ShareWorldPage>
     });
   }
 
+  Future<void> _pickAndUploadCover() async {
+    if (_uploadingCover || _publishing) return;
+
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: true,
+      );
+    } catch (error) {
+      _triggerShake('无法打开相册：${_cleanError(error)}');
+      return;
+    }
+
+    if (result == null || result.files.isEmpty || !mounted) return;
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      _triggerShake('${file.name} 读取失败');
+      return;
+    }
+
+    // 1. 调用自定义的裁剪对话框 (强制 1:1)
+    final croppedBytes = await showDialog<Uint8List>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _SquareCoverCropDialog(image: bytes),
+    );
+
+    if (croppedBytes == null || !mounted) return; // 用户取消了裁剪
+
+    setState(() {
+      _errorTextMsg = null;
+      _uploadingCover = true;
+    });
+
+    try {
+      // 2. 套用 flutter_image_compress 进行 512*512 尺寸限制
+      final compressedBytes = await FlutterImageCompress.compressWithList(
+        croppedBytes,
+        minWidth: 512,   // 限制最大宽度
+        minHeight: 512,  // 限制最大高度
+        quality: 90,     // 压缩质量
+        format: CompressFormat.jpeg,
+      );
+
+      // fallback 保护：如果压缩失败则使用裁剪原图
+      final uploadBytes = compressedBytes.isNotEmpty ? compressedBytes : croppedBytes;
+
+      // 3. 上传最终的字节数据
+      final draft = await _uploadOneMedia(
+        fileName: 'cover_cropped.jpg', // 统一使用 jpg 后缀
+        bytes: uploadBytes,
+        contentType: 'image/jpeg',
+        r2Category: _r2CoverCategory,
+      );
+      
+      if (!mounted) return;
+      setState(() {
+        _coverUrl = draft.url;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      _triggerShake('封面上传失败：${_cleanError(error)}');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingCover = false;
+        });
+      }
+    }
+  }
+
   Widget _buildMediaManager() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1570,6 +1600,191 @@ class _WorldPickerDialog extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  
+}
+
+class _SquareCoverCropDialog extends StatefulWidget {
+  const _SquareCoverCropDialog({required this.image});
+
+  final Uint8List image;
+
+  @override
+  State<_SquareCoverCropDialog> createState() => _SquareCoverCropDialogState();
+}
+
+class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
+  final CropController _cropController = CropController();
+  bool _cropping = false;
+  String? _error;
+
+  void _confirmCrop() {
+    if (_cropping) return;
+    setState(() {
+      _cropping = true;
+      _error = null;
+    });
+    _cropController.crop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final dialogWidth = math.min(media.size.width - 28, 520.0);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      backgroundColor: _background,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: SizedBox(
+        width: dialogWidth,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '裁剪剧本封面',
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        SizedBox(height: 6),
+                        Text(
+                          '固定 1:1 · 双指或滚轮缩放 · 拖动调整位置',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _cropping ? null : () => Navigator.of(context).pop(),
+                    icon: const Icon(
+                      LucideIcons.x,
+                      size: 20,
+                      color: _textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              AspectRatio(
+                aspectRatio: 1,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: ColoredBox(
+                    color: _fieldBackground,
+                    child: Crop(
+                      image: widget.image,
+                      controller: _cropController,
+                      aspectRatio: 1,
+                      interactive: true,
+                      fixCropRect: true,
+                      initialRectBuilder: InitialRectBuilder.withSizeAndRatio(
+                        size: 0.92,
+                        aspectRatio: 1,
+                      ),
+                      baseColor: _fieldBackground,
+                      maskColor: Colors.black.withOpacity(0.56),
+                      radius: 2,
+                      filterQuality: FilterQuality.medium,
+                      progressIndicator: const Center(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: _themeGreen,
+                        ),
+                      ),
+                      cornerDotBuilder: (_, __) => const SizedBox.shrink(),
+                      onCropped: (result) {
+                        switch (result) {
+                          case CropSuccess(:final croppedImage):
+                            if (mounted) {
+                              Navigator.of(context).pop(croppedImage);
+                            }
+                          case CropFailure(:final cause):
+                            if (!mounted) return;
+                            setState(() {
+                              _cropping = false;
+                              _error = '裁剪失败：$cause';
+                            });
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: _errorText, fontSize: 12),
+                ),
+              ],
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _cropping ? null : () => Navigator.of(context).pop(),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _textSecondary,
+                        side: BorderSide(color: _textMuted.withOpacity(0.4)),
+                        backgroundColor: Colors.transparent,
+                        minimumSize: const Size.fromHeight(44),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _cropping ? null : _confirmCrop,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _themeGreen,
+                        foregroundColor: _textPrimary,
+                        minimumSize: const Size.fromHeight(44),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: _cropping
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: _textPrimary,
+                              ),
+                            )
+                          : const Text(
+                              '使用此封面',
+                              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),

@@ -58,12 +58,22 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   static const Color _pageBg = Color(0xFF0A0A0A);
   static const Color _danger = Color(0xFFE0554A);
 
+  OverlayEntry? _currentToast;
+
   final TextEditingController _commentController = TextEditingController();
   final FocusNode _commentFocusNode = FocusNode();
   final PageController _mediaController = PageController();
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _commentKeys = <String, GlobalKey>{};
 
+  Future<void> _loadCollectStatus() async {
+    try {
+      final collected = await StoreApi.checkCollected(widget.id);
+      if (!mounted) return;
+      setState(() => _isCollected = collected);
+    } catch (_) {}
+  }
+  
   ScenarioDetail? _detail;
   List<ScenarioComment> _comments = const [];
   ScenarioComment? _replyingTo;
@@ -96,6 +106,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
 
   @override
   void dispose() {
+    _currentToast?.remove(); // 加上这行
+    _currentToast = null;    // 加上这行
+
     _commentController.removeListener(_onCommentChanged);
     _commentController.dispose();
     _commentFocusNode.dispose();
@@ -134,60 +147,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     } catch (_) {}
   }
 
-  Future<void> _loadComments() async {
-    if (mounted) {
-      setState(() {
-        _commentsLoading = true;
-        _commentsError = null;
-      });
-    }
-
-    try {
-      final comments = await StoreApi.getScenarioComments(widget.id);
-      if (!mounted) return;
-      final targetId = widget.initialCommentId?.trim();
-      final nextComments = <ScenarioComment>[];
-      for (final parent in comments) {
-        var updated = parent;
-        if (targetId != null && targetId.isNotEmpty) {
-          final replyIndex = parent.replies.indexWhere((r) => r.id == targetId);
-          if (replyIndex >= 0) {
-            updated = parent.copyWith(
-              visibleReplyCount: replyIndex + 1,
-            );
-          }
-        }
-        nextComments.add(updated);
-      }
-
-      setState(() {
-        _comments = nextComments;
-        _commentsLoading = false;
-      });
-
-      if (targetId != null && targetId.isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _scrollToInitialComment();
-        });
-      }
-    } on ApiException catch (error, stackTrace) {
-      debugPrint('load comments api failed: ${error.message}');
-      debugPrintStack(stackTrace: stackTrace);
-      if (!mounted) return;
-      setState(() {
-        _commentsLoading = false;
-        _commentsError = '评论暂时无法加载';
-      });
-    } catch (error, stackTrace) {
-      debugPrint('load comments failed: $error');
-      debugPrintStack(stackTrace: stackTrace);
-      if (!mounted) return;
-      setState(() {
-        _commentsLoading = false;
-        _commentsError = '评论暂时无法加载';
-      });
-    }
-  }
+  
 
   bool get _isOwner {
     final me = widget.currentUserId;
@@ -250,20 +210,92 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
 
   void _toast(String message, {bool isError = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message, style: TextStyle(color: isError ? _danger : AppColors.accent)),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFF161616), 
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+
+    // 清除可能还在显示的自带 SnackBar
+    ScaffoldMessenger.of(context).clearSnackBars();
+
+    // 移除上一个自定义 Toast（防止快速点击时重叠）
+    if (_currentToast != null) {
+      _currentToast!.remove();
+      _currentToast = null;
+    }
+
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    bool isRemoved = false;
+
+    entry = OverlayEntry(
+      builder: (context) => Positioned(
+        // 固定在顶部，彻底避开底部键盘收起时的闪烁跳动
+        top: MediaQuery.paddingOf(context).top + 20, 
+        left: 0,
+        right: 0,
+        child: Material(
+          color: Colors.transparent,
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+            builder: (context, value, child) {
+              return Opacity(
+                opacity: value,
+                child: Transform.translate(
+                  offset: Offset(0, -15 * (1 - value)),
+                  child: child,
+                ),
+              );
+            },
+            child: Center(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF161616).withOpacity(0.75),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: Colors.white.withOpacity(0.08), width: 0.5),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isError) ...[
+                          const Icon(Icons.error_outline, size: 16, color: Color(0xFFE0554A)),
+                          const SizedBox(width: 8),
+                        ] else ...[
+                          const Icon(Icons.check_circle_outline, size: 16, color: Colors.white),
+                          const SizedBox(width: 8),
+                        ],
+                        Text(
+                          message,
+                          style: TextStyle(
+                            color: isError ? const Color(0xFFE0554A) : Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-          margin: const EdgeInsets.only(bottom: 84, left: 24, right: 24),
-          duration: const Duration(milliseconds: 2500),
         ),
-      );
+      ),
+    );
+
+    _currentToast = entry;
+    overlay.insert(entry);
+
+    Future.delayed(const Duration(milliseconds: 2000), () {
+      if (!isRemoved && _currentToast == entry && mounted) {
+        isRemoved = true;
+        entry.remove();
+        _currentToast = null;
+      }
+    });
   }
 
   bool _requireLogin() {
@@ -326,12 +358,66 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     }
   }
 
-  Future<void> _loadCollectStatus() async {
+  // 加上 quiet 参数，默认 false
+  Future<void> _loadComments({bool quiet = false}) async {
+    if (mounted) {
+      if (!quiet) {
+        // 如果不是静默刷新，才显示加载圈
+        setState(() {
+          _commentsLoading = true;
+          _commentsError = null;
+        });
+      } else {
+        // 静默刷新也顺便清一下错误状态
+        setState(() => _commentsError = null);
+      }
+    }
+
     try {
-      final collected = await StoreApi.checkCollected(widget.id);
+      final comments = await StoreApi.getScenarioComments(widget.id);
       if (!mounted) return;
-      setState(() => _isCollected = collected);
-    } catch (_) {}
+      final targetId = widget.initialCommentId?.trim();
+      final nextComments = <ScenarioComment>[];
+      for (final parent in comments) {
+        var updated = parent;
+        if (targetId != null && targetId.isNotEmpty) {
+          final replyIndex = parent.replies.indexWhere((r) => r.id == targetId);
+          if (replyIndex >= 0) {
+            updated = parent.copyWith(
+              visibleReplyCount: replyIndex + 1,
+            );
+          }
+        }
+        nextComments.add(updated);
+      }
+
+      setState(() {
+        _comments = nextComments;
+        if (!quiet) _commentsLoading = false; 
+      });
+
+      if (targetId != null && targetId.isNotEmpty && !quiet) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToInitialComment();
+        });
+      }
+    } on ApiException catch (error, stackTrace) {
+      debugPrint('load comments api failed: ${error.message}');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        if (!quiet) _commentsLoading = false;
+        _commentsError = '评论暂时无法加载';
+      });
+    } catch (error, stackTrace) {
+      debugPrint('load comments failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        if (!quiet) _commentsLoading = false;
+        _commentsError = '评论暂时无法加载';
+      });
+    }
   }
 
   Future<void> _toggleCollect() async {
@@ -405,7 +491,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         _sendingComment = false;
       });
       _toast('发送成功');
-      await _loadComments();
+      
+      // 改为静默刷新，不要让列表跳动
+      await _loadComments(quiet: true); 
     } catch (_) {
       if (!mounted) return;
       setState(() => _sendingComment = false);
@@ -655,6 +743,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     
     return Scaffold(
       backgroundColor: _pageBg,
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           Positioned.fill(
@@ -954,7 +1043,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             const SizedBox(height: 14),
             Text(
               _formatDate(detail!.createdAt),
-              style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12, fontFamily: 'Courier'),
+              style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12),
             ),
           ],
           if (description.isNotEmpty) ...[
@@ -1158,7 +1247,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 child: GestureDetector(
-                  onTap: _loadComments,
+                  onTap: () => _loadComments(),
                   behavior: HitTestBehavior.opaque,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1221,6 +1310,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         : const <ScenarioComment>[];
 
     final isTarget = _isTargetComment(comment.id);
+    
     return Container(
       key: _commentKey(comment.id),
       margin: EdgeInsets.only(left: isReply ? 46 : 0, top: isReply ? 20 : 0),
@@ -1250,7 +1340,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 第一行：用户名与标签 (已移除爱心点赞)
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Flexible(
                       child: Text(
@@ -1311,6 +1403,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                // 第三行：时间、回复、更多按钮、点赞(爱心移到这里)
                 Row(
                   children: [
                     if ((comment.createdAt ?? '').isNotEmpty)
@@ -1319,7 +1412,6 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         style: const TextStyle(
                           color: AppColors.textOnDarkMuted,
                           fontSize: 11,
-                          fontFamily: 'Courier',
                         ),
                       ),
                     if (!_isMyComment(comment)) ...[
@@ -1350,6 +1442,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         ),
                       ),
                     ],
+                    // 用 Spacer 将点赞按钮推向最右侧
                     const Spacer(),
                     GestureDetector(
                       onTap: () => _toggleCommentLike(comment, parent: parent),
@@ -1357,6 +1450,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
                         child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
                               comment.isLiked ? Icons.favorite : Icons.favorite_border,
@@ -1366,7 +1460,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                   : AppColors.textOnDarkMuted,
                             ),
                             if (comment.likes > 0) ...[
-                              const SizedBox(width: 6),
+                              const SizedBox(width: 4),
                               Text(
                                 '${comment.likes}',
                                 style: const TextStyle(
