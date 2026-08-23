@@ -1269,7 +1269,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                   child: _coverUrl.isEmpty
                       ? const Icon(Icons.landscape_outlined, size: 30, color: AppColors.textOnDarkMuted)
                       : Image.network(
-                          _coverUrl,
+                          CdnUtil.resize(_coverUrl, width: 300), // <
                           fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => const Icon(
                             Icons.broken_image_outlined,
@@ -1575,7 +1575,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               child: avatar.isEmpty
                   ? const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted)
                   : Image.network(
-                      avatar,
+                      CdnUtil.resize(avatar, width: 120),
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted),
                     ),
@@ -2796,7 +2796,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                                   ),
                                 )
                               : Image.network(
-                                  portrait,
+                                  CdnUtil.resize(portrait, width: 800),
                                   fit: BoxFit.cover,
                                   errorBuilder: (_, __, ___) => const Center(
                                     child: Icon(Icons.broken_image_outlined, color: AppColors.textOnDarkMuted),
@@ -2864,7 +2864,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                                 avatar.isEmpty
                                     ? const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted)
                                     : Image.network(
-                                        avatar,
+                                        CdnUtil.resize(avatar, width: 150),
                                         fit: BoxFit.cover,
                                         errorBuilder: (_, __, ___) => const Icon(
                                           Icons.person_outline_rounded,

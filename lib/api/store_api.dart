@@ -139,27 +139,34 @@ class ScenarioCharacter {
     this.identity,
     this.desc,
     this.avatarUrl,
+    this.portraitUrl, // 👈 新增字段
   });
 
   final String name;
   final String? identity;
   final String? desc;
 
-  /// Vue 优先级：poster -> portrait_url -> avatar。
+  /// 小头像，仅取 avatar / avatar_url，不再混入立绘字段
   final String? avatarUrl;
+  
+  /// 详情页立绘展示
+  final String? portraitUrl; // 👈 新增声明
 
   factory ScenarioCharacter.fromJson(Map<String, dynamic> json) {
-    final avatar = _asString(
-      json['poster'] ??
-          json['portrait_url'] ??
-          json['avatar'] ??
-          json['avatar_url'],
+    // 头像与立绘分开解析，互不干扰（对齐 scenario_edit_page.dart 的写法）
+    final avatar = _asString(json['avatar'] ?? json['avatar_url']);
+
+    // 立绘字段
+    final portrait = _asString(
+      json['portrait_url'] ?? json['portrait'] ?? json['poster'],
     );
+    
     return ScenarioCharacter(
       name: _asString(json['name'], '未命名角色'),
       identity: json['identity']?.toString(),
       desc: (json['desc'] ?? json['description'] ?? json['background'])?.toString(),
       avatarUrl: avatar.isEmpty ? null : avatar,
+      portraitUrl: portrait.isEmpty ? null : portrait, // 👈 注入立绘字段
     );
   }
 }
@@ -354,7 +361,8 @@ class ScenarioComment {
         '匿名用户',
       ),
       userId: (json['user_id'] ?? json['author_id'] ?? user['id'])?.toString(),
-      authorAvatarUrl: (json['author_avatar'] ??
+      authorAvatarUrl: (json['user_avatar'] ??
+              json['author_avatar'] ??
               json['avatar_url'] ??
               json['avatar'] ??
               user['avatar_url'] ??
@@ -409,6 +417,7 @@ class StoreApi {
     String? mode,
     String? category,
     String sort = 'recommend',
+    String? gender, // 👈 新增：主角性别筛选（'男' / '女'，不传即不筛选）
   }) async {
     final json = await ApiClient.instance.post(
       '/store/list',
@@ -418,6 +427,7 @@ class StoreApi {
         'sort': sort,
         if (query != null && query.trim().isNotEmpty) 'query': query.trim(),
         if ((category ?? mode) != null) 'category': category ?? mode,
+        if (gender != null && gender.trim().isNotEmpty) 'gender': gender.trim(),
       },
     );
     final list = _extractList(json, keys: const ['data', 'items', 'list']);
@@ -488,6 +498,51 @@ class StoreApi {
     final json = await ApiClient.instance.get(
       '/user/my-scripts',
       queryParams: {if (status != null) 'status': status},
+    );
+    final list = _extractList(json, keys: const ['data', 'items', 'list']);
+    return list.map((e) => StoreItem.fromJson(_asMap(e))).toList();
+  }
+
+  /// 3.5 获取我点赞过的剧本列表（与"我的收藏"是两套独立数据，对接 /user/liked-scenarios）。
+  static Future<List<StoreItem>> getMyLikedScenarios({
+    int page = 1,
+    int size = 20,
+  }) async {
+    final json = await ApiClient.instance.get(
+      '/user/liked-scenarios',
+      queryParams: {'page': page, 'size': size},
+    );
+    final list = _extractList(json, keys: const ['data', 'items', 'list']);
+    return list.map((e) => StoreItem.fromJson(_asMap(e))).toList();
+  }
+
+  /// 检查剧本是否已被当前用户收藏（与点赞是独立系统，对接 /collect/scenarios/{id}/check）。
+  static Future<bool> checkCollected(String templateId) async {
+    final json = await ApiClient.instance.get(
+      '/collect/scenarios/$templateId/check',
+    );
+    final data = _unwrapData(json);
+    return _asBool(data['is_collected'] ?? json['is_collected']);
+  }
+
+  /// 收藏剧本。
+  static Future<void> collectScenario(String templateId) {
+    return ApiClient.instance.post('/collect/scenarios/$templateId');
+  }
+
+  /// 取消收藏剧本。
+  static Future<void> uncollectScenario(String templateId) {
+    return ApiClient.instance.delete('/collect/scenarios/$templateId');
+  }
+
+  /// 获取我的收藏列表（收藏本身的数据源，与点赞列表不共用）。
+  static Future<List<StoreItem>> getMyCollectedScenarios({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final json = await ApiClient.instance.get(
+      '/collect/scenarios',
+      queryParams: {'page': page, 'page_size': pageSize},
     );
     final list = _extractList(json, keys: const ['data', 'items', 'list']);
     return list.map((e) => StoreItem.fromJson(_asMap(e))).toList();

@@ -114,3 +114,29 @@ class Avatar extends StatelessWidget {
     );
   }
 }
+
+/// ---------------- 新增：CDN 图片动态缩放工具 ----------------
+class CdnUtil {
+  /// 将原始 URL 转换为 Cloudflare 动态压缩 URL
+  static String resize(String url, {int width = 256}) {
+    if (url.trim().isEmpty || !url.startsWith('http')) return url;
+    
+    // TODO: 把下面这个域名替换成你 R2 绑定的真实自定义域名（不要加 https:// 和最后的斜杠）
+    // 比如：'cdn.yourdomain.com'
+    const myCdnDomain = 'img.freedreamky.com'; 
+    
+    // 如果不是你的 CDN 域名，或者是已经拼接过参数的 URL，直接放行
+    if (!url.contains(myCdnDomain) || url.contains('/cdn-cgi/image/')) {
+      return url;
+    }
+
+    try {
+      final uri = Uri.parse(url);
+      // 拼接 Cloudflare Image Resizing 规则
+      // format=auto 极度推荐，会自动返回 webp/avif 省大量流量
+      return 'https://${uri.host}/cdn-cgi/image/width=$width,fit=crop,format=auto,quality=75${uri.path}';
+    } catch (_) {
+      return url;
+    }
+  }
+}

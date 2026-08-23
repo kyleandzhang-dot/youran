@@ -3615,7 +3615,7 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                       key: ValueKey<String>(
                         'showcase-${_portraitUrl}-${widget.character.name}',
                       ),
-                      url: _portraitUrl,
+                      url: CdnUtil.resize(_portraitUrl, width: 800),
                       assetCandidates: <String>[fallbackAsset],
                       fit: BoxFit.contain,
                       alignment: Alignment.bottomCenter,
@@ -4518,7 +4518,7 @@ class _CharacterThumbStrip extends StatelessWidget {
                       fit: StackFit.expand,
                       children: <Widget>[
                         NovelArtwork(
-                          url: image,
+                          url: CdnUtil.resize(image, width: 150), //
                           assetCandidates: <String>[fallbackAsset],
                           fit: BoxFit.cover,
                           alignment: Alignment.topCenter,
@@ -5154,7 +5154,7 @@ class _InlineCharacterVisualEditorState
 
     if (_portraitUrl.trim().isNotEmpty) {
       return NovelArtwork(
-        url: _portraitUrl,
+        url: CdnUtil.resize(_portraitUrl, width: 600),
         fit: BoxFit.contain,
         fallbackText: widget.character.name,
         fallbackIcon: Icons.person_outline_rounded,
@@ -7667,7 +7667,7 @@ class _ProfileHeader extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           child: character?.avatarUrl.isNotEmpty == true
               ? Image.network(
-                  character!.avatarUrl,
+                  CdnUtil.resize(character!.avatarUrl, width: 150),
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => const Icon(
                     Icons.person_outline_rounded,
@@ -7777,9 +7777,11 @@ class _CharacterCard extends StatelessWidget {
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: NovelArtwork(
-                  url: character.avatarUrl.isNotEmpty
-                      ? character.avatarUrl
-                      : character.portraitUrl,
+                 url: CdnUtil.resize(
+                      character.avatarUrl.isNotEmpty
+                          ? character.avatarUrl
+                          : character.portraitUrl,
+                      width: 150), // <--- 列表小头像
                   fit: BoxFit.cover,
                   fallbackText: character.name,
                   fallbackIcon: Icons.person_outline_rounded,
@@ -9032,7 +9034,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: NovelArtwork(
-                  url: avatar,
+                  url: CdnUtil.resize(avatar, width: 256),
                   assetCandidates: <String>[fallback],
                   fit: BoxFit.cover,
                   fallbackText: name,
@@ -9594,7 +9596,7 @@ class _GameStyleCharacterProfilePage extends StatelessWidget {
                             child: SizedBox.square(
                               dimension: 96,
                               child: NovelArtwork(
-                                url: avatar,
+                                url: CdnUtil.resize(avatar, width: 150),
                                 assetCandidates: <String>[fallback],
                                 fit: BoxFit.cover,
                                 alignment: Alignment.topCenter,

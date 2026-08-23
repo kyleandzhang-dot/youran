@@ -243,9 +243,9 @@ class MineDialogs {
   static Future<Uint8List> _convertImageToWebp(Uint8List bytes) async {
     final converted = await FlutterImageCompress.compressWithList(
       bytes,
-      minWidth: 4096,
-      minHeight: 4096,
-      quality: 88,
+      minWidth: 256,
+      minHeight: 256,
+      quality: 70,
       format: CompressFormat.webp,
       keepExif: false,
     );

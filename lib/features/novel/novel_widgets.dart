@@ -14,6 +14,8 @@ import 'novel_game_controller.dart';
 import 'novel_socket_service.dart';
 import 'novel_models.dart';
 
+import '../../app_shared.dart';
+
 class NovelPortraitCache {
   NovelPortraitCache._();
 
@@ -39,7 +41,7 @@ class NovelPortraitCache {
 
     if (key.startsWith('http://') ||
         key.startsWith('https://')) {
-      provider = NetworkImage(key);
+      provider = NetworkImage(CdnUtil.resize(key, width: 800));
     } else {
       provider = AssetImage(key);
     }
@@ -285,13 +287,14 @@ class NovelArtwork extends StatelessWidget {
       }
     }
     if (value.startsWith('http://') || value.startsWith('https://')) {
-      return Image.network(
-        value,
+      return Image(
+        // 这里直接从我们改过的缓存里拿图片就行了，缓存已经加过 CdnUtil.resize 了
+        image: NovelPortraitCache.instance.get(value), 
         fit: fit,
         alignment: alignment,
         filterQuality: filterQuality,
         gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => _assetAt(0),
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(), // <--- 关键是这里！改回 SizedBox.shrink()
       );
     }
     if (value.isNotEmpty) {
@@ -347,6 +350,7 @@ class _StagePortraitArtwork extends StatelessWidget {
 
     if (value.startsWith('http://') || value.startsWith('https://')) {
       return Image(
+        // 这里直接从缓存里拿，缓存里已经加过 CdnUtil.resize 了
         image: NovelPortraitCache.instance.get(value),
         fit: fit,
         alignment: alignment,
@@ -1318,11 +1322,11 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     }
     if (value.startsWith('http://') || value.startsWith('https://')) {
       return Image.network(
-        value,
+        CdnUtil.resize(value, width: 1080), // 压缩全屏背景
         fit: BoxFit.cover,
         gaplessPlayback: true,
         filterQuality: FilterQuality.medium,
-        errorBuilder: (_, __, ___) => _fallback(),
+        errorBuilder: (_, __, ___) => _fallback(), // 注意这里是 _fallback()
       );
     }
     if (value.isNotEmpty) {
@@ -7596,9 +7600,9 @@ class _NetworkOrFallback extends StatelessWidget {
   Widget build(BuildContext context) {
     if (url.startsWith('http')) {
       return Image.network(
-        url,
+        CdnUtil.resize(url, width: 150), // 压缩小头像
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _fallback(),
+        errorBuilder: (_, __, ___) => _fallback(), // 注意这里是 _fallback()
       );
     }
     if (url.isNotEmpty) {

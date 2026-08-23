@@ -30,7 +30,7 @@ class DiscoverDetailWindow extends StatefulWidget {
     this.currentUserId,
     this.shareUrl,
     this.onLaunch,
-    this.onDeleted,
+    this.onDeleted, // 仅保留参数防止外部报错，本页面不再使用
     this.onLikeChanged,
     this.initialCommentId,
   });
@@ -72,9 +72,11 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   late int _likeCount;
   int _currentMediaIndex = 0;
 
+  bool _isCollected = false;
+  bool _collecting = false;
+
   bool _liking = false;
   bool _launching = false;
-  bool _deletingScenario = false;
   bool _sendingComment = false;
   bool _hasInput = false;
   bool _commentsLoading = true;
@@ -87,6 +89,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     _likeCount = widget.likes;
     _commentController.addListener(_onCommentChanged);
     _loadAll();
+    if (widget.isLoggedIn) {
+      _loadCollectStatus();
+    }
   }
 
   @override
@@ -243,7 +248,6 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     );
   }
 
-  // 同步为扁平极客风的 Toast
   void _toast(String message, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -252,12 +256,11 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         SnackBar(
           content: Text(message, style: TextStyle(color: isError ? _danger : AppColors.accent)),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.black,
+          backgroundColor: const Color(0xFF161616), 
           shape: RoundedRectangleBorder(
-            side: BorderSide(color: Colors.white.withOpacity(0.1)),
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(12),
           ),
-          margin: const EdgeInsets.only(bottom: 84, left: 20, right: 20),
+          margin: const EdgeInsets.only(bottom: 84, left: 24, right: 24),
           duration: const Duration(milliseconds: 2500),
         ),
       );
@@ -319,6 +322,53 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         _liking = false;
       });
       widget.onLikeChanged?.call(widget.id, _isLiked, _likeCount);
+      _toast('操作失败', isError: true);
+    }
+  }
+
+  Future<void> _loadCollectStatus() async {
+    try {
+      final collected = await StoreApi.checkCollected(widget.id);
+      if (!mounted) return;
+      setState(() => _isCollected = collected);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleCollect() async {
+    if (!_requireLogin() || _collecting) return;
+
+    final previousCollected = _isCollected;
+    setState(() {
+      _collecting = true;
+      _isCollected = !_isCollected;
+    });
+
+    try {
+      if (_isCollected) {
+        await StoreApi.collectScenario(widget.id);
+      } else {
+        await StoreApi.uncollectScenario(widget.id);
+      }
+      if (!mounted) return;
+      setState(() => _collecting = false);
+      _toast(_isCollected ? '已收藏' : '已取消收藏');
+    } on ApiException catch (error, stackTrace) {
+      debugPrint('collect scenario api failed: ${error.message}');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        _isCollected = previousCollected;
+        _collecting = false;
+      });
+      _toast('操作失败：${error.message}', isError: true);
+    } catch (error, stackTrace) {
+      debugPrint('collect scenario failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        _isCollected = previousCollected;
+        _collecting = false;
+      });
       _toast('操作失败', isError: true);
     }
   }
@@ -467,10 +517,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: const Color(0xFF161616),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: BorderSide(color: Colors.white.withOpacity(0.08)),
+          borderRadius: BorderRadius.circular(16), 
         ),
-        title: const Text('删除评论', style: TextStyle(color: AppColors.textOnDark, fontSize: 15, fontWeight: FontWeight.w600)),
+        title: const Text('删除评论', style: TextStyle(color: AppColors.textOnDark, fontSize: 16, fontWeight: FontWeight.w600)),
         content: const Text(
           '确定要删除这条评论吗？',
           style: TextStyle(color: AppColors.textOnDarkMuted),
@@ -600,48 +649,6 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     _toast('链接已复制');
   }
 
-  Future<void> _deleteScenario() async {
-    if (!_isOwner || _deletingScenario) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF161616),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: BorderSide(color: Colors.white.withOpacity(0.08)),
-        ),
-        title: const Text('删除作品', style: TextStyle(color: AppColors.textOnDark, fontSize: 15, fontWeight: FontWeight.w600)),
-        content: const Text(
-          '删除后该发布作品将从商店移除，确定继续吗？',
-          style: TextStyle(color: AppColors.textOnDarkMuted),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('删除', style: TextStyle(color: _danger, fontWeight: FontWeight.w700)),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    setState(() => _deletingScenario = true);
-    try {
-      await StoreApi.deletePublishedScenario(_detail?.id ?? widget.id);
-      if (!mounted) return;
-      widget.onDeleted?.call(widget.id);
-      Navigator.of(context).pop();
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _deletingScenario = false);
-      _toast('删除失败', isError: true);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
@@ -663,7 +670,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                 _buildCharacters(),
                 _buildMainEnterButton(),
                 _buildCommentSection(),
-                const SizedBox(height: 40),
+                const SizedBox(height: 60),
               ],
             ),
           ),
@@ -671,19 +678,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
           Positioned(
             top: MediaQuery.paddingOf(context).top + 12,
             left: 16,
-            right: 16,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildStickyActionButton(
-                  LucideIcons.chevronLeft,
-                  () => Navigator.of(context).pop(),
-                ),
-                _buildStickyActionButton(
-                  LucideIcons.moreHorizontal,
-                  _showActionMenu,
-                ),
-              ],
+            child: _buildStickyActionButton(
+              LucideIcons.chevronLeft,
+              () => Navigator.of(context).pop(),
             ),
           ),
 
@@ -707,9 +704,8 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     return Stack(
       alignment: Alignment.bottomCenter,
       children: [
-        // 调整比例并使用 Stack 实现底层模糊、顶层完整的双层显示效果
         AspectRatio(
-          aspectRatio: 1.0, // 改为 1:1 给长图更多展示空间
+          aspectRatio: 1.0, 
           child: PageView.builder(
             controller: _mediaController,
             itemCount: media.length,
@@ -717,17 +713,15 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             itemBuilder: (context, index) {
               final item = media[index];
               return GestureDetector(
-                onTap: () => _showImagePreview(item.url),
+                onTap: () => _showImagePreview(item.url), 
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    // 底层：高斯模糊放大垫底，消除黑边
                     ImageFiltered(
                       imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                      child: _image(item.url, fit: BoxFit.cover, opacity: 0.4),
+                      child: _image(CdnUtil.resize(item.url, width: 200), fit: BoxFit.cover, opacity: 0.4),
                     ),
-                    // 顶层：完整显示图片，不错过任何细节
-                    _image(item.url, fit: BoxFit.contain),
+                    _image(CdnUtil.resize(item.url, width: 1080), fit: BoxFit.contain), 
                   ],
                 ),
               );
@@ -755,7 +749,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         ),
         Positioned(
           bottom: 0, left: 0, right: 0,
-          height: 60,
+          height: 80, 
           child: IgnorePointer(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -773,17 +767,16 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         ),
         if (media.length > 1)
           Positioned(
-            bottom: 12,
+            bottom: 16,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: Colors.white.withOpacity(0.08)),
+                color: Colors.black.withOpacity(0.4),
+                borderRadius: BorderRadius.circular(12), 
               ),
               child: Text(
                 '${_currentMediaIndex + 1}/${media.length}',
-                style: const TextStyle(color: AppColors.textOnDark, fontSize: 11, fontWeight: FontWeight.w600),
+                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
               ),
             ),
           ),
@@ -791,7 +784,6 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     );
   }
 
-  // 扩展了一个 opacity 参数，方便底层模糊图变暗
   Widget _image(String url, {BoxFit fit = BoxFit.cover, double opacity = 1.0}) {
     Widget img;
     if (url.startsWith('http://') || url.startsWith('https://')) {
@@ -824,7 +816,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     return Container(
       color: Colors.white.withOpacity(0.02),
       alignment: Alignment.center,
-      child: Icon(
+      child: const Icon(
         Icons.image_outlined,
         color: AppColors.textOnDarkMuted,
         size: 40,
@@ -875,14 +867,13 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Container(
-            width: 36,
-            height: 36,
+            width: 40, 
+            height: 40,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.35),
+              color: Colors.black.withOpacity(0.4), 
               shape: BoxShape.circle,
-              border: Border.all(color: Colors.white.withOpacity(0.12), width: .5),
             ),
-            child: Icon(icon, size: 18, color: AppColors.textOnDark),
+            child: Icon(icon, size: 20, color: AppColors.textOnDark),
           ),
         ),
       ),
@@ -901,7 +892,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final description = detail?.description ?? '';
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0), 
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -909,27 +900,26 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             title,
             style: const TextStyle(
               color: AppColors.textOnDark,
-              fontSize: 22,
+              fontSize: 24, 
               fontWeight: FontWeight.w700,
               height: 1.3,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           Row(
             children: [
               Container(
-                width: 26,
-                height: 26,
+                width: 28,
+                height: 28,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  borderRadius: BorderRadius.circular(8), 
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: avatar.isEmpty
                     ? _avatarPlaceholder()
                     : _image(avatar, fit: BoxFit.cover),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Flexible(
                 child: Text(
                   author,
@@ -937,43 +927,43 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  border: Border.all(color: AppColors.accent.withOpacity(0.4)),
-                  borderRadius: BorderRadius.circular(4),
+                  color: AppColors.accent.withOpacity(0.12), 
+                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   _modeLabel(detail?.mode),
                   style: const TextStyle(
                     color: AppColors.accent,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
             ],
           ),
           if ((detail?.createdAt ?? '').isNotEmpty) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
             Text(
               _formatDate(detail!.createdAt),
-              style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 11, fontFamily: 'Courier'),
+              style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12, fontFamily: 'Courier'),
             ),
           ],
           if (description.isNotEmpty) ...[
-            const SizedBox(height: 20),
+            const SizedBox(height: 24), 
             Text(
               description,
               style: TextStyle(
                 color: AppColors.textOnDark.withOpacity(0.85),
-                fontSize: 14,
+                fontSize: 15,
                 height: 1.6,
               ),
             ),
@@ -985,7 +975,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
 
   Widget _avatarPlaceholder() {
     return Container(
-      color: Colors.white.withOpacity(0.02),
+      color: Colors.white.withOpacity(0.04),
       alignment: Alignment.center,
       child: const Icon(Icons.person, size: 14, color: AppColors.textOnDarkMuted),
     );
@@ -995,24 +985,23 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final tags = _detail?.tags ?? const <String>[];
     if (tags.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
       child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+        spacing: 10,
+        runSpacing: 10,
         children: tags
             .map(
               (tag) => Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.02),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                  borderRadius: BorderRadius.circular(4),
+                  color: Colors.white.withOpacity(0.06), 
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   tag,
                   style: const TextStyle(
-                    color: AppColors.textOnDarkMuted,
-                    fontSize: 11,
+                    color: AppColors.textOnDark,
+                    fontSize: 12,
                   ),
                 ),
               ),
@@ -1026,59 +1015,58 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final characters = _detail?.characters ?? const <ScenarioCharacter>[];
     if (characters.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 28),
+      padding: const EdgeInsets.only(top: 36), 
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20),
+            padding: EdgeInsets.symmetric(horizontal: 24),
             child: Text(
               '登场角色',
               style: TextStyle(
                 color: AppColors.textOnDark,
-                fontSize: 14,
+                fontSize: 15,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           SizedBox(
-            height: 80,
+            height: 90,
             child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 24),
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               itemCount: characters.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 14),
+              separatorBuilder: (_, __) => const SizedBox(width: 16),
               itemBuilder: (context, index) {
                 final char = characters[index];
                 return GestureDetector(
                   onTap: () => _showCharacterPopup(char),
                   child: SizedBox(
-                    width: 58,
+                    width: 60,
                     child: Column(
                       children: [
                         Container(
-                          width: 52,
-                          height: 52,
+                          width: 56,
+                          height: 56,
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.02),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: Colors.white.withOpacity(0.08)),
+                            color: Colors.white.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(16), 
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: (char.avatarUrl ?? '').isEmpty
                               ? const Icon(Icons.person, color: AppColors.textOnDarkMuted)
-                              : _image(char.avatarUrl!, fit: BoxFit.cover),
+                              : _image(CdnUtil.resize(char.avatarUrl!, width: 120), fit: BoxFit.cover), 
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 10),
                         Text(
                           char.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: AppColors.textOnDarkMuted,
-                            fontSize: 11,
+                            color: AppColors.textOnDark,
+                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -1095,21 +1083,21 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
 
   Widget _buildMainEnterButton() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+      padding: const EdgeInsets.fromLTRB(24, 36, 24, 32),
       child: Material(
         color: AppColors.accent,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(14), 
         child: InkWell(
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(14),
           onTap: _launching ? null : _playScenario,
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(vertical: 16),
             alignment: Alignment.center,
             child: _launching
                 ? const SizedBox(
-                    width: 18,
-                    height: 18,
+                    width: 20,
+                    height: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
                       color: Color(0xFF121212),
@@ -1118,14 +1106,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                 : const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(LucideIcons.play, size: 16, color: Color(0xFF0A0A0A)),
+                      Icon(LucideIcons.play, size: 18, color: Color(0xFF0A0A0A)),
                       SizedBox(width: 8),
                       Text(
                         '进入世界',
                         style: TextStyle(
                           color: Color(0xFF0A0A0A),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
@@ -1138,7 +1126,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
 
   Widget _buildCommentSection() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1146,18 +1134,18 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             '评论区${_totalComments > 0 ? ' ($_totalComments)' : ''}',
             style: const TextStyle(
               color: AppColors.textOnDark,
-              fontSize: 15,
+              fontSize: 16,
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 24), 
           if (_commentsLoading)
             const Center(
               child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 20),
                 child: SizedBox(
-                  width: 18,
-                  height: 18,
+                  width: 20,
+                  height: 20,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
                     color: AppColors.accent,
@@ -1179,7 +1167,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         _commentsError!,
                         style: const TextStyle(
                           color: AppColors.textOnDarkMuted,
-                          fontSize: 12,
+                          fontSize: 13,
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -1187,7 +1175,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         '重试',
                         style: TextStyle(
                           color: AppColors.accent,
-                          fontSize: 12,
+                          fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1199,23 +1187,19 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
           else if (_comments.isEmpty)
             const Center(
               child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
+                padding: EdgeInsets.symmetric(vertical: 30),
                 child: Text(
                   '还没有评论，来抢个沙发吧',
                   style: TextStyle(
                     color: AppColors.textOnDarkMuted,
-                    fontSize: 12,
+                    fontSize: 13,
                   ),
                 ),
               ),
             )
           else
             for (int i = 0; i < _comments.length; i++) ...[
-              if (i > 0)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  child: Divider(height: 1, color: Colors.white.withOpacity(0.04)),
-                ),
+              if (i > 0) const SizedBox(height: 28), 
               _buildCommentItem(_comments[i]),
             ],
         ],
@@ -1228,7 +1212,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     ScenarioComment? parent,
     bool isReply = false,
   }) {
-    final avatarSize = isReply ? 24.0 : 32.0;
+    final avatarSize = isReply ? 26.0 : 36.0;
     final visibleCount = !isReply
         ? comment.visibleReplyCount.clamp(0, comment.replies.length).toInt()
         : 0;
@@ -1239,13 +1223,12 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final isTarget = _isTargetComment(comment.id);
     return Container(
       key: _commentKey(comment.id),
-      margin: EdgeInsets.only(left: isReply ? 42 : 0, top: isReply ? 16 : 0),
+      margin: EdgeInsets.only(left: isReply ? 46 : 0, top: isReply ? 20 : 0),
       padding: isTarget ? const EdgeInsets.all(12) : EdgeInsets.zero,
       decoration: isTarget
           ? BoxDecoration(
-              color: Colors.white.withOpacity(0.02),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: AppColors.accent.withOpacity(0.4)),
+              color: Colors.white.withOpacity(0.04), 
+              borderRadius: BorderRadius.circular(10),
             )
           : null,
       child: Row(
@@ -1255,15 +1238,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             width: avatarSize,
             height: avatarSize,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
+              borderRadius: BorderRadius.circular(avatarSize / 2), 
             ),
             clipBehavior: Clip.antiAlias,
             child: (comment.authorAvatarUrl ?? '').isEmpty
                 ? _avatarPlaceholder()
-                : _image(comment.authorAvatarUrl!, fit: BoxFit.cover),
+                : _image(CdnUtil.resize(comment.authorAvatarUrl!, width: 100), fit: BoxFit.cover), 
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1276,7 +1258,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: AppColors.textOnDarkMuted,
-                          fontSize: isReply ? 11 : 12,
+                          fontSize: isReply ? 12 : 13,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1284,16 +1266,16 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                     if (_isAuthorComment(comment)) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          border: Border.all(color: AppColors.accent.withOpacity(0.4)),
-                          borderRadius: BorderRadius.circular(2),
+                          color: AppColors.accent.withOpacity(0.12), 
+                          borderRadius: BorderRadius.circular(4),
                         ),
                         child: const Text(
                           '作者',
                           style: TextStyle(
                             color: AppColors.accent,
-                            fontSize: 9,
+                            fontSize: 10,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -1302,16 +1284,16 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                     if (comment.isPinned) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          border: Border.all(color: const Color(0xFFE8C58B).withOpacity(0.4)),
-                          borderRadius: BorderRadius.circular(2),
+                          color: const Color(0xFFE8C58B).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(4),
                         ),
                         child: const Text(
                           '置顶',
                           style: TextStyle(
                             color: Color(0xFFE8C58B),
-                            fontSize: 9,
+                            fontSize: 10,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -1319,16 +1301,16 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                     ],
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
                 Text(
                   comment.content,
                   style: TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: isReply ? 12.5 : 13.5,
-                    height: 1.5,
+                    fontSize: isReply ? 13 : 14,
+                    height: 1.6, 
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 Row(
                   children: [
                     if ((comment.createdAt ?? '').isNotEmpty)
@@ -1336,26 +1318,26 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         _formatDate(comment.createdAt, withTime: true),
                         style: const TextStyle(
                           color: AppColors.textOnDarkMuted,
-                          fontSize: 10,
+                          fontSize: 11,
                           fontFamily: 'Courier',
                         ),
                       ),
                     if (!_isMyComment(comment)) ...[
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 20),
                       GestureDetector(
                         onTap: () => _startReply(comment),
                         child: const Text(
                           '回复',
                           style: TextStyle(
                             color: AppColors.textOnDarkMuted,
-                            fontSize: 11,
+                            fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
                     ],
                     if (_isMyComment(comment) || (_isOwner && !isReply)) ...[
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 12),
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
@@ -1363,7 +1345,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         onPressed: () => _showCommentActions(comment, isReply: isReply),
                         icon: const Icon(
                           Icons.more_horiz_rounded,
-                          size: 14,
+                          size: 16,
                           color: AppColors.textOnDarkMuted,
                         ),
                       ),
@@ -1373,12 +1355,12 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       onTap: () => _toggleCommentLike(comment, parent: parent),
                       behavior: HitTestBehavior.opaque,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 5),
+                        padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
                         child: Row(
                           children: [
                             Icon(
-                              LucideIcons.heart,
-                              size: 13,
+                              comment.isLiked ? Icons.favorite : Icons.favorite_border,
+                              size: 14,
                               color: comment.isLiked
                                   ? const Color(0xFFE0554A)
                                   : AppColors.textOnDarkMuted,
@@ -1389,7 +1371,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                 '${comment.likes}',
                                 style: const TextStyle(
                                   color: AppColors.textOnDarkMuted,
-                                  fontSize: 11,
+                                  fontSize: 12,
                                 ),
                               ),
                             ],
@@ -1412,14 +1394,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   ),
                 if (!isReply && comment.replies.length > visibleCount)
                   Padding(
-                    padding: const EdgeInsets.only(left: 42, top: 12),
+                    padding: const EdgeInsets.only(left: 46, top: 16),
                     child: GestureDetector(
                       onTap: () => _expandReplies(comment),
                       child: Text(
                         '展开更多回复 (${comment.replies.length - visibleCount})',
                         style: const TextStyle(
                           color: AppColors.accent,
-                          fontSize: 11,
+                          fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1427,14 +1409,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   ),
                 if (!isReply && comment.replies.length > 1 && visibleCount >= comment.replies.length)
                   Padding(
-                    padding: const EdgeInsets.only(left: 42, top: 12),
+                    padding: const EdgeInsets.only(left: 46, top: 16),
                     child: GestureDetector(
                       onTap: () => _collapseReplies(comment),
                       child: const Text(
                         '收起回复',
                         style: TextStyle(
                           color: AppColors.textOnDarkMuted,
-                          fontSize: 11,
+                          fontSize: 12,
                         ),
                       ),
                     ),
@@ -1452,21 +1434,20 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
       context: context,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => Container(
-        margin: const EdgeInsets.all(12),
+        margin: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: const Color(0xFF161616),
-          border: Border.all(color: Colors.white.withOpacity(0.08)),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(16), 
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (_isOwner && !isReply)
               ListTile(
-                leading: const Icon(Icons.push_pin_outlined, color: AppColors.textOnDarkMuted, size: 18),
+                leading: const Icon(Icons.push_pin_outlined, color: AppColors.textOnDark, size: 20),
                 title: Text(
                   comment.isPinned ? '取消置顶' : '置顶评论',
-                  style: const TextStyle(color: AppColors.textOnDark, fontSize: 14),
+                  style: const TextStyle(color: AppColors.textOnDark, fontSize: 15),
                 ),
                 onTap: () {
                   Navigator.pop(sheetContext);
@@ -1475,10 +1456,10 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
               ),
             if (_isMyComment(comment))
               ListTile(
-                leading: const Icon(Icons.delete_outline, color: Color(0xFFE0554A), size: 18),
+                leading: const Icon(Icons.delete_outline, color: Color(0xFFE0554A), size: 20),
                 title: const Text(
                   '删除评论',
-                  style: TextStyle(color: Color(0xFFE0554A), fontSize: 14),
+                  style: TextStyle(color: Color(0xFFE0554A), fontSize: 15),
                 ),
                 onTap: () {
                   Navigator.pop(sheetContext);
@@ -1487,7 +1468,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
               ),
             ListTile(
               title: const Center(
-                child: Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 14)),
+                child: Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 15)),
               ),
               onTap: () => Navigator.pop(sheetContext),
             ),
@@ -1501,14 +1482,11 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final bottomPadding = MediaQuery.paddingOf(context).bottom;
     return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30), 
         child: Container(
-          padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + bottomPadding),
+          padding: EdgeInsets.fromLTRB(20, 14, 20, 14 + bottomPadding),
           decoration: BoxDecoration(
-            color: _pageBg.withOpacity(0.9),
-            border: Border(
-              top: BorderSide(color: Colors.white.withOpacity(.08), width: 1),
-            ),
+            color: _pageBg.withOpacity(0.85),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1523,7 +1501,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: AppColors.textOnDarkMuted,
-                          fontSize: 11,
+                          fontSize: 12,
                         ),
                       ),
                     ),
@@ -1531,30 +1509,29 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       onTap: () => _cancelReply(clearInput: false),
                       child: const Icon(
                         Icons.close_rounded,
-                        size: 14,
+                        size: 16,
                         color: AppColors.textOnDarkMuted,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
               ],
               Row(
                 children: [
                   Expanded(
                     child: Container(
-                      height: 40,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      height: 42,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(.02),
-                        border: Border.all(color: Colors.white.withOpacity(0.08)),
-                        borderRadius: BorderRadius.circular(4),
+                        color: Colors.white.withOpacity(.06), 
+                        borderRadius: BorderRadius.circular(21), 
                       ),
                       alignment: Alignment.centerLeft,
                       child: TextField(
                         controller: _commentController,
                         focusNode: _commentFocusNode,
-                        style: const TextStyle(color: AppColors.textOnDark, fontSize: 13),
+                        style: const TextStyle(color: AppColors.textOnDark, fontSize: 14),
                         onTapOutside: (_) {
                           if (_replyingTo != null && !_hasInput) {
                             _cancelReply(clearInput: false);
@@ -1567,6 +1544,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                               : '回复 @${_replyingTo!.authorName}',
                           hintStyle: TextStyle(
                             color: AppColors.textOnDarkMuted.withOpacity(.6),
+                            fontSize: 13,
                           ),
                           border: InputBorder.none,
                           isDense: true,
@@ -1575,7 +1553,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 20),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 180),
                     child: _hasInput
@@ -1584,12 +1562,12 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                             onTap: _sendingComment ? null : _submitComment,
                             child: Container(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
+                                horizontal: 16,
                                 vertical: 10,
                               ),
                               decoration: BoxDecoration(
                                 color: AppColors.accent,
-                                borderRadius: BorderRadius.circular(4),
+                                borderRadius: BorderRadius.circular(20), 
                               ),
                               child: _sendingComment
                                   ? const SizedBox(
@@ -1604,35 +1582,58 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                       '发送',
                                       style: TextStyle(
                                         color: Colors.black,
-                                        fontSize: 12,
+                                        fontSize: 13,
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
                             ),
                           )
-                        : GestureDetector(
-                            key: const ValueKey('like'),
-                            onTap: _liking ? null : _toggleLike,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  LucideIcons.heart,
-                                  size: 22,
-                                  color: _isLiked
-                                      ? const Color(0xFFE0554A)
-                                      : AppColors.textOnDark,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  '$_likeCount',
-                                  style: const TextStyle(
-                                    color: AppColors.textOnDark,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
+                        : Row(
+                            key: const ValueKey('actions'), 
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              GestureDetector(
+                                onTap: _collecting ? null : _toggleCollect,
+                                behavior: HitTestBehavior.opaque,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                                  child: Icon(
+                                    _isCollected ? Icons.star_rounded : Icons.star_border_rounded,
+                                    size: 26, 
+                                    color: _isCollected ? Colors.amber : AppColors.textOnDark,
                                   ),
                                 ),
-                              ],
-                            ),
+                              ),
+                              const SizedBox(width: 4), 
+                              GestureDetector(
+                                key: const ValueKey('like'),
+                                onTap: _liking ? null : _toggleLike,
+                                behavior: HitTestBehavior.opaque,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        _isLiked ? Icons.favorite : Icons.favorite_border,
+                                        size: 24,
+                                        color: _isLiked
+                                            ? const Color(0xFFE0554A)
+                                            : AppColors.textOnDark,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '$_likeCount',
+                                        style: const TextStyle(
+                                          color: AppColors.textOnDark,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                   ),
                 ],
@@ -1649,41 +1650,26 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
       context: context,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => Container(
-        margin: const EdgeInsets.all(12),
+        margin: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: const Color(0xFF161616),
-          border: Border.all(color: Colors.white.withOpacity(0.08)),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(16), 
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.link_rounded, color: AppColors.textOnDarkMuted, size: 18),
-              title: const Text('复制链接', style: TextStyle(color: AppColors.textOnDark, fontSize: 14)),
+              leading: const Icon(Icons.link_rounded, color: AppColors.textOnDark, size: 20),
+              title: const Text('复制链接', style: TextStyle(color: AppColors.textOnDark, fontSize: 15)),
               onTap: () {
                 Navigator.pop(sheetContext);
                 _copyLink();
               },
             ),
-            if (_isOwner)
-              ListTile(
-                leading: const Icon(Icons.delete_outline, color: Color(0xFFE0554A), size: 18),
-                title: Text(
-                  _deletingScenario ? '删除中…' : '删除作品',
-                  style: const TextStyle(color: Color(0xFFE0554A), fontSize: 14),
-                ),
-                onTap: _deletingScenario
-                    ? null
-                    : () {
-                        Navigator.pop(sheetContext);
-                        _deleteScenario();
-                      },
-              ),
-            Divider(height: 1, color: Colors.white.withOpacity(.04)),
+            const SizedBox(height: 8), 
             ListTile(
               title: const Center(
-                child: Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 14)),
+                child: Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 15)),
               ),
               onTap: () => Navigator.pop(sheetContext),
             ),
@@ -1694,6 +1680,10 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   }
 
   void _showCharacterPopup(ScenarioCharacter character) {
+    final String displayImageUrl = (character.portraitUrl != null && character.portraitUrl!.isNotEmpty)
+        ? character.portraitUrl!
+        : (character.avatarUrl ?? '');
+
     showDialog<void>(
       context: context,
       builder: (dialogContext) => Dialog(
@@ -1703,29 +1693,28 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
           constraints: const BoxConstraints(maxHeight: 520),
           decoration: BoxDecoration(
             color: const Color(0xFF161616),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white.withOpacity(.08)),
+            borderRadius: BorderRadius.circular(20), 
           ),
           clipBehavior: Clip.antiAlias,
           child: SingleChildScrollView(
             child: Column(
               children: [
-                if ((character.avatarUrl ?? '').isNotEmpty)
+                if (displayImageUrl.isNotEmpty)
                   GestureDetector(
                     onTap: () {
                       Navigator.pop(dialogContext);
-                      _showImagePreview(character.avatarUrl!);
+                      _showImagePreview(displayImageUrl);
                     },
                     child: AspectRatio(
-                      aspectRatio: 1, // 弹窗立绘也采用 1:1 展示防裁减
+                      aspectRatio: 1, 
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
                           ImageFiltered(
                             imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                            child: _image(character.avatarUrl!, fit: BoxFit.cover, opacity: 0.4),
+                            child: _image(displayImageUrl, fit: BoxFit.cover, opacity: 0.4),
                           ),
-                          _image(character.avatarUrl!, fit: BoxFit.contain),
+                          _image(displayImageUrl, fit: BoxFit.contain),
                         ],
                       ),
                     ),
@@ -1736,29 +1725,36 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                     child: _errorPlaceholder(),
                   ),
                 Padding(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(28), 
                   child: Column(
                     children: [
                       Text(
                         character.name,
                         style: const TextStyle(
                           color: AppColors.textOnDark,
-                          fontSize: 18,
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        (character.identity ?? '').isNotEmpty
-                            ? character.identity!
-                            : '神秘角色',
-                        style: const TextStyle(
-                          color: AppColors.accent,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.accent.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          (character.identity ?? '').isNotEmpty
+                              ? character.identity!
+                              : '神秘角色',
+                          style: const TextStyle(
+                            color: AppColors.accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 24),
                       Text(
                         (character.desc ?? '').isNotEmpty
                             ? character.desc!
@@ -1766,7 +1762,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: AppColors.textOnDarkMuted,
-                          fontSize: 13,
+                          fontSize: 14,
                           height: 1.6,
                         ),
                       ),

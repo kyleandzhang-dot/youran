@@ -280,8 +280,9 @@ class _WorldPanelState extends State<_WorldPanel> {
   // 世界切换属于导航操作，不能只依赖 selectedGameIndex 做拦截。
   // 用户连续点击时，父层还没来得及更新 selectedGameIndex，旧代码会重复触发
   // onGameSelected，最终造成同一个世界被连续 push 多次。这里先同步上锁，
-  // 再执行外层切换；1.2 秒后仅作为兜底解锁。正常进入新页面时本 State 会销毁。
-  static const Duration _worldLaunchGuardDuration = Duration(milliseconds: 1200);
+  // 再执行外层切换；2 秒后仅作为兜底解锁。正常进入新页面时本 State 会销毁。
+  // 这段时间同时展示可见的 Loading，避免用户误以为点击没有生效。
+  static const Duration _worldLaunchGuardDuration = Duration(seconds: 2);
 
   bool _worldLaunchLocked = false;
   Timer? _worldLaunchUnlockTimer;
@@ -309,20 +310,24 @@ class _WorldPanelState extends State<_WorldPanel> {
 
     // 防重复进入：第一次点击后立刻锁住，后续连续点击全部丢弃。
     if (_worldLaunchLocked) return;
-    _worldLaunchLocked = true;
     _worldLaunchUnlockTimer?.cancel();
+    setState(() => _worldLaunchLocked = true);
 
     try {
       widget.onGameSelected(index);
-    } catch (_) {
-      _worldLaunchLocked = false;
-      rethrow;
+    } catch (error, stackTrace) {
+      debugPrint('进入剧情失败：$error\n$stackTrace');
+      if (mounted) {
+        setState(() => _worldLaunchLocked = false);
+        AppNotice.error(context, '进入剧情失败，请重试');
+      }
+      return;
     }
 
     // 兜底：如果外层因为异常没有发生页面切换，也不会永久锁死。
     _worldLaunchUnlockTimer = Timer(_worldLaunchGuardDuration, () {
       if (!mounted) return;
-      _worldLaunchLocked = false;
+      setState(() => _worldLaunchLocked = false);
     });
   }
 
@@ -364,34 +369,83 @@ class _WorldPanelState extends State<_WorldPanel> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: _refresh,
-      color: _drawerAccent,
-      child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
-        physics: const AlwaysScrollableScrollPhysics(
-          parent: BouncingScrollPhysics(),
-        ),
-        itemCount: widget.games.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
-        itemBuilder: (context, index) {
-          return _WorldItem(
-            game: widget.games[index],
-            selected: widget.selectedGameIndex == index,
-            onTap: () => _selectWorld(context, index),
-            onDetailTap: () {
-              final callback = widget.onEditWorld;
-              if (callback == null) {
-                debugPrint('未配置 onEditWorld：${widget.games[index].title}');
-                return;
-              }
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: _refresh,
+          color: _drawerAccent,
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            itemCount: widget.games.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              return _WorldItem(
+                game: widget.games[index],
+                selected: widget.selectedGameIndex == index,
+                onTap: () => _selectWorld(context, index),
+                onDetailTap: () {
+                  final callback = widget.onEditWorld;
+                  if (callback == null) {
+                    debugPrint('未配置 onEditWorld：${widget.games[index].title}');
+                    return;
+                  }
 
-              // 直接触发跳转，不关闭抽屉
-              callback(index);
+                  // 直接触发跳转，不关闭抽屉
+                  callback(index);
+                },
+              );
             },
-          );
-        },
-      ),
+          ),
+        ),
+        if (_worldLaunchLocked) ...[
+          ModalBarrier(
+            dismissible: false,
+            color: Colors.black.withOpacity(0.34),
+          ),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF171A1F).withOpacity(0.96),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withOpacity(0.10)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x66000000),
+                    blurRadius: 18,
+                    offset: Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      color: _drawerAccent,
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Text(
+                    '正在进入剧情…',
+                    style: TextStyle(
+                      color: AppColors.textOnDark,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -778,7 +832,7 @@ class _DrawerHeader extends StatelessWidget {
                           avatarUrl != null &&
                           avatarUrl!.isNotEmpty)
                       ? Image.network(
-                          avatarUrl!,
+                          CdnUtil.resize(avatarUrl!, width: 128),
                           width: 44,
                           height: 44,
                           fit: BoxFit.cover,
@@ -1291,6 +1345,12 @@ class _DiscoverPanel extends StatefulWidget {
   State<_DiscoverPanel> createState() => _DiscoverPanelState();
 }
 
+// 发现页固定只展示「小说」类型剧本，不再需要分类切换。
+const String _kDiscoverFixedMode = 'novel';
+const String _kDiscoverFixedSort = 'recommend';
+
+enum _DiscoverGenderFilter { all, male, female }
+
 class _DiscoverPanelState extends State<_DiscoverPanel> {
   List<StoreItem> _items = [];
   final Map<String, String> _genderById = <String, String>{};
@@ -1299,10 +1359,24 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
   bool _loading = true;
   bool _failed = false;
 
+  _DiscoverGenderFilter _genderFilter = _DiscoverGenderFilter.all;
+
+  bool _searchExpanded = false;
+  String _searchText = '';
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -1312,7 +1386,16 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
     });
 
     try {
-      final items = await StoreApi.getStoreList();
+      final query = _searchText.trim();
+      final gender = _genderFilter == _DiscoverGenderFilter.all
+          ? null
+          : (_genderFilter == _DiscoverGenderFilter.male ? '男' : '女');
+      final items = await StoreApi.getStoreList(
+        mode: _kDiscoverFixedMode,
+        sort: _kDiscoverFixedSort,
+        query: query.isEmpty ? null : query,
+        gender: gender,
+      );
       if (!mounted) return;
 
       setState(() {
@@ -1381,8 +1464,98 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
     }
   }
 
+  void _toggleSearch() {
+    setState(() => _searchExpanded = !_searchExpanded);
+    if (!_searchExpanded && _searchText.isNotEmpty) {
+      _searchDebounce?.cancel();
+      _searchController.clear();
+      _searchText = '';
+      _load();
+    }
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted || _searchText == value) return;
+      _searchText = value;
+      _load();
+    });
+  }
+
+  void _onGenderFilterChanged(_DiscoverGenderFilter value) {
+    if (_genderFilter == value) return;
+    setState(() => _genderFilter = value);
+    // gender 参数已经带给后端；这里重新请求一次，
+    // 等后端接入筛选后可以直接拿到服务端过滤+分页好的结果。
+    _load();
+  }
+
+  /// 客户端兜底过滤：在后端尚未支持 gender 参数、或某条剧本性别还没
+  /// 从详情接口补齐之前，先在本地按已知性别过滤一遍，避免看到不符的内容。
+  List<StoreItem> get _filteredItems {
+    if (_genderFilter == _DiscoverGenderFilter.all) return _items;
+    final target = _genderFilter == _DiscoverGenderFilter.male ? '男' : '女';
+    return _items.where((item) {
+      final gender = _genderById[item.id] ?? _discoverGenderOfStoreItem(item);
+      return gender == target;
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _buildFilterHeader(),
+        Expanded(child: _buildBody()),
+      ],
+    );
+  }
+
+  Widget _buildFilterHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _DiscoverGenderFilterRow(
+                  value: _genderFilter,
+                  onChanged: _onGenderFilterChanged,
+                ),
+              ),
+              const SizedBox(width: 6),
+              _DiscoverIconButton(
+                icon: _searchExpanded ? LucideIcons.x : LucideIcons.search,
+                active: _searchExpanded,
+                onTap: _toggleSearch,
+              ),
+            ],
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: _searchExpanded
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: _DiscoverSearchField(
+                      controller: _searchController,
+                      onChanged: _onSearchChanged,
+                    ),
+                  )
+                : const SizedBox(width: double.infinity, height: 0),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+  Widget _buildBody() {
     if (_loading) {
       return const Center(
         child: SizedBox(
@@ -1402,10 +1575,12 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
       );
     }
 
-    if (_items.isEmpty) {
+    final filtered = _filteredItems;
+
+    if (filtered.isEmpty) {
       return Center(
         child: Text(
-          '暂无内容',
+          _items.isEmpty ? '暂无内容' : '没有符合筛选条件的内容',
           style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 13),
         ),
       );
@@ -1423,9 +1598,9 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
           crossAxisSpacing: 10,
           childAspectRatio: 0.68,
         ),
-        itemCount: _items.length,
+        itemCount: filtered.length,
         itemBuilder: (context, index) {
-          final item = _items[index];
+          final item = filtered[index];
           return _DiscoverItem(
             id: item.id,
             imageUrl: item.coverUrl,
@@ -1457,6 +1632,162 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
           );
         },
       ),
+    );
+  }
+}
+
+/// 发现页右上角的搜索开关按钮。
+class _DiscoverIconButton extends StatelessWidget {
+  const _DiscoverIconButton({
+    required this.icon,
+    required this.onTap,
+    this.active = false,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? _drawerAccent.withOpacity(0.18)
+                : Colors.white.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: active
+                  ? _drawerAccent.withOpacity(0.5)
+                  : Colors.white.withOpacity(0.08),
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 15,
+            color: active ? _drawerAccent : AppColors.textOnDarkMuted,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 展开态的搜索输入框，风格与抽屉整体保持一致。
+class _DiscoverSearchField extends StatelessWidget {
+  const _DiscoverSearchField({
+    required this.controller,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: [
+          Icon(LucideIcons.search, size: 14, color: AppColors.textOnDarkMuted),
+          const SizedBox(width: 6),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              autofocus: true,
+              onChanged: onChanged,
+              onSubmitted: onChanged,
+              style: const TextStyle(color: AppColors.textOnDark, fontSize: 12.5),
+              cursorColor: _drawerAccent,
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: '搜索标题、作者、标签',
+                hintStyle: TextStyle(
+                  color: AppColors.textOnDarkMuted.withOpacity(0.7),
+                  fontSize: 12.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 主角性别筛选（客户端过滤，配色与卡片上的 ♂/♀ 徽章保持一致）。
+class _DiscoverGenderFilterRow extends StatelessWidget {
+  const _DiscoverGenderFilterRow({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final _DiscoverGenderFilter value;
+  final ValueChanged<_DiscoverGenderFilter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget chip(String label, _DiscoverGenderFilter target, Color accent) {
+      final active = value == target;
+      return Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () =>
+                onChanged(active ? _DiscoverGenderFilter.all : target),
+            borderRadius: BorderRadius.circular(999),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              height: 26,
+              padding: const EdgeInsets.symmetric(horizontal: 11),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: active
+                    ? accent.withOpacity(0.16)
+                    : Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: active
+                      ? accent.withOpacity(0.55)
+                      : Colors.white.withOpacity(0.08),
+                ),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: active ? accent : AppColors.textOnDarkMuted,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        chip('全部', _DiscoverGenderFilter.all, _drawerAccent),
+        chip('♂ 男主', _DiscoverGenderFilter.male, const Color(0xFF72AFFF)),
+        chip('♀ 女主', _DiscoverGenderFilter.female, const Color(0xFFF28DB5)),
+      ],
     );
   }
 }
@@ -1559,7 +1890,7 @@ class _DiscoverItem extends StatelessWidget {
                       borderRadius:
                           const BorderRadius.vertical(top: Radius.circular(8)),
                       child: Image.network(
-                        imageUrl,
+                        CdnUtil.resize(imageUrl, width: 300),
                         width: double.infinity,
                         height: double.infinity,
                         fit: BoxFit.cover,
@@ -1606,7 +1937,7 @@ class _DiscoverItem extends StatelessWidget {
                             children: [
                               ClipOval(
                                 child: Image.network(
-                                  avatarUrl,
+                                  CdnUtil.resize(avatarUrl, width: 64),
                                   width: 14,
                                   height: 14,
                                   fit: BoxFit.cover,
@@ -1733,11 +2064,17 @@ class _MinePanelState extends State<_MinePanel> {
 
   bool _loading = false;
   String? _error;
+  String? _removingItemId;
 
   bool _notificationsLoaded = false;
   bool _notificationsLoading = false;
   bool _markingAll = false;
   String? _notificationsError;
+
+  List<StoreItem> _favoriteItems = const [];
+  bool _favoritesLoaded = false;
+  bool _favoritesLoading = false;
+  String? _favoritesError;
 
 
   int get _unreadCount => _notificationsLoaded
@@ -1763,9 +2100,12 @@ class _MinePanelState extends State<_MinePanel> {
         _publishedItems = const [];
         _notifications = const [];
         _notificationsLoaded = false;
+        _favoriteItems = const [];
+        _favoritesLoaded = false;
         _expandedSection = null;
         _error = null;
         _notificationsError = null;
+        _favoritesError = null;
       });
     }
   }
@@ -1779,6 +2119,7 @@ class _MinePanelState extends State<_MinePanel> {
 
     UserProfile? profile;
     List<StoreItem>? published;
+    List<StoreItem>? favorites; // 👈 新增：定义收藏列表变量
     Object? profileError;
     Object? publishedError;
 
@@ -1794,10 +2135,23 @@ class _MinePanelState extends State<_MinePanel> {
       publishedError = e;
     }
 
+    // 👈 新增：一开始就顺便加载收藏列表
+    try {
+      favorites = await StoreApi.getMyCollectedScenarios();
+    } catch (e) {
+      // 失败了就不管，稍后点开时还会重试
+    }
+
     if (!mounted) return;
     setState(() {
       if (profile != null) _profile = profile;
       if (published != null) _publishedItems = published;
+      // 👈 新增：如果拿到了收藏，就存进状态，并标记为已加载
+      if (favorites != null) {
+        _favoriteItems = favorites;
+        _favoritesLoaded = true; 
+      }
+      
       _loading = false;
       if (profileError != null && publishedError != null) {
         _error = '个人信息加载失败';
@@ -1810,6 +2164,9 @@ class _MinePanelState extends State<_MinePanel> {
     if (_notificationsLoaded || _expandedSection == _MineSection.notifications) {
       await _loadNotifications();
     }
+    if (_favoritesLoaded || _expandedSection == _MineSection.favorites) {
+      await _loadFavorites();
+    }
   }
 
   void _toggleSection(_MineSection section) {
@@ -1820,6 +2177,33 @@ class _MinePanelState extends State<_MinePanel> {
 
     if (willOpen && section == _MineSection.notifications && !_notificationsLoaded) {
       _loadNotifications();
+    }
+    if (willOpen && section == _MineSection.favorites && !_favoritesLoaded) {
+      _loadFavorites();
+    }
+  }
+
+  Future<void> _loadFavorites() async {
+    if (_favoritesLoading) return;
+    setState(() {
+      _favoritesLoading = true;
+      _favoritesError = null;
+    });
+
+    try {
+      final items = await StoreApi.getMyCollectedScenarios();
+      if (!mounted) return;
+      setState(() {
+        _favoriteItems = items;
+        _favoritesLoaded = true;
+        _favoritesLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _favoritesLoading = false;
+        _favoritesError = '收藏列表加载失败';
+      });
     }
   }
 
@@ -1981,6 +2365,74 @@ class _MinePanelState extends State<_MinePanel> {
     );
   }
 
+  Future<void> _deletePublishedItem(StoreItem item) async {
+    // 防止重复点击
+    if (_removingItemId == item.id) return; 
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF161616),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          '移除作品', 
+          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)
+        ),
+        content: const Text(
+          '移除后，该作品将从发现页面下架，不会删掉你的本地世界。确定继续吗？',
+          style: TextStyle(color: Colors.white70, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('移除', style: TextStyle(color: _drawerAccent, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    // 👈 弹窗确认后，立刻进入加载状态
+    setState(() => _removingItemId = item.id);
+
+    try {
+      await StoreApi.deletePublishedScenario(item.id);
+      if (!mounted) return;
+      setState(() {
+        _publishedItems = _publishedItems.where((e) => e.id != item.id).toList();
+      });
+      AppNotice.success(context, '已从发现页移除'); // 文案也顺便改成移除
+    } catch (_) {
+      if (!mounted) return;
+      AppNotice.error(context, '移除失败');
+    } finally {
+      // 👈 无论成功还是失败，最后都清空加载状态
+      if (mounted) {
+        setState(() => _removingItemId = null);
+      }
+    }
+  }
+
+  Future<void> _unfavoriteItem(StoreItem item) async {
+    final previous = _favoriteItems;
+    setState(() {
+      _favoriteItems = _favoriteItems.where((e) => e.id != item.id).toList();
+    });
+    try {
+      await StoreApi.uncollectScenario(item.id);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _favoriteItems = previous);
+      AppNotice.error(context, '取消收藏失败');
+    }
+  }
+
   void _openNotificationTarget(AppNotification item) {
     final templateId = item.templateId?.trim();
     if (templateId == null || templateId.isEmpty) {
@@ -2119,7 +2571,7 @@ class _MinePanelState extends State<_MinePanel> {
                 borderRadius: BorderRadius.circular(6),
                 child: item.coverUrl.isNotEmpty
                     ? Image.network(
-                        item.coverUrl,
+                        CdnUtil.resize(item.coverUrl, width: 120),
                         width: 48,
                         height: 48,
                         fit: BoxFit.cover,
@@ -2175,11 +2627,31 @@ class _MinePanelState extends State<_MinePanel> {
                   ],
                 ),
               ),
-              Icon(
-                LucideIcons.chevronRight,
-                size: 15,
-                color: AppColors.textOnDarkMuted.withOpacity(0.45),
-              ),
+              // 将原本的 chevronRight 替换为了直接的删除按钮
+              // 替换掉原本刺眼的红色 delete_outline_rounded
+              // 👈 替换原本的 IconButton
+              _removingItemId == item.id
+                  ? const Padding(
+                      padding: EdgeInsets.only(right: 10, left: 10),
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: _drawerAccent, // 绿色的加载圈，呼应整体风格
+                        ),
+                      ),
+                    )
+                  : IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      icon: Icon(
+                        LucideIcons.trash2, // 或者你后来换成的 visibility_off_outlined
+                        size: 16,
+                        color: AppColors.textOnDarkMuted.withOpacity(0.7),
+                      ),
+                      onPressed: () => _deletePublishedItem(item),
+                    ),
             ],
           ),
         ),
@@ -2188,14 +2660,118 @@ class _MinePanelState extends State<_MinePanel> {
   }
 
   Widget _buildFavoritesInline() {
+    if (_favoritesLoading && _favoriteItems.isEmpty) {
+      return const _MineInlineLoading();
+    }
+    if (_favoritesError != null && _favoriteItems.isEmpty) {
+      return _MineInlineEmpty(text: _favoritesError!);
+    }
+    if (_favoriteItems.isEmpty) {
+      return const _MineInlineEmpty(text: '还没有收藏的作品');
+    }
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(44, 4, 8, 14),
-      child: Text(
-        '收藏列表接口还没提供。接入后直接在这里显示收藏作品，不再弹新窗口。',
-        style: TextStyle(
-          color: AppColors.textOnDarkMuted,
-          fontSize: 11.5,
-          height: 1.5,
+      padding: const EdgeInsets.fromLTRB(10, 2, 2, 8),
+      child: Column(
+        children: [
+          for (int i = 0; i < _favoriteItems.length; i++) ...[
+            if (i > 0)
+              Divider(
+                height: 1,
+                indent: 58,
+                color: Colors.white.withOpacity(0.045),
+              ),
+            _buildFavoriteRow(_favoriteItems[i]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFavoriteRow(StoreItem item) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openScenarioDetail(item),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: item.coverUrl.isNotEmpty
+                    ? Image.network(
+                        CdnUtil.resize(item.coverUrl, width: 120),
+                        width: 48,
+                        height: 48,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) =>
+                            _publishedCoverFallback(size: 48),
+                      )
+                    : _publishedCoverFallback(size: 48),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.textOnDark,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text(
+                          item.authorName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppColors.textOnDarkMuted,
+                            fontSize: 10.5,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Icon(
+                          LucideIcons.heart,
+                          size: 11.5,
+                          color: item.isLiked
+                              ? const Color(0xFFE0554A)
+                              : AppColors.textOnDarkMuted,
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          '${item.likes}',
+                          style: TextStyle(
+                            color: AppColors.textOnDarkMuted,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+             // 在 _buildFavoriteRow 方法中找到以下代码并替换：
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  icon: const Icon(
+                    Icons.star_rounded, // 替换为圆角星星图标
+                    size: 19, // 星星图标在视觉上偏小，建议从 17 稍微调大到 19
+                    color: Colors.amber, // 替换为琥珀黄色 (或者用 const Color(0xFFFFD700))
+                  ),
+                  onPressed: () => _unfavoriteItem(item),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -2287,7 +2863,7 @@ class _MinePanelState extends State<_MinePanel> {
                       child: avatarUrl.isEmpty
                           ? _notificationAvatarFallback()
                           : Image.network(
-                              avatarUrl,
+                              CdnUtil.resize(avatarUrl, width: 100), 
                               fit: BoxFit.cover,
                               errorBuilder: (_, __, ___) =>
                                   _notificationAvatarFallback(),
@@ -2366,7 +2942,7 @@ class _MinePanelState extends State<_MinePanel> {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(5),
                   child: Image.network(
-                    coverUrl,
+                    CdnUtil.resize(coverUrl, width: 100),
                     width: 42,
                     height: 42,
                     fit: BoxFit.cover,
@@ -2428,8 +3004,9 @@ class _MinePanelState extends State<_MinePanel> {
     return Column(
       children: [
         _MineListItem(
-          icon: LucideIcons.bookOpen,
-          title: '已发布的作品',
+          icon: Icons.public_rounded, // 替换为圆润的地球/网络图标
+          iconColor: const Color(0xFF64D2FF), // 保持清爽通透的冰蓝色
+          title: '发布的世界',
           trailingText: _loading && _publishedItems.isEmpty
               ? '…'
               : _publishedItems.length.toString(),
@@ -2441,9 +3018,14 @@ class _MinePanelState extends State<_MinePanel> {
           child: _buildPublishedInline(),
         ),
         const SizedBox(height: 4),
+        // 在 _buildPrimarySection 方法中找到对应代码并替换：
         _MineListItem(
-          icon: LucideIcons.bookmark,
-          title: '收藏的作品',
+          icon: Icons.star_rounded,// 从 LucideIcons.bookmark 改为 star
+          iconColor: Colors.amber,
+          title: '收藏的世界',
+          trailingText: _loading && _favoriteItems.isEmpty
+              ? '…'
+              : _favoriteItems.length.toString(),
           expanded: _expandedSection == _MineSection.favorites,
           onTap: () => _toggleSection(_MineSection.favorites),
         ),
@@ -2453,7 +3035,8 @@ class _MinePanelState extends State<_MinePanel> {
         ),
         const SizedBox(height: 4),
         _MineListItem(
-          icon: Icons.notifications_none_rounded,
+          icon: Icons.notifications_rounded, // 换成实心小铃铛
+          iconColor: const Color(0xFFB388FF), // 柔和的淡紫色 (如果你想用全局绿，可以写 _drawerAccent)
           title: '消息通知',
           badgeCount: _unreadCount,
           expanded: _expandedSection == _MineSection.notifications,
@@ -2630,6 +3213,7 @@ class _MineListItem extends StatelessWidget {
   const _MineListItem({
     required this.icon,
     required this.title,
+    this.iconColor,
     this.trailingText,
     this.badgeCount = 0,
     this.expanded = false,
@@ -2638,6 +3222,7 @@ class _MineListItem extends StatelessWidget {
 
   final IconData icon;
   final String title;
+  final Color? iconColor;
   final String? trailingText;
   final int badgeCount;
   final bool expanded;
@@ -2655,7 +3240,7 @@ class _MineListItem extends StatelessWidget {
           color: expanded ? Colors.white.withOpacity(0.025) : Colors.transparent,
           child: Row(
             children: [
-              Icon(icon, size: 18, color: AppColors.textOnDarkMuted),
+              Icon(icon, size: 18, color: iconColor ?? AppColors.textOnDarkMuted),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -2864,7 +3449,7 @@ class _WorldItem extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(2),
                 child: Image.network(
-                  game.imageUrl,
+                  CdnUtil.resize(game.imageUrl, width: 150), 
                   width: 52,
                   height: 52,
                   fit: BoxFit.cover,
