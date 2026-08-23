@@ -1562,7 +1562,16 @@ class NovelGameController extends ChangeNotifier {
           : current;
     }).toList();
     await refreshInventory(notify: false);
-    infoMessage = '成功获得 ${item.name}';
+    
+    // 替换为统一的 HUD 提示系统，它会自动定时消失
+    _enqueueHudEvent(
+      kind: 'inventory',
+      title: '成功获得 ${item.name}',
+      detail: '已放入背包',
+      delta: 1,
+      tone: 'accent',
+      dedupeKey: 'shop-buy:${item.itemType}',
+    );
     _notify();
   }
 

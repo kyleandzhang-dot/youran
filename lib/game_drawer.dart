@@ -1904,12 +1904,14 @@ class _DiscoverItem extends StatelessWidget {
                         ),
                       ),
                     ),
+                    // 👇 把这段加回来
                     if (gender == '男' || gender == '女')
                       Positioned(
-                        right: 7,
-                        bottom: 7,
+                        right: 6, // 稍微往边上靠一点点
+                        bottom: 6,
                         child: _DiscoverGenderBadge(gender: gender),
                       ),
+                    // 👆 恢复结束
                   ],
                 ),
               ),
@@ -1997,34 +1999,6 @@ class _DiscoverItem extends StatelessWidget {
 }
 
 
-class _DiscoverGenderBadge extends StatelessWidget {
-  const _DiscoverGenderBadge({required this.gender});
-
-  final String gender;
-
-  @override
-  Widget build(BuildContext context) {
-    final isFemale = gender == '女';
-
-    return Text(
-      isFemale ? '♀' : '♂',
-      style: TextStyle(
-        color: isFemale
-            ? const Color(0xFFF28DB5)
-            : const Color(0xFF72AFFF),
-        fontSize: 19,
-        fontWeight: FontWeight.w700,
-        height: 1,
-        shadows: const <Shadow>[
-          Shadow(
-            color: Color(0x99000000),
-            blurRadius: 5,
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 
 enum _MineSection { published, favorites, notifications }
@@ -3533,6 +3507,37 @@ class _WorldItem extends StatelessWidget {
   }
 }
 
+
+class _DiscoverGenderBadge extends StatelessWidget {
+  const _DiscoverGenderBadge({required this.gender});
+
+  final String gender;
+
+  @override
+  Widget build(BuildContext context) {
+    final isFemale = gender == '女';
+
+    return Text(
+      isFemale ? '♀' : '♂',
+      style: TextStyle(
+        color: isFemale
+            ? const Color(0xFFF28DB5)
+            : const Color(0xFF72AFFF),
+        fontSize: 15, // 告别巨无霸 19，改成克制的 15
+        fontWeight: FontWeight.w800,
+        height: 1,
+        // 非常微弱的阴影，只为了防纯白背景，去掉了原本厚重的黑影
+        shadows: const <Shadow>[
+          Shadow(
+            color: Color(0x66000000), // 透明度降低
+            blurRadius: 3,            // 模糊范围收敛
+            offset: Offset(0, 1),     // 微微向下偏移
+          ),
+        ],
+      ),
+    );
+  }
+}
 class _BottomActionButton extends StatelessWidget {
   const _BottomActionButton({
     super.key, // <--- 补充这一行

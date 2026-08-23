@@ -4,9 +4,12 @@
 // 图片资源仅保留：
 //   assets/images/login_logo.png
 //   assets/images/login_background.png
+//
+// 新增：登录前必须勾选同意《用户协议》《隐私政策》《内容须知》
 
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -96,6 +99,9 @@ class _LoginSheetState extends State<LoginSheet> {
   bool _submitting = false;
   String? _errorText;
 
+  /// 是否已勾选同意协议与内容须知
+  bool _agreed = false;
+
   @override
   void initState() {
     super.initState();
@@ -179,6 +185,11 @@ class _LoginSheetState extends State<LoginSheet> {
   Future<void> _handleSubmit() async {
     if (_submitting) return;
 
+    if (!_agreed) {
+      setState(() => _errorText = '请先阅读并勾选同意用户协议与内容须知');
+      return;
+    }
+
     if (!_emailValid) {
       setState(() => _errorText = '请输入正确的邮箱地址');
       return;
@@ -221,6 +232,137 @@ class _LoginSheetState extends State<LoginSheet> {
       }
     }
   }
+
+  /// 弹出内容须知 / 用户协议 / 隐私政策对话框
+  void _showNoticeDialog({
+    required String title,
+    required String content,
+  }) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Text(
+            title,
+            style: const TextStyle(
+              color: _ink,
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Text(
+              content,
+              style: TextStyle(
+                color: _ink.withOpacity(.85),
+                fontSize: 13.5,
+                height: 1.55,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text(
+                '我知道了',
+                style: TextStyle(
+                  color: Color(0xFF55B84A),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // 内容须知（App Store 合规相关提示，面向用户）
+  static const String _contentNotice = '''
+【内容须知】（使用前请仔细阅读）
+
+1. AI 生成内容说明
+本应用使用人工智能实时生成无限剧情与对话。生成内容可能存在虚构、不准确或不符合预期的情况，请理性对待，仅作娱乐用途。
+
+2. 禁止的内容
+严禁生成、传播或引导以下内容：
+• 色情、露骨性描写或色情服务
+• 真实暴力、仇恨、歧视、恐吓或欺凌
+• 违法、自伤、恐怖主义或任何危害公共安全的内容
+• 侵犯他人知识产权、肖像权或隐私的内容
+
+系统会自动过滤部分不当内容。若发现违规，我们有权限制或终止账号。
+
+3. 用户责任
+您应对自己输入的指令和生成的故事负责。请勿利用本服务制作或传播违法违规内容。多次违规可能导致账号被永久封禁。
+
+4. 年龄要求
+本应用包含可能不适合未成年人的内容（部分剧情可能涉及成熟主题）。请确认您已年满 13 周岁（或当地法律要求的最低年龄）。未成年人请在监护人指导下使用。
+
+5. 举报与反馈
+如发现不当内容，请通过应用内举报功能或联系客服反馈，我们会及时处理。
+
+继续使用即表示您已阅读并同意以上内容须知，以及《用户协议》与《隐私政策》。
+''';
+
+  static const String _userAgreement = '''
+【用户协议】（摘要）
+
+欢迎使用 YO RAN。
+
+1. 服务说明
+本应用提供 AI 驱动的互动文字剧情体验。我们保留随时调整、暂停或终止服务的权利。
+
+2. 账号
+使用邮箱验证码登录后自动创建账号。您应妥善保管账号信息，不得将账号转让或出借给他人。
+
+3. 使用规范
+您同意遵守《内容须知》，不得利用本服务从事任何违法或侵权活动。我们有权对违规行为采取警告、限制功能或封禁账号等措施。
+
+4. 知识产权
+应用内由我们提供的内容、界面、代码等归我们所有。用户生成的故事内容在法律允许范围内由用户享有相应权利，但您授权我们用于服务改进与内容审核。
+
+5. 免责声明
+AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适用性作任何保证。因使用本服务产生的任何直接或间接损失，我们在法律允许范围内免责。
+
+6. 协议变更
+我们可能不时更新本协议。继续使用即视为接受更新后的协议。
+
+完整版本请以正式上线后的用户协议页面为准。
+''';
+
+  static const String _privacyPolicy = '''
+【隐私政策】（摘要）
+
+我们重视您的隐私。
+
+1. 我们收集的信息
+• 登录邮箱（用于账号识别与验证码发送）
+• 设备与使用日志（用于服务稳定性与安全）
+• 您主动输入的故事指令与生成记录（用于提供服务及内容审核）
+
+2. AI 相关数据处理
+若使用云端 AI 服务，您的部分输入文本可能被发送至第三方模型提供商以生成回复。我们会在首次使用相关功能前征得您的明确同意，并尽量减少不必要的数据传输。优先采用本地处理以保护隐私。
+
+3. 信息使用
+仅用于提供服务、账号管理、内容安全审核、改进产品体验及法律要求。
+
+4. 信息共享
+除法律法规要求或获得您明确同意外，我们不会向第三方出售或共享您的个人信息。
+
+5. 数据安全与保留
+我们采取合理技术措施保护数据安全。账号注销后，我们将按法律规定删除或匿名化相关数据。
+
+6. 您的权利
+您可联系我们查询、更正或删除个人信息，或注销账号。
+
+完整版本请以正式上线后的隐私政策页面为准。如有疑问，请通过应用内联系我们。
+''';
 
   @override
   Widget build(BuildContext context) {
@@ -274,7 +416,7 @@ class _LoginSheetState extends State<LoginSheet> {
                         // 缩小最大宽度，让输入框不会太长
                         constraints:
                             const BoxConstraints(
-                          maxWidth: 320, 
+                          maxWidth: 320,
                         ),
                         child: Column(
                           mainAxisSize:
@@ -460,10 +602,16 @@ class _LoginSheetState extends State<LoginSheet> {
 
           const SizedBox(height: 14),
 
+          // ========== 协议勾选区域 ==========
+          _buildAgreementRow(),
+
+          const SizedBox(height: 16),
+
           _LoginPrimaryButton(
             isLoading: _submitting,
             label: '登录',
-            onTap: _submitting
+            // 必须勾选协议后才能点击登录
+            onTap: (_submitting || !_agreed)
                 ? null
                 : _handleSubmit,
           ),
@@ -489,6 +637,101 @@ class _LoginSheetState extends State<LoginSheet> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 协议勾选行 + 可点击的协议链接
+  Widget _buildAgreementRow() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 22,
+          height: 22,
+          child: Checkbox(
+            value: _agreed,
+            onChanged: (value) {
+              setState(() {
+                _agreed = value ?? false;
+                if (_agreed && _errorText == '请先阅读并勾选同意用户协议与内容须知') {
+                  _errorText = null;
+                }
+              });
+            },
+            activeColor: const Color(0xFF55B84A),
+            checkColor: Colors.white,
+            side: BorderSide(
+              color: _muted.withOpacity(.55),
+              width: 1.4,
+            ),
+            materialTapTargetSize:
+                MaterialTapTargetSize.shrinkWrap,
+            visualDensity: VisualDensity.compact,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text.rich(
+              TextSpan(
+                style: TextStyle(
+                  color: _muted.withOpacity(.9),
+                  fontSize: 11.5,
+                  height: 1.45,
+                ),
+                children: [
+                  const TextSpan(text: '我已阅读并同意'),
+                  TextSpan(
+                    text: '《用户协议》',
+                    style: const TextStyle(
+                      color: Color(0xFF55B84A),
+                      fontWeight: FontWeight.w600,
+                    ),
+                    recognizer: TapGestureRecognizer()
+                      ..onTap = () {
+                        _showNoticeDialog(
+                          title: '用户协议',
+                          content: _userAgreement,
+                        );
+                      },
+                  ),
+                  const TextSpan(text: '、'),
+                  TextSpan(
+                    text: '《隐私政策》',
+                    style: const TextStyle(
+                      color: Color(0xFF55B84A),
+                      fontWeight: FontWeight.w600,
+                    ),
+                    recognizer: TapGestureRecognizer()
+                      ..onTap = () {
+                        _showNoticeDialog(
+                          title: '隐私政策',
+                          content: _privacyPolicy,
+                        );
+                      },
+                  ),
+                  const TextSpan(text: '与'),
+                  TextSpan(
+                    text: '《内容须知》',
+                    style: const TextStyle(
+                      color: Color(0xFF55B84A),
+                      fontWeight: FontWeight.w600,
+                    ),
+                    recognizer: TapGestureRecognizer()
+                      ..onTap = () {
+                        _showNoticeDialog(
+                          title: '内容须知',
+                          content: _contentNotice,
+                        );
+                      },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -575,7 +818,7 @@ class _LoginSheetState extends State<LoginSheet> {
               const SizedBox(width: 15),
               Icon(
                 icon,
-                size: 17, 
+                size: 17,
                 color: focused
                     ? const Color(0xFF589D4F)
                     : _muted.withOpacity(.76),

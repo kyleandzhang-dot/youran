@@ -1302,8 +1302,7 @@ Future<void> showNovelStoreSheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  await controller.refreshShop();
-  if (!context.mounted) return;
+  // 1. 去掉这里的 await controller.refreshShop(); 防止阻塞弹窗
   await _showNovelSheet<void>(
     context,
     heightFactor: .78,
@@ -1321,68 +1320,104 @@ class _StoreSheet extends StatefulWidget {
 
 class _StoreSheetState extends State<_StoreSheet> {
   String busy = '';
+  bool _loading = true; // 2. 新增加载状态
+
+  @override
+  void initState() {
+    super.initState();
+    // 弹窗打开后，异步拉取商品数据
+    _fetchShopData();
+  }
+
+  Future<void> _fetchShopData() async {
+    await widget.controller.refreshShop();
+    if (mounted) {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
-        return _SheetScaffold(
-          title: '道具兑换',
-          subtitle: '用积分换取故事中的特殊机会',
-          trailing: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(.045),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: Colors.white.withOpacity(.08)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                const Icon(Icons.star_rounded, size: 13, color: Color(0xFFF4C542)),
-                const SizedBox(width: 5),
-                Text(
-                  '${widget.controller.score.total}',
-                  style: const TextStyle(
-                    color: NovelPalette.text,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                  ),
+        // 3. 在最外层包裹 Stack，用于解决 HUD 提示层级问题
+        return Stack(
+          children: [
+            _SheetScaffold(
+              title: '道具兑换',
+              subtitle: '用积分换取故事中的特殊机会',
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.045),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white.withOpacity(.08)),
                 ),
-              ],
-            ),
-          ),
-          child: widget.controller.shopItems.isEmpty
-              ? const _EmptyState(text: '暂无可兑换物品')
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(18, 8, 18, 30),
-                  itemCount: widget.controller.shopItems.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final item = widget.controller.shopItems[index];
-                    return _ItemCard(
-                      iconUrl: item.imageUrl,
-                      itemType: item.itemType,
-                      fallback: _itemFallback(item.itemType),
-                      name: item.name,
-                      description: item.description,
-                      badge: '已拥有 ${item.quantity}',
-                      actionText: '${item.price}',
-                      showPointIcon: true,
-                      loading: busy == item.itemType,
-                      onAction: () async {
-                        if (busy.isNotEmpty) return;
-                        setState(() => busy = item.itemType);
-                        try {
-                          await widget.controller.buyShopItem(item);
-                        } finally {
-                          if (mounted) setState(() => busy = '');
-                        }
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const Icon(Icons.star_rounded, size: 13, color: Color(0xFFF4C542)),
+                    const SizedBox(width: 5),
+                    Text(
+                      '${widget.controller.score.total}',
+                      style: const TextStyle(
+                        color: NovelPalette.text,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              child: _loading 
+                  // 数据加载时显示加载动画
+                  ? const Center(
+                      child: CircularProgressIndicator(color: NovelPalette.accent),
+                    )
+                  : widget.controller.shopItems.isEmpty
+                  ? const _EmptyState(text: '暂无可兑换物品')
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(18, 8, 18, 30),
+                      itemCount: widget.controller.shopItems.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final item = widget.controller.shopItems[index];
+                        return _ItemCard(
+                          iconUrl: item.imageUrl,
+                          itemType: item.itemType,
+                          fallback: _itemFallback(item.itemType),
+                          name: item.name,
+                          description: item.description,
+                          badge: '已拥有 ${item.quantity}',
+                          actionText: '${item.price}',
+                          showPointIcon: true,
+                          loading: busy == item.itemType,
+                          onAction: () async {
+                            if (busy.isNotEmpty) return;
+                            setState(() => busy = item.itemType);
+                            try {
+                              await widget.controller.buyShopItem(item);
+                            } finally {
+                              if (mounted) setState(() => busy = '');
+                            }
+                          },
+                        );
                       },
-                    );
-                  },
+                    ),
+            ),
+            
+            // 4. 将系统提示渲染在商城弹窗内部的最上层
+            if (widget.controller.hudEvent != null)
+              Positioned.fill(
+                child: KeyedSubtree(
+                  key: ValueKey<int>(widget.controller.hudEvent!.id),
+                  child: NovelHudEventOverlay(event: widget.controller.hudEvent!),
                 ),
+              ),
+          ],
         );
       },
     );
@@ -7463,18 +7498,21 @@ class _ItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      // 增加上下留白
+      padding: const EdgeInsets.symmetric(vertical: 14),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
+          // 图标区域：去掉生硬的边框，改为微圆角和极浅底色
           Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
               Container(
-                width: 50,
-                height: 50,
+                width: 52,
+                height: 52,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.02),
-                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                  color: Colors.white.withOpacity(.04), // 浅色玻璃底
+                  borderRadius: BorderRadius.circular(12), // 微圆角
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: NovelArtwork(
@@ -7488,31 +7526,31 @@ class _ItemCard extends StatelessWidget {
               ),
               if (badge.isNotEmpty)
                 Positioned(
-                  right: -5,
-                  bottom: -5,
+                  right: -4,
+                  bottom: -4,
                   child: Container(
-                    constraints: const BoxConstraints(minWidth: 20),
-                    height: 19,
-                    padding: const EdgeInsets.symmetric(horizontal: 5),
-                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(.8),
-                      border: Border.all(color: Colors.white.withOpacity(0.2)),
+                      color: const Color(0xFF1E201E),
+                      borderRadius: BorderRadius.circular(6),
+                      // 仅保留一点点高光边
+                      border: Border.all(color: Colors.white.withOpacity(0.1), width: 0.5),
                     ),
                     child: Text(
                       badge,
-                      maxLines: 1,
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.9),
                         fontSize: 8.5,
-                        fontWeight: FontWeight.w400,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                 ),
             ],
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 16), // 拉开图标和文字的距离
+          
+          // 文字区域：弱化描述，突出标题
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -7522,56 +7560,56 @@ class _ItemCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.9),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 1.5,
+                    color: Colors.white.withOpacity(0.95),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Text(
                   description.trim().isEmpty ? _itemTypeLabel(itemType) : description,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.5),
-                    fontSize: 11,
-                    height: 1.6,
+                    color: Colors.white.withOpacity(0.45), // 进一步弱化描述
+                    fontSize: 11.5,
+                    height: 1.4,
                   ),
                 ),
               ],
             ),
           ),
+          
+          // 按钮区域：无边框，采用柔和底色和微圆角
           if (actionText.isNotEmpty) ...<Widget>[
-            const SizedBox(width: 10),
+            const SizedBox(width: 12),
             Material(
-              color: Colors.transparent,
+              color: Colors.white.withOpacity(0.06), // 淡淡的底色取代边框
+              borderRadius: BorderRadius.circular(10),
               child: InkWell(
                 onTap: loading ? null : onAction,
+                borderRadius: BorderRadius.circular(10),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white.withOpacity(.2)), // 幽灵边框
-                  ),
                   child: loading
                       ? const SizedBox.square(
                           dimension: 14,
-                          child: CircularProgressIndicator(strokeWidth: 1.0, color: Colors.white),
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white70),
                         )
                       : Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             if (showPointIcon) ...<Widget>[
-                              const Icon(Icons.star_rounded, size: 12, color: Colors.white70),
+                              const Icon(Icons.star_rounded, size: 13, color: Color(0xFFF4C542)), // 让星星带点色彩
                               const SizedBox(width: 4),
                             ],
                             Text(
                               actionText,
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.8),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w400,
-                                letterSpacing: 2.0,
+                                color: Colors.white.withOpacity(0.9),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ],
