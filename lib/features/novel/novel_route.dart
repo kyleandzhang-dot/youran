@@ -123,30 +123,24 @@ class _InvalidNovelRoutePage extends StatefulWidget {
 }
 
 class _InvalidNovelRoutePageState extends State<_InvalidNovelRoutePage> {
-  Timer? _redirectTimer;
-
   @override
   void initState() {
     super.initState();
     // 记录到日志/监控系统供排查，不在 UI 上暴露给用户。
+    // 注意：initState 阶段不能用 ModalRoute.of(context)（会在 State 完成挂载前
+    // 触发 dependOnInheritedWidgetOfExactType 报错），改用 widget 上已有的信息。
     debugPrint(
       '[NovelRoute] invalid route: missing scenarioId/sessionId, '
-      'settings=${ModalRoute.of(context)?.settings}',
+      'fallbackRouteName=${widget.fallbackRouteName}',
     );
-    // 短暂停留后自动跳转，避免用户卡在一个不知所云的页面上。
-    _redirectTimer = Timer(const Duration(milliseconds: 1200), () {
+    // 首帧渲染完成后立刻跳转，不做停留（相当于 0 秒）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil(
         widget.fallbackRouteName,
         (route) => false,
       );
     });
-  }
-
-  @override
-  void dispose() {
-    _redirectTimer?.cancel();
-    super.dispose();
   }
 
   @override
@@ -181,7 +175,6 @@ class _InvalidNovelRoutePageState extends State<_InvalidNovelRoutePage> {
               const SizedBox(height: 22),
               TextButton(
                 onPressed: () {
-                  _redirectTimer?.cancel();
                   Navigator.of(context).pushNamedAndRemoveUntil(
                     widget.fallbackRouteName,
                     (route) => false,
