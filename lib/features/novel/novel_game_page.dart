@@ -67,6 +67,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _balanceOpen = false;
   bool _loadFailureHandled = false;
   NovelWeatherEffect? _weatherPreviewOverride;
+  String? _backgroundPreviewOverride;
   NovelTimePeriod? _timePreviewOverride;
   String _lastWeatherSyncToken = '';
   Timer? _sceneArrivalTimer;
@@ -434,6 +435,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         previewTimeSkip: _previewTimeSkip,
         previewEndingIntro: _previewEndingIntro,
         previewEnding: _previewEnding,
+        previewImageTransition: _previewImageTransition,
         previewAffectionUp: () async => controller.previewDeveloperFeedback('affection_up'),
         previewAffectionDown: () async => controller.previewDeveloperFeedback('affection_down'),
         previewItemObtained: () async => controller.previewDeveloperFeedback('item_obtained'),
@@ -444,6 +446,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         previewDamage: () async => controller.previewDeveloperFeedback('damage'),
         previewRecovery: () async => controller.previewDeveloperFeedback('recovery'),
         previewRisk: () async => controller.previewDeveloperFeedback('risk'),
+        previewNarrationStyles: _previewNarrationStyles,
       );
 
   Future<void> _setWeatherPreviewOverride(NovelWeatherEffect? effect) async {
@@ -719,6 +722,22 @@ class _NovelGamePageState extends State<NovelGamePage>
     );
   }
 
+  Future<void> _previewImageTransition() async {
+    if (!mounted) return;
+    
+    final randomTimestamp = DateTime.now().millisecondsSinceEpoch;
+    final testUrl = 'https://picsum.photos/1080/1920?random=$randomTimestamp';
+
+    setState(() {
+      _backgroundPreviewOverride = testUrl; 
+    });
+  }
+
+  Future<void> _previewNarrationStyles() async {
+    if (!mounted) return;
+    await NovelNarrationStylePreview.show(context);
+  }
+
   void _handleLoadFailure(VoidCallback openDrawer) {
     if (_loadFailureHandled) return;
     _loadFailureHandled = true;
@@ -726,16 +745,24 @@ class _NovelGamePageState extends State<NovelGamePage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
 
-      // 普通用户不展示“世界暂时无法载入”等技术失败页。
-      // 保留日志方便开发排查，然后直接执行原“打开菜单”动作。
-      debugPrint('剧情初始化失败，已自动打开菜单：${controller.lastError}');
+      // 1. 清空控制器的原本报错信息
       controller.clearMessages();
 
+      // 2. 屏幕下方弹出一个干净友好的提示
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('场景载入异常，已自动为您返回首页'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      // 3. 自动返回首页
       final callback = widget.onBack;
       if (callback != null) {
         callback();
       } else {
-        openDrawer();
+        openDrawer(); // 展开菜单/返回
       }
     });
   }
@@ -806,7 +833,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         // 剧情背景优先使用后端 world.backgroundUrl。
         // 空背景，或后端误回 APP 主页占位背景时，都统一走模糊兜底；
         // 真正的剧情场景图仍按原样显示，不受兜底模糊影响。
-        final rawBackground = controller.world.backgroundUrl.trim();
+        final rawBackground = _backgroundPreviewOverride ?? controller.world.backgroundUrl.trim();
         final normalizedBackground = rawBackground.replaceAll('\\', '/').toLowerCase();
         final isHomeBackground =
             normalizedBackground.endsWith('/home_background.jpg') ||
@@ -1147,7 +1174,7 @@ class _NovelGamePageState extends State<NovelGamePage>
               if (!loadFailed)
                 NovelStatusBanner(
                   message: controller.lastError.isNotEmpty
-                      ? controller.lastError
+                      ? '场景载入异常，请返回首页'  // <--- 强行把报错替换成这句干净的话
                       : controller.infoMessage,
                   isError: controller.lastError.isNotEmpty,
                   onDismiss: controller.clearMessages,

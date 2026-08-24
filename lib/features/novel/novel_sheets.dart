@@ -1482,6 +1482,7 @@ class NovelDeveloperPreviewActions {
     required this.previewTimeSkip,
     required this.previewEndingIntro,
     required this.previewEnding,
+    required this.previewImageTransition,
     required this.previewAffectionUp,
     required this.previewAffectionDown,
     required this.previewItemObtained,
@@ -1492,6 +1493,7 @@ class NovelDeveloperPreviewActions {
     required this.previewDamage,
     required this.previewRecovery,
     required this.previewRisk,
+    required this.previewNarrationStyles,
   });
 
   final NovelWeatherEffect? Function() weatherOverride;
@@ -1511,6 +1513,7 @@ class NovelDeveloperPreviewActions {
   final Future<void> Function() previewTimeSkip;
   final Future<void> Function() previewEndingIntro;
   final Future<void> Function() previewEnding;
+  final Future<void> Function() previewImageTransition;
 
   // 直接反馈预览：全部只作用于当前客户端，不写真实剧情状态。
   final Future<void> Function() previewAffectionUp;
@@ -1523,6 +1526,10 @@ class NovelDeveloperPreviewActions {
   final Future<void> Function() previewDamage;
   final Future<void> Function() previewRecovery;
   final Future<void> Function() previewRisk;
+
+  // 正文（旁白层）正则标记样式预览：把 （）* 【】 [] "" 全部标记的实际渲染
+  // 效果集中展示，纯本地弹窗，不产生真实剧情反馈，所以单独放在字段最后。
+  final Future<void> Function() previewNarrationStyles;
 }
 
 const Color _novelDrawerAccent = NovelPalette.accent;
@@ -2273,6 +2280,30 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                   title: '结局页面',
                   subtitle: '最终结局、共同记忆与命运轨迹',
                   onTap: () => _openPreview(actions.previewEnding),
+                ),
+                _DeveloperPreviewDivider(), // <--- 新增这根分割线
+                _DeveloperPreviewRow(       // <--- 新增这个预览按钮
+                  title: '背景过渡',
+                  subtitle: '测试场景图片更换时的无缝淡入效果',
+                  onTap: () => _openPreview(actions.previewImageTransition),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 22),
+          const _DeveloperSectionTitle(
+            title: '正文样式',
+            subtitle: '查看旁白层各种正则标记的渲染效果，不影响角色对白',
+          ),
+          const SizedBox(height: 10),
+          _CleanSettingsCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: <Widget>[
+                _DeveloperPreviewRow(
+                  title: '正则样式预览',
+                  subtitle: '（）* 【】 [] "" 全部标记效果一次看全',
+                  onTap: () => _openPreview(actions.previewNarrationStyles),
                 ),
               ],
             ),

@@ -311,7 +311,7 @@ class _LoginSheetState extends State<LoginSheet> {
 ''';
 
   static const String _userAgreement = '''
-【用户协议】（摘要）
+【用户协议】
 
 欢迎使用 YO RAN。
 
@@ -337,7 +337,7 @@ AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适�
 ''';
 
   static const String _privacyPolicy = '''
-【隐私政策】（摘要）
+【隐私政策】
 
 我们重视您的隐私。
 

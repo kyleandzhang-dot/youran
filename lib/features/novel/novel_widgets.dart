@@ -147,6 +147,183 @@ List<InlineSpan> _buildNovelDialogueDisplaySpans(
   return spans;
 }
 
+/// 旁白 / 正文专用的富文本标记。只作用于叙述层，不影响角色对白
+/// （对白继续走上面的 _buildNovelDialogueDisplaySpans，不受此函数影响）。
+///
+/// 覆盖市面上主流文字游戏 / 互动小说（含"酒馆"式 RP 排版惯例）常见的几类标记：
+///   （…）/ (…)  全角/半角圆括号 —— 心理活动、动作旁注
+///   *…*         星号包裹 —— 酒馆最常见的动作/神态标记，语义等同圆括号
+///   【…】        系统类播报（面板音效、状态提示、命运转折的"画外音"）
+///   […]         重点词汇（技能 / 道具 / 专有名词、地名首次出现）
+///   "…" / "…"   叙述中夹带的引述对白
+///
+/// 圆括号 / 星号 / 方括号本质上只是"排版指令"——告诉渲染层这段该用什么视觉样式，
+/// 不是真正要给读者看的字符，所以解析后把符号本身丢掉，只保留内容 + 对应样式。
+/// 引号不一样：它是书面语法里"这是被转述的话"的正式标点，删掉会让读者分不清
+/// 这句到底是叙述还是引述，所以引号本身要保留，只是颜色/字重上做轻微区分。
+enum _NovelNarrationMarkerKind { aside, system, keyword, quote }
+
+class _NovelNarrationMarkerDef {
+  const _NovelNarrationMarkerDef(this.open, this.close, this.kind, {required this.strip});
+  final String open;
+  final String close;
+  final _NovelNarrationMarkerKind kind;
+  final bool strip;
+}
+
+const List<_NovelNarrationMarkerDef> _novelNarrationMarkers = <_NovelNarrationMarkerDef>[
+  _NovelNarrationMarkerDef('（', '）', _NovelNarrationMarkerKind.aside, strip: true),
+  _NovelNarrationMarkerDef('(', ')', _NovelNarrationMarkerKind.aside, strip: true),
+  _NovelNarrationMarkerDef('*', '*', _NovelNarrationMarkerKind.aside, strip: true),
+  _NovelNarrationMarkerDef('【', '】', _NovelNarrationMarkerKind.system, strip: true),
+  _NovelNarrationMarkerDef('[', ']', _NovelNarrationMarkerKind.keyword, strip: true),
+  _NovelNarrationMarkerDef('"', '"', _NovelNarrationMarkerKind.quote, strip: false),
+  _NovelNarrationMarkerDef('“', '”', _NovelNarrationMarkerKind.quote, strip: false),
+];
+
+/// 单个标记扫描出来的片段：普通正文 kind 为 null；命中某种标记时是对应 kind。
+/// 这是 _buildNovelNarrationDisplaySpans（渲染用）和 _novelVisibleNarrationText
+/// （纯粹判断“剥完符号后是否还有可见内容”用）共用的唯一一套解析逻辑——
+/// 两边分别再造一遍容易在后续改动里悄悄跑偏，所以只在这里写一次。
+class _NovelNarrationSegment {
+  const _NovelNarrationSegment(this.text, this.kind);
+  final String text;
+  final _NovelNarrationMarkerKind? kind;
+}
+
+List<_NovelNarrationSegment> _novelNarrationSegments(String value) {
+  if (value.isEmpty) return const <_NovelNarrationSegment>[];
+
+  final segments = <_NovelNarrationSegment>[];
+  var cursor = 0;
+
+  while (cursor < value.length) {
+    // 找出从 cursor 开始，离得最近的一个标记起始符（几种标记里最早出现的那个）。
+    _NovelNarrationMarkerDef? nearestMarker;
+    var nearestIndex = -1;
+    for (final marker in _novelNarrationMarkers) {
+      final index = value.indexOf(marker.open, cursor);
+      if (index < 0) continue;
+      if (nearestIndex < 0 || index < nearestIndex) {
+        nearestIndex = index;
+        nearestMarker = marker;
+      }
+    }
+
+    if (nearestMarker == null || nearestIndex < 0) {
+      segments.add(_NovelNarrationSegment(value.substring(cursor), null));
+      break;
+    }
+
+    if (nearestIndex > cursor) {
+      segments.add(
+        _NovelNarrationSegment(value.substring(cursor, nearestIndex), null),
+      );
+    }
+
+    final close = value.indexOf(nearestMarker.close, nearestIndex + 1);
+    final strip = nearestMarker.strip;
+
+    if (close < 0) {
+      // 逐字动画尚未出现右侧闭合符号时，从左标记到当前末尾也保持对应样式，避免闪烁。
+      // strip 类标记连起始符号也一起丢掉；引号类保留起始符号本身。
+      final tailStart = strip ? nearestIndex + 1 : nearestIndex;
+      segments.add(
+        _NovelNarrationSegment(value.substring(tailStart), nearestMarker.kind),
+      );
+      break;
+    }
+
+    final matchedText = strip
+        ? value.substring(nearestIndex + 1, close)
+        : value.substring(nearestIndex, close + 1);
+    segments.add(_NovelNarrationSegment(matchedText, nearestMarker.kind));
+    cursor = close + 1;
+  }
+
+  return segments;
+}
+
+/// 剥符号之后真正会显示给读者的纯文字（不带样式）。
+/// 专门用来在渲染前判断“这一段剥完符号后是否还有可见内容”——
+/// 纯符号片段（残留的半个 *、内容为空的 （）标记）剥完就是空字符串，
+/// 不应该再触发段落间距 / 占位行高。
+String _novelVisibleNarrationText(String value) {
+  if (value.isEmpty) return value;
+  final buffer = StringBuffer();
+  for (final segment in _novelNarrationSegments(value)) {
+    buffer.write(segment.text);
+  }
+  return buffer.toString();
+}
+
+List<InlineSpan> _buildNovelNarrationDisplaySpans(
+  String value,
+  TextStyle baseStyle,
+) {
+  if (value.isEmpty) {
+    return <InlineSpan>[TextSpan(text: value, style: baseStyle)];
+  }
+
+  final Color baseColor = baseStyle.color ?? const Color(0xFFF3F4F6);
+
+  final asideStyle = baseStyle.copyWith(
+    color: baseColor.withOpacity(.60),
+    fontStyle: FontStyle.italic,
+    fontWeight: FontWeight.w400,
+    shadows: const <Shadow>[
+      Shadow(color: Color(0x30000000), blurRadius: 1.5, offset: Offset(0, 1)),
+    ],
+  );
+
+  final systemStyle = baseStyle.copyWith(
+    color: NovelPalette.accent,
+    fontWeight: FontWeight.w700,
+    letterSpacing: (baseStyle.letterSpacing ?? 0) + .8,
+    // 淡淡的底色，模拟系统提示的“标签感”，同时不影响整体呼吸感排版。
+    background: Paint()..color = NovelPalette.accent.withOpacity(.14),
+    shadows: <Shadow>[
+      Shadow(color: NovelPalette.accent.withOpacity(.45), blurRadius: 10),
+      const Shadow(color: Color(0x66000000), blurRadius: 4, offset: Offset(0, 1)),
+    ],
+  );
+
+  final keywordStyle = baseStyle.copyWith(
+    color: NovelPalette.warning,
+    fontStyle: FontStyle.italic,
+    fontWeight: FontWeight.w600,
+    shadows: const <Shadow>[
+      Shadow(color: Color(0x40000000), blurRadius: 3, offset: Offset(0, 1)),
+    ],
+  );
+
+  final quoteStyle = baseStyle.copyWith(
+    color: NovelPalette.accentLine,
+    fontWeight: FontWeight.w600,
+  );
+
+  TextStyle styleFor(_NovelNarrationMarkerKind kind) {
+    switch (kind) {
+      case _NovelNarrationMarkerKind.aside:
+        return asideStyle;
+      case _NovelNarrationMarkerKind.system:
+        return systemStyle;
+      case _NovelNarrationMarkerKind.keyword:
+        return keywordStyle;
+      case _NovelNarrationMarkerKind.quote:
+        return quoteStyle;
+    }
+  }
+
+  return <InlineSpan>[
+    for (final segment in _novelNarrationSegments(value))
+      TextSpan(
+        text: segment.text,
+        style: segment.kind == null ? baseStyle : styleFor(segment.kind!),
+      ),
+  ];
+}
+
 bool _useLowPowerNovelEffects(BuildContext context) {
   final media = MediaQuery.of(context);
   // 手机（含横屏）优先稳定帧率；平板/桌面继续保留完整毛玻璃与背景缓动。
@@ -294,7 +471,7 @@ class NovelArtwork extends StatelessWidget {
         alignment: alignment,
         filterQuality: filterQuality,
         gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => const SizedBox.shrink(), // <--- 关键是这里！改回 SizedBox.shrink()
+        errorBuilder: (_, __, ___) => _assetAt(0),
       );
     }
     if (value.isNotEmpty) {
@@ -1213,6 +1390,12 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   bool _lowPowerEffects = false;
   bool _animationsDisabled = false;
 
+  // 【核心修复】真正显示在屏幕上的 url，只有在新图完整解码完成后才会更新。
+  // widget.url 变化并不会立刻触发 AnimatedSwitcher 切换，
+  // 避免“动画计时器跑完了，但图片还没解码完”导致的黑屏/白屏。
+  late String _displayedUrl;
+  int _loadToken = 0;
+
   @override
   void initState() {
     super.initState();
@@ -1220,6 +1403,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       vsync: this,
       duration: const Duration(seconds: 22),
     );
+    _displayedUrl = widget.url.trim();
   }
 
   @override
@@ -1244,9 +1428,69 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   }
 
   @override
+  void didUpdateWidget(covariant NovelWorldBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = widget.url.trim();
+    if (next != oldWidget.url.trim()) {
+      _preloadThenSwap(next);
+    }
+  }
+
+  @override
   void dispose() {
     _motionController.dispose();
+    _loadToken++; // 让所有还在飞行中的 precache 回调失效
     super.dispose();
+  }
+
+  ImageProvider? _providerFor(String value) {
+    if (value.isEmpty) return null;
+    if (value.startsWith('data:image/')) {
+      try {
+        return MemoryImage(base64Decode(value.split(',').last));
+      } catch (_) {
+        return null;
+      }
+    }
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+      return NetworkImage(CdnUtil.resize(value, width: 1080)); // 压缩全屏背景
+    }
+    return AssetImage(value);
+  }
+
+  /// 新图先在后台完整解码，解码成功（或明确失败）之后再 setState 触发
+  /// AnimatedSwitcher 的切换动画。这样动画开始时新图必然已经能立刻画出来，
+  /// 老图会一直原地不动，杜绝“动画时间到了但图还没到”的黑屏窗口。
+  Future<void> _preloadThenSwap(String value) async {
+    final token = ++_loadToken;
+
+    if (value.isEmpty) {
+      if (mounted && token == _loadToken) {
+        setState(() => _displayedUrl = value);
+      }
+      return;
+    }
+
+    final provider = _providerFor(value);
+    if (provider == null) {
+      // 无法识别的 url（比如 data: 解析失败），直接切换让 errorBuilder 兜底。
+      if (mounted && token == _loadToken) {
+        setState(() => _displayedUrl = value);
+      }
+      return;
+    }
+
+    try {
+      await precacheImage(provider, context);
+    } catch (_) {
+      // 加载失败也要切换过去：交给 _image() 里的 errorBuilder 兜底，
+      // 不要让背景永远卡在旧图上一动不动。
+    }
+
+    // token 不一致说明这期间 url 又变了（用户快速连续切换场景），
+    // 这次已经过期的加载结果直接丢弃，只认最新的那次。
+    if (!mounted || token != _loadToken) return;
+    setState(() => _displayedUrl = value);
   }
 
   Widget _fallback() {
@@ -1308,37 +1552,20 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   }
 
   Widget _image() {
-    final value = widget.url.trim();
-    if (value.startsWith('data:image/')) {
-      try {
-        final bytes = base64Decode(value.split(',').last);
-        return Image.memory(
-          bytes,
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.medium,
-        );
-      } catch (_) {}
-    }
-    if (value.startsWith('http://') || value.startsWith('https://')) {
-      return Image.network(
-        CdnUtil.resize(value, width: 1080), // 压缩全屏背景
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (_, __, ___) => _fallback(), // 注意这里是 _fallback()
-      );
-    }
-    if (value.isNotEmpty) {
-      return Image.asset(
-        value,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (_, __, ___) => _fallback(),
-      );
-    }
-    return _fallback();
+    // 注意：这里读的是 _displayedUrl（已经确认解码完成的图），
+    // 不是 widget.url（可能还在飞行中的新值）。
+    final value = _displayedUrl;
+    final provider = _providerFor(value);
+    if (provider == null) return _fallback();
+    return Image(
+      image: provider,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
+      // 正常情况下走到这里时图片已经被 precacheImage 解码过、在缓存里，
+      // errorBuilder 只兜底“缓存被回收 / 解码失败”这种极端情况。
+      errorBuilder: (_, __, ___) => _fallback(),
+    );
   }
 
   @override
@@ -1357,11 +1584,32 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     final blur = widget.characterPresent ? 2.2 : 0.0;
 
     final imageLayer = AnimatedSwitcher(
-      duration: Duration(milliseconds: _lowPowerEffects ? 650 : 1200),
-      switchInCurve: Curves.easeInOutCubic,
-      switchOutCurve: Curves.easeInOutCubic,
+      // 保持较长的呼吸感，1500ms 适合剧情氛围
+      duration: Duration(milliseconds: _lowPowerEffects ? 800 : 1500),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeOutCubic,
+      transitionBuilder: (child, animation) {
+        final isIncoming = child.key == ValueKey<String>(_displayedUrl);
+
+        if (isIncoming) {
+          // 【新图出场】：透明度 0 -> 1 渐显，同时尺寸 1.05 -> 1.0 微距拉近
+          return FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 1.05, end: 1.0).animate(animation),
+              child: child,
+            ),
+          );
+        } else {
+          // 【老图退场 - 核心修复】：直接 return child，不做任何透明度衰减！
+          // AnimatedSwitcher 默认会将新图盖在老图上方。
+          // 这样老图会在整个 1.5 秒内保持 100% 可见，直到新图完全覆盖并结束动画，
+          // 完美吃掉网络图片加载的延迟白屏，实现真正的无缝溶解。
+          return child; 
+        }
+      },
       child: SizedBox.expand(
-        key: ValueKey<String>(widget.url),
+        key: ValueKey<String>(_displayedUrl),
         child: _image(),
       ),
     );
@@ -3329,9 +3577,13 @@ class _NovelNarrationSurface extends StatelessWidget {
           children: <Widget>[
             ValueListenableBuilder<String>(
               valueListenable: displayTextListenable,
-              builder: (context, value, _) => Text(
-                value.isEmpty ? emptyTextFallback : value,
-                style: style,
+              builder: (context, value, _) => Text.rich(
+                TextSpan(
+                  children: _buildNovelNarrationDisplaySpans(
+                    value.isEmpty ? emptyTextFallback : value,
+                    style,
+                  ),
+                ),
                 textAlign: TextAlign.left,
               ),
             ),
@@ -3388,7 +3640,13 @@ _NovelVisibleReaderParts _visibleReaderParts(
   }
 
   final visibleLeading = take(leading);
-  if (leading.isNotEmpty && visibleLeading.runes.length >= leading.runes.length) {
+  // leading 剥符号前非空不代表它会显示任何东西——纯符号残留（比如只有一个
+  // 孤立的 （ 或 *）剥完是空字符串，不值得为它扣一次“段落停顿”的预算。
+  // dialogue 走的是 _buildNovelDialogueDisplaySpans，不做符号剥离，
+  // 所以 dialogue 的 isNotEmpty 判断本身就是准的，不用同样处理。
+  if (leading.isNotEmpty &&
+      visibleLeading.runes.length >= leading.runes.length &&
+      _novelVisibleNarrationText(leading).trim().isNotEmpty) {
     consumeGap();
   }
   final visibleDialogue = take(dialogue);
@@ -3457,23 +3715,37 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
           valueListenable: displayTextListenable,
           builder: (context, value, _) {
             final parts = _visibleReaderParts(sentence, value);
+            // 用“剥符号之后真正会显示的文字”来判断是否渲染这个区块 / 插入间距，
+            // 而不是原始文本是否非空——否则只剩纯符号（残留的半个 *、空的 （）标记）
+            // 的片段，虽然视觉上什么都没有，依然会占一整行高度 + 12px 间距，
+            // 看起来就像莫名多出一段大空白/换行。
+            final hasLeading =
+                _novelVisibleNarrationText(parts.leadingNarration).trim().isNotEmpty;
+            final hasTrailing =
+                _novelVisibleNarrationText(parts.trailingNarration).trim().isNotEmpty;
             return Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                if (parts.leadingNarration.isNotEmpty)
-                  Text(
-                    parts.leadingNarration,
-                    style: style,
+                if (hasLeading)
+                  Text.rich(
+                    TextSpan(
+                      children: _buildNovelNarrationDisplaySpans(
+                        parts.leadingNarration,
+                        style,
+                      ),
+                    ),
                     textAlign: TextAlign.left,
                   ),
-                if (parts.leadingNarration.isNotEmpty &&
-                    parts.trailingNarration.isNotEmpty)
-                  const SizedBox(height: 12),
-                if (parts.trailingNarration.isNotEmpty)
-                  Text(
-                    parts.trailingNarration,
-                    style: style,
+                if (hasLeading && hasTrailing) const SizedBox(height: 12),
+                if (hasTrailing)
+                  Text.rich(
+                    TextSpan(
+                      children: _buildNovelNarrationDisplaySpans(
+                        parts.trailingNarration,
+                        style,
+                      ),
+                    ),
                     textAlign: TextAlign.left,
                   ),
               ],
@@ -7823,6 +8095,185 @@ class _NovelChoiceCard extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                   height: 1.3,
                 ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 开发者调试专用：把正文（旁白层，不含角色对白）里所有正则标记的实际渲染效果
+/// 集中展示出来，不用真的在剧情里凑齐每种符号才能看到样式。
+///
+/// 用法：在开发设置抽屉里加一个按钮/开关项，调用
+///   NovelNarrationStylePreview.show(context);
+/// 即可弹出这个预览面板；面板本身不写入任何真实数据，随时可以关掉。
+class NovelNarrationStylePreview {
+  const NovelNarrationStylePreview._();
+
+  static Future<void> show(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => const _NovelNarrationStylePreviewSheet(),
+    );
+  }
+}
+
+class _NovelNarrationPreviewSample {
+  const _NovelNarrationPreviewSample(this.label, this.raw);
+  final String label;
+  final String raw;
+}
+
+// 每一行覆盖一种标记，最后一行把所有标记混在一句里，模拟真实剧情文本的样子。
+const List<_NovelNarrationPreviewSample> _novelNarrationPreviewSamples = <_NovelNarrationPreviewSample>[
+  _NovelNarrationPreviewSample(
+    '圆括号 / 半角括号 —— 心理活动、动作旁注',
+    '（她微微皱眉）他没有回答，(反而转身走向了窗边)。',
+  ),
+  _NovelNarrationPreviewSample(
+    '星号 —— 动作/神态（酒馆式标记，效果同圆括号）',
+    '*他缓缓握紧了拳头*，指节因为用力而发白。',
+  ),
+  _NovelNarrationPreviewSample(
+    '【】—— 系统类播报',
+    '【触发隐藏剧情】守卫的视线还未离开，你必须尽快做出选择。',
+  ),
+  _NovelNarrationPreviewSample(
+    '[] —— 重点词汇（技能/道具/专有名词）',
+    '你在角落发现了一把[生锈的钥匙]，似乎能打开地窖的门。',
+  ),
+  _NovelNarrationPreviewSample(
+    '引号 —— 叙述中夹带的引述对白（符号保留）',
+    '她低声说道："你终于来了。"随后转身离去，"别让我等太久。"',
+  ),
+  _NovelNarrationPreviewSample(
+    '混合示例 —— 模拟真实剧情文本',
+    '（心跳漏了一拍）*他猛地看向门口*，【战斗触发】她说："小心，[黑袍人]来了。"',
+  ),
+];
+
+class _NovelNarrationStylePreviewSheet extends StatelessWidget {
+  const _NovelNarrationStylePreviewSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = const TextStyle(
+      color: Color(0xFFF3F4F6),
+      fontSize: 16,
+      height: 1.9,
+      fontWeight: FontWeight.w500,
+      shadows: <Shadow>[
+        Shadow(color: Color(0x99000000), blurRadius: 6, offset: Offset(0, 1)),
+      ],
+    );
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .82,
+          ),
+          child: _GlassSurface(
+            radius: 20,
+            blur: 24,
+            color: const Color(0xE0191B19),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 14, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Container(
+                        width: 3,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: NovelPalette.accent,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          '正文正则样式预览',
+                          style: TextStyle(
+                            color: NovelPalette.text,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .3,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        icon: Icon(
+                          Icons.close_rounded,
+                          color: Colors.white.withOpacity(.6),
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '仅开发调试用：只展示正文/旁白层的渲染效果（角色对白样式不受此规则影响），不写入任何真实剧情数据。',
+                    style: TextStyle(
+                      color: NovelPalette.muted,
+                      fontSize: 12,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          for (final sample in _novelNarrationPreviewSamples) ...<Widget>[
+                            Text(
+                              sample.label,
+                              style: const TextStyle(
+                                color: NovelPalette.muted,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: .4,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(.04),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white.withOpacity(.06)),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: _buildNovelNarrationDisplaySpans(
+                                      sample.raw,
+                                      baseStyle,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

@@ -24,6 +24,7 @@ class NovelRuntime {
     this.webSocketBaseUrl,
     this.endpoints = const NovelEndpointConfig(),
     this.fallbackBackgroundAsset = 'assets/images/home_background.jpg',
+    this.invalidRouteFallbackName = '/',
   });
 
   final String baseUrl;
@@ -34,6 +35,9 @@ class NovelRuntime {
   final RuntimeKickedCallback? onKicked;
   final NovelEndpointConfig endpoints;
   final String fallbackBackgroundAsset;
+
+  /// 当路由缺少 scenarioId/sessionId 时，自动跳转到的路由名。
+  final String invalidRouteFallbackName;
 
   NovelGameController createController({
     required String scenarioId,
@@ -87,7 +91,9 @@ class NovelRuntime {
     if (scenarioId.isEmpty || sessionId.isEmpty) {
       return MaterialPageRoute<void>(
         settings: settings,
-        builder: (_) => const _InvalidNovelRoutePage(),
+        builder: (_) => _InvalidNovelRoutePage(
+          fallbackRouteName: invalidRouteFallbackName,
+        ),
       );
     }
 
@@ -106,8 +112,42 @@ class NovelRuntime {
   }
 }
 
-class _InvalidNovelRoutePage extends StatelessWidget {
-  const _InvalidNovelRoutePage();
+class _InvalidNovelRoutePage extends StatefulWidget {
+  const _InvalidNovelRoutePage({this.fallbackRouteName = '/'});
+
+  /// 找不到有效会话时自动跳转的路由，默认回首页。
+  final String fallbackRouteName;
+
+  @override
+  State<_InvalidNovelRoutePage> createState() => _InvalidNovelRoutePageState();
+}
+
+class _InvalidNovelRoutePageState extends State<_InvalidNovelRoutePage> {
+  Timer? _redirectTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // 记录到日志/监控系统供排查，不在 UI 上暴露给用户。
+    debugPrint(
+      '[NovelRoute] invalid route: missing scenarioId/sessionId, '
+      'settings=${ModalRoute.of(context)?.settings}',
+    );
+    // 短暂停留后自动跳转，避免用户卡在一个不知所云的页面上。
+    _redirectTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted) return;
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        widget.fallbackRouteName,
+        (route) => false,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _redirectTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -119,22 +159,35 @@ class _InvalidNovelRoutePage extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              const Icon(Icons.link_off_rounded, color: Color(0xFFE97878), size: 42),
-              const SizedBox(height: 16),
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.4,
+                  color: Color(0xFFE97878),
+                ),
+              ),
+              const SizedBox(height: 20),
               const Text(
-                '缺少剧本或会话参数',
+                '页面走丢了',
                 style: TextStyle(color: Color(0xFFF4F1EA), fontSize: 20, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 12),
               const Text(
-                '路由应为 /chat/{scenarioId} 或 /novel/{scenarioId}，并在 arguments 中传入 session_id。',
+                '正在回到首页…',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Color(0xFFA4A8A2), height: 1.6),
               ),
               const SizedBox(height: 22),
               TextButton(
-                onPressed: () => Navigator.of(context).maybePop(),
-                child: const Text('返回'),
+                onPressed: () {
+                  _redirectTimer?.cancel();
+                  Navigator.of(context).pushNamedAndRemoveUntil(
+                    widget.fallbackRouteName,
+                    (route) => false,
+                  );
+                },
+                child: const Text('立即返回'),
               ),
             ],
           ),
