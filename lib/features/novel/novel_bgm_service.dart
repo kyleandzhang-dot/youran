@@ -18,7 +18,11 @@ class NovelBgmService {
     this.debounceCount = 2,
   })  : _player = player ?? AudioPlayer(),
         _weatherPlayer = weatherPlayer ?? AudioPlayer(),
-        _typingPlayer = typingPlayer ?? AudioPlayer();
+        // 打字声只是叠加在 BGM 上的短音效，不能再次申请/激活音频会话。
+        // 否则部分 Android/iOS 设备会把正在播放的 BGM 当成被打断音频，
+        // 每次开始打字时都出现一次短暂停顿。
+        _typingPlayer = typingPlayer ??
+            AudioPlayer(handleAudioSessionActivation: false);
 
   final AudioPlayer _player;
   final AudioPlayer _weatherPlayer;

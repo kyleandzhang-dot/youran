@@ -5,10 +5,14 @@ import 'package:flutter/material.dart';
 
 import '../../game_shell.dart';
 import 'novel_ending_page.dart';
+import 'novel_backend.dart';
 import 'novel_game_controller.dart';
+import 'http_novel_backend.dart';
 import 'novel_models.dart';
 import 'novel_sheets.dart';
 import 'novel_widgets.dart';
+import 'novel_world_map.dart';
+import 'novel_battle_page.dart';
 
 typedef NovelEndingBuilder = Widget Function(
   BuildContext context,
@@ -43,10 +47,15 @@ enum _NovelPrimaryTab {
   characters,
   inventory,
   journey,
+  surroundings,
 }
 
 class _NovelGamePageState extends State<NovelGamePage>
     with WidgetsBindingObserver {
+  // 大世界地图功能尚未完成，先仅隐藏入口与对应 HUD。
+  // 保留原有地图逻辑，后续完成后改为 true 即可恢复。
+  static const bool _worldMapEnabled = false;
+
   static const Duration _sceneArrivalDuration =
       Duration(milliseconds: 2800);
 
@@ -65,6 +74,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _fateOpen = false;
   bool _endingOpen = false;
   bool _balanceOpen = false;
+  bool _battleOpen = false;
   bool _loadFailureHandled = false;
   NovelWeatherEffect? _weatherPreviewOverride;
   String? _backgroundPreviewOverride;
@@ -114,7 +124,9 @@ class _NovelGamePageState extends State<NovelGamePage>
       return;
     }
     if (state == AppLifecycleState.resumed && controller.isInitialized) {
-      unawaited(controller.socket.connect(controller.sessionId));
+      // 恢复前台时不能只重连 WebSocket；后台期间可能错过任意推送。
+      // 统一通过 HTTP 重读剧情、目标、场景、调查资格和背包权威状态。
+      unawaited(controller.recoverAfterResume());
       unawaited(controller.bgm.init(
         controller.bgm.currentIntensity,
         controller.bgm.currentSceneMode,
@@ -168,6 +180,15 @@ class _NovelGamePageState extends State<NovelGamePage>
     });
   }
 
+  Future<void> _openSceneMap() async {
+    _inputFocusNode.unfocus();
+    await showNovelWorldMapPage(
+      context,
+      controller,
+      currentBackgroundUrl: controller.world.backgroundUrl.trim(),
+    );
+  }
+
   Future<void> _processOverlayRequests() async {
     // 角色确认弹窗尚未完全退出时，禁止再 push 开场/其他覆盖层。
     // submitCharacterSetup() 成功后会 notify，并把 showOpening 设为 true；
@@ -208,6 +229,24 @@ class _NovelGamePageState extends State<NovelGamePage>
         await _returnToWorldMenuAfterCharacterSetupDismissed();
       }
       return;
+    }
+    if (!_battleOpen) {
+      final pendingBattleStart = controller.consumePendingBattleStart();
+      if (pendingBattleStart != null) {
+        _battleOpen = true;
+        await _openPendingStoryBattle(pendingBattleStart);
+        _battleOpen = false;
+        return;
+      }
+
+      // 旧流程兼容：如果某处已经直接塞入完整 battle payload，仍照常进入。
+      final battlePayload = controller.consumePendingBattle();
+      if (battlePayload != null) {
+        _battleOpen = true;
+        await _openStoryBattle(battlePayload);
+        _battleOpen = false;
+        return;
+      }
     }
     if (controller.showFateRevert && !_fateOpen) {
       _fateOpen = true;
@@ -432,6 +471,9 @@ class _NovelGamePageState extends State<NovelGamePage>
         previewFateRevert: _previewFateRevert,
         previewBalance: _previewBalance,
         previewDice: _previewDice,
+        previewChoices: _previewChoices,
+        previewSurroundings: _previewSurroundings,
+        previewBattle: _previewBattle,
         previewTimeSkip: _previewTimeSkip,
         previewEndingIntro: _previewEndingIntro,
         previewEnding: _previewEnding,
@@ -443,10 +485,15 @@ class _NovelGamePageState extends State<NovelGamePage>
         previewGoalRefresh: () async => controller.previewDeveloperFeedback('goal_refresh'),
         previewGoalSuccess: () async => controller.previewDeveloperFeedback('goal_completed'),
         previewGoalFailure: () async => controller.previewDeveloperFeedback('goal_failed'),
+        previewDamageLight: () async => controller.previewDeveloperFeedback('damage_light'),
         previewDamage: () async => controller.previewDeveloperFeedback('damage'),
+        previewDamageCritical: () async => controller.previewDeveloperFeedback('damage_critical'),
         previewRecovery: () async => controller.previewDeveloperFeedback('recovery'),
         previewRisk: () async => controller.previewDeveloperFeedback('risk'),
         previewNarrationStyles: _previewNarrationStyles,
+        recognizeAndAcquireContent:
+            controller.recognizeAndAcquireDeveloperContent,
+        testGeneratedOpponent: _previewGeneratedOpponent,
       );
 
   Future<void> _setWeatherPreviewOverride(NovelWeatherEffect? effect) async {
@@ -549,8 +596,15 @@ class _NovelGamePageState extends State<NovelGamePage>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    CircularProgressIndicator(color: NovelPalette.accent),
-                    SizedBox(height: 18),
+                    SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xB3FFFFFF),
+                      ),
+                    ),
+                    SizedBox(height: 14),
                     Text(
                       '正在载入世界…',
                       style: TextStyle(
@@ -611,6 +665,79 @@ class _NovelGamePageState extends State<NovelGamePage>
     controller.clearMessages();
   }
 
+  Future<void> _previewChoices() async {
+    if (!mounted) return;
+    const previewChoices = <NovelChoice>[
+      NovelChoice(
+        text: '询问她究竟发生了什么',
+        type: 'dialogue',
+      ),
+      NovelChoice(
+        text: '冒险穿过正在坍塌的回廊',
+        type: 'action',
+        dice: true,
+      ),
+      NovelChoice(
+        text: '迎战挡在前方的对手',
+        type: 'battle',
+      ),
+    ];
+
+    // 开发者预览直接复用剧情页真正的选择组件。
+    // 不再经过 showNovelChoicesSheet / _ActionTile 那套独立 Sheet UI，
+    // 因此真实选择框今后的边框、磨砂、字号、间距等改动会自动同步到这里。
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭选择框预览',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 120),
+      pageBuilder: (dialogContext, _, __) {
+        final media = MediaQuery.of(dialogContext);
+        final compact = media.size.width <= 600;
+        final footerBaseHeight = compact ? 52.0 : 54.0;
+        final footerOuterGap = compact ? 4.0 : 6.0;
+        final choiceBottomGap = compact ? 4.0 : 5.0;
+        final bottom = media.viewPadding.bottom +
+            footerBaseHeight +
+            footerOuterGap +
+            choiceBottomGap;
+
+        return Material(
+          color: Colors.transparent,
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(dialogContext).pop(),
+                child: const SizedBox.expand(),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: bottom,
+                child: NovelChoiceDock(
+                  choices: previewChoices,
+                  // 预览只展示真实组件与按压反馈，不触发任何剧情。
+                  onSelected: (_) {},
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return FadeTransition(opacity: animation, child: child);
+      },
+    );
+  }
+
+  Future<void> _previewSurroundings() async {
+    if (!mounted) return;
+    await showNovelSurroundingsDeveloperPreview(context, controller);
+  }
+
   Future<void> _previewDice() async {
     if (!mounted) return;
     const previewRoll = NovelDiceRoll(
@@ -638,6 +765,318 @@ class _NovelGamePageState extends State<NovelGamePage>
           ),
         );
       },
+    );
+  }
+
+  Future<void> _previewGeneratedOpponent(
+    String opponentName,
+    String description,
+  ) async {
+    if (!mounted) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final backend = controller.backend;
+    if (backend is! HttpNovelBackend) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('当前后端不支持开发者对手生成接口')),
+        );
+      return;
+    }
+
+    final localPlayer = controller.protagonist;
+    final localAvatar = localPlayer?.avatarUrl.trim() ?? '';
+    final localPortrait = localPlayer?.portraitUrl.trim() ?? '';
+    final localPlayerName = localPlayer?.name.trim().isNotEmpty == true
+        ? localPlayer!.name.trim()
+        : controller.protagonistName;
+
+    await showYoranGeneratedBattlePage(
+      context,
+      playerName: localPlayerName,
+      playerAvatar: localAvatar,
+      playerPortrait: localPortrait,
+      enemyName: opponentName,
+      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneTitle: controller.locationTitle,
+      sceneSubtitle: controller.locationSubtitle.trim(),
+      socketService: controller.socket,
+      setupLoader: () async {
+        try {
+          final response = await backend.createDeveloperBattleOpponent(
+            sessionId: controller.sessionId,
+            name: opponentName,
+            description: description,
+          );
+          return YoranGeneratedBattleSetup.fromJson(response);
+        } on NovelBackendException catch (error) {
+          throw Exception(error.message);
+        } on FormatException catch (error) {
+          throw Exception(error.message.toString());
+        }
+      },
+      onSettleItems: (consumptions, outcome) async {
+        await backend.settleBattleItems(
+          sessionId: controller.sessionId,
+          consumptions: consumptions
+              .map((item) => item.toJson())
+              .toList(growable: false),
+          outcome: outcome.name,
+        );
+        return true;
+      },
+    );
+  }
+
+
+  Future<void> _openPendingStoryBattle(
+    NovelPendingBattleStart request,
+  ) async {
+    if (!mounted) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final localPlayer = controller.protagonist;
+    final localAvatar = localPlayer?.avatarUrl.trim() ?? '';
+    final localPortrait = localPlayer?.portraitUrl.trim() ?? '';
+    final localPlayerName = localPlayer?.name.trim().isNotEmpty == true
+        ? localPlayer!.name.trim()
+        : controller.protagonistName;
+
+    var battleId = '';
+    var targetName = request.targetName.trim();
+    var battleMode = request.battleMode.trim().isEmpty
+        ? 'hostile'
+        : request.battleMode.trim().toLowerCase();
+
+    final outcome = await showYoranGeneratedBattlePage(
+      context,
+      playerName: localPlayerName,
+      playerAvatar: localAvatar,
+      playerPortrait: localPortrait,
+      enemyName: targetName,
+      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneTitle: controller.locationTitle,
+      sceneSubtitle: controller.locationSubtitle.trim(),
+      socketService: controller.socket,
+      setupLoader: () async {
+        try {
+          final response = await request.loadPayload();
+          final setup = YoranGeneratedBattleSetup.fromJson(response);
+
+          battleId = stringValue(response['battle_id']).trim();
+          if (battleId.isEmpty) {
+            throw const FormatException('后端没有返回有效的 battle_id');
+          }
+
+          final target = asJsonMap(response['target']);
+          final design = asJsonMap(response['battle_opponent']);
+          final resolvedTargetName =
+              stringValue(target['name'], setup.enemy.name).trim();
+          if (resolvedTargetName.isNotEmpty) {
+            targetName = resolvedTargetName;
+          }
+          battleMode = stringValue(
+            design['battle_mode'],
+            battleMode,
+          ).trim().toLowerCase();
+
+          return setup;
+        } on NovelBackendException catch (error) {
+          throw Exception(error.message);
+        } on FormatException catch (error) {
+          throw Exception(error.message.toString());
+        }
+      },
+      onSettleItems: (consumptions, result) {
+        return controller.settleStoryBattle(
+          battleId: battleId,
+          outcome: result.name,
+          consumptions: consumptions
+              .map((item) => item.toJson())
+              .toList(growable: false),
+        );
+      },
+    );
+
+    if (!mounted) return;
+    if (outcome == null) {
+      // 用户在生成失败/加载阶段主动返回，不消费原战斗选项。
+      controller.abandonBattleStart(request.optionId);
+      return;
+    }
+
+    await controller.continueAfterStoryBattle(
+      targetName: targetName,
+      battleMode: battleMode,
+      outcome: outcome.name,
+    );
+  }
+
+  Future<void> _openStoryBattle(JsonMap response) async {
+    if (!mounted) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    try {
+      final setup = YoranGeneratedBattleSetup.fromJson(response);
+      final battleId = stringValue(response['battle_id']).trim();
+      final target = asJsonMap(response['target']);
+      final design = asJsonMap(response['battle_opponent']);
+      final targetName = stringValue(target['name'], setup.enemy.name).trim();
+      final battleMode = stringValue(design['battle_mode'], 'hostile')
+          .trim()
+          .toLowerCase();
+      if (battleId.isEmpty) {
+        throw const FormatException('后端没有返回有效的 battle_id');
+      }
+
+      final localPlayer = controller.protagonist;
+      final localAvatar = localPlayer?.avatarUrl.trim() ?? '';
+      final localPortrait = localPlayer?.portraitUrl.trim() ?? '';
+      final subtitleParts = <String>[
+        if (controller.locationSubtitle.trim().isNotEmpty)
+          controller.locationSubtitle.trim(),
+        if (setup.difficultyLabel.trim().isNotEmpty)
+          setup.difficultyLabel.trim(),
+      ];
+      final outcome = await showYoranBattlePage(
+        context,
+        playerName: setup.playerName,
+        playerAvatar: setup.playerAvatar.trim().isNotEmpty
+            ? setup.playerAvatar.trim()
+            : localAvatar,
+        playerPortrait: setup.playerPortrait.trim().isNotEmpty
+            ? setup.playerPortrait.trim()
+            : localPortrait,
+        skills: setup.playerSkills,
+        items: setup.playerItems,
+        equipment: setup.playerEquipment,
+        onSettleItems: (consumptions, result) {
+          return controller.settleStoryBattle(
+            battleId: battleId,
+            outcome: result.name,
+            consumptions: consumptions
+                .map((item) => item.toJson())
+                .toList(growable: false),
+          );
+        },
+        enemyName: setup.enemy.name,
+        enemyPortrait: setup.enemy.portrait,
+        enemies: <YoranBattleEnemy>[setup.enemy],
+        sceneBackground: controller.world.backgroundUrl.trim(),
+        sceneTitle: controller.locationTitle,
+        sceneSubtitle: subtitleParts.join(' · '),
+        socketService: controller.socket,
+      );
+      if (!mounted || outcome == null) return;
+      await controller.continueAfterStoryBattle(
+        targetName: targetName,
+        battleMode: battleMode,
+        outcome: outcome.name,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is NovelBackendException
+          ? error.message
+          : error is FormatException
+              ? error.message.toString()
+              : '进入战斗失败，请稍后重试。';
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Map<String, dynamic> _battleInventoryState(NovelInventoryItem item) {
+    final raw = item.raw.map<String, dynamic>(
+      (key, value) => MapEntry<String, dynamic>('$key', value),
+    );
+    return <String, dynamic>{
+      ...raw,
+      'id': item.id,
+      'name': item.name,
+      'type': item.itemType,
+      'quantity': item.quantity,
+      'description': item.description,
+      'equipped': item.isEquipped,
+    };
+  }
+
+  List<Map<String, dynamic>> _battleInventorySnapshot() {
+    final data = controller.inventory;
+    final result = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final item in <NovelInventoryItem>[
+      ...data.storyItems,
+      ...data.consumables,
+    ]) {
+      final key = item.id.trim().isNotEmpty
+          ? 'id:${item.id.trim()}'
+          : '${item.itemType.trim()}:${item.name.trim()}';
+      if (seen.add(key)) result.add(_battleInventoryState(item));
+    }
+    return result;
+  }
+
+  Future<void> _previewBattle() async {
+    if (!mounted) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    // 开战前主动刷新一次角色权威状态，避免刚通过开发者工具加入的技能
+    // 仍停留在旧的本地快照中。
+    try {
+      await Future.wait<void>(<Future<void>>[
+        controller.refreshCharacterStatus(notify: false),
+        controller.refreshInventory(notify: false),
+      ]);
+    } catch (_) {
+      // 预览入口允许在离线状态继续打开，下面会使用当前已有快照。
+    }
+    if (!mounted) return;
+
+    final protagonist = controller.protagonist;
+    final rawSkills = protagonist?.status['skills'];
+    final learnedSkills = <YoranBattleSkill>[];
+    final seenSkillNames = <String>{'普通攻击'};
+    if (rawSkills is List) {
+      for (final raw in rawSkills) {
+        final skill = YoranBattleSkill.fromState(raw);
+        if (skill == null) continue;
+        final key = skill.name.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+        if (key.isNotEmpty && seenSkillNames.add(key)) {
+          learnedSkills.add(skill);
+        }
+      }
+    }
+    final battleSkills = learnedSkills.isEmpty
+        ? yoranDefaultBattleSkills
+        : <YoranBattleSkill>[
+            yoranDefaultBattleSkills.first,
+            ...learnedSkills,
+          ];
+    final battleInventory = _battleInventorySnapshot();
+
+    await showYoranBattlePage(
+      context,
+
+      // 主角名称、头像、立绘和技能均读取当前角色状态。
+      playerName: protagonist?.name.trim().isNotEmpty == true
+          ? protagonist!.name.trim()
+          : controller.protagonistName,
+      playerAvatar: protagonist?.avatarUrl.trim() ?? '',
+      playerPortrait: protagonist?.portraitUrl.trim() ?? '',
+      skills: battleSkills,
+      items: battleInventory,
+      equipment: battleInventory,
+
+      // 敌人立绘
+      enemyName: '赛诺',
+      enemyPortrait: 'assets/images/red_wolf.png',
+
+      // 自动使用当前剧情背景，不要改
+      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneTitle: controller.locationTitle,
+      sceneSubtitle: controller.locationSubtitle,
+      socketService: controller.socket,
     );
   }
 
@@ -779,6 +1218,17 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _selectPrimaryTab(_NovelPrimaryTab tab) {
     if (_primaryTab == tab) return;
     FocusManager.instance.primaryFocus?.unfocus();
+
+    // 切离剧情页时先立即掐掉连续打字声；NovelDialogPanel.active 随后会
+    // 在同一帧停止逐字 Timer，避免面板盖上后还有一个尾音/下一字符重新续命。
+    if (tab != _NovelPrimaryTab.story) {
+      unawaited(controller.bgm.stopTypingSound());
+    }
+    if (tab == _NovelPrimaryTab.surroundings) {
+      // 真正点开时才生成；场景到达与入口发光只读取轻量可用性。
+      unawaited(controller.loadSurroundings());
+    }
+
     setState(() {
       _primaryTab = tab;
       _mountedPrimaryTabs.add(tab);
@@ -795,6 +1245,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     if (key.isEmpty) return;
 
     FocusManager.instance.primaryFocus?.unfocus();
+    unawaited(controller.bgm.stopTypingSound());
     setState(() {
       _characterFocusKey = key;
       _characterFocusRequestId++;
@@ -816,6 +1267,11 @@ class _NovelGamePageState extends State<NovelGamePage>
         NovelInventoryTab(controller: controller),
       _NovelPrimaryTab.journey =>
         NovelJourneyTab(controller: controller),
+      _NovelPrimaryTab.surroundings =>
+        NovelSurroundingsTab(
+          controller: controller,
+          onClose: () => _selectPrimaryTab(_NovelPrimaryTab.story),
+        ),
       _NovelPrimaryTab.story => const SizedBox.shrink(),
     };
   }
@@ -892,6 +1348,18 @@ class _NovelGamePageState extends State<NovelGamePage>
                     final sceneArrivalSubtitle =
                         _sceneArrivalPreviewSubtitle ??
                             controller.locationSubtitle;
+                    final rawLocationSubtitle =
+                        controller.locationSubtitle.trim();
+                    final worldTimeLabel =
+                        controller.world.timeDescription.trim();
+                    final worldMapHudTitle = rawLocationSubtitle.isNotEmpty &&
+                            rawLocationSubtitle != worldTimeLabel
+                        ? rawLocationSubtitle.split(' · ').first
+                        : controller.locationTitle;
+                    final worldMapHudSubtitle =
+                        worldMapHudTitle != controller.locationTitle
+                            ? '当前位置 · ${controller.locationTitle}'
+                            : rawLocationSubtitle;
                     final sceneHudTransitionDuration = _sceneArrivalActive
                         ? const Duration(milliseconds: 180)
                         : const Duration(milliseconds: 620);
@@ -946,8 +1414,14 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 curve: Curves.easeOutCubic,
                                 opacity: _sceneArrivalActive ? 0 : 1,
                                 child: NovelLocationHud(
-                                  title: controller.locationTitle,
-                                  subtitle: controller.locationSubtitle,
+                                  title: worldMapHudTitle,
+                                  subtitle: worldMapHudSubtitle,
+                                  // 地图系统尚未完成：保留场景文字 HUD，只隐藏地图图标与点击能力。
+                                  loading: _worldMapEnabled && controller.isSceneMapLoading,
+                                  showMapGlyph: _worldMapEnabled,
+                                  onTap: !_worldMapEnabled || _sceneArrivalActive
+                                      ? null
+                                      : () => unawaited(_openSceneMap()),
                                 ),
                               ),
                             ),
@@ -958,9 +1432,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                             // 键盘出现时隐藏场景目标，避免和被抬高的输入区 / 正文抢空间。
                             // 当前目标收紧到场景标题下方，减少两块 HUD 之间的空档。
                             // 完成/失败仍在这里原位反馈；底部人物/经历/背包美术完全不动。
-                            top: controller.locationSubtitle.trim().isNotEmpty
-                                ? 108
-                                : 96,
+                            // 探索入口已经移到“请做出你的选择”右侧，
+                            // 当前目标恢复原来的位置，不再被额外下推。
+                            top: compact ? 111 : 116,
                             child: AnimatedSlide(
                               duration: sceneHudTransitionDuration,
                               curve: Curves.easeOutCubic,
@@ -1010,30 +1484,45 @@ class _NovelGamePageState extends State<NovelGamePage>
                             alignment: Alignment.bottomCenter,
                             child: ConstrainedBox(
                               constraints: const BoxConstraints(maxWidth: 720),
-                              child: NovelDialogPanel(
-                                controller: controller,
-                                textController: _inputController,
-                                focusNode: _inputFocusNode,
-                                onSend: (text) {
-                                  controller.goLatest();
-                                  unawaited(controller.sendPlayerMessage(text));
-                                },
-                                onContinue: controller.continueStory,
-                                onForceContinue: controller.forceContinue,
-                                onOpenChoices: () => showNovelChoicesSheet(context, controller),
-                                onOpenInventory: () => _selectPrimaryTab(
-                                  _NovelPrimaryTab.inventory,
+                              child: NovelChoiceDockActionScope(
+                                visible: controller.shouldShowSurroundingsAction,
+                                label: controller.surroundingsActionLabel,
+                                attention: controller.surroundingsNeedsAttention,
+                                loading: controller.isSurroundingsLoading,
+                                onTap: () => _selectPrimaryTab(
+                                  _NovelPrimaryTab.surroundings,
                                 ),
-                                onOpenCharacters: () => _selectPrimaryTab(
-                                  _NovelPrimaryTab.characters,
+                                child: NovelDialogPanel(
+                                  controller: controller,
+                                  // 右侧人物 / 背包 / 经历打开时剧情页仍保留在底层，
+                                  // 但逐字 Timer 与打字音必须暂停；回到剧情页后再继续。
+                                  active: _primaryTab == _NovelPrimaryTab.story,
+                                  textController: _inputController,
+                                  focusNode: _inputFocusNode,
+                                  onSend: (text) {
+                                    controller.goLatest();
+                                    unawaited(controller.sendPlayerMessage(text));
+                                  },
+                                  onContinue: controller.continueStory,
+                                  onForceContinue: controller.forceContinue,
+                                  onOpenChoices: () =>
+                                      showNovelChoicesSheet(context, controller),
+                                  onOpenInventory: () => _selectPrimaryTab(
+                                    _NovelPrimaryTab.inventory,
+                                  ),
+                                  onOpenCharacters: () => _selectPrimaryTab(
+                                    _NovelPrimaryTab.characters,
+                                  ),
+                                  onOpenJourney: () => _selectPrimaryTab(
+                                    _NovelPrimaryTab.journey,
+                                  ),
+                                  onRevert: () =>
+                                      showNovelRevertDialog(context, controller),
+                                  onOpenPortrait:
+                                      controller.currentSpeakerCharacter == null
+                                          ? null
+                                          : _openCurrentSpeakerInCharacters,
                                 ),
-                                onOpenJourney: () => _selectPrimaryTab(
-                                  _NovelPrimaryTab.journey,
-                                ),
-                                onRevert: () => showNovelRevertDialog(context, controller),
-                                onOpenPortrait: controller.currentSpeakerCharacter == null
-                                    ? null
-                                    : _openCurrentSpeakerInCharacters,
                               ),
                             ),
                           ),
@@ -1044,14 +1533,28 @@ class _NovelGamePageState extends State<NovelGamePage>
                 ),
               ),
 
-              // 角色 / 背包 / 经历改成真正的一级 Tab：
-              // 第一次切入时才挂载对应页面，之后使用 Offstage 保留滚动位置、
-              // 当前筛选和已加载数据；剧情页本身始终保留在底层。
+              // 主角伤势必须挂在根 Stack，而不是 SafeArea 内部。
+              // 这样刘海、状态栏、底部手势区以及横屏两侧都能被完整覆盖。
+              if (_primaryTab == _NovelPrimaryTab.story &&
+                  controller.storyStarted &&
+                  !controller.isCinematic)
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: NovelDamageFeedbackOverlay(
+                      hp: controller.protagonistHp,
+                    ),
+                  ),
+                ),
+
+              // 角色 / 背包 / 经历是右侧长期入口；周围虽然不再显示在右侧，
+              // 底层仍以保活 Tab 挂载，保证返回剧情再进入时探索/组合进度不会丢失。
+              // 第一次切入时才挂载对应页面，之后使用 Offstage 保留本地状态。
               if (controller.storyStarted && !controller.isCinematic)
                 for (final tab in const <_NovelPrimaryTab>[
                   _NovelPrimaryTab.characters,
                   _NovelPrimaryTab.inventory,
                   _NovelPrimaryTab.journey,
+                  _NovelPrimaryTab.surroundings,
                 ])
                   if (_mountedPrimaryTabs.contains(tab))
                     Positioned.fill(
@@ -1071,7 +1574,8 @@ class _NovelGamePageState extends State<NovelGamePage>
               // 右上角星星作为唯一的道具 / 兑换入口；在四个一级 Tab 中都可使用。
               if (controller.storyStarted &&
                   !controller.isGenerating &&
-                  !controller.isCinematic)
+                  !controller.isCinematic &&
+                  _primaryTab != _NovelPrimaryTab.surroundings)
                 Positioned(
                   top: (MediaQuery.paddingOf(context).top < 10
                           ? 10
@@ -1084,10 +1588,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                   ),
                 ),
 
-              // 一级导航放回积分正下方：得分在右上角，四个入口沿右侧向下排列。
-              // 不再垂直居中，避免与剧情主体抢占中段视觉空间。
+              // 右侧只保留“剧情 / 角色 / 背包 / 经历”四个长期入口。
+              // “周围”改为当前地点的场景动作，不再混进档案导航。
               if (controller.storyStarted &&
                   !controller.isCinematic &&
+                  _primaryTab != _NovelPrimaryTab.surroundings &&
                   !(MediaQuery.sizeOf(context).width <= 600 &&
                       MediaQuery.viewInsetsOf(context).bottom > 0))
                 Positioned(
@@ -1111,7 +1616,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                   (controller.currentSentence?.readerText.trim().isEmpty ?? true) &&
                   !controller.showDice)
                 const NovelBrewingOverlay(),
-
 
               // 通用 HUD 只保留物品/人物状态/风险等场景反馈。
               // 好感度在角色爱心原位变化；积分在右上角星星原位变化；
@@ -1137,8 +1641,15 @@ class _NovelGamePageState extends State<NovelGamePage>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        CircularProgressIndicator(color: NovelPalette.accent),
-                        SizedBox(height: 18),
+                        SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xB3FFFFFF),
+                          ),
+                        ),
+                        SizedBox(height: 14),
                         Text('正在载入世界…', style: TextStyle(color: NovelPalette.text, letterSpacing: 2)),
                       ],
                     ),

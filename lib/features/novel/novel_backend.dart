@@ -10,6 +10,43 @@ abstract class NovelBackend {
 
   Stream<NovelStreamEvent> sendMessageStream(NovelSendRequest request);
 
+  /// 获取当前位置与一跳相邻节点。后端不会返回完整世界地图或隐藏节点。
+  Future<JsonMap> fetchSceneMap(String sessionId);
+
+  /// 校验一次节点点击并返回结构化 navigation_action；本接口不直接改位置。
+  Future<JsonMap> createSceneMoveIntent(
+    String sessionId,
+    String targetSceneId,
+  );
+
+  /// 轻量读取当前位置是否允许调查；本接口不会触发 LLM。
+  Future<JsonMap> fetchSurroundingsAvailability(String sessionId);
+
+  /// 首次打开时按当前场景生成并保存调查结构；之后直接读取存档。
+  Future<JsonMap> fetchSurroundings(String sessionId);
+
+  Future<JsonMap> investigateSurroundNode(
+    String sessionId,
+    String nodeId,
+  );
+
+  Future<JsonMap> combineSurroundNodes(
+    String sessionId,
+    String firstId,
+    String secondId,
+  );
+
+  Future<JsonMap> claimSurroundReward(
+    String sessionId,
+    String nodeId,
+  );
+
+  /// 使用与普通聊天完全相同的 SSE 通道发送一次地图移动回合。
+  Stream<NovelStreamEvent> sendNavigationMessageStream(
+    NovelSendRequest request,
+    JsonMap navigationAction,
+  );
+
   Future<void> cancelActiveStream();
 
   Future<void> markMessageRead(String scenarioId, String messageId);
@@ -48,6 +85,16 @@ abstract class NovelBackend {
   /// 不要把这里误认为 scenario instance id。
   Future<NovelInventoryData> fetchInventory(String sessionId);
 
+  /// 战斗退出时一次性扣除本场使用的消耗品。
+  /// 默认实现便于预览/测试后端继续工作；正式 HTTP 后端必须覆写。
+  Future<JsonMap> settleBattleItems({
+    required String sessionId,
+    required List<JsonMap> consumptions,
+    required String outcome,
+  }) {
+    throw const NovelBackendException('当前后端不支持战斗道具结算');
+  }
+
   Future<void> equipItem({
     required String scenarioInstanceId,
     required String itemId,
@@ -81,6 +128,17 @@ abstract class NovelBackend {
   });
 
   Future<void> close();
+}
+
+/// 可选的开发者内容识别能力。
+///
+/// 单独拆成接口，避免预览/测试用的 NovelBackend 实现被迫接入开发者路由；
+/// 正式 HTTP 后端实现后，控制器会自动启用“输入名称获取技能/物品”。
+abstract class NovelDeveloperContentBackend {
+  Future<JsonMap> recognizeAndAcquireDeveloperContent({
+    required String sessionId,
+    required String name,
+  });
 }
 
 class NovelBackendException implements Exception {

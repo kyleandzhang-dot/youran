@@ -24,6 +24,15 @@ class NovelEndpointConfig {
     this.history = '/chat/history',
     this.sendStream = '/chat/stream',
     this.markRead = '/chat/mark-read',
+    this.sceneMap = '/novel/scene-map/{sessionId}',
+    this.sceneMoveIntent = '/novel/scene-map/{sessionId}/move-intent',
+    this.surroundingsAvailability =
+        '/novel/surroundings/{sessionId}/availability',
+    this.surroundings = '/novel/surroundings/{sessionId}',
+    this.surroundingsInvestigate =
+        '/novel/surroundings/{sessionId}/investigate',
+    this.surroundingsCombine = '/novel/surroundings/{sessionId}/combine',
+    this.surroundingsClaim = '/novel/surroundings/{sessionId}/claim',
     this.characterStatus = '/scenario/{scenarioId}/characters/status',
     this.journey = '/scenario/{scenarioId}/journey',
     this.updateScenario = '/scenario/{scenarioId}/update',
@@ -34,12 +43,15 @@ class NovelEndpointConfig {
     this.imageTaskResult = '/image/task/{taskId}/result',
     this.r2Signature = '/r2/get-signature',
     this.inventory = '/novel/inventory/{sessionId}',
+    this.battleItemSettlement = '/novel/battle/items/settle',
     this.equipItem = '/novel/inventory/{scenarioInstanceId}/equip',
     this.useGift = '/novel/use-gift',
     this.useBlindBox = '/novel/use-blind-box',
     this.shopItems = '/novel/shop/items',
     this.buyItem = '/novel/shop/buy',
     this.revertTurn = '/novel/revert',
+    this.developerContent = '/novel/developer/content',
+    this.developerBattleOpponents = '/novel/developer/battle-opponents',
     this.webSocket = '/ws/private',
   });
 
@@ -47,6 +59,13 @@ class NovelEndpointConfig {
   final String history;
   final String sendStream;
   final String markRead;
+  final String sceneMap;
+  final String sceneMoveIntent;
+  final String surroundingsAvailability;
+  final String surroundings;
+  final String surroundingsInvestigate;
+  final String surroundingsCombine;
+  final String surroundingsClaim;
   final String characterStatus;
   final String journey;
   final String updateScenario;
@@ -57,12 +76,15 @@ class NovelEndpointConfig {
   final String imageTaskResult;
   final String r2Signature;
   final String inventory;
+  final String battleItemSettlement;
   final String equipItem;
   final String useGift;
   final String useBlindBox;
   final String shopItems;
   final String buyItem;
   final String revertTurn;
+  final String developerContent;
+  final String developerBattleOpponents;
   final String webSocket;
 
   String resolve(
@@ -85,7 +107,8 @@ class NovelEndpointConfig {
   }
 }
 
-class HttpNovelBackend implements NovelBackend {
+class HttpNovelBackend
+    implements NovelBackend, NovelDeveloperContentBackend {
   HttpNovelBackend({
     required this.baseUrl,
     required this.tokenProvider,
@@ -283,7 +306,131 @@ class HttpNovelBackend implements NovelBackend {
   }
 
   @override
-  Stream<NovelStreamEvent> sendMessageStream(NovelSendRequest request) async* {
+  Future<JsonMap> fetchSceneMap(String sessionId) async {
+    final path = endpoints.resolve(
+      endpoints.sceneMap,
+      sessionId: sessionId,
+    );
+    final response = await _get(path);
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> createSceneMoveIntent(
+    String sessionId,
+    String targetSceneId,
+  ) async {
+    final cleanTarget = targetSceneId.trim();
+    if (cleanTarget.isEmpty) {
+      throw const NovelBackendException('目标场景不能为空');
+    }
+    final path = endpoints.resolve(
+      endpoints.sceneMoveIntent,
+      sessionId: sessionId,
+    );
+    final response = await _send(
+      'POST',
+      path,
+      body: <String, dynamic>{'target_scene_id': cleanTarget},
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> fetchSurroundingsAvailability(String sessionId) async {
+    final path = endpoints.resolve(
+      endpoints.surroundingsAvailability,
+      sessionId: sessionId,
+    );
+    final response = await _get(path);
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> fetchSurroundings(String sessionId) async {
+    final path = endpoints.resolve(
+      endpoints.surroundings,
+      sessionId: sessionId,
+    );
+    final response = await _get(path);
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> investigateSurroundNode(
+    String sessionId,
+    String nodeId,
+  ) async {
+    final path = endpoints.resolve(
+      endpoints.surroundingsInvestigate,
+      sessionId: sessionId,
+    );
+    final response = await _send(
+      'POST',
+      path,
+      body: <String, dynamic>{'node_id': nodeId.trim()},
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> combineSurroundNodes(
+    String sessionId,
+    String firstId,
+    String secondId,
+  ) async {
+    final path = endpoints.resolve(
+      endpoints.surroundingsCombine,
+      sessionId: sessionId,
+    );
+    final response = await _send(
+      'POST',
+      path,
+      body: <String, dynamic>{
+        'first_id': firstId.trim(),
+        'second_id': secondId.trim(),
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> claimSurroundReward(
+    String sessionId,
+    String nodeId,
+  ) async {
+    final path = endpoints.resolve(
+      endpoints.surroundingsClaim,
+      sessionId: sessionId,
+    );
+    final response = await _send(
+      'POST',
+      path,
+      body: <String, dynamic>{'node_id': nodeId.trim()},
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Stream<NovelStreamEvent> sendMessageStream(NovelSendRequest request) {
+    return _sendMessageStream(request);
+  }
+
+  @override
+  Stream<NovelStreamEvent> sendNavigationMessageStream(
+    NovelSendRequest request,
+    JsonMap navigationAction,
+  ) {
+    return _sendMessageStream(
+      request,
+      navigationAction: navigationAction,
+    );
+  }
+
+  Stream<NovelStreamEvent> _sendMessageStream(
+    NovelSendRequest request, {
+    JsonMap navigationAction = const <String, dynamic>{},
+  }) async* {
     await cancelActiveStream();
     _streamCancelled = false;
     final client = http.Client();
@@ -293,7 +440,11 @@ class HttpNovelBackend implements NovelBackend {
       final httpRequest = http.Request('POST', _uri(endpoints.sendStream));
       final headers = await _headers(stream: true).timeout(_streamConnectTimeout);
       httpRequest.headers.addAll(headers);
-      httpRequest.body = jsonEncode(request.toJson());
+      httpRequest.body = jsonEncode(<String, dynamic>{
+        ...request.toJson(),
+        if (navigationAction.isNotEmpty)
+          'navigation_action': navigationAction,
+      });
 
       // Future.timeout 本身不会取消底层 socket，但 finally 中 client.close()
       // 会在超时后立即终止该次连接，避免浏览器一直挂着 pending request。
@@ -759,6 +910,92 @@ class HttpNovelBackend implements NovelBackend {
     );
     final response = await _get(path);
     return NovelInventoryData.fromJson(asJsonMap(_dataOf(response)));
+  }
+
+  @override
+  Future<JsonMap> settleBattleItems({
+    required String sessionId,
+    required List<JsonMap> consumptions,
+    required String outcome,
+  }) async {
+    final numericSessionId = int.tryParse(sessionId);
+    if (numericSessionId == null) {
+      throw const NovelBackendException('当前会话ID无效，无法结算战斗道具');
+    }
+    final normalized = <JsonMap>[];
+    for (final raw in consumptions) {
+      final itemId = stringValue(raw['item_id'] ?? raw['id']).trim();
+      final quantity = intValue(raw['quantity']);
+      if (itemId.isEmpty || quantity <= 0) continue;
+      normalized.add(<String, dynamic>{
+        'item_id': itemId,
+        'quantity': quantity.clamp(1, 999).toInt(),
+      });
+    }
+    if (normalized.isEmpty) return <String, dynamic>{'settled': <dynamic>[]};
+
+    final response = await _send(
+      'POST',
+      endpoints.battleItemSettlement,
+      body: <String, dynamic>{
+        'session_id': numericSessionId,
+        'outcome': outcome.trim(),
+        'consumptions': normalized,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> recognizeAndAcquireDeveloperContent({
+    required String sessionId,
+    required String name,
+  }) async {
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) {
+      throw const NovelBackendException('名称不能为空');
+    }
+    final numericSessionId = int.tryParse(sessionId);
+    if (numericSessionId == null) {
+      throw const NovelBackendException('当前会话ID无效，无法识别开发者内容');
+    }
+    final response = await _send(
+      'POST',
+      endpoints.developerContent,
+      body: <String, dynamic>{
+        'session_id': numericSessionId,
+        'name': cleanName,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  /// 开发者测试：让后端读取当前玩家权威状态并生成一个可直接开战的对手。
+  /// 对手不会写入剧情角色库；返回值同时包含 player_snapshot、对手技能和
+  /// 后端按双方真实阶位计算的中立裁判倍率。
+  Future<JsonMap> createDeveloperBattleOpponent({
+    required String sessionId,
+    required String name,
+    String description = '',
+  }) async {
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) {
+      throw const NovelBackendException('对手名称不能为空');
+    }
+    final numericSessionId = int.tryParse(sessionId);
+    if (numericSessionId == null) {
+      throw const NovelBackendException('当前会话ID无效，无法生成测试对手');
+    }
+    final response = await _send(
+      'POST',
+      endpoints.developerBattleOpponents,
+      body: <String, dynamic>{
+        'session_id': numericSessionId,
+        'name': cleanName,
+        'description': description.trim(),
+      },
+    );
+    return asJsonMap(_dataOf(response));
   }
 
   @override

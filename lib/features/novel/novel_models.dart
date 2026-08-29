@@ -520,15 +520,67 @@ class NovelChoice {
     required this.text,
     this.type = 'normal',
     this.dice = false,
+    String iconPath = '',
     this.raw = const <String, dynamic>{},
-  });
+  }) : _iconPath = iconPath;
+
+  /// 三类剧情选项的默认图标资源路径。
+  /// 以后只需要把对应 PNG 放到这些位置，并在 pubspec.yaml 中声明 assets。
+  static const String dialogueIconPath =
+      'assets/images/choices/dialogue.webp';
+  static const String actionIconPath =
+      'assets/images/choices/action.webp';  
+  static const String battleIconPath =
+      'assets/images/choices/battle.webp';
 
   final String text;
   final String type;
   final bool dice;
+  final String _iconPath;
   final JsonMap raw;
 
-  bool get isAction => type == 'action' || dice;
+  String get normalizedType => type.trim().toLowerCase();
+
+  bool get isDialogue =>
+      normalizedType == 'dialogue' ||
+      normalizedType == 'normal' ||
+      normalizedType.isEmpty;
+
+  bool get isAction => normalizedType == 'action' || dice;
+
+  bool get isBattle => normalizedType == 'battle';
+
+  /// 后端生成的不可伪造选项标识。正式战斗只回传这个 ID，
+  /// 不让前端自行提交对手名称、等级或技能。
+  String get optionId =>
+      stringValue(raw['option_id'] ?? raw['optionId']).trim();
+
+  int get sourceMessageId =>
+      intValue(raw['source_message_id'] ?? raw['sourceMessageId']);
+
+  JsonMap get battleTarget => asJsonMap(raw['target']);
+
+  String get battleTargetName => stringValue(
+        battleTarget['name'] ?? raw['target_name'] ?? raw['targetName'],
+      ).trim();
+
+  String get battleMode =>
+      stringValue(raw['battle_mode'] ?? raw['battleMode'], 'hostile')
+          .trim()
+          .toLowerCase();
+
+  /// 优先使用后端/调用方显式传入的 icon；没有时按选项类型走本地默认资源。
+  /// 未识别的旧类型继续按 dialogue 图标兜底，避免旧存档出现空图标。
+  String get iconPath {
+    final explicit = _iconPath.trim();
+    if (explicit.isNotEmpty) return explicit;
+
+    return switch (normalizedType) {
+      'action' => actionIconPath,
+      'battle' => battleIconPath,
+      _ => dialogueIconPath,
+    };
+  }
 
   factory NovelChoice.fromDynamic(dynamic value) {
     if (value is String) return NovelChoice(text: value);
@@ -536,7 +588,10 @@ class NovelChoice {
     return NovelChoice(
       text: stringValue(json['text'] ?? json['label']),
       type: stringValue(json['type'], 'normal'),
-      dice: boolValue(json['dice']),
+      dice: boolValue(json['dice'] ?? json['need_check']),
+      iconPath: stringValue(
+        json['icon_path'] ?? json['iconPath'] ?? json['icon'],
+      ),
       raw: json,
     );
   }

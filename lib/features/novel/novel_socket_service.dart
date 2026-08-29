@@ -45,6 +45,7 @@ class NovelSocketService {
   bool _manuallyClosed = false;
   bool _connecting = false;
   bool _kickNotified = false;
+  bool _everConnected = false;
   int _attempt = 0;
   String _sessionId = '';
 
@@ -73,6 +74,9 @@ class NovelSocketService {
     if (_connecting) return;
     if (_channel != null && _sessionId == sessionId) return;
 
+    if (_sessionId.isNotEmpty && _sessionId != sessionId) {
+      _everConnected = false;
+    }
     _connecting = true;
     _manuallyClosed = false;
     _kickNotified = false;
@@ -99,6 +103,8 @@ class NovelSocketService {
       _attempt = 0;
       _startHeartbeat();
 
+      final reconnected = _everConnected;
+      _everConnected = true;
       _subscription = channel.stream.listen(
         _handleMessage,
         onError: (Object error, StackTrace stackTrace) {
@@ -124,10 +130,25 @@ class NovelSocketService {
             unawaited(_closeChannel());
             return;
           }
+          _events.add(NovelSocketEvent(
+            type: 'socket_disconnected',
+            data: <String, dynamic>{
+              'session_id': sessionId,
+              'close_code': code,
+            },
+          ));
           _scheduleReconnect();
         },
         cancelOnError: false,
       );
+      // 先挂上远端消息监听，再通知控制器开始补拉，避免重连瞬间漏掉首条推送。
+      _events.add(NovelSocketEvent(
+        type: 'socket_connected',
+        data: <String, dynamic>{
+          'session_id': sessionId,
+          'reconnected': reconnected,
+        },
+      ));
     } catch (error) {
       _events.add(NovelSocketEvent(
         type: 'socket_error',
@@ -260,6 +281,7 @@ class NovelSocketService {
   Future<void> disconnect() async {
     _manuallyClosed = true;
     _sessionId = '';
+    _everConnected = false;
     await _closeChannel();
   }
 

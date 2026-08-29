@@ -10,6 +10,250 @@ import 'novel_settings_service.dart';
 import 'novel_socket_service.dart';
 import 'novel_text_parser.dart';
 
+RegExp _buildNovelReadableCharacterPattern() {
+  try {
+    // 优先按 Unicode 字母/数字判断，兼容中文、英文及其它语言。
+    return RegExp(r'[\p{L}\p{N}]', unicode: true);
+  } on FormatException {
+    // 兼容少数较旧、尚不支持 Unicode property escapes 的 Dart 运行时。
+    return RegExp(
+      r'[A-Za-z0-9\u00C0-\u02AF\u0370-\u052F\u0531-\u058F'
+      r'\u05D0-\u05EA\u0620-\u06FF\u0900-\u097F\u0E00-\u0E7F'
+      r'\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]',
+      unicode: true,
+    );
+  }
+}
+
+final RegExp _novelReadableCharacterPattern =
+    _buildNovelReadableCharacterPattern();
+
+/// 一行至少包含一个字母或数字，才算真正的剧情内容。
+/// 纯空白、纯标点、纯装饰符号（例如“……”“---”“【】”）不应占据正文行。
+bool novelTextHasReadableContent(String value) {
+  return value.isNotEmpty && _novelReadableCharacterPattern.hasMatch(value);
+}
+
+/// 删除正文中没有任何文字/数字的整行。
+/// 正常的单换行必须保留；空行、纯空格行或纯符号行被移除后，
+/// 相邻正文之间只留下一个换行，避免出现双换行空白。
+String novelTextWithoutSymbolOnlyLines(String value) {
+  if (value.isEmpty) return value;
+  // sentenceItems 偶尔会把换行保留成字面量 "\\n"；显示前统一还原。
+  // 流式正文通常已经是真换行，这几步对它没有副作用。
+  final normalized = value
+      .replaceAll(r'\r\n', '\n')
+      .replaceAll(r'\n', '\n')
+      .replaceAll(r'\r', '\n')
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .replaceAll('\u2028', '\n')
+      .replaceAll('\u2029', '\n');
+  return normalized
+      .split('\n')
+      // 只清理行尾无意义空格；保留有效正文原本的行首排版。
+      .map((line) => line.trimRight())
+      .where(novelTextHasReadableContent)
+      .join('\n');
+}
+
+typedef NovelSceneMapLoader = Future<Map<String, dynamic>> Function(
+  String sessionId,
+);
+
+typedef NovelSceneMoveIntentCreator = Future<Map<String, dynamic>> Function(
+  String sessionId,
+  String targetSceneId,
+);
+
+typedef NovelNavigationStreamSender = Stream<NovelStreamEvent> Function(
+  NovelSendRequest request,
+  Map<String, dynamic> navigationAction,
+);
+
+typedef NovelDeveloperSkillAdder = Future<Map<String, dynamic>> Function(
+  String sessionId,
+  String skillName,
+);
+
+typedef NovelBattleStarter = Future<JsonMap> Function(
+  String sessionId,
+  String battleOptionId,
+);
+
+
+class NovelPendingBattleStart {
+  const NovelPendingBattleStart({
+    required this.optionId,
+    required this.targetName,
+    required this.battleMode,
+    required this.loadPayload,
+  });
+
+  final String optionId;
+  final String targetName;
+  final String battleMode;
+
+  /// 每次调用都重新发起一次后端战斗生成请求，供 Battle 加载页失败后原地重试。
+  final Future<JsonMap> Function() loadPayload;
+}
+
+typedef NovelBattleSettler = Future<JsonMap> Function(
+  String sessionId,
+  String battleId,
+  String outcome,
+  List<JsonMap> consumptions,
+);
+
+Map<String, dynamic> _sceneJsonMap(dynamic value) {
+  if (value is Map<String, dynamic>) return value;
+  if (value is Map) {
+    return value.map<String, dynamic>(
+      (key, item) => MapEntry<String, dynamic>('$key', item),
+    );
+  }
+  return <String, dynamic>{};
+}
+
+String _sceneString(dynamic value) => value?.toString().trim() ?? '';
+
+bool _sceneBool(dynamic value, {bool fallback = false}) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  final normalized = _sceneString(value).toLowerCase();
+  if (normalized == 'true' || normalized == '1' || normalized == 'yes') {
+    return true;
+  }
+  if (normalized == 'false' || normalized == '0' || normalized == 'no') {
+    return false;
+  }
+  return fallback;
+}
+
+/// 后端只返回当前位置与一跳相邻节点，前端不会拿到完整世界地图。
+class NovelSceneMapNode {
+  const NovelSceneMapNode({
+    this.sceneId = '',
+    this.name = '',
+    this.regionId = '',
+    this.description = '',
+    this.connectionId = '',
+    this.exitName = '',
+    this.moveState = 'locked',
+    this.reason = '',
+    this.requiresCheck = false,
+    this.discovered = false,
+    this.visited = false,
+    this.presentNpcs = const <String>[],
+  });
+
+  final String sceneId;
+  final String name;
+  final String regionId;
+  final String description;
+  final String connectionId;
+  final String exitName;
+  final String moveState;
+  final String reason;
+  final bool requiresCheck;
+  final bool discovered;
+  final bool visited;
+  final List<String> presentNpcs;
+
+  bool get isAvailable => moveState == 'available';
+  bool get isRisky => moveState == 'risky';
+  bool get isLocked => !isAvailable && !isRisky;
+
+  factory NovelSceneMapNode.fromDynamic(dynamic value) {
+    final data = _sceneJsonMap(value);
+    final rawNpcs = data['present_npcs'];
+    return NovelSceneMapNode(
+      sceneId: _sceneString(data['scene_id']),
+      name: _sceneString(data['name']),
+      regionId: _sceneString(data['region_id']),
+      description: _sceneString(data['description']),
+      connectionId: _sceneString(data['connection_id']),
+      exitName: _sceneString(data['exit_name']),
+      moveState: _sceneString(data['move_state']).toLowerCase().isEmpty
+          ? 'locked'
+          : _sceneString(data['move_state']).toLowerCase(),
+      reason: _sceneString(data['reason']),
+      requiresCheck: _sceneBool(data['requires_check']),
+      discovered: _sceneBool(data['discovered'], fallback: true),
+      visited: _sceneBool(data['visited']),
+      presentNpcs: rawNpcs is List
+          ? rawNpcs
+              .map(_sceneString)
+              .where((item) => item.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[],
+    );
+  }
+}
+
+class NovelSceneMobility {
+  const NovelSceneMobility({
+    this.canOpenMap = true,
+    this.status = 'available',
+    this.reason = '',
+    this.combatActive = false,
+  });
+
+  final bool canOpenMap;
+  final String status;
+  final String reason;
+  final bool combatActive;
+
+  bool get canMove => status == 'available';
+
+  factory NovelSceneMobility.fromDynamic(dynamic value) {
+    final data = _sceneJsonMap(value);
+    final status = _sceneString(data['status']).toLowerCase();
+    return NovelSceneMobility(
+      canOpenMap: _sceneBool(data['can_open_map'], fallback: true),
+      status: status.isEmpty ? 'available' : status,
+      reason: _sceneString(data['reason']),
+      combatActive: _sceneBool(data['combat_active']),
+    );
+  }
+}
+
+class NovelSceneMapData {
+  const NovelSceneMapData({
+    this.configured = false,
+    this.currentSceneId = '',
+    this.currentScene = const NovelSceneMapNode(),
+    this.mobility = const NovelSceneMobility(),
+    this.targets = const <NovelSceneMapNode>[],
+  });
+
+  final bool configured;
+  final String currentSceneId;
+  final NovelSceneMapNode currentScene;
+  final NovelSceneMobility mobility;
+  final List<NovelSceneMapNode> targets;
+
+  bool get hasCurrentScene =>
+      currentSceneId.isNotEmpty || currentScene.name.isNotEmpty;
+
+  factory NovelSceneMapData.fromDynamic(dynamic value) {
+    final data = _sceneJsonMap(value);
+    final rawTargets = data['targets'];
+    return NovelSceneMapData(
+      configured: _sceneBool(data['configured']),
+      currentSceneId: _sceneString(data['current_scene_id']),
+      currentScene: NovelSceneMapNode.fromDynamic(data['current_scene']),
+      mobility: NovelSceneMobility.fromDynamic(data['mobility']),
+      targets: rawTargets is List
+          ? rawTargets
+              .map(NovelSceneMapNode.fromDynamic)
+              .where((item) => item.sceneId.isNotEmpty || item.name.isNotEmpty)
+              .toList(growable: false)
+          : const <NovelSceneMapNode>[],
+    );
+  }
+}
+
 class NovelHudEvent {
   const NovelHudEvent({
     required this.id,
@@ -54,6 +298,12 @@ class NovelGameController extends ChangeNotifier {
     required this.bgm,
     required this.settings,
     NovelTextParser? parser,
+    this.sceneMapLoader,
+    this.sceneMoveIntentCreator,
+    this.navigationStreamSender,
+    this.developerSkillAdder,
+    this.battleStarter,
+    this.battleSettler,
   }) : parser = parser ?? const NovelTextParser() {
     settings.addListener(_onSettingsChanged);
   }
@@ -65,6 +315,12 @@ class NovelGameController extends ChangeNotifier {
   final NovelBgmService bgm;
   final NovelSettingsService settings;
   final NovelTextParser parser;
+  final NovelSceneMapLoader? sceneMapLoader;
+  final NovelSceneMoveIntentCreator? sceneMoveIntentCreator;
+  final NovelNavigationStreamSender? navigationStreamSender;
+  final NovelDeveloperSkillAdder? developerSkillAdder;
+  final NovelBattleStarter? battleStarter;
+  final NovelBattleSettler? battleSettler;
 
   NovelScenario? scenario;
   NovelWorldState world = const NovelWorldState();
@@ -89,8 +345,27 @@ class NovelGameController extends ChangeNotifier {
   NovelInventoryData inventory = const NovelInventoryData();
   List<NovelShopItem> shopItems = <NovelShopItem>[];
   JsonMap journey = <String, dynamic>{};
+  NovelSceneMapData sceneMap = const NovelSceneMapData();
+  JsonMap surroundingsAvailability = <String, dynamic>{};
+  JsonMap surroundingsData = <String, dynamic>{};
   NovelHudEvent? hudEvent;
+  bool isSceneMapLoading = false;
+  bool isSceneMoveSubmitting = false;
+  bool isSurroundingsAvailabilityLoading = false;
+  bool _surroundingsAvailabilityRefreshPending = false;
+  int _surroundingsAvailabilityPollTicket = 0;
+  bool isSurroundingsLoading = false;
+  bool isSurroundingsActionRunning = false;
+  bool isReaderRevealing = false;
+  String sceneMapError = '';
+  String sceneMoveError = '';
+  String surroundingsError = '';
+  DateTime? _lastSceneMapRefreshAt;
   bool isBackgroundGenerating = false;
+  bool isStartingBattle = false;
+  NovelPendingBattleStart? _pendingBattleStart;
+  JsonMap? _pendingBattle;
+  String _activeBattleOptionId = '';
   final Map<String, String> characterExpressions = <String, String>{};
   /// 正在自动生成立绘的角色 id 集合（素材库未命中时后端触发），供 UI 显示"生成中"占位
   final Set<String> generatingPortraitCharacterIds = <String>{};
@@ -130,6 +405,8 @@ class NovelGameController extends ChangeNotifier {
   bool isInitialized = false;
   bool isGenerating = false;
   bool isSyncingHistory = false;
+  bool isRecoveringConnection = false;
+  bool _authoritativeRecoveryPending = false;
   bool isReverting = false;
   bool storyStarted = false;
   bool showCharacterSetup = false;
@@ -170,10 +447,11 @@ class NovelGameController extends ChangeNotifier {
   List<dynamic>? _developerInjuriesBackup;
 
   // 流式文本如果每个 token 都立刻解析 + notify，会导致整页在手机上高频 rebuild。
-  // 这里把多个小 chunk 合并成约 14fps 的 UI 刷新；网络流本身不降速，也不会丢字。
+  // 这里把多个小 chunk 合并成约 20fps 的 UI 刷新；比旧版 72ms 更贴近本地逐字节奏，
+  // 同时仍避免每个网络 token 都触发整页 rebuild。网络流本身不降速，也不会丢字。
   Timer? _streamUiTimer;
   String _pendingStreamText = '';
-  static const Duration _streamUiInterval = Duration(milliseconds: 72);
+  static const Duration _streamUiInterval = Duration(milliseconds: 48);
 
   final List<NovelHudEvent> _hudEventQueue = <NovelHudEvent>[];
   final Map<String, DateTime> _recentHudEventKeys = <String, DateTime>{};
@@ -188,6 +466,31 @@ class NovelGameController extends ChangeNotifier {
       if (messages[i].role == NovelMessageRole.assistant) return messages[i];
     }
     return null;
+  }
+
+  NovelPendingBattleStart? consumePendingBattleStart() {
+    final request = _pendingBattleStart;
+    _pendingBattleStart = null;
+    if (request != null) {
+      // Battle 路由已经接管生成过程，剧情页不再继续显示“正在生成对手”。
+      isStartingBattle = false;
+      _activeBattleOptionId = request.optionId;
+    }
+    return request;
+  }
+
+  void abandonBattleStart(String optionId) {
+    if (_activeBattleOptionId == optionId.trim()) {
+      _activeBattleOptionId = '';
+    }
+    isStartingBattle = false;
+    if (!_disposed) _notify();
+  }
+
+  JsonMap? consumePendingBattle() {
+    final payload = _pendingBattle;
+    _pendingBattle = null;
+    return payload;
   }
 
   NovelSentence? get currentSentence {
@@ -209,6 +512,11 @@ class NovelGameController extends ChangeNotifier {
 
   String get protagonistName => protagonist?.name ?? '我';
 
+  /// 选项按钮图标统一从 NovelChoice 读取。
+  /// dialogue / action / battle 在 NovelChoice 内已经配置默认本地资源路径，
+  /// 后端如传 icon_path / iconPath / icon 则会自动覆盖。
+  String choiceIconPath(NovelChoice choice) => choice.iconPath;
+
   String get locationTitle {
     final raw = world.location.isNotEmpty ? world.location : (scenario?.title ?? '');
     final parts = raw.split(RegExp(r'[^一-龥a-zA-Z0-9]+')).where((part) => part.isNotEmpty).toList();
@@ -220,6 +528,84 @@ class NovelGameController extends ChangeNotifier {
     final parts = raw.split(RegExp(r'[^一-龥a-zA-Z0-9]+')).where((part) => part.isNotEmpty).toList();
     if (parts.length <= 1) return world.timeDescription;
     return parts.sublist(0, parts.length - 1).join(' · ');
+  }
+
+  bool get shouldShowSurroundingsAction {
+    return storyStarted &&
+        !isCinematic &&
+        !isGenerating &&
+        !hasNext &&
+        !isReaderRevealing &&
+        !pendingFateRevert &&
+        !showDice &&
+        !isStartingBattle &&
+        boolValue(surroundingsAvailability['available']) &&
+        boolValue(surroundingsAvailability['can_investigate']);
+  }
+
+  bool get canInvestigateSurroundings => shouldShowSurroundingsAction;
+
+  bool get surroundingsNeedsAttention {
+    return canInvestigateSurroundings &&
+        boolValue(surroundingsAvailability['needs_attention']);
+  }
+
+  String get surroundingsStatus {
+    return stringValue(
+      surroundingsData['status'] ?? surroundingsAvailability['status'],
+      'unavailable',
+    ).trim().toLowerCase();
+  }
+
+  String get surroundingsActionLabel {
+    return switch (surroundingsStatus) {
+      'exhausted' => '已探索',
+      'reward_ready' => '有所发现',
+      'in_progress' => '继续调查',
+      _ => '探索周围',
+    };
+  }
+
+  bool get canRequestSceneMove {
+    return storyStarted &&
+        !hasNext &&
+        !isGenerating &&
+        !isReaderRevealing &&
+        !isCinematic &&
+        !pendingFateRevert &&
+        !showDice &&
+        !isSceneMoveSubmitting &&
+        sceneMap.mobility.canMove;
+  }
+
+  String get sceneMoveDisabledReason {
+    if (!storyStarted) return '剧情尚未开始';
+    if (hasNext) return '请先返回最新剧情，再进行场景移动';
+    if (isGenerating) return '剧情正在生成，请稍候';
+    if (isReaderRevealing) return '请先读完当前这段剧情';
+    if (isCinematic) return '当前处于剧情演出，暂时无法移动';
+    if (pendingFateRevert) return '请先处理当前命运回溯';
+    if (showDice) return '检定尚未结束，暂时无法移动';
+    if (isSceneMoveSubmitting) return '正在确认路线';
+    if (!sceneMap.mobility.canMove) {
+      return sceneMap.mobility.reason.isEmpty
+          ? '当前状态无法移动'
+          : sceneMap.mobility.reason;
+    }
+    return '';
+  }
+
+  bool canMoveToScene(NovelSceneMapNode target) {
+    return canRequestSceneMove && !target.isLocked && target.sceneId.isNotEmpty;
+  }
+
+  void setReaderRevealing(bool value, {bool notify = true}) {
+    if (isReaderRevealing == value) return;
+    isReaderRevealing = value;
+    if (!notify || _disposed) return;
+    scheduleMicrotask(() {
+      if (!_disposed) _notify();
+    });
   }
 
   String _normalizeSpeakerLookupName(String value) {
@@ -419,6 +805,11 @@ class NovelGameController extends ChangeNotifier {
 
       // 核心数据已经就绪，先允许游戏页面进入。
       isInitialized = true;
+      // 地图是增强能力，不作为进入剧情的硬依赖。接口尚未部署或旧剧本
+      // 没有 scene_graph 时只在地图面板内提示，不阻断正文。
+      unawaited(refreshSceneMap(force: true));
+      // 只读取轻量可用性，不生成调查内容；真正的 LLM 调用发生在用户点开时。
+      unawaited(refreshSurroundingsAvailability());
 
       // 角色 / 经历 / 背包改为真正的按需加载：
       // 用户先看到页面，再由对应页面在首帧后异步刷新，避免进入世界时提前请求，
@@ -448,7 +839,13 @@ class NovelGameController extends ChangeNotifier {
     }
   }
 
-  void _applyHistory(NovelHistoryResult history) {
+  void _applyHistory(
+    NovelHistoryResult history, {
+    bool preserveReaderPosition = false,
+  }) {
+    final visibleSentence = preserveReaderPosition ? currentSentence : null;
+    final visibleSentenceIndex = currentSentenceIndex;
+
     messages = history.messages.where((message) => !message.isTemporary).toList();
     currentTurn = history.currentTurn;
     score = NovelScore(total: history.currentScore);
@@ -458,7 +855,24 @@ class NovelGameController extends ChangeNotifier {
       showEnding = true;
     }
     _syncUiFromLastMessage(lastAssistantMessage);
-    _rebuildSentences(resetIndex: true);
+    _rebuildSentences(resetIndex: !preserveReaderPosition);
+
+    if (preserveReaderPosition && sentences.isNotEmpty) {
+      // HTTP 补拉会重新创建整组 NovelSentence，不能依赖对象引用。
+      // 优先按正在阅读的内容找回原页；流式正文被补全、内容发生变化时，
+      // 再保留原下标并夹紧到新分页范围，避免同步后跳回第一页。
+      final matchingIndex = visibleSentence == null
+          ? -1
+          : sentences.indexWhere(
+              (item) =>
+                  item.readerText == visibleSentence.readerText &&
+                  item.speakerName == visibleSentence.speakerName &&
+                  item.type == visibleSentence.type,
+            );
+      currentSentenceIndex = matchingIndex >= 0
+          ? matchingIndex
+          : visibleSentenceIndex.clamp(0, sentences.length - 1).toInt();
+    }
   }
 
   void _syncUiFromLastMessage(NovelMessage? message) {
@@ -524,10 +938,15 @@ class NovelGameController extends ChangeNotifier {
   }
 
   void _rebuildSentences({bool resetIndex = false}) {
-    sentences = parser.buildSentences(
-      message: lastAssistantMessage,
-      isGenerating: isGenerating,
-    );
+    sentences = parser
+        .buildSentences(
+          message: lastAssistantMessage,
+          isGenerating: isGenerating,
+        )
+        // 防止解析器把“……”“---”或只有空格的内容拆成独立剧情页。
+        .where((sentence) =>
+            novelTextHasReadableContent(sentence.readerText))
+        .toList(growable: false);
     if (resetIndex) {
       currentSentenceIndex = 0;
     } else if (sentences.isEmpty) {
@@ -956,6 +1375,328 @@ class NovelGameController extends ChangeNotifier {
     await _triggerAi(text);
   }
 
+  void _applySurroundingsPayload(JsonMap payload) {
+    surroundingsData = Map<String, dynamic>.from(payload);
+    surroundingsAvailability = <String, dynamic>{
+      ...surroundingsAvailability,
+      'available': payload['available'],
+      'can_investigate': payload['can_investigate'],
+      'needs_attention': payload['needs_attention'],
+      'status': payload['status'],
+      'reason': payload['reason'],
+      'scene_key': payload['scene_key'],
+      'scene_title': payload['scene_title'],
+      'generated': true,
+    };
+  }
+
+  Future<void> refreshSurroundingsAvailability({bool notify = true}) async {
+    if (sessionId.trim().isEmpty) return;
+    if (isSurroundingsAvailabilityLoading) {
+      // Writer 正文完成和后台 StateAnalyzer 提交可能非常接近；如果刷新请求
+      // 重叠，必须在当前请求结束后再读一次，不能把最新资格事件静默丢掉。
+      _surroundingsAvailabilityRefreshPending = true;
+      return;
+    }
+    isSurroundingsAvailabilityLoading = true;
+    if (notify) _notify();
+    try {
+      final payload = await backend.fetchSurroundingsAvailability(sessionId);
+      final incomingSceneKey = stringValue(payload['scene_key']);
+      final loadedSceneKey = stringValue(surroundingsData['scene_key']);
+      if (loadedSceneKey.isNotEmpty &&
+          incomingSceneKey.isNotEmpty &&
+          incomingSceneKey != loadedSceneKey) {
+        surroundingsData = <String, dynamic>{};
+        surroundingsError = '';
+      }
+      surroundingsAvailability = Map<String, dynamic>.from(payload);
+      debugPrint(
+        '[NovelSurroundings] scene=${stringValue(payload['scene_title'])} '
+        'available=${boolValue(payload['available'])} '
+        'canInvestigate=${boolValue(payload['can_investigate'])} '
+        'status=${stringValue(payload['status'])} '
+        'reason=${stringValue(payload['reason'])}',
+      );
+    } on NoSuchMethodError {
+      surroundingsAvailability = <String, dynamic>{};
+      surroundingsError = '当前客户端尚未接入调查接口';
+    } on NovelBackendException catch (error) {
+      surroundingsAvailability = <String, dynamic>{};
+      surroundingsError = error.message;
+    } catch (error) {
+      surroundingsAvailability = <String, dynamic>{};
+      surroundingsError = '调查状态暂时无法读取：$error';
+    } finally {
+      isSurroundingsAvailabilityLoading = false;
+      if (notify) _notify();
+      if (_surroundingsAvailabilityRefreshPending) {
+        _surroundingsAvailabilityRefreshPending = false;
+        unawaited(refreshSurroundingsAvailability(notify: notify));
+      }
+    }
+  }
+
+  void _scheduleSurroundingsAvailabilityRefreshAfterTurn() {
+    final ticket = ++_surroundingsAvailabilityPollTicket;
+    final generationId = _generationId;
+    unawaited(_pollSurroundingsAvailabilityAfterTurn(ticket, generationId));
+  }
+
+  Future<void> _pollSurroundingsAvailabilityAfterTurn(
+    int ticket,
+    int generationId,
+  ) async {
+    // message_saved 往往早于后台 StateAnalyzer 落库。WS 只是加速通知，
+    // 这里用轻量 GET 做最终一致性兜底，避免漏一条推送后入口永远不出现。
+    const delays = <Duration>[
+      Duration(milliseconds: 400),
+      Duration(milliseconds: 1200),
+      Duration(seconds: 3),
+      Duration(seconds: 6),
+      Duration(seconds: 10),
+    ];
+    for (final delay in delays) {
+      await Future<void>.delayed(delay);
+      if (_disposed ||
+          ticket != _surroundingsAvailabilityPollTicket ||
+          generationId != _generationId) {
+        return;
+      }
+      await refreshSurroundingsAvailability();
+      if (boolValue(surroundingsAvailability['available']) &&
+          boolValue(surroundingsAvailability['can_investigate'])) {
+        return;
+      }
+    }
+  }
+
+  Future<JsonMap> loadSurroundings({bool force = false}) async {
+    if (isSurroundingsLoading) return surroundingsData;
+    final availableSceneKey = stringValue(surroundingsAvailability['scene_key']);
+    final loadedSceneKey = stringValue(surroundingsData['scene_key']);
+    if (!force &&
+        surroundingsData.isNotEmpty &&
+        availableSceneKey.isNotEmpty &&
+        availableSceneKey == loadedSceneKey) {
+      return surroundingsData;
+    }
+    isSurroundingsLoading = true;
+    surroundingsError = '';
+    _notify();
+    try {
+      final payload = await backend.fetchSurroundings(sessionId);
+      _applySurroundingsPayload(payload);
+      return surroundingsData;
+    } on NovelBackendException catch (error) {
+      surroundingsError = error.message;
+      rethrow;
+    } catch (error) {
+      surroundingsError = '调查内容载入失败：$error';
+      rethrow;
+    } finally {
+      isSurroundingsLoading = false;
+      _notify();
+    }
+  }
+
+  Future<JsonMap> investigateSurroundNode(String nodeId) async {
+    if (isSurroundingsActionRunning) return surroundingsData;
+    isSurroundingsActionRunning = true;
+    surroundingsError = '';
+    _notify();
+    try {
+      final payload = await backend.investigateSurroundNode(
+        sessionId,
+        nodeId,
+      );
+      _applySurroundingsPayload(payload);
+      return surroundingsData;
+    } on NovelBackendException catch (error) {
+      surroundingsError = error.message;
+      rethrow;
+    } catch (error) {
+      surroundingsError = '调查失败：$error';
+      rethrow;
+    } finally {
+      isSurroundingsActionRunning = false;
+      _notify();
+    }
+  }
+
+  Future<JsonMap> combineSurroundNodes(
+    String firstId,
+    String secondId,
+  ) async {
+    if (isSurroundingsActionRunning) return surroundingsData;
+    isSurroundingsActionRunning = true;
+    surroundingsError = '';
+    _notify();
+    try {
+      final payload = await backend.combineSurroundNodes(
+        sessionId,
+        firstId,
+        secondId,
+      );
+      _applySurroundingsPayload(payload);
+      return surroundingsData;
+    } on NovelBackendException catch (error) {
+      surroundingsError = error.message;
+      rethrow;
+    } catch (error) {
+      surroundingsError = '组合失败：$error';
+      rethrow;
+    } finally {
+      isSurroundingsActionRunning = false;
+      _notify();
+    }
+  }
+
+  Future<JsonMap> claimSurroundReward(String nodeId) async {
+    if (isSurroundingsActionRunning) return surroundingsData;
+    isSurroundingsActionRunning = true;
+    surroundingsError = '';
+    _notify();
+    try {
+      final payload = await backend.claimSurroundReward(sessionId, nodeId);
+      _applySurroundingsPayload(payload);
+      await refreshInventory(notify: false);
+      return surroundingsData;
+    } on NovelBackendException catch (error) {
+      surroundingsError = error.message;
+      rethrow;
+    } catch (error) {
+      surroundingsError = '领取失败：$error';
+      rethrow;
+    } finally {
+      isSurroundingsActionRunning = false;
+      _notify();
+    }
+  }
+
+  /// 刷新只包含“当前位置 + 一跳相邻节点”的局部地图。
+  /// `novel_backend.dart` 可直接实现 fetchSceneMap(sessionId)，也可以在
+  /// 构造 Controller 时通过 sceneMapLoader 注入，避免页面依赖 HTTP 细节。
+  Future<void> refreshSceneMap({
+    bool force = false,
+    bool notify = true,
+  }) async {
+    if (isSceneMapLoading || sessionId.trim().isEmpty) return;
+    final now = DateTime.now();
+    if (!force &&
+        _lastSceneMapRefreshAt != null &&
+        now.difference(_lastSceneMapRefreshAt!) <
+            const Duration(seconds: 2)) {
+      return;
+    }
+
+    isSceneMapLoading = true;
+    sceneMapError = '';
+    if (force) sceneMoveError = '';
+    if (notify) _notify();
+    try {
+      final Map<String, dynamic> payload;
+      if (sceneMapLoader != null) {
+        payload = await sceneMapLoader!(sessionId);
+      } else {
+        payload = await backend.fetchSceneMap(sessionId);
+      }
+      sceneMap = NovelSceneMapData.fromDynamic(payload);
+      _lastSceneMapRefreshAt = DateTime.now();
+    } on NoSuchMethodError {
+      sceneMapError = '当前客户端尚未接入场景地图接口';
+    } on NovelBackendException catch (error) {
+      sceneMapError = error.message;
+    } catch (error) {
+      sceneMapError = '地图暂时无法载入：$error';
+    } finally {
+      isSceneMapLoading = false;
+      if (notify) _notify();
+    }
+  }
+
+  /// 点击地图节点只提交移动意图，不直接修改当前位置。
+  /// 后端会在普通聊天回合开始前再次检查连接、战斗和角色行动状态。
+  Future<bool> requestSceneMove(NovelSceneMapNode target) async {
+    sceneMoveError = '';
+    if (!canMoveToScene(target)) {
+      sceneMoveError = target.isLocked && target.reason.isNotEmpty
+          ? target.reason
+          : sceneMoveDisabledReason;
+      if (sceneMoveError.isEmpty) sceneMoveError = '当前无法前往该场景';
+      _notify();
+      return false;
+    }
+
+    isSceneMoveSubmitting = true;
+    _notify();
+    try {
+      final Map<String, dynamic> result;
+      if (sceneMoveIntentCreator != null) {
+        result = await sceneMoveIntentCreator!(sessionId, target.sceneId);
+      } else {
+        result = await backend.createSceneMoveIntent(
+          sessionId,
+          target.sceneId,
+        );
+      }
+
+      final accepted = _sceneBool(result['accepted']);
+      if (!accepted) {
+        sceneMoveError = _sceneString(result['message']);
+        if (sceneMoveError.isEmpty) {
+          sceneMoveError = _sceneString(result['reason']);
+        }
+        if (sceneMoveError.isEmpty) sceneMoveError = '该场景当前不可达';
+        return false;
+      }
+
+      final chatInput = _sceneString(result['chat_input']);
+      final navigationAction = _sceneJsonMap(result['navigation_action']);
+      if (chatInput.isEmpty || navigationAction.isEmpty) {
+        sceneMoveError = '移动意图返回不完整，请稍后重试';
+        return false;
+      }
+
+      messages.add(
+        NovelMessage(
+          id: 'temp-user-map-${DateTime.now().microsecondsSinceEpoch}',
+          role: NovelMessageRole.user,
+          content: chatInput,
+          timestamp: DateTime.now().millisecondsSinceEpoch,
+          status: 'sending',
+        ),
+      );
+
+      // 先恢复按钮状态，让地图面板可以立即关闭；生成流程会同步进入
+      // isGenerating，防止用户在关闭动画期间重复点击。
+      isSceneMoveSubmitting = false;
+      _notify();
+      unawaited(
+        _triggerAi(
+          chatInput,
+          isAction: true,
+          navigationAction: navigationAction,
+        ),
+      );
+      return true;
+    } on NoSuchMethodError {
+      sceneMoveError = '当前客户端尚未接入场景移动接口';
+      return false;
+    } on NovelBackendException catch (error) {
+      sceneMoveError = error.message;
+      return false;
+    } catch (error) {
+      sceneMoveError = '路线确认失败：$error';
+      return false;
+    } finally {
+      if (isSceneMoveSubmitting) {
+        isSceneMoveSubmitting = false;
+        _notify();
+      }
+    }
+  }
+
   Future<void> continueStory() async {
     if (isGenerating) return;
     if (choices.isNotEmpty && !hasNext) {
@@ -973,7 +1714,11 @@ class NovelGameController extends ChangeNotifier {
   }
 
   Future<void> selectChoice(NovelChoice choice) async {
-    if (choice.text.trim().isEmpty || isGenerating) return;
+    if (choice.text.trim().isEmpty || isGenerating || isStartingBattle) return;
+    if (choice.isBattle) {
+      await _startBattleChoice(choice);
+      return;
+    }
     // 选项提交走“可恢复事务”：
     // 在真正收到后端流事件前如果连接失败/超时，恢复当前剧情与原选项，
     // 不让界面永久停在“故事酝酿中”。
@@ -984,21 +1729,129 @@ class NovelGameController extends ChangeNotifier {
     );
   }
 
+  Future<void> _startBattleChoice(NovelChoice choice) async {
+    final optionId = choice.optionId;
+    if (optionId.isEmpty) {
+      lastError = '这个战斗选项缺少有效标识，请继续剧情后重新选择。';
+      _notify();
+      return;
+    }
+    final starter = battleStarter;
+    if (starter == null) {
+      lastError = '当前客户端尚未配置剧情战斗入口。';
+      _notify();
+      return;
+    }
+
+    final targetName = choice.battleTargetName.trim().isNotEmpty
+        ? choice.battleTargetName.trim()
+        : choice.text.trim();
+    final battleMode = choice.battleMode.trim().isEmpty
+        ? 'hostile'
+        : choice.battleMode.trim().toLowerCase();
+
+    // 不再在剧情页 await 十几秒。
+    // 这里只登记一份“可重复调用”的加载请求，下一帧由 Battle 页面接管。
+    _pendingBattleStart = NovelPendingBattleStart(
+      optionId: optionId,
+      targetName: targetName,
+      battleMode: battleMode,
+      loadPayload: () async {
+        final payload = await starter(sessionId, optionId);
+        final battleId = stringValue(payload['battle_id']).trim();
+        if (battleId.isEmpty ||
+            asJsonMap(payload['battle_opponent']).isEmpty) {
+          throw const NovelBackendException('后端没有返回完整的战斗快照');
+        }
+        return payload;
+      },
+    );
+    isStartingBattle = true;
+    lastError = '';
+    _notify();
+  }
+
+  Future<bool> settleStoryBattle({
+    required String battleId,
+    required String outcome,
+    required List<JsonMap> consumptions,
+  }) async {
+    final settler = battleSettler;
+    if (settler == null || battleId.trim().isEmpty) {
+      lastError = '当前客户端尚未配置战斗结算接口。';
+      _notify();
+      return false;
+    }
+    try {
+      await settler(
+        sessionId,
+        battleId.trim(),
+        outcome.trim().toLowerCase(),
+        consumptions,
+      );
+      await refreshInventory(notify: false);
+      await refreshSurroundingsAvailability(notify: false);
+      _notify();
+      return true;
+    } catch (error) {
+      lastError = error is NovelBackendException
+          ? error.message
+          : '战斗结算失败，请重试。';
+      _notify();
+      return false;
+    }
+  }
+
+  Future<void> continueAfterStoryBattle({
+    required String targetName,
+    required String battleMode,
+    required String outcome,
+  }) async {
+    final resultLabel = switch (outcome.trim().toLowerCase()) {
+      'victory' => '玩家获胜',
+      'defeat' => '玩家落败',
+      'escaped' => '玩家成功脱离战斗',
+      _ => '战斗已经结束',
+    };
+    final modeLabel = switch (battleMode.trim().toLowerCase()) {
+      'spar' => '切磋',
+      'training' => '训练战',
+      'duel' => '决斗',
+      'defend' => '防卫战',
+      _ => '战斗',
+    };
+    final target = targetName.trim().isEmpty ? '当前目标' : targetName.trim();
+    choices.removeWhere((item) => item.optionId == _activeBattleOptionId);
+    choicesVisible = false;
+    _activeBattleOptionId = '';
+    await _triggerAi(
+      '（战斗系统权威结算：与$target的$modeLabel已经结束，结果为$resultLabel。'
+      '请严格承接该结果继续描写后续剧情，不要重新进行或重新判定同一场战斗。）',
+      isCommand: true,
+      allowLuckyCard: false,
+    );
+  }
+
   Future<void> _triggerAi(
     String userPayload, {
     bool isCommand = false,
     bool isAction = false,
     bool allowLuckyCard = true,
     bool restoreUiOnEarlyFailure = false,
+    Map<String, dynamic> navigationAction = const <String, dynamic>{},
   }) async {
     if (isGenerating) return;
+
+    final preGenerationMessages = List<NovelMessage>.of(messages);
+    final recoveryBaselineTurn = currentTurn;
+    final recoveryBaselineAssistantId =
+        _latestAssistantIn(preGenerationMessages)?.id ?? '';
 
     // 对话选项提交前保存一份完整的前端 UI 快照。
     // 仅在“尚未收到任何后端有效流事件”时使用，避免网络预连接失败后
     // 丢失原剧情、原选项或误扣幸运卡。
-    final rollbackMessages = restoreUiOnEarlyFailure
-        ? List<NovelMessage>.of(messages)
-        : null;
+    final rollbackMessages =
+        restoreUiOnEarlyFailure ? preGenerationMessages : null;
     final rollbackChoices = restoreUiOnEarlyFailure
         ? List<NovelChoice>.of(choices)
         : null;
@@ -1098,7 +1951,21 @@ class NovelGameController extends ChangeNotifier {
     }
 
     try {
-      await for (final event in backend.sendMessageStream(request)) {
+      final Stream<NovelStreamEvent> responseStream;
+      if (navigationAction.isEmpty) {
+        responseStream = backend.sendMessageStream(request);
+      } else if (navigationStreamSender != null) {
+        responseStream = navigationStreamSender!(request, navigationAction);
+      } else {
+        // NovelBackend 对应适配方法负责把 navigation_action 与原聊天请求
+        // 一起发出。不能把它拼进用户文字，否则会降低 Writer 的理解稳定性。
+        responseStream = backend.sendNavigationMessageStream(
+          request,
+          navigationAction,
+        );
+      }
+
+      await for (final event in responseStream) {
         if (generationId != _generationId || _disposed) return;
         if (event.type != NovelStreamEventType.error &&
             event.type != NovelStreamEventType.ignored) {
@@ -1146,9 +2013,26 @@ class NovelGameController extends ChangeNotifier {
       }
       if (generationId == _generationId && isGenerating) {
         _flushStreamText(notify: false);
-        isGenerating = false;
-        _rebuildSentences();
-        _notify();
+        final rollbackEarlyChoice =
+            restoreUiOnEarlyFailure && !receivedServerProgress;
+        if (rollbackEarlyChoice) {
+          restoreEarlyChoiceUi();
+        } else {
+          isGenerating = false;
+          _rebuildSentences();
+          lastError = '剧情连接提前结束，正在恢复最终内容。';
+          _notify();
+          final recovered = await _recoverInterruptedGeneration(
+            generationId: generationId,
+            baselineTurn: recoveryBaselineTurn,
+            baselineAssistantId: recoveryBaselineAssistantId,
+            fallbackMessages: preGenerationMessages,
+          );
+          if (!recovered && generationId == _generationId) {
+            lastError = '剧情连接已中断，尚未获取到完整内容，请稍后重试。';
+            _notify();
+          }
+        }
       }
     } on NovelBackendException catch (error) {
       if (generationId != _generationId) return;
@@ -1164,11 +2048,19 @@ class NovelGameController extends ChangeNotifier {
       insufficientBalance = error.isInsufficientBalance;
       _notify();
 
-      // 选项请求在后端尚未产生任何有效流事件前就失败时，
-      // 服务端没有可同步的新剧情；此时直接恢复原 UI 即可。
-      // 已经收到过正文/完成事件的中断仍同步历史，避免客户端与服务端分叉。
       if (!rollbackEarlyChoice) {
-        await syncHistory();
+        final shouldWaitForCommit =
+            receivedServerProgress || error.code.toUpperCase().startsWith('STREAM_');
+        if (shouldWaitForCommit) {
+          await _recoverInterruptedGeneration(
+            generationId: generationId,
+            baselineTurn: recoveryBaselineTurn,
+            baselineAssistantId: recoveryBaselineAssistantId,
+            fallbackMessages: preGenerationMessages,
+          );
+        } else {
+          await _recoverAuthoritativeState();
+        }
       }
     } catch (error) {
       if (generationId != _generationId) return;
@@ -1183,7 +2075,16 @@ class NovelGameController extends ChangeNotifier {
       lastError = '生成中断：$error';
       _notify();
       if (!rollbackEarlyChoice) {
-        await syncHistory();
+        final recovered = await _recoverInterruptedGeneration(
+          generationId: generationId,
+          baselineTurn: recoveryBaselineTurn,
+          baselineAssistantId: recoveryBaselineAssistantId,
+          fallbackMessages: preGenerationMessages,
+        );
+        if (!recovered && generationId == _generationId) {
+          lastError = '生成连接中断，尚未获取到完整内容，请稍后重试。';
+          _notify();
+        }
       }
     }
   }
@@ -1192,7 +2093,7 @@ class NovelGameController extends ChangeNotifier {
     if (rawText.isEmpty || messages.isEmpty) return;
 
     // 只缓存，不在每个网络 token 到达时立刻做正则清洗、分页解析和整页 notify。
-    // 72ms 内的 token 一次性合并，手机端 CPU / layout 压力会小很多。
+    // 48ms 内的 token 一次性合并，兼顾逐字平滑度与手机端 CPU / layout 压力。
     _pendingStreamText += rawText.replaceAll(r'\n', '\n');
     _streamUiTimer ??= Timer(_streamUiInterval, () => _flushStreamText());
   }
@@ -1250,6 +2151,7 @@ class NovelGameController extends ChangeNotifier {
         'total': extra['current_goal_total'],
       });
     }
+    final previousMessageLocation = world.location;
     world = world.copyWith(
       location: stringValue(extra['location'], world.location),
       timeDescription: stringValue(extra['time_desc'], world.timeDescription),
@@ -1265,6 +2167,12 @@ class NovelGameController extends ChangeNotifier {
     );
     if (normalizedMessagePeriod.isNotEmpty) {
       worldTimePeriodKey = normalizedMessagePeriod;
+    }
+    if (world.location != previousMessageLocation) {
+      surroundingsData = <String, dynamic>{};
+      surroundingsAvailability = <String, dynamic>{};
+      surroundingsError = '';
+      unawaited(refreshSurroundingsAvailability());
     }
 
     isGenerating = false;
@@ -1285,6 +2193,8 @@ class NovelGameController extends ChangeNotifier {
           : visibleSentenceIndex.clamp(0, sentences.length - 1).toInt();
     }
     _notify();
+    unawaited(refreshSceneMap(force: true));
+    _scheduleSurroundingsAvailabilityRefreshAfterTurn();
 
     if (event.messageId.isNotEmpty) {
       unawaited(backend.markMessageRead(scenarioId, event.messageId));
@@ -1347,17 +2257,145 @@ class NovelGameController extends ChangeNotifier {
     try {
       await cancelGeneration();
       final history = await backend.fetchHistory(sessionId, force: true);
-      _applyHistory(history);
+      _applyHistory(history, preserveReaderPosition: true);
       await Future.wait(<Future<void>>[
         refreshCharacterStatus(notify: false),
         refreshCurrentGoal(notify: false),
+        refreshSurroundingsAvailability(notify: false),
+        refreshInventory(notify: false),
       ]);
+      await refreshSceneMap(force: true, notify: false);
     } catch (error) {
       lastError = '同步故事状态失败：$error';
     } finally {
       isSyncingHistory = false;
       _notify();
     }
+  }
+
+  NovelMessage? _latestAssistantIn(Iterable<NovelMessage> source) {
+    for (final message in source.toList().reversed) {
+      if (message.role == NovelMessageRole.assistant && !message.isTemporary) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  bool _historyContainsCompletedTurn(
+    NovelHistoryResult history, {
+    required int baselineTurn,
+    required String baselineAssistantId,
+  }) {
+    final latest = _latestAssistantIn(history.messages);
+    if (latest == null || !novelTextHasReadableContent(latest.content)) {
+      return false;
+    }
+    final status = latest.status.trim().toLowerCase();
+    final statusComplete = !const <String>{
+      'sending',
+      'streaming',
+      'pending',
+      'generating',
+    }.contains(status);
+    final turnAdvanced = history.currentTurn > baselineTurn;
+    final messageChanged =
+        latest.id.isNotEmpty && latest.id != baselineAssistantId;
+    return turnAdvanced || (messageChanged && statusComplete);
+  }
+
+  Future<void> _refreshRecoveredSideState() async {
+    await Future.wait(<Future<void>>[
+      refreshCharacterStatus(notify: false),
+      refreshCurrentGoal(notify: false),
+      refreshSurroundingsAvailability(notify: false),
+      refreshInventory(notify: false),
+    ]);
+    await refreshSceneMap(force: true, notify: false);
+  }
+
+  Future<bool> _recoverInterruptedGeneration({
+    required int generationId,
+    required int baselineTurn,
+    required String baselineAssistantId,
+    required List<NovelMessage> fallbackMessages,
+  }) async {
+    // SSE 断开不代表后端停止。等待权威回合真正落库后再覆盖本地内容，
+    // 避免第一次历史请求过早，把已有正文替换成空白页。
+    await backend.cancelActiveStream();
+    // 最多补拉 3 次；任意一次确认完整回合后立即结束。
+    const delays = <Duration>[
+      Duration.zero,
+      Duration(milliseconds: 600),
+      Duration(milliseconds: 1500),
+    ];
+
+    for (final delay in delays) {
+      if (_disposed || generationId != _generationId) return false;
+      if (delay != Duration.zero) await Future<void>.delayed(delay);
+      if (_disposed || generationId != _generationId) return false;
+      try {
+        final history = await backend.fetchHistory(sessionId, force: true);
+        if (!_historyContainsCompletedTurn(
+          history,
+          baselineTurn: baselineTurn,
+          baselineAssistantId: baselineAssistantId,
+        )) {
+          continue;
+        }
+        _applyHistory(history, preserveReaderPosition: true);
+        await _refreshRecoveredSideState();
+        lastError = '';
+        _notify();
+        return true;
+      } catch (_) {
+        // 网络尚未恢复时继续下一档退避；最终失败统一保留本地已收到正文。
+      }
+    }
+
+    final currentAi = lastAssistantMessage;
+    if (currentAi == null || !novelTextHasReadableContent(currentAi.content)) {
+      messages = List<NovelMessage>.of(fallbackMessages);
+      _rebuildSentences(resetIndex: false);
+    }
+    _notify();
+    return false;
+  }
+
+  Future<void> _recoverAuthoritativeState() async {
+    if (_disposed || sessionId.trim().isEmpty) return;
+    if (isRecoveringConnection) {
+      _authoritativeRecoveryPending = true;
+      return;
+    }
+    isRecoveringConnection = true;
+    _notify();
+    try {
+      // 正在正常接收 SSE 时不能为了 WebSocket 重连而取消正文流。
+      if (!isGenerating) {
+        final history = await backend.fetchHistory(sessionId, force: true);
+        _applyHistory(history, preserveReaderPosition: true);
+      }
+      await _refreshRecoveredSideState();
+    } catch (error) {
+      lastError = '连接恢复后同步状态失败：$error';
+    } finally {
+      isRecoveringConnection = false;
+      _notify();
+      if (_authoritativeRecoveryPending) {
+        _authoritativeRecoveryPending = false;
+        unawaited(_recoverAuthoritativeState());
+      }
+    }
+  }
+
+  Future<void> recoverAfterResume() async {
+    try {
+      await socket.connect(sessionId);
+    } catch (_) {
+      // WebSocket 可能仍处于自动重连退避；HTTP 补拉不应因此被跳过或向 UI 抛异常。
+    }
+    await _recoverAuthoritativeState();
   }
 
   void goNext() {
@@ -1445,6 +2483,85 @@ class NovelGameController extends ChangeNotifier {
         _notify();
       }
     }
+  }
+
+  Future<String> recognizeAndAcquireDeveloperContent(String rawName) async {
+    final name = rawName.trim();
+    if (name.isEmpty) {
+      throw const NovelBackendException('名称不能为空');
+    }
+    final contentBackend = backend;
+    if (contentBackend is! NovelDeveloperContentBackend) {
+      throw const NovelBackendException('当前客户端尚未配置开发者内容识别接口');
+    }
+    final developerContentBackend =
+        contentBackend as NovelDeveloperContentBackend;
+
+    final payload = await developerContentBackend
+        .recognizeAndAcquireDeveloperContent(
+      sessionId: sessionId,
+      name: name,
+    );
+    final recognized = boolValue(payload['recognized']);
+    final reason = stringValue(payload['reason']).trim();
+    if (!recognized) {
+      return reason.isEmpty ? '未识别该名称，未写入存档' : '未识别：$reason';
+    }
+
+    final contentType = stringValue(payload['content_type']).trim();
+    final created = boolValue(payload['created']);
+    if (contentType == 'skill') {
+      final rawSkills = payload['skills'];
+      if (rawSkills is List) {
+        _syncProtagonistStatus(<String, dynamic>{
+          'skills': List<dynamic>.of(rawSkills),
+        });
+      } else {
+        await refreshCharacterStatus(notify: false);
+      }
+      _notify();
+
+      final rawSkill = payload['skill'];
+      final skill = rawSkill is Map
+          ? rawSkill.map<String, dynamic>(
+              (key, value) => MapEntry<String, dynamic>('$key', value),
+            )
+          : <String, dynamic>{};
+      final savedName = stringValue(skill['name'], name).trim();
+      final spec = skill['battle_spec'] is Map
+          ? Map<String, dynamic>.from(skill['battle_spec'] as Map)
+          : <String, dynamic>{};
+      final quality = intValue(spec['quality']);
+      final qualityText = quality > 0 ? ' · 品质 $quality' : '';
+      return created
+          ? '已识别并学会「$savedName」$qualityText'
+          : '已识别「$savedName」 · 技能已存在$qualityText';
+    }
+
+    await refreshInventory(notify: false);
+    _notify();
+
+    final rawItem = payload['item'];
+    final item = rawItem is Map
+        ? rawItem.map<String, dynamic>(
+            (key, value) => MapEntry<String, dynamic>('$key', value),
+          )
+        : <String, dynamic>{};
+    final savedName = stringValue(item['name'], name).trim();
+    final quality = intValue(payload['quality'] ?? item['quality']);
+    final typeText = switch (contentType) {
+      'health_potion' => '生命药物',
+      'energy_potion' => '精力药物',
+      'weapon' => '武器',
+      'armor' => '防具',
+      'accessory' => '饰品',
+      'quest' => '剧情物品',
+      _ => '物品',
+    };
+    final qualityText = quality > 0 ? ' · 品质 $quality' : '';
+    return created
+        ? '已识别并获得「$savedName」 · $typeText$qualityText'
+        : '已识别「$savedName」并增加 1 个 · $typeText$qualityText';
   }
 
   Future<void> refreshInventory({bool notify = true}) async {
@@ -1751,6 +2868,17 @@ class NovelGameController extends ChangeNotifier {
 
     if (!_matchesSession(data)) return;
 
+    if (type == 'socket_connected') {
+      // 即使是首次连上，也可能已经晚于初始化时的 history 请求；每次连接成功
+      // 都做一次权威补拉，彻底消除“请求完成到 WS 建连之间”的丢事件窗口。
+      unawaited(_recoverAuthoritativeState());
+      return;
+    }
+    if (type == 'socket_disconnected') {
+      // 断线期间不清空任何页面；重连成功后再以 HTTP 权威状态覆盖。
+      return;
+    }
+
     switch (type) {
       case 'ending_cg_chunk':
         ending = ending.copyWith(text: '${ending.text}${stringValue(data['text'])}');
@@ -1795,6 +2923,7 @@ class NovelGameController extends ChangeNotifier {
         break;
       case 'world_state_update':
         final worldTimeData = asJsonMap(data['world_time']);
+        final previousLocation = world.location;
         world = world.copyWith(
           location: stringValue(data['current_location'] ?? data['location'], world.location),
           timeDescription: stringValue(
@@ -1816,6 +2945,18 @@ class NovelGameController extends ChangeNotifier {
         if (boolValue(data['is_timeskip']) && stringValue(data['time_label']).isNotEmpty) {
           timeSkipLabel = stringValue(data['time_label']);
         }
+        unawaited(refreshSceneMap(force: true));
+        if (world.location != previousLocation) {
+          surroundingsData = <String, dynamic>{};
+          surroundingsAvailability = <String, dynamic>{};
+          surroundingsError = '';
+          unawaited(refreshSurroundingsAvailability());
+        }
+        break;
+      case 'surroundings_state_changed':
+        // 该事件由 Writer 后台 StateAnalyzer 在权威状态提交后发送；此时再读
+        // availability，确保同地点出现的新资源也能立即点亮入口。
+        unawaited(refreshSurroundingsAvailability());
         break;
       case 'relation_update':
         _applyRelationUpdate(data);
@@ -1932,6 +3073,7 @@ class NovelGameController extends ChangeNotifier {
         break;
       case 'cinematic_end':
         isCinematic = false;
+        unawaited(refreshSurroundingsAvailability());
         break;
       case 'ending_intro':
         showEndingIntro = true;
@@ -2601,6 +3743,28 @@ class NovelGameController extends ChangeNotifier {
           dedupeKey: 'developer:goal_failed:${DateTime.now().microsecondsSinceEpoch}',
         );
         break;
+      case 'damage_light':
+        _developerConditionPreviewTimer?.cancel();
+        _developerConditionBackup ??= protagonistCondition;
+        _developerInjuriesBackup ??= List<dynamic>.of(protagonistInjuries);
+
+        protagonistCondition = '轻伤';
+        protagonistInjuries = <dynamic>['手臂擦伤'];
+        _syncProtagonistStatus();
+        _enqueueHudEvent(
+          kind: 'injury',
+          title: '受到轻伤',
+          detail: '手臂擦伤 · 当前状态：轻伤',
+          tone: 'warning',
+          dedupeKey: 'developer:damage_light:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        _notify();
+
+        _developerConditionPreviewTimer = Timer(
+          const Duration(milliseconds: 6000),
+          _restoreDeveloperConditionPreview,
+        );
+        break;
       case 'damage':
         _developerConditionPreviewTimer?.cancel();
         _developerConditionBackup ??= protagonistCondition;
@@ -2619,7 +3783,29 @@ class NovelGameController extends ChangeNotifier {
         _notify();
 
         _developerConditionPreviewTimer = Timer(
-          const Duration(milliseconds: 3200),
+          const Duration(milliseconds: 6000),
+          _restoreDeveloperConditionPreview,
+        );
+        break;
+      case 'damage_critical':
+        _developerConditionPreviewTimer?.cancel();
+        _developerConditionBackup ??= protagonistCondition;
+        _developerInjuriesBackup ??= List<dynamic>.of(protagonistInjuries);
+
+        protagonistCondition = '濒死';
+        protagonistInjuries = <dynamic>['严重失血'];
+        _syncProtagonistStatus();
+        _enqueueHudEvent(
+          kind: 'injury',
+          title: '生命垂危',
+          detail: '严重失血 · 当前状态：濒危',
+          tone: 'critical',
+          dedupeKey: 'developer:damage_critical:${DateTime.now().microsecondsSinceEpoch}',
+        );
+        _notify();
+
+        _developerConditionPreviewTimer = Timer(
+          const Duration(milliseconds: 6000),
           _restoreDeveloperConditionPreview,
         );
         break;
@@ -2641,7 +3827,7 @@ class NovelGameController extends ChangeNotifier {
         _notify();
 
         _developerConditionPreviewTimer = Timer(
-          const Duration(milliseconds: 3200),
+          const Duration(milliseconds: 6000),
           _restoreDeveloperConditionPreview,
         );
         break;
@@ -2758,6 +3944,7 @@ class NovelGameController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _generationId += 1;
+    _surroundingsAvailabilityPollTicket += 1;
     _diceTimer?.cancel();
     _taskTimer?.cancel();
     _hudEventTimer?.cancel();

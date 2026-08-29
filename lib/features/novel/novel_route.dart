@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import 'http_novel_backend.dart';
+import 'novel_backend.dart';
 import 'novel_bgm_service.dart';
 import 'novel_game_controller.dart';
 import 'novel_game_page.dart';
@@ -39,6 +42,149 @@ class NovelRuntime {
   /// 当路由缺少 scenarioId/sessionId 时，自动跳转到的路由名。
   final String invalidRouteFallbackName;
 
+  Uri _developerSkillUri() {
+    final base = Uri.parse(baseUrl);
+    return base.replace(
+      path: '/api/v1/novel/developer/skills',
+      query: null,
+      fragment: null,
+    );
+  }
+
+  Future<Map<String, dynamic>> _addDeveloperSkill(
+    String sessionId,
+    String skillName,
+  ) async {
+    Future<http.Response> submit(String token) async {
+      final userId = (await userIdProvider())?.trim() ?? '';
+      return http.post(
+        _developerSkillUri(),
+        headers: <String, String>{
+          'Content-Type': 'application/json; charset=utf-8',
+          if (token.trim().isNotEmpty) 'Authorization': 'Bearer ${token.trim()}',
+          if (userId.isNotEmpty) 'X-User-ID': userId,
+        },
+        body: jsonEncode(<String, dynamic>{
+          'session_id': int.tryParse(sessionId) ?? sessionId,
+          'name': skillName.trim(),
+        }),
+      );
+    }
+
+    var token = (await tokenProvider())?.trim() ?? '';
+    var response = await submit(token);
+    if (response.statusCode == 401 && tokenRefresher != null) {
+      token = (await tokenRefresher!())?.trim() ?? '';
+      if (token.isNotEmpty) response = await submit(token);
+    }
+
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    } catch (_) {
+      decoded = null;
+    }
+    final data = decoded is Map
+        ? decoded.map<String, dynamic>(
+            (key, value) => MapEntry<String, dynamic>('$key', value),
+          )
+        : <String, dynamic>{};
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final detail = data['detail'] ?? data['message'] ?? data['error'];
+      throw NovelBackendException(
+        detail?.toString().trim().isNotEmpty == true
+            ? detail.toString()
+            : '新增技能失败（${response.statusCode}）',
+        statusCode: response.statusCode,
+        code: data['code']?.toString() ?? '',
+        details: data,
+      );
+    }
+    return data;
+  }
+
+  Uri _battleUri(String action) {
+    final base = Uri.parse(baseUrl);
+    return base.replace(
+      path: '/api/v1/novel/battle/$action',
+      query: null,
+      fragment: null,
+    );
+  }
+
+  Future<Map<String, dynamic>> _postBattleJson(
+    String action,
+    Map<String, dynamic> body,
+  ) async {
+    Future<http.Response> submit(String token) async {
+      final userId = (await userIdProvider())?.trim() ?? '';
+      return http.post(
+        _battleUri(action),
+        headers: <String, String>{
+          'Content-Type': 'application/json; charset=utf-8',
+          if (token.trim().isNotEmpty) 'Authorization': 'Bearer ${token.trim()}',
+          if (userId.isNotEmpty) 'X-User-ID': userId,
+        },
+        body: jsonEncode(body),
+      );
+    }
+
+    var token = (await tokenProvider())?.trim() ?? '';
+    var response = await submit(token);
+    if (response.statusCode == 401 && tokenRefresher != null) {
+      token = (await tokenRefresher!())?.trim() ?? '';
+      if (token.isNotEmpty) response = await submit(token);
+    }
+
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    } catch (_) {
+      decoded = null;
+    }
+    final data = decoded is Map
+        ? decoded.map<String, dynamic>(
+            (key, value) => MapEntry<String, dynamic>('$key', value),
+          )
+        : <String, dynamic>{};
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final detail = data['detail'] ?? data['message'] ?? data['error'];
+      throw NovelBackendException(
+        detail?.toString().trim().isNotEmpty == true
+            ? detail.toString()
+            : '战斗请求失败（${response.statusCode}）',
+        statusCode: response.statusCode,
+        code: data['code']?.toString() ?? '',
+        details: data,
+      );
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> _startStoryBattle(
+    String sessionId,
+    String battleOptionId,
+  ) {
+    return _postBattleJson('start', <String, dynamic>{
+      'session_id': int.tryParse(sessionId) ?? sessionId,
+      'battle_option_id': battleOptionId,
+    });
+  }
+
+  Future<Map<String, dynamic>> _settleStoryBattle(
+    String sessionId,
+    String battleId,
+    String outcome,
+    List<Map<String, dynamic>> consumptions,
+  ) {
+    return _postBattleJson('items/settle', <String, dynamic>{
+      'session_id': int.tryParse(sessionId) ?? sessionId,
+      'battle_id': battleId,
+      'outcome': outcome,
+      'consumptions': consumptions,
+    });
+  }
+
   NovelGameController createController({
     required String scenarioId,
     required String sessionId,
@@ -64,6 +210,9 @@ class NovelRuntime {
       socket: socket,
       bgm: NovelBgmService(),
       settings: NovelSettingsService(),
+      developerSkillAdder: _addDeveloperSkill,
+      battleStarter: _startStoryBattle,
+      battleSettler: _settleStoryBattle,
     );
   }
 

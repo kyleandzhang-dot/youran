@@ -411,10 +411,10 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         return 'chat';
     }
   }
-Future<void> _replaceScenarioRoute(ScenarioLaunchInfo launch) async {
+
+  Future<void> _replaceScenarioRoute(ScenarioLaunchInfo launch) async {
     if (!launch.isValid) {
-      // 1. 替换掉“缺少剧本或会话参数”
-      AppNotice.error(context, '场景载入异常，请返回重试');
+      AppNotice.error(context, '缺少剧本或会话参数，无法进入世界');
       return;
     }
 
@@ -434,13 +434,8 @@ Future<void> _replaceScenarioRoute(ScenarioLaunchInfo launch) async {
         arguments: arguments,
       );
     } catch (error) {
-      // 2. 底层错误日志留给控制台自己看就行
       debugPrint('GameShell route failed: route=$route error=$error');
-      
-      if (mounted) {
-        // 3. 替换掉“游戏路由尚未配置：$route”，绝对不能把带有 $route 的代码路径暴露给玩家
-        AppNotice.error(context, '场景载入异常，请返回首页');
-      }
+      if (mounted) AppNotice.error(context, '游戏路由尚未配置：$route');
     }
   }
 
@@ -528,8 +523,10 @@ Future<void> _replaceScenarioRoute(ScenarioLaunchInfo launch) async {
     }
 
     // 重置的不是当前世界，或只是普通退出编辑页：仅刷新世界列表即可。
+    // 这里必须继续聚焦当前正在玩的世界，不能把刚刚重置的其他剧本
+    // 写进 selectedGameIndex，否则会造成“重置 A，却把当前世界切到 A”的错觉。
     await _loadHomeData(
-      focusScenarioId: isDataChanged == true ? scenarioId : null,
+      focusScenarioId: widget.activeScenarioId,
     );
   }
 
