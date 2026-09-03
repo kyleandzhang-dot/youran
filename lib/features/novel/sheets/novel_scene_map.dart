@@ -12,22 +12,22 @@ const List<_WorldMapPreviewScene> _developerWorldMapScenes =
   _WorldMapPreviewScene(
     id: 'preview-yunlan',
     name: '云岚宗',
-    imageUrl: 'assets/images/world_map/yunlan_sect_tile.png',
+    imageUrl: 'assets/images/world_map/yunlan_sect_tile.webp',
   ),
   _WorldMapPreviewScene(
     id: 'preview-school',
     name: '日本校园',
-    imageUrl: 'assets/images/world_map/japanese_school_tile.png',
+    imageUrl: 'assets/images/world_map/japanese_school_tile.webp',
   ),
   _WorldMapPreviewScene(
     id: 'preview-island',
     name: '海滩海岸',
-    imageUrl: 'assets/images/world_map/island_beach_tile.png',
+    imageUrl: 'assets/images/world_map/island_beach_tile.webp',
   ),
   _WorldMapPreviewScene(
     id: 'preview-castle',
     name: '剑与魔法城堡',
-    imageUrl: 'assets/images/world_map/fantasy_castle_tile.png',
+    imageUrl: 'assets/images/world_map/fantasy_castle_tile.webp',
   ),
 ];
 
