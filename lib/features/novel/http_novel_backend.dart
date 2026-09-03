@@ -33,7 +33,13 @@ class NovelEndpointConfig {
         '/novel/surroundings/{sessionId}/investigate',
     this.surroundingsCombine = '/novel/surroundings/{sessionId}/combine',
     this.surroundingsClaim = '/novel/surroundings/{sessionId}/claim',
+    this.surroundingsEncounter =
+        '/novel/surroundings/{sessionId}/encounter',
     this.characterStatus = '/scenario/{scenarioId}/characters/status',
+    this.novelCharacterRoster = '/chat/novel-character/roster',
+    this.novelCharacterDraw = '/chat/novel-character/draw',
+    this.novelCharacterHistory = '/chat/novel-character/history',
+    this.novelCharacterStream = '/chat/novel-character/stream',
     this.journey = '/scenario/{scenarioId}/journey',
     this.updateScenario = '/scenario/{scenarioId}/update',
     this.modelConfig = '/model-config/',
@@ -66,7 +72,12 @@ class NovelEndpointConfig {
   final String surroundingsInvestigate;
   final String surroundingsCombine;
   final String surroundingsClaim;
+  final String surroundingsEncounter;
   final String characterStatus;
+  final String novelCharacterRoster;
+  final String novelCharacterDraw;
+  final String novelCharacterHistory;
+  final String novelCharacterStream;
   final String journey;
   final String updateScenario;
   final String modelConfig;
@@ -131,7 +142,9 @@ class HttpNovelBackend
   final NovelTextParser _parser;
 
   http.Client? _activeStreamClient;
+  http.Client? _activeCharacterStreamClient;
   bool _streamCancelled = false;
+  bool _characterStreamCancelled = false;
 
   // 剧情流不能无限卡在“故事酝酿中”。
   // 连接阶段与首个 SSE 数据分别限时，超过后向 Controller 返回可恢复错误。
@@ -401,6 +414,23 @@ class HttpNovelBackend
   ) async {
     final path = endpoints.resolve(
       endpoints.surroundingsClaim,
+      sessionId: sessionId,
+    );
+    final response = await _send(
+      'POST',
+      path,
+      body: <String, dynamic>{'node_id': nodeId.trim()},
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> startSurroundEncounter(
+    String sessionId,
+    String nodeId,
+  ) async {
+    final path = endpoints.resolve(
+      endpoints.surroundingsEncounter,
       sessionId: sessionId,
     );
     final response = await _send(
@@ -785,6 +815,167 @@ class HttpNovelBackend
   }
 
   @override
+  Future<JsonMap> fetchNovelCharacterRoster(String mainSessionId) async {
+    final response = await _get(
+      endpoints.novelCharacterRoster,
+      query: <String, String>{'main_session_id': mainSessionId},
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> drawNovelCharacters({
+    required String mainSessionId,
+    required int count,
+  }) async {
+    final response = await _send(
+      'POST',
+      endpoints.novelCharacterDraw,
+      body: <String, dynamic>{
+        'main_session_id': int.tryParse(mainSessionId) ?? mainSessionId,
+        'count': count,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> fetchNovelCharacterChatHistory({
+    required String mainSessionId,
+    required String characterInstanceId,
+    int offset = 0,
+    int limit = 30,
+  }) async {
+    final response = await _get(
+      endpoints.novelCharacterHistory,
+      query: <String, String>{
+        'main_session_id': mainSessionId,
+        'character_instance_id': characterInstanceId,
+        'offset': '$offset',
+        'limit': '$limit',
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Stream<JsonMap> sendNovelCharacterChatStream({
+    required String mainSessionId,
+    required String characterInstanceId,
+    required String message,
+  }) async* {
+    await cancelNovelCharacterChatStream();
+    _characterStreamCancelled = false;
+    final client = http.Client();
+    _activeCharacterStreamClient = client;
+
+    try {
+      Future<http.StreamedResponse> execute() async {
+        final request = http.Request(
+          'POST',
+          _uri(endpoints.novelCharacterStream),
+        );
+        request.headers.addAll(
+          await _headers(stream: true).timeout(_streamConnectTimeout),
+        );
+        request.body = jsonEncode(<String, dynamic>{
+          'main_session_id': int.tryParse(mainSessionId) ?? mainSessionId,
+          'character_instance_id':
+              int.tryParse(characterInstanceId) ?? characterInstanceId,
+          'message': message,
+        });
+        return client.send(request).timeout(_streamConnectTimeout);
+      }
+
+      var response = await execute();
+      if (response.statusCode == 401 && await _tryRefreshToken()) {
+        try {
+          await response.stream.drain<void>().timeout(const Duration(seconds: 3));
+        } catch (_) {}
+        response = await execute();
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final body = await utf8.decoder
+            .bind(response.stream)
+            .join()
+            .timeout(const Duration(seconds: 10));
+        final error = decodeJsonMap(body);
+        throw NovelBackendException(
+          stringValue(error['detail'] ?? error['message'], '角色回复失败'),
+          statusCode: response.statusCode,
+          code: stringValue(error['code']),
+          details: error,
+        );
+      }
+
+      final lines = response.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .timeout(_streamInactivityTimeout);
+      final buffer = <String>[];
+      await for (final originalLine in lines) {
+        if (_characterStreamCancelled) return;
+        final line = originalLine.trimRight();
+        if (line.isEmpty) {
+          if (buffer.isEmpty) continue;
+          final event = _decodeCharacterStreamEvent(buffer.join('\n'));
+          buffer.clear();
+          if (event != null) yield event;
+          continue;
+        }
+        if (line.startsWith(':') || line.startsWith('event:')) continue;
+        if (line.startsWith('data:')) {
+          buffer.add(line.substring(5).trimLeft());
+        } else if (buffer.isNotEmpty) {
+          buffer.add(line);
+        } else {
+          final event = _decodeCharacterStreamEvent(line);
+          if (event != null) yield event;
+        }
+      }
+      if (buffer.isNotEmpty && !_characterStreamCancelled) {
+        final event = _decodeCharacterStreamEvent(buffer.join('\n'));
+        if (event != null) yield event;
+      }
+    } on NovelBackendException {
+      rethrow;
+    } on TimeoutException {
+      throw const NovelBackendException('角色回复超时，请重试');
+    } on http.ClientException catch (error) {
+      if (!_characterStreamCancelled) {
+        throw NovelBackendException('角色聊天连接中断：${error.message}');
+      }
+    } finally {
+      if (identical(_activeCharacterStreamClient, client)) {
+        _activeCharacterStreamClient = null;
+      }
+      client.close();
+    }
+  }
+
+  JsonMap? _decodeCharacterStreamEvent(String payload) {
+    final value = payload.trim();
+    if (value.isEmpty || value == '[DONE]') return null;
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is Map) return asJsonMap(decoded);
+      if (decoded is String && decoded.trim().isNotEmpty) {
+        return <String, dynamic>{'type': 'chat_message', 'text': decoded};
+      }
+    } catch (_) {
+      return <String, dynamic>{'type': 'chat_message', 'text': value};
+    }
+    return null;
+  }
+
+  @override
+  Future<void> cancelNovelCharacterChatStream() async {
+    _characterStreamCancelled = true;
+    _activeCharacterStreamClient?.close();
+    _activeCharacterStreamClient = null;
+  }
+
+  @override
   Future<JsonMap> fetchJourney(String scenarioId) async {
     final path = endpoints.resolve(endpoints.journey, scenarioId: scenarioId);
     final response = await _get(path);
@@ -917,6 +1108,7 @@ class HttpNovelBackend
     required String sessionId,
     required List<JsonMap> consumptions,
     required String outcome,
+    String battleId = '',
   }) async {
     final numericSessionId = int.tryParse(sessionId);
     if (numericSessionId == null) {
@@ -932,13 +1124,12 @@ class HttpNovelBackend
         'quantity': quantity.clamp(1, 999).toInt(),
       });
     }
-    if (normalized.isEmpty) return <String, dynamic>{'settled': <dynamic>[]};
-
     final response = await _send(
       'POST',
       endpoints.battleItemSettlement,
       body: <String, dynamic>{
         'session_id': numericSessionId,
+        'battle_id': battleId.trim(),
         'outcome': outcome.trim(),
         'consumptions': normalized,
       },
@@ -1096,6 +1287,7 @@ class HttpNovelBackend
 
   @override
   Future<void> close() async {
+    await cancelNovelCharacterChatStream();
     await cancelActiveStream();
     _client.close();
   }

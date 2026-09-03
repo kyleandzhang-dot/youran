@@ -287,8 +287,10 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
           controller: widget.controller,
           embedded: widget.embedded,
           lightTheme: true,
-          child: Column(
-            children: <Widget>[
+          child: Padding(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: <Widget>[
               _GameStyleHeader(
                 title: '经历',
                 english: 'JOURNEY',
@@ -418,7 +420,8 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                   ),
                 ),
               ),
-            ],
+              ],
+            ),
           ),
         );
       },

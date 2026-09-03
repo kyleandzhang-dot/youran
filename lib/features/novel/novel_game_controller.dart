@@ -88,11 +88,13 @@ class NovelPendingBattleStart {
     required this.targetName,
     required this.battleMode,
     required this.loadPayload,
+    this.fromSurroundings = false,
   });
 
   final String optionId;
   final String targetName;
   final String battleMode;
+  final bool fromSurroundings;
 
   /// 每次调用都重新发起一次后端战斗生成请求，供 Battle 加载页失败后原地重试。
   final Future<JsonMap> Function() loadPayload;
@@ -136,6 +138,7 @@ class NovelSceneMapNode {
     this.sceneId = '',
     this.name = '',
     this.regionId = '',
+    this.imageUrl = '',
     this.description = '',
     this.connectionId = '',
     this.exitName = '',
@@ -144,12 +147,15 @@ class NovelSceneMapNode {
     this.requiresCheck = false,
     this.discovered = false,
     this.visited = false,
+    this.unlocked = false,
     this.presentNpcs = const <String>[],
   });
 
   final String sceneId;
   final String name;
   final String regionId;
+  /// 世界地图方形板块使用的场景图片；支持网络 URL 与 Flutter asset 路径。
+  final String imageUrl;
   final String description;
   final String connectionId;
   final String exitName;
@@ -158,11 +164,13 @@ class NovelSceneMapNode {
   final bool requiresCheck;
   final bool discovered;
   final bool visited;
+  final bool unlocked;
   final List<String> presentNpcs;
 
   bool get isAvailable => moveState == 'available';
   bool get isRisky => moveState == 'risky';
   bool get isLocked => !isAvailable && !isRisky;
+  bool get isUnlocked => unlocked || visited || isAvailable || isRisky;
 
   factory NovelSceneMapNode.fromDynamic(dynamic value) {
     final data = _sceneJsonMap(value);
@@ -171,6 +179,13 @@ class NovelSceneMapNode {
       sceneId: _sceneString(data['scene_id']),
       name: _sceneString(data['name']),
       regionId: _sceneString(data['region_id']),
+      imageUrl: _sceneString(
+        data['map_tile_url'] ??
+            data['world_map_image_url'] ??
+            data['image_url'] ??
+            data['scene_image_url'] ??
+            data['image'],
+      ),
       description: _sceneString(data['description']),
       connectionId: _sceneString(data['connection_id']),
       exitName: _sceneString(data['exit_name']),
@@ -181,6 +196,11 @@ class NovelSceneMapNode {
       requiresCheck: _sceneBool(data['requires_check']),
       discovered: _sceneBool(data['discovered'], fallback: true),
       visited: _sceneBool(data['visited']),
+      unlocked: data.containsKey('unlocked')
+          ? _sceneBool(data['unlocked'])
+          : const <String>{'available', 'risky'}.contains(
+              _sceneString(data['move_state']).toLowerCase(),
+            ),
       presentNpcs: rawNpcs is List
           ? rawNpcs
               .map(_sceneString)
@@ -367,6 +387,9 @@ class NovelGameController extends ChangeNotifier {
   JsonMap? _pendingBattle;
   String _activeBattleOptionId = '';
   final Map<String, String> characterExpressions = <String, String>{};
+  int novelCharacterFlowers = 0;
+  Map<String, JsonMap> novelCharacterRoster = <String, JsonMap>{};
+  bool isNovelCharacterRosterLoading = false;
   /// 正在自动生成立绘的角色 id 集合（素材库未命中时后端触发），供 UI 显示"生成中"占位
   final Set<String> generatingPortraitCharacterIds = <String>{};
 
@@ -1574,6 +1597,49 @@ class NovelGameController extends ChangeNotifier {
     }
   }
 
+  Future<void> startSurroundEncounter({
+    required String nodeId,
+    required String targetName,
+  }) async {
+    final cleanNodeId = nodeId.trim();
+    if (cleanNodeId.isEmpty || isStartingBattle) return;
+    final cleanTarget = targetName.trim().isEmpty ? '未知敌人' : targetName.trim();
+    final sceneKey = stringValue(surroundingsData['scene_key']).trim();
+    final optionId = 'surround:$sceneKey:$cleanNodeId';
+    _pendingBattleStart = NovelPendingBattleStart(
+      optionId: optionId,
+      targetName: cleanTarget,
+      battleMode: 'hostile',
+      fromSurroundings: true,
+      loadPayload: () async {
+        final payload = await backend.startSurroundEncounter(
+          sessionId,
+          cleanNodeId,
+        );
+        final battleId = stringValue(payload['battle_id']).trim();
+        if (battleId.isEmpty || asJsonMap(payload['battle_opponent']).isEmpty) {
+          throw const NovelBackendException('后端没有返回完整的探索战斗快照');
+        }
+        return payload;
+      },
+    );
+    isStartingBattle = true;
+    lastError = '';
+    _notify();
+  }
+
+  Future<void> finishSurroundingsBattle() async {
+    _activeBattleOptionId = '';
+    await refreshInventory(notify: false);
+    await refreshSurroundingsAvailability(notify: false);
+    try {
+      await loadSurroundings(force: true);
+    } catch (_) {
+      // 战斗已完成时背包结算仍然有效；调查页允许玩家稍后手动重试刷新。
+    }
+    _notify();
+  }
+
   /// 刷新只包含“当前位置 + 一跳相邻节点”的局部地图。
   /// `novel_backend.dart` 可直接实现 fetchSceneMap(sessionId)，也可以在
   /// 构造 Controller 时通过 sceneMapLoader 注入，避免页面依赖 HTTP 细节。
@@ -1756,6 +1822,7 @@ class NovelGameController extends ChangeNotifier {
       optionId: optionId,
       targetName: targetName,
       battleMode: battleMode,
+      fromSurroundings: false,
       loadPayload: () async {
         final payload = await starter(sessionId, optionId);
         final battleId = stringValue(payload['battle_id']).trim();
@@ -1777,18 +1844,27 @@ class NovelGameController extends ChangeNotifier {
     required List<JsonMap> consumptions,
   }) async {
     final settler = battleSettler;
-    if (settler == null || battleId.trim().isEmpty) {
-      lastError = '当前客户端尚未配置战斗结算接口。';
+    if (battleId.trim().isEmpty) {
+      lastError = '当前战斗缺少有效结算标识。';
       _notify();
       return false;
     }
     try {
-      await settler(
-        sessionId,
-        battleId.trim(),
-        outcome.trim().toLowerCase(),
-        consumptions,
-      );
+      if (settler != null) {
+        await settler(
+          sessionId,
+          battleId.trim(),
+          outcome.trim().toLowerCase(),
+          consumptions,
+        );
+      } else {
+        await backend.settleBattleItems(
+          sessionId: sessionId,
+          battleId: battleId.trim(),
+          outcome: outcome.trim().toLowerCase(),
+          consumptions: consumptions,
+        );
+      }
       await refreshInventory(notify: false);
       await refreshSurroundingsAvailability(notify: false);
       _notify();
@@ -2483,6 +2559,103 @@ class NovelGameController extends ChangeNotifier {
         _notify();
       }
     }
+  }
+
+  JsonMap novelCharacterRosterEntry(String characterInstanceId) {
+    return novelCharacterRoster[characterInstanceId.trim()] ??
+        const <String, dynamic>{};
+  }
+
+  bool isNovelCharacterOwned(String characterInstanceId) {
+    return boolValue(
+      novelCharacterRosterEntry(characterInstanceId)['owned'],
+    );
+  }
+
+  int novelCharacterFragments(String characterInstanceId) {
+    return intValue(
+      novelCharacterRosterEntry(characterInstanceId)['fragments'],
+    );
+  }
+
+  void _applyNovelCharacterRosterPayload(JsonMap payload) {
+    novelCharacterFlowers = intValue(
+      payload['flowers'],
+      novelCharacterFlowers,
+    );
+    final next = <String, JsonMap>{};
+    for (final raw in asJsonList(payload['characters'] ?? payload['roster'])) {
+      final item = asJsonMap(raw);
+      final id = stringValue(
+        item['character_instance_id'] ?? item['character_id'] ?? item['id'],
+      ).trim();
+      if (id.isNotEmpty) next[id] = item;
+    }
+    if (next.isNotEmpty || payload.containsKey('characters')) {
+      novelCharacterRoster = next;
+    }
+  }
+
+  Future<void> refreshNovelCharacterRoster({bool notify = true}) async {
+    isNovelCharacterRosterLoading = true;
+    if (notify) _notify();
+    try {
+      final payload = await backend.fetchNovelCharacterRoster(sessionId);
+      _applyNovelCharacterRosterPayload(payload);
+    } finally {
+      isNovelCharacterRosterLoading = false;
+      if (notify) _notify();
+    }
+  }
+
+  Future<JsonMap> drawNovelCharacters(int count) async {
+    if (count != 1 && count != 10) {
+      throw const NovelBackendException('只支持结缘一次或十次');
+    }
+    final payload = await backend.drawNovelCharacters(
+      mainSessionId: sessionId,
+      count: count,
+    );
+    _applyNovelCharacterRosterPayload(payload);
+    await refreshCharacterStatus(notify: false);
+    _notify();
+    return payload;
+  }
+
+  Future<JsonMap> fetchNovelCharacterChatHistory(
+    String characterInstanceId, {
+    int offset = 0,
+    int limit = 30,
+  }) {
+    return backend.fetchNovelCharacterChatHistory(
+      mainSessionId: sessionId,
+      characterInstanceId: characterInstanceId,
+      offset: offset,
+      limit: limit,
+    );
+  }
+
+  Stream<JsonMap> sendNovelCharacterChatStream({
+    required String characterInstanceId,
+    required String message,
+  }) {
+    return backend.sendNovelCharacterChatStream(
+      mainSessionId: sessionId,
+      characterInstanceId: characterInstanceId,
+      message: message,
+    );
+  }
+
+  void applyNovelCharacterChatEvent(JsonMap event) {
+    final type = stringValue(event['type']).trim().toLowerCase();
+    if (type == 'affection_update') {
+      _applyAffectionUpdate(event);
+      _notify();
+    }
+  }
+
+  Future<void> cancelNovelCharacterChatStream() {
+    return backend.cancelNovelCharacterChatStream();
   }
 
   Future<String> recognizeAndAcquireDeveloperContent(String rawName) async {

@@ -41,6 +41,14 @@ abstract class NovelBackend {
     String nodeId,
   );
 
+  /// 点击调查中的敌人节点后，创建并冻结一场后端权威战斗。
+  Future<JsonMap> startSurroundEncounter(
+    String sessionId,
+    String nodeId,
+  ) {
+    throw const NovelBackendException('当前后端不支持探索遭遇');
+  }
+
   /// 使用与普通聊天完全相同的 SSE 通道发送一次地图移动回合。
   Stream<NovelStreamEvent> sendNavigationMessageStream(
     NovelSendRequest request,
@@ -52,6 +60,40 @@ abstract class NovelBackend {
   Future<void> markMessageRead(String scenarioId, String messageId);
 
   Future<List<NovelCharacter>> fetchCharacterStatus(String scenarioId);
+
+  /// 读取当前小说存档的结缘状态。鲜花、碎片和已获得角色均由后端持久化。
+  Future<JsonMap> fetchNovelCharacterRoster(String mainSessionId) {
+    throw const NovelBackendException('当前后端不支持小说角色结缘');
+  }
+
+  /// 在当前小说存档中消耗鲜花结缘。count 目前只允许 1 或 10。
+  Future<JsonMap> drawNovelCharacters({
+    required String mainSessionId,
+    required int count,
+  }) {
+    throw const NovelBackendException('当前后端不支持小说角色结缘');
+  }
+
+  /// 读取小说角色页中某个已获得角色的私聊记录。
+  Future<JsonMap> fetchNovelCharacterChatHistory({
+    required String mainSessionId,
+    required String characterInstanceId,
+    int offset = 0,
+    int limit = 30,
+  }) {
+    throw const NovelBackendException('当前后端不支持小说角色私聊');
+  }
+
+  /// 小说角色页专用 SSE。它不推进主线，也不复用主线消息列表。
+  Stream<JsonMap> sendNovelCharacterChatStream({
+    required String mainSessionId,
+    required String characterInstanceId,
+    required String message,
+  }) {
+    throw const NovelBackendException('当前后端不支持小说角色私聊');
+  }
+
+  Future<void> cancelNovelCharacterChatStream() async {}
 
   Future<JsonMap> fetchJourney(String scenarioId);
 
@@ -91,6 +133,7 @@ abstract class NovelBackend {
     required String sessionId,
     required List<JsonMap> consumptions,
     required String outcome,
+    String battleId = '',
   }) {
     throw const NovelBackendException('当前后端不支持战斗道具结算');
   }

@@ -25,6 +25,7 @@ class NovelDeveloperPreviewActions {
     required this.previewDice,
     required this.previewChoices,
     required this.previewSurroundings,
+    required this.previewWorldMap,
     required this.previewBattle,
     required this.previewTimeSkip,
     required this.previewEndingIntro,
@@ -63,6 +64,7 @@ class NovelDeveloperPreviewActions {
   final Future<void> Function() previewDice;
   final Future<void> Function() previewChoices;
   final Future<void> Function() previewSurroundings;
+  final Future<void> Function() previewWorldMap;
   final Future<void> Function() previewBattle;
   final Future<void> Function() previewTimeSkip;
   final Future<void> Function() previewEndingIntro;
@@ -716,6 +718,12 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                   title: '探索周围',
                   subtitle: '打开本地演示场景，点击绿色成品测试拾取与放入背包提示',
                   onTap: () => _openPreview(actions.previewSurroundings),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '世界地图',
+                  subtitle: '四个场景填充斜角地图格；白线分隔并随机分布',
+                  onTap: () => _openPreview(actions.previewWorldMap),
                 ),
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(

@@ -719,6 +719,14 @@ class _GameStyleHeaderIcon extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(999),
+          // 显式覆盖 Flutter Theme 默认交互色，避免悬浮/点击时继承全局紫色。
+          hoverColor: lightTheme
+              ? const Color(0x0A000000)
+              : const Color(0x12FFFFFF),
+          splashColor: lightTheme
+              ? const Color(0x12000000)
+              : const Color(0x18FFFFFF),
+          highlightColor: Colors.transparent,
           child: SizedBox(
             width: 42,
             height: 42,

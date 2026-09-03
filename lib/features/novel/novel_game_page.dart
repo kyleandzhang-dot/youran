@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -11,7 +12,6 @@ import 'http_novel_backend.dart';
 import 'novel_models.dart';
 import 'novel_sheets.dart';
 import 'novel_widgets.dart';
-import 'novel_world_map.dart';
 import 'novel_battle_page.dart';
 
 typedef NovelEndingBuilder = Widget Function(
@@ -47,17 +47,16 @@ enum _NovelPrimaryTab {
   characters,
   inventory,
   journey,
+  world,
   surroundings,
 }
 
 class _NovelGamePageState extends State<NovelGamePage>
     with WidgetsBindingObserver {
-  // 大世界地图功能尚未完成，先仅隐藏入口与对应 HUD。
-  // 保留原有地图逻辑，后续完成后改为 true 即可恢复。
-  static const bool _worldMapEnabled = false;
-
   static const Duration _sceneArrivalDuration =
       Duration(milliseconds: 2800);
+  // 世界地图已有右侧独立入口，主页左上角旧地图 / 地点面板先隐藏。
+  static const bool _showLegacyLocationHud = true;
 
   final TextEditingController _inputController = TextEditingController();
   final FocusNode _inputFocusNode = FocusNode();
@@ -88,6 +87,9 @@ class _NovelGamePageState extends State<NovelGamePage>
   int _sceneArrivalRunId = 0;
 
   NovelGameController get controller => widget.controller;
+
+  // 角色输入/创建阶段进入沉浸输入模式，减少同时显示的信息。
+  bool get _immersiveInputMode => _characterSetupOpen;
 
   @override
   void initState() {
@@ -182,11 +184,7 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   Future<void> _openSceneMap() async {
     _inputFocusNode.unfocus();
-    await showNovelWorldMapPage(
-      context,
-      controller,
-      currentBackgroundUrl: controller.world.backgroundUrl.trim(),
-    );
+    await showNovelSceneMapSheet(context, controller);
   }
 
   Future<void> _processOverlayRequests() async {
@@ -473,6 +471,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         previewDice: _previewDice,
         previewChoices: _previewChoices,
         previewSurroundings: _previewSurroundings,
+        previewWorldMap: _previewWorldMap,
         previewBattle: _previewBattle,
         previewTimeSkip: _previewTimeSkip,
         previewEndingIntro: _previewEndingIntro,
@@ -735,7 +734,177 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   Future<void> _previewSurroundings() async {
     if (!mounted) return;
-    await showNovelSurroundingsDeveloperPreview(context, controller);
+    await showNovelSurroundingsDeveloperPreview(
+      context,
+      controller,
+      previewBattleLauncher: _openDeveloperSurroundingsBattle,
+    );
+  }
+
+  Future<void> _previewWorldMap() async {
+    if (!mounted) return;
+    await showNovelSceneMapDeveloperPreview(context, controller);
+  }
+
+  List<YoranBattleSkill> _currentPreviewBattleSkills() {
+    final rawSkills = controller.protagonist?.status['skills'];
+    final learnedSkills = <YoranBattleSkill>[];
+    final seenSkillNames = <String>{'普通攻击'};
+    if (rawSkills is List) {
+      for (final raw in rawSkills) {
+        final skill = YoranBattleSkill.fromState(raw);
+        if (skill == null) continue;
+        final key = skill.name.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+        if (key.isNotEmpty && seenSkillNames.add(key)) {
+          learnedSkills.add(skill);
+        }
+      }
+    }
+    return learnedSkills.isEmpty
+        ? yoranDefaultBattleSkills
+        : <YoranBattleSkill>[
+            yoranDefaultBattleSkills.first,
+            ...learnedSkills,
+          ];
+  }
+
+  YoranBattleEnemy _developerSurroundingsEnemy({
+    required String name,
+    required int quality,
+    required bool elite,
+    required List<dynamic> equipment,
+  }) {
+    final normalizedQuality = quality.clamp(1, 6).toInt();
+    final equipped = equipment
+        .map(YoranBattleEquipment.fromState)
+        .whereType<YoranBattleEquipment>()
+        .toList(growable: false);
+
+    int slotQuality(String slot) {
+      var value = 0;
+      for (final item in equipped) {
+        if (item.slot == slot) value = math.max(value, item.quality);
+      }
+      return value.clamp(0, 10).toInt();
+    }
+
+    int affixTotal(String key, int cap) {
+      var value = 0;
+      for (final item in equipped) {
+        value += item.affixes[key] ?? 0;
+      }
+      return value.clamp(0, cap).toInt();
+    }
+
+    final upper = slotQuality('upper');
+    final face = slotQuality('face');
+    final handheld = slotQuality('handheld');
+    final lower = slotQuality('lower');
+    final playerMaxHp = (100 *
+            (1 + upper * .10 +
+                affixTotal('max_hp_percent', 40) / 100))
+        .round();
+    final playerMaxEnergy = (100 *
+            (1 + face * .10 +
+                affixTotal('max_energy_percent', 40) / 100))
+        .round();
+    final attackMultiplier = 1 +
+        handheld * .10 +
+        affixTotal('attack_percent', 40) / 100;
+    final incomingMultiplier = (1 -
+            lower * .05 -
+            affixTotal('defense_percent', 15) / 100)
+        .clamp(.35, 1.0)
+        .toDouble();
+
+    final ratio = switch (normalizedQuality) {
+      1 => .50,
+      2 => .70,
+      3 => 1.00,
+      4 => 1.50,
+      5 => 2.00,
+      _ => 3.00,
+    };
+    // 与后端探索规则一致：70%来自品质基准，30%参考玩家当前装备。
+    final playerScaledAttack =
+        ratio * attackMultiplier / math.max(.5, incomingMultiplier);
+    final attackRatio = ratio * .70 + playerScaledAttack * .30;
+    final maxHp = (100 * ratio * .70 + playerMaxHp * ratio * .30)
+        .round()
+        .clamp(12, 1000)
+        .toInt();
+    final basicMin = (5 * attackRatio).round().clamp(1, 25).toInt();
+    final basicMax = math
+        .max(basicMin, (8 * attackRatio).round())
+        .clamp(1, 25)
+        .toInt();
+    final difficulty = switch (normalizedQuality) {
+      1 => ('轻松', '约为玩家当前战力的50%'),
+      2 => ('略弱', '约为玩家当前战力的70%'),
+      3 => ('均衡', '约为玩家当前战力的100%'),
+      4 => ('危险', '约为玩家当前战力的150%'),
+      5 => ('高危', '约为玩家当前战力的200%'),
+      _ => ('极危', '约为玩家当前战力的300%'),
+    };
+
+    return YoranBattleEnemy(
+      name: name.trim().isEmpty ? '测试敌人' : name.trim(),
+      maxHp: maxHp,
+      currentEnergy: (playerMaxEnergy * ratio)
+          .round()
+          .clamp(20, 100)
+          .toInt(),
+      condition: elite ? '高度警戒' : '警戒',
+      realm: '探索品质 $normalizedQuality',
+      difficultyLabel: difficulty.$1,
+      openingEstimate: difficulty.$2,
+      basicAttackMin: basicMin,
+      basicAttackMax: basicMax,
+      hitBonus: (4 + normalizedQuality ~/ 2 + (elite ? 1 : 0))
+          .clamp(2, 10)
+          .toInt(),
+      allowInstantDefeat: normalizedQuality >= 6,
+      // 开发者探索只测试品质数值，不为 NPC 请求或生成专属技能。
+      skills: const <YoranBattleSkill>[],
+    );
+  }
+
+  Future<String?> _openDeveloperSurroundingsBattle({
+    required String enemyName,
+    required int quality,
+    required bool elite,
+  }) async {
+    if (!mounted) return null;
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final protagonist = controller.protagonist;
+    final inventory = _battleInventorySnapshot();
+    final enemy = _developerSurroundingsEnemy(
+      name: enemyName,
+      quality: quality,
+      elite: elite,
+      equipment: inventory,
+    );
+    final outcome = await showYoranBattlePage(
+      context,
+      playerName: protagonist?.name.trim().isNotEmpty == true
+          ? protagonist!.name.trim()
+          : controller.protagonistName,
+      playerAvatar: protagonist?.avatarUrl.trim() ?? '',
+      playerPortrait: protagonist?.portraitUrl.trim() ?? '',
+      skills: _currentPreviewBattleSkills(),
+      items: inventory,
+      equipment: inventory,
+      enemyName: enemy.name,
+      enemies: <YoranBattleEnemy>[enemy],
+      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneTitle: '探索测试 · 海滩边缘',
+      sceneSubtitle:
+          '${elite ? '高级敌人' : '普通敌人'} · 品质 ${quality.clamp(1, 6)}',
+      socketService: controller.socket,
+      // 开发者探索不传结算回调：不扣真实道具，也不写入正式战斗状态。
+    );
+    return outcome?.name;
   }
 
   Future<void> _previewDice() async {
@@ -906,6 +1075,12 @@ class _NovelGamePageState extends State<NovelGamePage>
       return;
     }
 
+    if (request.fromSurroundings) {
+      // 探索遭遇只刷新背包与调查图，不让剧情 LLM 再复述/重判同一场战斗。
+      await controller.finishSurroundingsBattle();
+      return;
+    }
+
     await controller.continueAfterStoryBattle(
       targetName: targetName,
       battleMode: battleMode,
@@ -1034,25 +1209,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     if (!mounted) return;
 
     final protagonist = controller.protagonist;
-    final rawSkills = protagonist?.status['skills'];
-    final learnedSkills = <YoranBattleSkill>[];
-    final seenSkillNames = <String>{'普通攻击'};
-    if (rawSkills is List) {
-      for (final raw in rawSkills) {
-        final skill = YoranBattleSkill.fromState(raw);
-        if (skill == null) continue;
-        final key = skill.name.replaceAll(RegExp(r'\s+'), '').toLowerCase();
-        if (key.isNotEmpty && seenSkillNames.add(key)) {
-          learnedSkills.add(skill);
-        }
-      }
-    }
-    final battleSkills = learnedSkills.isEmpty
-        ? yoranDefaultBattleSkills
-        : <YoranBattleSkill>[
-            yoranDefaultBattleSkills.first,
-            ...learnedSkills,
-          ];
+    final battleSkills = _currentPreviewBattleSkills();
     final battleInventory = _battleInventorySnapshot();
 
     await showYoranBattlePage(
@@ -1267,6 +1424,8 @@ class _NovelGamePageState extends State<NovelGamePage>
         NovelInventoryTab(controller: controller),
       _NovelPrimaryTab.journey =>
         NovelJourneyTab(controller: controller),
+      _NovelPrimaryTab.world =>                           // 新增这一段
+        NovelWorldMapTab(controller: controller),         // 新增这一段
       _NovelPrimaryTab.surroundings =>
         NovelSurroundingsTab(
           controller: controller,
@@ -1277,6 +1436,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   @override
+  @override
   Widget build(BuildContext context) {
     return GameShell(
       activeScenarioId: controller.scenarioId,
@@ -1284,417 +1444,399 @@ class _NovelGamePageState extends State<NovelGamePage>
       backgroundColor: controller.settings.backgroundColor,
       builder: (context, openDrawer) {
         return AnimatedBuilder(
-      animation: Listenable.merge(<Listenable>[controller, controller.settings]),
-      builder: (context, _) {
-        // 剧情背景优先使用后端 world.backgroundUrl。
-        // 空背景，或后端误回 APP 主页占位背景时，都统一走模糊兜底；
-        // 真正的剧情场景图仍按原样显示，不受兜底模糊影响。
-        final rawBackground = _backgroundPreviewOverride ?? controller.world.backgroundUrl.trim();
-        final normalizedBackground = rawBackground.replaceAll('\\', '/').toLowerCase();
-        final isHomeBackground =
-            normalizedBackground.endsWith('/home_background.jpg') ||
-            normalizedBackground.endsWith('home_background.jpg') ||
-            normalizedBackground.endsWith('/background_home.png') ||
-            normalizedBackground.endsWith('background_home.png');
-        final background = isHomeBackground ? '' : rawBackground;
-        final activeWeather = _activeWeatherEffect;
-        final activeTime = _activeTimePeriod;
-        final loadFailed = !controller.isInitializing &&
-            !controller.isInitialized &&
-            controller.lastError.isNotEmpty;
+          animation: Listenable.merge(<Listenable>[controller, controller.settings]),
+          builder: (context, _) {
+            final rawBackground = _backgroundPreviewOverride ?? controller.world.backgroundUrl.trim();
+            final normalizedBackground = rawBackground.replaceAll('\\', '/').toLowerCase();
+            final isHomeBackground =
+                normalizedBackground.endsWith('/home_background.jpg') ||
+                normalizedBackground.endsWith('home_background.jpg') ||
+                normalizedBackground.endsWith('/background_home.png') ||
+                normalizedBackground.endsWith('background_home.png');
+            final background = isHomeBackground ? '' : rawBackground;
+            final activeWeather = _activeWeatherEffect;
+            final activeTime = _activeTimePeriod;
+            final loadFailed = !controller.isInitializing &&
+                !controller.isInitialized &&
+                controller.lastError.isNotEmpty;
 
-        if (controller.isInitialized) {
-          _loadFailureHandled = false;
-        } else if (loadFailed) {
-          _handleLoadFailure(openDrawer);
-        }
+            if (controller.isInitialized) {
+              _loadFailureHandled = false;
+            } else if (loadFailed) {
+              _handleLoadFailure(openDrawer);
+            }
 
-        return Scaffold(
-          // 键盘只抬高正在编辑的输入区，不再压缩整个剧情 / 角色页面。
-          // 否则右侧一级导航、顶部场景 HUD、角色筛选和头像都会一起被顶上来。
-          resizeToAvoidBottomInset: false,
-          backgroundColor: controller.settings.backgroundColor,
-          body: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              RepaintBoundary(
-                child: NovelWorldBackground(
-                  url: background,
-                  fallbackAsset: 'assets/images/background_home.png',
-                  // 背景单独成层：流式文字/爱心动画更新时尽量复用已栅格化背景。
-                  characterPresent: controller.storyStarted &&
-                      controller.currentSpeakerName.isNotEmpty &&
-                      !controller.isCinematic,
-                  isGenerating: controller.isGenerating,
-                  weatherEffect: _weatherPreviewOverride != null
-                      ? activeWeather
-                      : (controller.settings.weatherEffectsEnabled
+            final isCompactWidth = MediaQuery.sizeOf(context).width <= 600;
+            final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+            final keyboardActive = isCompactWidth && keyboardInset > 0;
+            
+            final showBottomNav = !_immersiveInputMode &&
+                controller.storyStarted &&
+                !controller.isCinematic &&
+                !_endingOpen &&
+                !_battleOpen &&
+                _primaryTab != _NovelPrimaryTab.surroundings &&
+                (controller.hasNext || controller.isGenerating) &&
+                !keyboardActive;
+
+            return Scaffold(
+              resizeToAvoidBottomInset: false,
+              backgroundColor: controller.settings.backgroundColor,
+              body: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  RepaintBoundary(
+                    child: NovelWorldBackground(
+                      url: background,
+                      fallbackAsset: 'assets/images/background_home.png',
+                      characterPresent: controller.storyStarted &&
+                          controller.currentSpeakerName.isNotEmpty &&
+                          !controller.isCinematic,
+                      isGenerating: controller.isGenerating,
+                      weatherEffect: _weatherPreviewOverride != null
                           ? activeWeather
-                          : NovelWeatherEffect.none),
-                  timePeriod: activeTime,
-                ),
-              ),
-              // 角色立绘由 NovelDialogPanel 内部统一绘制。
-              // 不在这里再画第二层，避免重复立绘或两套 visible 条件互相打架。
-              SafeArea(
-                minimum: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxWidth < 430;
-                    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-                    final keyboardActive = constraints.maxWidth <= 600 && keyboardInset > 0;
-                    final sceneArrivalTitle =
-                        _sceneArrivalPreviewTitle ?? controller.locationTitle;
-                    final sceneArrivalSubtitle =
-                        _sceneArrivalPreviewSubtitle ??
-                            controller.locationSubtitle;
-                    final rawLocationSubtitle =
-                        controller.locationSubtitle.trim();
-                    final worldTimeLabel =
-                        controller.world.timeDescription.trim();
-                    final worldMapHudTitle = rawLocationSubtitle.isNotEmpty &&
-                            rawLocationSubtitle != worldTimeLabel
-                        ? rawLocationSubtitle.split(' · ').first
-                        : controller.locationTitle;
-                    final worldMapHudSubtitle =
-                        worldMapHudTitle != controller.locationTitle
-                            ? '当前位置 · ${controller.locationTitle}'
-                            : rawLocationSubtitle;
-                    final sceneHudTransitionDuration = _sceneArrivalActive
-                        ? const Duration(milliseconds: 180)
-                        : const Duration(milliseconds: 620);
-                    return Stack(
-                      children: <Widget>[
-                        // 电影模式是全屏交互层，但放在 HUD 下面，
-                        // 对齐 Vue NarrativeControls(z45) < NovelTopHeader(z50) 的层级关系。
-                        if (controller.storyStarted && controller.isCinematic)
-                          Positioned.fill(
-                            child: NovelCinematicControls(
-                              controller: controller,
-                              text: controller.currentSentence?.readerText ?? '',
-                              speakerName: controller.currentSpeakerName,
-                              isGenerating: controller.isGenerating,
-                              isFirst: !controller.hasPrevious,
-                              isLast: !controller.hasNext,
-                              fontFamily: controller.settings.fontFamily,
-                              fontSize: controller.settings.fontSize,
-                              onRevert: () => showNovelRevertDialog(context, controller),
-                              onPrevious: controller.goPrevious,
-                              onNext: controller.goNext,
-                              onContinue: controller.hasNext || controller.pendingFateRevert
-                                  ? controller.goNext
-                                  : controller.continueStory,
-                            ),
-                          ),
-                        Align(
-                          alignment: Alignment.topCenter,
-                          child: NovelTopHud(
-                            controller: controller,
-                            onMenu: widget.onBack ?? openDrawer,
-                            onOpenProfile: () => showNovelHostProfileSheet(context, controller),
-                            onOpenSettings: () => showNovelSettingsSheet(
-                              context,
-                              controller,
-                              developerPreview: _developerPreviewActions,
-                            ),
-                          ),
-                        ),
-                        if (controller.storyStarted && !keyboardActive)
-                          Positioned(
-                            left: 0,
-                            top: 56,
-                            child: AnimatedSlide(
-                              duration: sceneHudTransitionDuration,
-                              curve: Curves.easeOutCubic,
-                              offset: _sceneArrivalActive
-                                  ? const Offset(-.04, 0)
-                                  : Offset.zero,
-                              child: AnimatedOpacity(
-                                duration: sceneHudTransitionDuration,
-                                curve: Curves.easeOutCubic,
-                                opacity: _sceneArrivalActive ? 0 : 1,
-                                child: NovelLocationHud(
-                                  title: worldMapHudTitle,
-                                  subtitle: worldMapHudSubtitle,
-                                  // 地图系统尚未完成：保留场景文字 HUD，只隐藏地图图标与点击能力。
-                                  loading: _worldMapEnabled && controller.isSceneMapLoading,
-                                  showMapGlyph: _worldMapEnabled,
-                                  onTap: !_worldMapEnabled || _sceneArrivalActive
-                                      ? null
-                                      : () => unawaited(_openSceneMap()),
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (controller.storyStarted && !keyboardActive)
-                          Positioned(
-                            left: 0,
-                            // 键盘出现时隐藏场景目标，避免和被抬高的输入区 / 正文抢空间。
-                            // 当前目标收紧到场景标题下方，减少两块 HUD 之间的空档。
-                            // 完成/失败仍在这里原位反馈；底部人物/经历/背包美术完全不动。
-                            // 探索入口已经移到“请做出你的选择”右侧，
-                            // 当前目标恢复原来的位置，不再被额外下推。
-                            top: compact ? 111 : 116,
-                            child: AnimatedSlide(
-                              duration: sceneHudTransitionDuration,
-                              curve: Curves.easeOutCubic,
-                              offset: _sceneArrivalActive
-                                  ? const Offset(-.04, 0)
-                                  : Offset.zero,
-                              child: AnimatedOpacity(
-                                duration: sceneHudTransitionDuration,
-                                curve: Curves.easeOutCubic,
-                                opacity: _sceneArrivalActive ? 0 : 1,
-                                child: NovelGoalHud(
-                                  text: controller.currentGoal,
-                                  feedbackEvent: controller.hudEvent,
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (controller.storyStarted &&
-                            !keyboardActive &&
-                            _sceneArrivalActive)
-                          Positioned(
-                            left: compact ? 12 : 16,
-                            right: compact
-                                ? 50
-                                : constraints.maxWidth * .28,
-                            top: 56,
-                            child: IgnorePointer(
-                              child: Align(
-                                // 场景揭示回到左上角，原地点与目标在此期间已淡出，
-                                // 因此仍保留同一视觉锚点，但不会再发生文字重叠。
-                                alignment: Alignment.centerLeft,
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 620,
-                                  ),
-                                  child: NovelSceneArrivalTitle(
-                                    key: ValueKey<int>(_sceneArrivalRunId),
-                                    title: sceneArrivalTitle,
-                                    subtitle: sceneArrivalSubtitle,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (controller.storyStarted && !controller.isCinematic)
-                          Align(
-                            alignment: Alignment.bottomCenter,
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 720),
-                              child: NovelChoiceDockActionScope(
-                                visible: controller.shouldShowSurroundingsAction,
-                                label: controller.surroundingsActionLabel,
-                                attention: controller.surroundingsNeedsAttention,
-                                loading: controller.isSurroundingsLoading,
-                                onTap: () => _selectPrimaryTab(
-                                  _NovelPrimaryTab.surroundings,
-                                ),
-                                child: NovelDialogPanel(
+                          : (controller.settings.weatherEffectsEnabled
+                              ? activeWeather
+                              : NovelWeatherEffect.none),
+                      timePeriod: activeTime,
+                    ),
+                  ),
+                  SafeArea(
+                    minimum: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 430;
+                        final sceneArrivalTitle =
+                            _sceneArrivalPreviewTitle ?? controller.locationTitle;
+                        final sceneArrivalSubtitle =
+                            _sceneArrivalPreviewSubtitle ??
+                                controller.locationSubtitle;
+                        final rawLocationSubtitle =
+                            controller.locationSubtitle.trim();
+                        final worldTimeLabel =
+                            controller.world.timeDescription.trim();
+                        final worldMapHudTitle = rawLocationSubtitle.isNotEmpty &&
+                                rawLocationSubtitle != worldTimeLabel
+                            ? rawLocationSubtitle.split(' · ').first
+                            : controller.locationTitle;
+                        final worldMapHudSubtitle =
+                            worldMapHudTitle != controller.locationTitle
+                                ? '当前位置 · ${controller.locationTitle}'
+                                : rawLocationSubtitle;
+                        final sceneHudTransitionDuration = _sceneArrivalActive
+                            ? const Duration(milliseconds: 180)
+                            : const Duration(milliseconds: 620);
+
+                        return Stack(
+                          children: <Widget>[
+                            if (controller.storyStarted && controller.isCinematic)
+                              Positioned.fill(
+                                child: NovelCinematicControls(
                                   controller: controller,
-                                  // 右侧人物 / 背包 / 经历打开时剧情页仍保留在底层，
-                                  // 但逐字 Timer 与打字音必须暂停；回到剧情页后再继续。
-                                  active: _primaryTab == _NovelPrimaryTab.story,
-                                  textController: _inputController,
-                                  focusNode: _inputFocusNode,
-                                  onSend: (text) {
-                                    controller.goLatest();
-                                    unawaited(controller.sendPlayerMessage(text));
-                                  },
-                                  onContinue: controller.continueStory,
-                                  onForceContinue: controller.forceContinue,
-                                  onOpenChoices: () =>
-                                      showNovelChoicesSheet(context, controller),
-                                  onOpenInventory: () => _selectPrimaryTab(
-                                    _NovelPrimaryTab.inventory,
-                                  ),
-                                  onOpenCharacters: () => _selectPrimaryTab(
-                                    _NovelPrimaryTab.characters,
-                                  ),
-                                  onOpenJourney: () => _selectPrimaryTab(
-                                    _NovelPrimaryTab.journey,
-                                  ),
-                                  onRevert: () =>
-                                      showNovelRevertDialog(context, controller),
-                                  onOpenPortrait:
-                                      controller.currentSpeakerCharacter == null
-                                          ? null
-                                          : _openCurrentSpeakerInCharacters,
+                                  text: controller.currentSentence?.readerText ?? '',
+                                  speakerName: controller.currentSpeakerName,
+                                  isGenerating: controller.isGenerating,
+                                  isFirst: !controller.hasPrevious,
+                                  isLast: !controller.hasNext,
+                                  fontFamily: controller.settings.fontFamily,
+                                  fontSize: controller.settings.fontSize,
+                                  onRevert: () => showNovelRevertDialog(context, controller),
+                                  onPrevious: controller.goPrevious,
+                                  onNext: controller.goNext,
+                                  onContinue: controller.hasNext || controller.pendingFateRevert
+                                      ? controller.goNext
+                                      : controller.continueStory,
+                                ),
+                              ),
+                            Align(
+                              alignment: Alignment.topCenter,
+                              child: NovelTopHud(
+                                controller: controller,
+                                onMenu: widget.onBack ?? openDrawer,
+                                onOpenProfile: () => showNovelHostProfileSheet(context, controller),
+                                onOpenSettings: () => showNovelSettingsSheet(
+                                  context,
+                                  controller,
+                                  developerPreview: _developerPreviewActions,
                                 ),
                               ),
                             ),
-                          ),
+                            
+                            // 完美左对齐 + 高度紧凑优化：把位置和目标包在一个 Column 里
+                            if (!_immersiveInputMode && controller.storyStarted && !keyboardActive)
+                              Positioned(
+                                left: 0,
+                                top: 56, // 统一锁定在顶部起点
+                                child: AnimatedSlide(
+                                  duration: sceneHudTransitionDuration,
+                                  curve: Curves.easeOutCubic,
+                                  offset: _sceneArrivalActive
+                                      ? const Offset(-.04, 0)
+                                      : Offset.zero,
+                                  child: AnimatedOpacity(
+                                    duration: sceneHudTransitionDuration,
+                                    curve: Curves.easeOutCubic,
+                                    opacity: _sceneArrivalActive ? 0 : 1,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (_showLegacyLocationHud)
+                                          NovelLocationHud(
+                                            title: worldMapHudTitle,
+                                            subtitle: worldMapHudSubtitle,
+                                            loading: false,
+                                            onTap: null,
+                                          ),
+                                        if (_showLegacyLocationHud)
+                                          const SizedBox(height: 6), // 舒适又紧凑的间距
+                                        NovelGoalHud(
+                                          text: controller.currentGoal,
+                                          feedbackEvent: controller.hudEvent,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
 
-                      ],
-                    );
-                  },
-                ),
-              ),
-
-              // 主角伤势必须挂在根 Stack，而不是 SafeArea 内部。
-              // 这样刘海、状态栏、底部手势区以及横屏两侧都能被完整覆盖。
-              if (_primaryTab == _NovelPrimaryTab.story &&
-                  controller.storyStarted &&
-                  !controller.isCinematic)
-                Positioned.fill(
-                  child: RepaintBoundary(
-                    child: NovelDamageFeedbackOverlay(
-                      hp: controller.protagonistHp,
+                            if (controller.storyStarted &&
+                                !keyboardActive &&
+                                _sceneArrivalActive)
+                              Positioned(
+                                left: compact ? 12 : 16,
+                                right: compact
+                                    ? 50
+                                    : constraints.maxWidth * .28,
+                                top: 56,
+                                child: IgnorePointer(
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 620,
+                                      ),
+                                      child: NovelSceneArrivalTitle(
+                                        key: ValueKey<int>(_sceneArrivalRunId),
+                                        title: sceneArrivalTitle,
+                                        subtitle: sceneArrivalSubtitle,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (controller.storyStarted && !controller.isCinematic)
+                              Align(
+                                alignment: Alignment.bottomCenter,
+                                // 外层绝对不加 Padding，确保里面的立绘贴合在屏幕绝对最底部
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 720),
+                                  child: NovelChoiceDockActionScope(
+                                    visible: controller.shouldShowSurroundingsAction,
+                                    label: controller.surroundingsActionLabel,
+                                    attention: controller.surroundingsNeedsAttention,
+                                    loading: controller.isSurroundingsLoading,
+                                    onTap: () => _selectPrimaryTab(
+                                      _NovelPrimaryTab.surroundings,
+                                    ),
+                                    child: NovelDialogPanel(
+                                      controller: controller,
+                                      active: _primaryTab == _NovelPrimaryTab.story,
+                                      textController: _inputController,
+                                      focusNode: _inputFocusNode,
+                                      onSend: (text) {
+                                        controller.goLatest();
+                                        unawaited(controller.sendPlayerMessage(text));
+                                      },
+                                      onContinue: controller.continueStory,
+                                      onForceContinue: controller.forceContinue,
+                                      onOpenChoices: () =>
+                                          showNovelChoicesSheet(context, controller),
+                                      onOpenInventory: () => _selectPrimaryTab(
+                                        _NovelPrimaryTab.inventory,
+                                      ),
+                                      onOpenCharacters: () => _selectPrimaryTab(
+                                        _NovelPrimaryTab.characters,
+                                      ),
+                                      onOpenJourney: () => _selectPrimaryTab(
+                                        _NovelPrimaryTab.journey,
+                                      ),
+                                      onRevert: () =>
+                                          showNovelRevertDialog(context, controller),
+                                      onOpenPortrait:
+                                          controller.currentSpeakerCharacter == null
+                                              ? null
+                                              : _openCurrentSpeakerInCharacters,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
                     ),
                   ),
-                ),
 
-              // 角色 / 背包 / 经历是右侧长期入口；周围虽然不再显示在右侧，
-              // 底层仍以保活 Tab 挂载，保证返回剧情再进入时探索/组合进度不会丢失。
-              // 第一次切入时才挂载对应页面，之后使用 Offstage 保留本地状态。
-              if (controller.storyStarted && !controller.isCinematic)
-                for (final tab in const <_NovelPrimaryTab>[
-                  _NovelPrimaryTab.characters,
-                  _NovelPrimaryTab.inventory,
-                  _NovelPrimaryTab.journey,
-                  _NovelPrimaryTab.surroundings,
-                ])
-                  if (_mountedPrimaryTabs.contains(tab))
+                  if (_primaryTab == _NovelPrimaryTab.story &&
+                      controller.storyStarted &&
+                      !controller.isCinematic)
                     Positioned.fill(
-                      key: ValueKey<String>('novel-primary-${tab.name}'),
-                      child: Offstage(
-                        offstage: _primaryTab != tab,
-                        child: TickerMode(
-                          enabled: _primaryTab == tab,
-                          // 一级 Tab 的背景真正铺满整块屏幕。
-                          // 顶部刘海和右侧 HUD 的内容避让由各 Tab 自己处理，
-                          // 不再在页面层把整个 Tab 裁成一块“中间面板”。
-                          child: _buildPrimaryArchiveTab(tab),
+                      child: RepaintBoundary(
+                        child: NovelDamageFeedbackOverlay(
+                          hp: controller.protagonistHp,
                         ),
                       ),
                     ),
 
-              // 右上角星星作为唯一的道具 / 兑换入口；在四个一级 Tab 中都可使用。
-              if (controller.storyStarted &&
-                  !controller.isGenerating &&
-                  !controller.isCinematic &&
-                  _primaryTab != _NovelPrimaryTab.surroundings)
-                Positioned(
-                  top: (MediaQuery.paddingOf(context).top < 10
-                          ? 10
-                          : MediaQuery.paddingOf(context).top) +
-                      57,
-                  right: 17,
-                  child: NovelScoreChip(
-                    score: controller.score,
-                    onTap: () => showNovelStoreSheet(context, controller),
-                  ),
-                ),
-
-              // 右侧只保留“剧情 / 角色 / 背包 / 经历”四个长期入口。
-              // “周围”改为当前地点的场景动作，不再混进档案导航。
-              if (controller.storyStarted &&
-                  !controller.isCinematic &&
-                  _primaryTab != _NovelPrimaryTab.surroundings &&
-                  !(MediaQuery.sizeOf(context).width <= 600 &&
-                      MediaQuery.viewInsetsOf(context).bottom > 0))
-                Positioned(
-                  top: (MediaQuery.paddingOf(context).top < 10
-                          ? 10
-                          : MediaQuery.paddingOf(context).top) +
-                      104,
-                  right: 4,
-                  child: NovelSideArchiveBar(
-                    selectedIndex: _primaryTab.index,
-                    onSelected: (index) => _selectPrimaryTab(
-                      _NovelPrimaryTab.values[index],
-                    ),
-                  ),
-                ),
-
-              // 保留氛围型反馈：AI 尚未开始输出正文时显示“故事酝酿中”。
-              if (_primaryTab == _NovelPrimaryTab.story &&
-                  controller.storyStarted &&
-                  controller.isGenerating &&
-                  (controller.currentSentence?.readerText.trim().isEmpty ?? true) &&
-                  !controller.showDice)
-                const NovelBrewingOverlay(),
-
-              // 通用 HUD 只保留物品/人物状态/风险等场景反馈。
-              // 好感度在角色爱心原位变化；积分在右上角星星原位变化；
-              // 目标完成/失败/更新全部交给左上角 NovelGoalHud，不再单独滑出。
-              // 恢复目标完成/失败的中央大弹窗 (NovelHudEventOverlay 内部已有绝佳的动画支持)
-              if (_primaryTab == _NovelPrimaryTab.story &&
-                  controller.storyStarted &&
-                  controller.hudEvent != null &&
-                  controller.hudEvent!.kind != 'affection' &&
-                  controller.hudEvent!.kind != 'score' &&
-                  // ⬇️ 删掉了这里的 goal_completed 和 goal_failed 拦截
-                  !(controller.hudEvent!.kind == 'milestone' &&
-                      controller.hudEvent!.title.trim() == '目标更新'))
-                KeyedSubtree(
-                  key: ValueKey<int>(controller.hudEvent!.id),
-                  child: NovelHudEventOverlay(event: controller.hudEvent!),
-                ),
-
-              if (controller.isInitializing)
-                ColoredBox(
-                  color: Colors.black.withOpacity(.58),
-                  child: const Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Color(0xB3FFFFFF),
+                  if (controller.storyStarted && !controller.isCinematic)
+                    for (final tab in const <_NovelPrimaryTab>[
+                      _NovelPrimaryTab.characters,
+                      _NovelPrimaryTab.inventory,
+                      _NovelPrimaryTab.journey,
+                      _NovelPrimaryTab.world,
+                      _NovelPrimaryTab.surroundings,
+                    ])
+                      if (_mountedPrimaryTabs.contains(tab))
+                        Positioned.fill(
+                          key: ValueKey<String>('novel-primary-${tab.name}'),
+                          child: Offstage(
+                            offstage: _primaryTab != tab,
+                            child: TickerMode(
+                              enabled: _primaryTab == tab,
+                              child: _buildPrimaryArchiveTab(tab),
+                            ),
                           ),
                         ),
-                        SizedBox(height: 14),
-                        Text('正在载入世界…', style: TextStyle(color: NovelPalette.text, letterSpacing: 2)),
-                      ],
+
+                  if (!_immersiveInputMode &&
+                      controller.storyStarted &&
+                      !controller.isGenerating &&
+                      !controller.isCinematic &&
+                      _primaryTab != _NovelPrimaryTab.surroundings)
+                    Positioned(
+                      top: (MediaQuery.paddingOf(context).top < 10
+                              ? 10
+                              : MediaQuery.paddingOf(context).top) +
+                          57,
+                      right: 17,
+                      child: NovelScoreChip(
+                        score: controller.score,
+                        onTap: () => showNovelStoreSheet(context, controller),
+                      ),
                     ),
-                  ),
-                ),
-              if (controller.showDice && controller.diceRoll != null)
-                IgnorePointer(child: NovelDiceOverlay(roll: controller.diceRoll!)),
-              if (controller.timeSkipLabel.isNotEmpty)
-                NovelTimeSkipOverlay(
-                  label: controller.timeSkipLabel,
-                  onDismiss: controller.dismissTimeSkip,
-                ),
-              if (controller.showEndingIntro)
-                GestureDetector(
-                  onTap: () {
-                    controller.showEndingIntro = false;
-                    controller.clearMessages();
-                  },
-                  child: const ColoredBox(
-                    color: Colors.black,
-                    child: Center(
-                      child: Text(
-                        '故事走向终章',
-                        style: TextStyle(
-                          color: NovelPalette.text,
-                          fontSize: 18,
-                          letterSpacing: 5,
+
+                  // 底部导航栏
+                  if (showBottomNav)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: SafeArea(
+                        top: false,
+                        child: NovelBottomArchiveBar(
+                          // 因为加入了 surroundings，索引不再是一一对应，需要精准映射
+                          selectedIndex: switch (_primaryTab) {
+                            _NovelPrimaryTab.characters => 1,
+                            _NovelPrimaryTab.inventory => 2,
+                            _NovelPrimaryTab.journey => 3,
+                            _NovelPrimaryTab.world => 4,
+                            _ => 0, 
+                          },
+                          // 注意：删掉了 onWorld 属性
+                          onSelected: (index) {
+                            final tab = switch(index) {
+                              1 => _NovelPrimaryTab.characters,
+                              2 => _NovelPrimaryTab.inventory,
+                              3 => _NovelPrimaryTab.journey,
+                              4 => _NovelPrimaryTab.world,
+                              _ => _NovelPrimaryTab.story,
+                            };
+                            _selectPrimaryTab(tab);
+                          },
                         ),
                       ),
                     ),
-                  ),
-                ),
-              if (!loadFailed)
-                NovelStatusBanner(
-                  message: controller.lastError.isNotEmpty
-                      ? '场景载入异常，请返回首页'  // <--- 强行把报错替换成这句干净的话
-                      : controller.infoMessage,
-                  isError: controller.lastError.isNotEmpty,
-                  onDismiss: controller.clearMessages,
-                ),
-            ],
-          ),
+
+                  if (_primaryTab == _NovelPrimaryTab.story &&
+                      controller.storyStarted &&
+                      controller.isGenerating &&
+                      (controller.currentSentence?.readerText.trim().isEmpty ?? true) &&
+                      !controller.showDice)
+                    const NovelBrewingOverlay(),
+
+                  if (_primaryTab == _NovelPrimaryTab.story &&
+                      controller.storyStarted &&
+                      controller.hudEvent != null &&
+                      controller.hudEvent!.kind != 'affection' &&
+                      controller.hudEvent!.kind != 'score' &&
+                      !(controller.hudEvent!.kind == 'milestone' &&
+                          controller.hudEvent!.title.trim() == '目标更新'))
+                    KeyedSubtree(
+                      key: ValueKey<int>(controller.hudEvent!.id),
+                      child: NovelHudEventOverlay(event: controller.hudEvent!),
+                    ),
+
+                  if (controller.isInitializing)
+                    ColoredBox(
+                      color: Colors.black.withOpacity(.58),
+                      child: const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xB3FFFFFF),
+                              ),
+                            ),
+                            SizedBox(height: 14),
+                            Text('正在载入世界…', style: TextStyle(color: NovelPalette.text, letterSpacing: 2)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (controller.showDice && controller.diceRoll != null)
+                    IgnorePointer(child: NovelDiceOverlay(roll: controller.diceRoll!)),
+                  if (controller.timeSkipLabel.isNotEmpty)
+                    NovelTimeSkipOverlay(
+                      label: controller.timeSkipLabel,
+                      onDismiss: controller.dismissTimeSkip,
+                    ),
+                  if (controller.showEndingIntro)
+                    GestureDetector(
+                      onTap: () {
+                        controller.showEndingIntro = false;
+                        controller.clearMessages();
+                      },
+                      child: const ColoredBox(
+                        color: Colors.black,
+                        child: Center(
+                          child: Text(
+                            '故事走向终章',
+                            style: TextStyle(
+                              color: NovelPalette.text,
+                              fontSize: 18,
+                              letterSpacing: 5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (!loadFailed)
+                    NovelStatusBanner(
+                      message: controller.lastError.isNotEmpty
+                          ? '场景载入异常，请返回首页' 
+                          : controller.infoMessage,
+                      isError: controller.lastError.isNotEmpty,
+                      onDismiss: controller.clearMessages,
+                    ),
+                ],
+              ),
+            );
+          },
         );
-      },
-    );
       },
     );
   }

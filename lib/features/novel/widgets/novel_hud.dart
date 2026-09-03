@@ -26,7 +26,7 @@ class NovelTopHud extends StatelessWidget {
       opacity: generating ? .42 : 1,
       duration: const Duration(milliseconds: 420),
       child: SizedBox(
-        height: 48,
+        height: 72,
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
@@ -51,7 +51,6 @@ class NovelTopHud extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
                           _ConditionAvatar(
-                            avatarUrl: controller.protagonist?.avatarUrl ?? '',
                             gender: controller.protagonist?.gender ?? '',
                           ),
                           const SizedBox(width: 8),
@@ -76,19 +75,6 @@ class NovelTopHud extends StatelessWidget {
                                           height: 1,
                                           fontWeight: FontWeight.w700,
                                           letterSpacing: .45,
-                                          // 不做硬描边，只给文字一点柔和的暗部托底。
-                                          shadows: <Shadow>[
-                                            Shadow(
-                                              color: Color(0xA8000000),
-                                              blurRadius: 3.4,
-                                              offset: Offset(0, 1),
-                                            ),
-                                            Shadow(
-                                              color: Color(0x48000000),
-                                              blurRadius: 7,
-                                              offset: Offset(0, 2),
-                                            ),
-                                          ],
                                         ),
                                       ),
                                     ),
@@ -249,13 +235,17 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
 
     final accentColor = failed
         ? NovelPalette.danger
-        : Colors.white.withOpacity(.86);
+        : completed
+            ? NovelPalette.accent
+            : Colors.white.withOpacity(.72);
+
+    const goalIcon = Icons.adjust_rounded;
 
     return IgnorePointer(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: compact ? 286 : 372),
         child: Padding(
-          padding: EdgeInsets.only(left: compact ? 12 : 16),
+          padding: EdgeInsets.only(left: compact ? 10 : 14),
           child: AnimatedOpacity(
             opacity: _visible ? 1 : 0,
             duration: const Duration(milliseconds: 260),
@@ -272,81 +262,39 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      Container(
-                        width: 4.2,
-                        height: compact ? 11.0 : 12.0,
-                        decoration: BoxDecoration(
-                          color: accentColor,
-                          borderRadius: BorderRadius.circular(.8),
-                        ),
+                      Icon(
+                        goalIcon,
+                        size: compact ? 13 : 14,
+                        color: accentColor,
                       ),
-                      const SizedBox(width: 6),
-                      Stack(
-                        alignment: Alignment.centerLeft,
-                        children: <Widget>[
-                          Text(
-                            label,
-                            style: TextStyle(
-                              fontSize: compact ? 9.2 : 9.6,
-                              height: 1,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.35,
-                              foreground: Paint()
-                                ..style = PaintingStyle.stroke
-                                ..strokeWidth = .52
-                                ..color = const Color(0x88000000),
-                            ),
-                          ),
-                          Text(
-                            label,
-                            style: TextStyle(
-                              color: accentColor,
-                              fontSize: compact ? 9.2 : 9.6,
-                              height: 1,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.35,
-                              shadows: const <Shadow>[],
-                            ),
-                          ),
-                        ],
+                      const SizedBox(width: 5),
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: accentColor,
+                          fontFamily: 'MiSans',
+                          fontSize: compact ? 9.2 : 9.6,
+                          height: 1,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1.15,
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 5.5),
-                  Stack(
-                    alignment: Alignment.centerLeft,
-                    children: <Widget>[
-                      Text(
-                        _displayText,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.left,
-                        style: TextStyle(
-                          fontSize: compact ? 11.4 : 12.0,
-                          height: 1.46,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: .16,
-                          foreground: Paint()
-                            ..style = PaintingStyle.stroke
-                            ..strokeWidth = .42
-                            ..color = const Color(0x66D8D8D8),
-                        ),
-                      ),
-                      Text(
-                        _displayText,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.left,
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(.97),
-                          fontSize: compact ? 11.4 : 12.0,
-                          height: 1.46,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: .16,
-                          shadows: const <Shadow>[],
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 6),
+                  Text(
+                    _displayText,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.left,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.90),
+                      fontFamily: 'MiSans',
+                      fontSize: compact ? 11.4 : 12.0,
+                      height: 1.42,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: .12,
+                    ),
                   ),
                 ],
               ),
@@ -365,7 +313,7 @@ class NovelLocationHud extends StatelessWidget {
     this.subtitle = '',
     this.onTap,
     this.loading = false,
-    this.showMapGlyph = true,
+    this.showMapGlyph = false,
   });
 
   final String title;
@@ -396,27 +344,6 @@ class NovelLocationHud extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            if (showMapGlyph) ...<Widget>[
-              SizedBox(
-                width: compact ? 40 : 44,
-                height: compact ? 40 : 44,
-                child: loading
-                    ? Center(
-                        child: SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.25,
-                            color: Colors.white.withOpacity(.82),
-                          ),
-                        ),
-                      )
-                    : CustomPaint(
-                        painter: const _NovelLocationMapGlyphPainter(),
-                      ),
-              ),
-              SizedBox(width: compact ? 10 : 12),
-            ],
             Flexible(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -426,7 +353,7 @@ class NovelLocationHud extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       Text(
-                        '当前大世界',
+                        '当前位置',
                         style: TextStyle(
                           color: Colors.white.withOpacity(.46),
                           fontSize: compact ? 8.0 : 8.4,
@@ -487,29 +414,11 @@ class NovelLocationHud extends StatelessWidget {
       ),
     );
 
-    if (onTap == null) {
-      return Semantics(
-        label: '当前位置$title',
-        child: content,
-      );
-    }
-
+    // 这里只展示场景名称，不再承担世界地图入口。
+    // onTap / showMapGlyph 保留为兼容参数，避免旧调用处编译报错。
     return Semantics(
-      button: true,
-      label: '打开大世界地图，当前位置$title',
-      child: Tooltip(
-        message: '大世界地图',
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(9),
-            splashColor: Colors.white.withOpacity(.06),
-            highlightColor: Colors.white.withOpacity(.035),
-            child: content,
-          ),
-        ),
-      ),
+      label: '当前位置$title',
+      child: content,
     );
   }
 }
@@ -685,11 +594,9 @@ class _TopIconButton extends StatelessWidget {
 
 class _ConditionAvatar extends StatelessWidget {
   const _ConditionAvatar({
-    required this.avatarUrl,
     required this.gender,
   });
 
-  final String avatarUrl;
   final String gender;
 
   bool get _isFemale {
@@ -707,13 +614,14 @@ class _ConditionAvatar extends StatelessWidget {
         ? 'assets/images/female.webp'
         : 'assets/images/male.webp';
 
-    // 顶部 HUD 头像只保留头像本身，不再叠加主题色头像框、描边或辉光。
+    // 左上角固定使用项目内置头像，不读取用户或主角上传的头像地址。
     return SizedBox(
-      width: 34,
-      height: 34,
-      child: ClipOval(
+      width: 38,
+      height: 38,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(9),
         child: NovelArtwork(
-          url: avatarUrl.trim(),
+          url: '',
           assetCandidates: <String>[fallbackAsset],
           fit: BoxFit.cover,
           alignment: Alignment.center,
@@ -753,7 +661,24 @@ class NovelActionRail extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
-            _RailButton(icon: Icons.stars_rounded, label: '积分兑换', onTap: onStore, color: const Color(0xFFF4C542)),
+            Tooltip(
+              message: '积分兑换',
+              child: InkResponse(
+                onTap: onStore,
+                radius: 24,
+                child: SizedBox(
+                  width: 43, 
+                  height: 42, 
+                  child: Center(
+                    child: Image.asset(
+                      'assets/images/xing.webp', 
+                      width: 19, 
+                      height: 19,
+                    ),
+                  ),
+                ),
+              ),
+            ),
             _RailButton(icon: Icons.inventory_2_outlined, label: '背包', onTap: onInventory),
             _RailButton(icon: Icons.people_outline_rounded, label: '人物', onTap: onCharacters),
             _RailButton(icon: Icons.menu_book_outlined, label: '旅程', onTap: onJourney),
@@ -769,11 +694,14 @@ class NovelArchiveRail extends StatelessWidget {
     required this.onCharacters,
     required this.onJourney,
     required this.onInventory,
+    // 兼容旧调用；“世界”入口已统一交给 NovelSideArchiveBar，避免重复显示。
+    this.onWorld,
   });
 
   final VoidCallback onCharacters;
   final VoidCallback onJourney;
   final VoidCallback onInventory;
+  final VoidCallback? onWorld;
 
   @override
   Widget build(BuildContext context) {
@@ -872,86 +800,83 @@ class _NovelScoreChipState extends State<NovelScoreChip>
 
   @override
   Widget build(BuildContext context) {
-    final positive = widget.score.delta >= 0;
-
     return ValueListenableBuilder<int>(
       valueListenable: _novelPrimaryTabIndex,
       builder: (context, tabIndex, _) {
         if (tabIndex != 0) return const SizedBox.shrink();
+
         return AnimatedBuilder(
           animation: _controller,
-      builder: (context, _) {
-        final animating = _controller.isAnimating;
-        final progress = _controller.value.clamp(0.0, 1.0).toDouble();
-        final pulseColor = positive
-            ? const Color(0xFFF4D06F)
-            : NovelPalette.danger;
-        final color = animating
-            ? Color.lerp(
-                pulseColor,
-                Colors.white.withOpacity(.96),
-                Curves.easeOutCubic.transform(progress),
-              )!
-            : Colors.white.withOpacity(.96);
+          builder: (context, _) {
+            final animating = _controller.isAnimating;
 
-        return Transform.scale(
-          scale: animating ? _scale.value : 1,
-          alignment: Alignment.centerRight,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: widget.onTap,
-              borderRadius: BorderRadius.circular(8),
-              splashColor: Colors.white.withOpacity(.04),
-              highlightColor: Colors.white.withOpacity(.02),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Icon(
-                      animating
-                          ? Icons.star_rounded
-                          : Icons.star_outline_rounded,
-                      size: animating ? 16.5 : 15,
-                      color: color,
-                    ),
-                    const SizedBox(width: 4),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      transitionBuilder: (child, animation) => FadeTransition(
-                        opacity: animation,
-                        child: ScaleTransition(
-                          scale: Tween<double>(begin: .86, end: 1)
-                              .animate(animation),
-                          child: child,
-                        ),
+            return Transform.scale(
+              scale: animating ? _scale.value : 1,
+              alignment: Alignment.centerRight,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: widget.onTap,
+                  borderRadius: BorderRadius.circular(20),
+                  splashColor: Colors.white.withOpacity(.04),
+                  highlightColor: Colors.white.withOpacity(.02),
+                  child: Container(
+                    // 极简风的微透玻璃底，不再死黑
+                    margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+                    padding: const EdgeInsets.fromLTRB(4, 3, 10, 3), 
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(.18), // 非常清透的底色，若隐若现
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(.12), // 极细的微白高光边，模拟玻璃折射
+                        width: 0.5,
                       ),
-                      child: Text(
-                        '${widget.score.total}',
-                        key: ValueKey<int>(widget.score.total),
-                        style: TextStyle(
-                          color: color,
-                          fontSize: animating ? 12 : 11.4,
-                          height: 1,
-                          fontWeight: FontWeight.w800,
-                          shadows: const <Shadow>[
-                            Shadow(
-                              color: Color(0x99000000),
-                              blurRadius: 4,
-                              offset: Offset(0, 1),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        // 1. 星块图标（尺寸收敛一点，显得更精致）
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          width: animating ? 26.0 : 24.0, 
+                          height: animating ? 26.0 : 24.0,
+                          child: Image.asset(
+                            'assets/images/xing.webp',
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                        
+                        const SizedBox(width: 6),
+                        
+                        // 2. 纯白极简字体，去掉所有浮夸的颜色和阴影
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          transitionBuilder: (child, animation) => FadeTransition(
+                            opacity: animation,
+                            child: ScaleTransition(
+                              scale: Tween<double>(begin: .86, end: 1).animate(animation),
+                              child: child,
                             ),
-                          ],
+                          ),
+                          child: Text(
+                            '${widget.score.total}',
+                            key: ValueKey<int>(widget.score.total),
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(.92), // 纯净的白色
+                              fontSize: animating ? 14.5 : 14, 
+                              height: 1.1,
+                              fontWeight: FontWeight.w600, // 字重调得秀气一点
+                              letterSpacing: 0.3,
+                            ),
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ),
-        );
-      },
+            );
+          },
         );
       },
     );

@@ -4,15 +4,12 @@ part of '../novel_sheets.dart';
 // 道具兑换 / 商城页
 // 页面入口 / 对外入口：
 //   - showNovelStoreSheet(...)
-// 其余以下划线 `_` 开头的类型/方法均为该页面内部实现或共享私有实现。
 // ============================================================================
 
-/// 旧“状态”调用保留兼容，实际统一打开背包。
 Future<void> showNovelStoreSheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  // 1. 去掉这里的 await controller.refreshShop(); 防止阻塞弹窗
   await _showNovelSheet<void>(
     context,
     heightFactor: .78,
@@ -30,12 +27,11 @@ class _StoreSheet extends StatefulWidget {
 
 class _StoreSheetState extends State<_StoreSheet> {
   String busy = '';
-  bool _loading = true; // 2. 新增加载状态
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    // 弹窗打开后，异步拉取商品数据
     _fetchShopData();
   }
 
@@ -53,44 +49,61 @@ class _StoreSheetState extends State<_StoreSheet> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
-        // 3. 在最外层包裹 Stack，用于解决 HUD 提示层级问题
         return Stack(
           children: [
             _SheetScaffold(
               title: '道具兑换',
-              subtitle: '用积分换取故事中的特殊机会',
+              subtitle: '用星块换取故事中的特殊机会',
               trailing: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                // 顶部资产胶囊：高级深色玻璃质感
+                padding: const EdgeInsets.fromLTRB(6, 4, 12, 4), 
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.045),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: Colors.white.withOpacity(.08)),
+                  color: Colors.black.withOpacity(.35), // 加深底色提升对比度
+                  borderRadius: BorderRadius.circular(8), // 微圆角
+                  border: Border.all(
+                    color: Colors.white.withOpacity(.12), 
+                    width: 0.5,
+                  ),
+                  boxShadow: const <BoxShadow>[
+                    BoxShadow(color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 2)),
+                  ],
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    const Icon(Icons.star_rounded, size: 13, color: Color(0xFFF4C542)),
-                    const SizedBox(width: 5),
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: Image.asset(
+                        'assets/images/xing.webp',
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
                     Text(
                       '${widget.controller.score.total}',
-                      style: const TextStyle(
-                        color: NovelPalette.text,
-                        fontSize: 10.5,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.96),
+                        fontSize: 13.5,
+                        fontFamily: 'MiSans', // 推荐使用现代无衬线字体
                         fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
                       ),
                     ),
                   ],
                 ),
               ),
               child: _loading 
-                  // 数据加载时显示加载动画
-                  ? const Center(
-                      child: CircularProgressIndicator(color: NovelPalette.accent),
+                  ? Center(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.white.withOpacity(.4),
+                      ),
                     )
                   : widget.controller.shopItems.isEmpty
                   ? const _EmptyState(text: '暂无可兑换物品')
                   : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(18, 8, 18, 30),
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 30),
                       itemCount: widget.controller.shopItems.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
@@ -118,8 +131,6 @@ class _StoreSheetState extends State<_StoreSheet> {
                       },
                     ),
             ),
-            
-            // 4. 将系统提示渲染在商城弹窗内部的最上层
             if (widget.controller.hudEvent != null)
               Positioned.fill(
                 child: KeyedSubtree(
@@ -133,6 +144,7 @@ class _StoreSheetState extends State<_StoreSheet> {
     );
   }
 }
+
 class _ItemCard extends StatelessWidget {
   const _ItemCard({
     required this.iconUrl,
@@ -145,7 +157,6 @@ class _ItemCard extends StatelessWidget {
     required this.loading,
     required this.onAction,
     this.showPointIcon = false,
-    this.selected = false,
   });
 
   final String iconUrl;
@@ -158,26 +169,41 @@ class _ItemCard extends StatelessWidget {
   final bool loading;
   final VoidCallback onAction;
   final bool showPointIcon;
-  final bool selected;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      // 增加上下留白
-      padding: const EdgeInsets.symmetric(vertical: 14),
+    return Container(
+      // 核心提升：为每个商品包裹一层高质感的微圆角暗卡
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(.25), // 沉稳的底色，压住浮躁感
+        borderRadius: BorderRadius.circular(10), // TRPG 风格偏好的硬朗微圆角
+        border: Border.all(
+          color: Colors.white.withOpacity(.06), // 极微弱的边缘反光
+          width: 0.5,
+        ),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          // 图标区域：去掉生硬的边框，改为微圆角和极浅底色
+          // 图标区域：增加黑底色托盘，让图片更聚焦
           Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
               Container(
-                width: 52,
-                height: 52,
+                width: 54,
+                height: 54,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.04), // 浅色玻璃底
-                  borderRadius: BorderRadius.circular(12), // 微圆角
+                  color: Colors.black.withOpacity(.4), // 深色托盘
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withOpacity(.04)),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: NovelArtwork(
@@ -189,17 +215,19 @@ class _ItemCard extends StatelessWidget {
                   fallbackText: fallback,
                 ),
               ),
-              if (badge.isNotEmpty)
+              if (badge.isNotEmpty && badge != '已拥有 0')
                 Positioned(
-                  right: -4,
-                  bottom: -4,
+                  right: -6,
+                  bottom: -6,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                     decoration: BoxDecoration(
                       color: const Color(0xFF1E201E),
-                      borderRadius: BorderRadius.circular(6),
-                      // 仅保留一点点高光边
-                      border: Border.all(color: Colors.white.withOpacity(0.1), width: 0.5),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white.withOpacity(0.12), width: 0.5),
+                      boxShadow: const <BoxShadow>[
+                        BoxShadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 2)),
+                      ],
                     ),
                     child: Text(
                       badge,
@@ -213,9 +241,9 @@ class _ItemCard extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(width: 16), // 拉开图标和文字的距离
+          const SizedBox(width: 14), 
           
-          // 文字区域：弱化描述，突出标题
+          // 文字区域
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -237,7 +265,7 @@ class _ItemCard extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.45), // 进一步弱化描述
+                    color: Colors.white.withOpacity(0.55), // 提高描述的可读性
                     fontSize: 11.5,
                     height: 1.4,
                   ),
@@ -246,35 +274,54 @@ class _ItemCard extends StatelessWidget {
             ),
           ),
           
-          // 按钮区域：无边框，采用柔和底色和微圆角
+          // 按钮区域：采用具有真实点击欲望的立体悬浮按钮
           if (actionText.isNotEmpty) ...<Widget>[
             const SizedBox(width: 12),
             Material(
-              color: Colors.white.withOpacity(0.06), // 淡淡的底色取代边框
-              borderRadius: BorderRadius.circular(10),
+              color: Colors.white.withOpacity(.08), // 按钮底色比卡片略亮
+              borderRadius: BorderRadius.circular(8),
               child: InkWell(
                 onTap: loading ? null : onAction,
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(8),
+                splashColor: Colors.white.withOpacity(.06),
+                highlightColor: Colors.white.withOpacity(.04),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(.15), // 按钮边缘高光
+                      width: 0.5,
+                    ),
+                  ),
                   child: loading
-                      ? const SizedBox.square(
+                      ? SizedBox.square(
                           dimension: 14,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white70),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5, 
+                            color: Colors.white.withOpacity(.7)
+                          ),
                         )
                       : Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             if (showPointIcon) ...<Widget>[
-                              const Icon(Icons.star_rounded, size: 13, color: Color(0xFFF4C542)), // 让星星带点色彩
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: Image.asset(
+                                  'assets/images/xing.webp', 
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
                               const SizedBox(width: 4),
                             ],
                             Text(
                               actionText,
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.9),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
                           ],
@@ -301,6 +348,7 @@ class _ItemCard extends StatelessWidget {
     };
   }
 }
+
 class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.text});
   final String text;
@@ -310,24 +358,19 @@ class _EmptyState extends StatelessWidget {
     return Align(
       alignment: Alignment.topCenter,
       child: Padding(
-        padding: const EdgeInsets.only(top: 56),
+        padding: const EdgeInsets.only(top: 60),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Container(
-              width: 24,
-              height: 1,
-              color: Colors.white.withOpacity(.22),
-            ),
-            const SizedBox(height: 20),
+            Icon(Icons.inventory_2_outlined, size: 32, color: Colors.white.withOpacity(.15)),
+            const SizedBox(height: 12),
             Text(
               text,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.white.withOpacity(.55),
-                fontSize: 12.5,
-                letterSpacing: 1.2,
-                height: 1.6,
+                color: Colors.white.withOpacity(.45),
+                fontSize: 13,
+                letterSpacing: 1.5,
               ),
             ),
           ],
@@ -335,23 +378,6 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
-}
-
-InputDecoration _fieldDecoration({String? label}) {
-  return InputDecoration(
-    labelText: label,
-    labelStyle: const TextStyle(color: NovelPalette.muted, fontSize: 11),
-    filled: true,
-    fillColor: Colors.white.withOpacity(.018),
-    enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(8),
-      borderSide: BorderSide(color: Colors.white.withOpacity(.08)),
-    ),
-    focusedBorder: const OutlineInputBorder(
-      borderRadius: BorderRadius.all(Radius.circular(8)),
-      borderSide: BorderSide(color: NovelPalette.accent, width: 1),
-    ),
-  );
 }
 
 String _itemFallback(String type) {
@@ -365,13 +391,3 @@ String _itemFallback(String type) {
     _ => '物',
   };
 }
-
-
-
-
-
-// ============================================================================
-// Light archive palette
-// 人物 / 背包 / 档案 / 经历统一使用近白冷中性色。
-// 强调色统一引用 NovelPalette 的抹茶绿体系，只用于选中、主操作和状态。
-// ============================================================================

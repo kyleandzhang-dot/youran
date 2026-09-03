@@ -74,36 +74,27 @@ class _NovelChoiceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.zero,
       child: _AdaptiveBackdropBlur(
-        sigma: 18,
+        sigma: 15,
         child: Material(
           color: Colors.transparent,
           child: InkWell(
             onTap: enabled ? onTap : null,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.zero,
+            splashColor: Colors.white.withOpacity(.075),
+            highlightColor: Colors.white.withOpacity(.035),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                // 反光玻璃遮罩：顶部略亮、底部略暗的渐变，模拟光线打在磨砂玻璃上的高光
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: <Color>[
-                    Colors.white.withOpacity(.16),
-                    Colors.white.withOpacity(.045),
-                  ],
-                ),
+                color: Colors.white.withOpacity(.04),
+                borderRadius: BorderRadius.zero,
                 border: Border.all(
-                  color: Colors.white.withOpacity(.11),
-                  width: .55,
+                  color: Colors.white.withOpacity(.10),
+                  width: .65,
                 ),
-                boxShadow: const <BoxShadow>[
-                  BoxShadow(color: Color(0x30000000), blurRadius: 14, offset: Offset(0, 6)),
-                ],
               ),
               child: Text(
                 label,

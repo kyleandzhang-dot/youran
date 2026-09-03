@@ -325,8 +325,23 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       return;
     }
 
-    var delay =
-        _novelRevealDelay(controller.settings.textSpeedCps, afterCharacter);
+    // --- 拟人化叙事节奏 ---
+    int baseDelay = 1000 ~/ (controller.settings.textSpeedCps > 0 ? controller.settings.textSpeedCps : 20);
+    int delayMs = baseDelay;
+    
+    if (afterCharacter.isNotEmpty) {
+      final char = afterCharacter;
+      if (char == '，' || char == '、' || char == ',') {
+        delayMs = baseDelay * 3; // 短停顿，像讲述者的换气
+      } else if (char == '。' || char == '！' || char == '？' || char == '!' || char == '?') {
+        delayMs = baseDelay * 7; // 句末长停顿，留给玩家消化情绪
+      } else if (char == '…' || char == '—' || char == '~' || char == '～') {
+        delayMs = baseDelay * 5; // 情绪延展
+      } else if (char == '\n') {
+        delayMs = baseDelay * 10; // 换行大停顿，像翻开新的一页
+      }
+    }
+    var delay = Duration(milliseconds: delayMs);
 
     // 流式首字先留一个很短的本地缓冲，让 SSE 至少积累 1~2 次刷新，
     // 避免“打一个字 -> 等网络 -> 又打一个字”的锯齿节奏。
@@ -880,6 +895,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                           child: _NovelMixedNarrationSurface(
                             sentence: sentence!,
                             displayTextListenable: _displayTextNotifier,
+                            isRevealing: _revealing,
                             fontFamily: controller.settings.fontFamily,
                             fontSize: controller.settings.fontSize,
                             onTap: _handleStoryTap,
@@ -1154,23 +1170,7 @@ class _NovelNarrationSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 600;
-    final style = TextStyle(
-      color: const Color(0xFFF3F4F6),
-      fontFamily: fontFamily,
-      fontSize: fontSize + 2,
-      height: 1.90,
-      fontWeight: FontWeight.w500,
-      letterSpacing: .55,
-      shadows: const <Shadow>[
-        Shadow(
-          color: Color(0x99000000),
-          blurRadius: 6,
-          offset: Offset(0, 1),
-        ),
-      ],
-    );
-    // Vue 的 is-narrative-mode：完全没有面板背景、边框、模糊和标题，
-    // 文字直接浮在场景画面中央。
+    
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: onTap,
@@ -1182,11 +1182,30 @@ class _NovelNarrationSurface extends StatelessWidget {
           children: <Widget>[
             ValueListenableBuilder<String>(
               valueListenable: displayTextListenable,
-              builder: (context, value, _) => _NovelNarrationParagraphText(
-                value: value.isEmpty ? emptyTextFallback : value,
-                style: style,
-                textAlign: TextAlign.left,
-                paragraphSpacing: compact ? 9 : 11,
+              builder: (context, value, _) => TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
+                duration: const Duration(milliseconds: 600),
+                curve: Curves.easeOutCubic,
+                builder: (context, glow, child) {
+                  final style = TextStyle(
+                    color: const Color(0xFFF3F4F6),
+                    fontFamily: fontFamily,
+                    fontSize: fontSize + 2,
+                    height: 1.90,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: .55,
+                    shadows: <Shadow>[
+                      Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
+                      Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
+                    ],
+                  );
+                  return _NovelNarrationParagraphText(
+                    value: value.isEmpty ? emptyTextFallback : value,
+                    style: style,
+                    textAlign: TextAlign.left,
+                    paragraphSpacing: compact ? 9 : 11,
+                  );
+                },
               ),
             ),
             if (!hasNext &&
@@ -1280,6 +1299,7 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
   const _NovelMixedNarrationSurface({
     required this.sentence,
     required this.displayTextListenable,
+    required this.isRevealing,
     required this.fontFamily,
     required this.fontSize,
     required this.onTap,
@@ -1287,28 +1307,13 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
 
   final NovelSentence sentence;
   final ValueListenable<String> displayTextListenable;
+  final bool isRevealing;
   final String? fontFamily;
   final double fontSize;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final style = TextStyle(
-      color: const Color(0xFFF3F4F6),
-      fontFamily: fontFamily,
-      fontSize: fontSize + 1.4,
-      height: 1.86,
-      fontWeight: FontWeight.w500,
-      letterSpacing: .48,
-      shadows: const <Shadow>[
-        Shadow(
-          color: Color(0x99000000),
-          blurRadius: 6,
-          offset: Offset(0, 1),
-        ),
-      ],
-    );
-
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: onTap,
@@ -1326,24 +1331,45 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
                 _novelVisibleNarrationText(parts.leadingNarration).trim().isNotEmpty;
             final hasTrailing =
                 _novelVisibleNarrationText(parts.trailingNarration).trim().isNotEmpty;
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                if (hasLeading)
-                  _NovelNarrationParagraphText(
-                    value: parts.leadingNarration,
-                    style: style,
-                    textAlign: TextAlign.left,
-                  ),
-                if (hasLeading && hasTrailing) const SizedBox(height: 12),
-                if (hasTrailing)
-                  _NovelNarrationParagraphText(
-                    value: parts.trailingNarration,
-                    style: style,
-                    textAlign: TextAlign.left,
-                  ),
-              ],
+                
+            return TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
+              duration: const Duration(milliseconds: 600),
+              curve: Curves.easeOutCubic,
+              builder: (context, glow, child) {
+                final style = TextStyle(
+                  color: const Color(0xFFF3F4F6),
+                  fontFamily: fontFamily,
+                  fontSize: fontSize + 1.4,
+                  height: 1.86,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: .48,
+                  shadows: <Shadow>[
+                    Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
+                    Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
+                  ],
+                );
+                
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (hasLeading)
+                      _NovelNarrationParagraphText(
+                        value: parts.leadingNarration,
+                        style: style,
+                        textAlign: TextAlign.left,
+                      ),
+                    if (hasLeading && hasTrailing) const SizedBox(height: 12),
+                    if (hasTrailing)
+                      _NovelNarrationParagraphText(
+                        value: parts.trailingNarration,
+                        style: style,
+                        textAlign: TextAlign.left,
+                      ),
+                  ],
+                );
+              },
             );
           },
         ),
@@ -1409,23 +1435,6 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
     final screen = MediaQuery.sizeOf(context);
     final compact = screen.width <= 600;
 
-    // 剧情正文只决定颜色、字号和排版；字体由小说设置统一控制。
-    // 角色名等装饰性 UI 继续使用各自固定字体，不跟随剧情阅读字体切换。
-    final style = TextStyle(
-      color: const Color(0xFFF4F1EA),
-      fontFamily: fontFamily,
-      fontSize: fontSize + (compact ? 0 : .4),
-      height: 1.82,
-      fontWeight: FontWeight.w500,
-      letterSpacing: .15,
-      shadows: const <Shadow>[
-        Shadow(
-          color: Color(0x99000000),
-          blurRadius: 6,
-          offset: Offset(0, 1),
-        ),
-      ],
-    );
     // NPC 在左 -> 对白固定到右侧。
     // 主角在右 -> 对白固定到左侧。
     final sideAlignment = isHost ? Alignment.centerLeft : Alignment.centerRight;
@@ -1564,23 +1573,44 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                   final parts = _visibleReaderParts(sentence, display);
                   final alignment =
                       isHost ? TextAlign.right : TextAlign.left;
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      if (parts.dialogue.isNotEmpty)
-                        Text.rich(
-                          TextSpan(
-                            children: _buildNovelDialogueDisplaySpans(
-                              parts.dialogue,
-                              style,
+                      
+                  return TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
+                    duration: const Duration(milliseconds: 600),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, glow, child) {
+                      final style = TextStyle(
+                        color: const Color(0xFFF4F1EA),
+                        fontFamily: fontFamily,
+                        fontSize: fontSize + (compact ? 0 : .4),
+                        height: 1.82,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: .15,
+                        shadows: <Shadow>[
+                          Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
+                          Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
+                        ],
+                      );
+                      
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          if (parts.dialogue.isNotEmpty)
+                            Text.rich(
+                              TextSpan(
+                                children: _buildNovelDialogueDisplaySpans(
+                                  parts.dialogue,
+                                  style,
+                                ),
+                              ),
+                              // NPC 在左：对白区在右，文字左对齐；
+                              // 主角在右：对白区在左，文字右对齐。
+                              textAlign: alignment,
                             ),
-                          ),
-                          // NPC 在左：对白区在右，文字左对齐；
-                          // 主角在右：对白区在左，文字右对齐。
-                          textAlign: alignment,
-                        ),
-                    ],
+                        ],
+                      );
+                    },
                   );
                 },
               ),
@@ -2216,4 +2246,3 @@ class _NarratorHintState extends State<_NarratorHint> {
     );
   }
 }
-

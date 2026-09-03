@@ -3,17 +3,26 @@ part of '../novel_sheets.dart';
 // 页面入口 / 对外入口：
 //   - showNovelSurroundingsDeveloperPreview(...)
 //   - NovelSurroundingsTab
-// 其余 `_Surround...` 类型均为探索页内部节点、拖拽、合成、拾取与教程实现。[cite: 1]
+// 其余 `_Surround...` 类型均为探索页内部节点、拖拽、合成、拾取与教程实现。
 
 // ============================================================================
 // 当前场景“周围”互动页
-// 从孤岛节点原型迁移：点击探索、拖拽、可组合高亮、消耗/保留/生成。[cite: 1]
+// 从孤岛节点原型迁移：点击探索、拖拽、可组合高亮、消耗/保留/生成。
 // ============================================================================
+
+const Color _themeGreen = Color(0xFF8BD7A2);
+
+typedef NovelSurroundingsPreviewBattleLauncher = Future<String?> Function({
+  required String enemyName,
+  required int quality,
+  required bool elite,
+});
 
 Future<void> showNovelSurroundingsDeveloperPreview(
   BuildContext context,
-  NovelGameController controller,
-) async {
+  NovelGameController controller, {
+  NovelSurroundingsPreviewBattleLauncher? previewBattleLauncher,
+}) async {
   await Navigator.of(context).push<void>(
     PageRouteBuilder<void>(
       opaque: false, // 允许透视下层路由
@@ -25,6 +34,7 @@ Future<void> showNovelSurroundingsDeveloperPreview(
           child: NovelSurroundingsTab(
             controller: controller,
             developerPreview: true,
+            previewBattleLauncher: previewBattleLauncher,
             onClose: () => Navigator.of(routeContext).maybePop(),
           ),
         );
@@ -41,11 +51,13 @@ class NovelSurroundingsTab extends StatelessWidget {
     super.key,
     required this.controller,
     this.developerPreview = false,
+    this.previewBattleLauncher,
     this.onClose,
   });
 
   final NovelGameController controller;
   final bool developerPreview;
+  final NovelSurroundingsPreviewBattleLauncher? previewBattleLauncher;
   final VoidCallback? onClose;
 
   @override
@@ -53,13 +65,38 @@ class NovelSurroundingsTab extends StatelessWidget {
     return _NovelSurroundingsPage(
       controller: controller,
       developerPreview: developerPreview,
+      previewBattleLauncher: previewBattleLauncher,
       embedded: false,
       onClose: onClose,
     );
   }
 }
 
-enum _SurroundNodeType { environment, container, item, target, product }
+enum _SurroundNodeType {
+  environment,
+  container,
+  item,
+  target,
+  product,
+  encounter,
+}
+
+Color _surroundQualityColor(int quality) {
+  const colors = <Color>[
+    Color(0xFFE5E7EB), // 1 白
+    Color(0xFFA7F3D0), // 2 浅绿
+    Color(0xFFF9A8D4), // 3 粉
+    Color(0xFF7DD3FC), // 4 天蓝
+    Color(0xFF3B82F6), // 5 深蓝
+    Color(0xFF5F7F6A), // 6 墨茶绿
+    Color(0xFFF59E0B), // 7 橙
+    Color(0xFFA855F7), // 8 紫
+    Color(0xFFEF4444), // 9 红
+    Color(0xFFF4C95D), // 10 金
+  ];
+  final index = quality.clamp(1, 10).toInt() - 1;
+  return colors[index];
+}
 
 class _SurroundNodeDef {
   const _SurroundNodeDef({
@@ -70,6 +107,9 @@ class _SurroundNodeDef {
     this.text = '',
     this.children = const <String>[],
     this.collectible = false,
+    this.enemyCount = 0,
+    this.eliteCount = 0,
+    this.quality = 1,
   });
 
   final String id;
@@ -79,6 +119,9 @@ class _SurroundNodeDef {
   final String text;
   final List<String> children;
   final bool collectible;
+  final int enemyCount;
+  final int eliteCount;
+  final int quality;
 }
 
 class _SurroundRecipe {
@@ -144,12 +187,14 @@ class _NovelSurroundingsPage extends StatefulWidget {
     required this.controller,
     this.embedded = false,
     this.developerPreview = false,
+    this.previewBattleLauncher,
     this.onClose,
   });
 
   final NovelGameController controller;
   final bool embedded;
   final bool developerPreview;
+  final NovelSurroundingsPreviewBattleLauncher? previewBattleLauncher;
   final VoidCallback? onClose;
 
   @override
@@ -357,6 +402,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
       'item' => _SurroundNodeType.item,
       'target' => _SurroundNodeType.target,
       'product' => _SurroundNodeType.product,
+      'encounter' => _SurroundNodeType.encounter,
       _ => _SurroundNodeType.environment,
     };
   }
@@ -439,6 +485,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
   Map<String, Offset> _graphNodePositions(
     String rootId,
     Map<String, _SurroundNodeDef> defs,
+    int sceneSeed,
   ) {
     final result = <String, Offset>{};
     final root = defs[rootId];
@@ -447,7 +494,10 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
       final branchIds = root.children;
       final branchPositions = _rootBranchPositions(branchIds.length);
       for (var index = 0; index < branchIds.length; index++) {
-        result[branchIds[index]] = branchPositions[index];
+        final positionIndex = branchPositions.isEmpty
+            ? 0
+            : (index + sceneSeed.abs()) % branchPositions.length;
+        result[branchIds[index]] = branchPositions[positionIndex];
       }
 
       final visited = <String>{};
@@ -511,7 +561,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
     final orphanIds = defs.keys.where((id) => !result.containsKey(id)).toList()
       ..sort();
     for (final id in orphanIds) {
-      final seed = _stableNodeHash(id);
+      final seed = _stableNodeHash('$sceneSeed:$id');
       var angle = math.pi * 2 * (seed % 360) / 360;
       var candidate = const Offset(.5, .2);
       for (var attempt = 0; attempt < 10; attempt++) {
@@ -543,6 +593,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           .map(stringValue)
           .where((child) => child.trim().isNotEmpty)
           .toList();
+      final encounter = asJsonMap(node['encounter']);
       parsedDefs[id] = _SurroundNodeDef(
         id: id,
         label: stringValue(node['label'], id),
@@ -551,10 +602,18 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
         text: stringValue(node['text']),
         children: children,
         collectible: boolValue(node['collectible']),
+        enemyCount: intValue(encounter['enemy_count']),
+        eliteCount: intValue(encounter['elite_count']),
+        quality: intValue(encounter['quality'], 1),
       );
     }
     final rootId = stringValue(payload['root_id']).trim();
-    final layoutPositions = _graphNodePositions(rootId, parsedDefs);
+    final sceneSeed = intValue(payload['scene_seed']);
+    final layoutPositions = _graphNodePositions(
+      rootId,
+      parsedDefs,
+      sceneSeed,
+    );
     final defs = <String, _SurroundNodeDef>{
       for (final entry in parsedDefs.entries)
         entry.key: _SurroundNodeDef(
@@ -565,6 +624,9 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           text: entry.value.text,
           children: entry.value.children,
           collectible: entry.value.collectible,
+          enemyCount: entry.value.enemyCount,
+          eliteCount: entry.value.eliteCount,
+          quality: entry.value.quality,
         ),
     };
     final recipes = <_SurroundRecipe>[];
@@ -648,8 +710,6 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           .toSet();
       _consumed.addAll(eventConsumed);
 
-      // 已用于合成的材料只从当前画布消失，但仍然保持“已经发现”的状态。
-      // 这样父节点不会因为它变回 undiscovered 而再次把材料展开出来。
       _visible.removeAll(_consumed);
       _customPositions.removeWhere((id, _) => !_visible.contains(id));
       _revealing.removeAll(_consumed);
@@ -760,6 +820,16 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
 
     if (def.collectible) {
       await _collectNode(id, def);
+      return;
+    }
+
+    if (def.type == _SurroundNodeType.encounter) {
+      widget.onClose?.call();
+      await Future<void>.delayed(Duration.zero);
+      await widget.controller.startSurroundEncounter(
+        nodeId: id,
+        targetName: def.label,
+      );
       return;
     }
 
@@ -1005,8 +1075,6 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
       );
     });
     if (widget.developerPreview) {
-      // 预览模式直接完成合成，不再人为等待半秒。
-      // consumed 只从 visible 删除，不能从 discovered 删除，否则展开节点会把它再次生成。
       setState(() {
         _consumed.addAll(recipe.consume);
         for (final id in recipe.consume) {
@@ -1065,7 +1133,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
   Future<void> _showTutorial() async {
     await showDialog<void>(
       context: context,
-      barrierColor: Colors.black.withOpacity(.34),
+      barrierColor: Colors.black.withOpacity(.45),
       builder: (dialogContext) {
         final screenHeight = MediaQuery.sizeOf(dialogContext).height;
         return Dialog(
@@ -1077,14 +1145,14 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
               maxHeight: math.min(650.0, screenHeight * .82),
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.zero,
+              borderRadius: BorderRadius.circular(12),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
                 child: Container(
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(.075),
                     border: Border.all(
-                      color: Colors.white.withOpacity(.11),
+                      color: Colors.white.withOpacity(.15),
                       width: 1,
                     ),
                   ),
@@ -1125,14 +1193,18 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
                               color: Colors.transparent,
                               child: InkWell(
                                 onTap: () => Navigator.of(dialogContext).pop(),
-                                borderRadius: BorderRadius.zero,
-                                child: SizedBox(
+                                borderRadius: BorderRadius.circular(20),
+                                child: Container(
                                   width: 32,
                                   height: 32,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(.15),
+                                    shape: BoxShape.circle,
+                                  ),
                                   child: Icon(
                                     Icons.close_rounded,
                                     size: 17,
-                                    color: Colors.white.withOpacity(0.5),
+                                    color: Colors.white.withOpacity(0.6),
                                   ),
                                 ),
                               ),
@@ -1187,10 +1259,10 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
                           height: 38,
                           child: Material(
                             color: Colors.white.withOpacity(0.1),
-                            borderRadius: BorderRadius.zero,
+                            borderRadius: BorderRadius.circular(6),
                             child: InkWell(
                               onTap: () => Navigator.of(dialogContext).pop(),
-                              borderRadius: BorderRadius.zero,
+                              borderRadius: BorderRadius.circular(6),
                               child: const Center(
                                 child: Text(
                                   '知道了',
@@ -1249,7 +1321,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
                   height: 22,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: _archiveThemeGreen,
+                    color: _themeGreen,
                   ),
                 )
               else
@@ -1299,116 +1371,147 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
         final closeAction = widget.onClose ??
             (widget.embedded ? null : () => Navigator.of(context).maybePop());
 
-        return Material(
-          color: widget.embedded
-              ? Colors.transparent
-              : Colors.black.withOpacity(0.24),
-          child: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, viewport) {
-                final compact = viewport.maxWidth < 620;
-                final horizontalInset = compact ? 12.0 : 28.0;
-                final verticalInset = compact ? 14.0 : 28.0;
-                final maxWindowWidth = math.max(
-                  0.0,
-                  viewport.maxWidth - horizontalInset * 2,
-                );
-                final maxWindowHeight = math.max(
-                  0.0,
-                  viewport.maxHeight - verticalInset * 2,
-                );
-                final windowWidth = math.min(760.0, maxWindowWidth);
-                final windowHeight = math.min(
-                  compact ? 680.0 : 720.0,
-                  maxWindowHeight * (compact ? .94 : .86),
-                );
+        final useFogGrid = widget.developerPreview ||
+            widget.controller.surroundingsData.isEmpty ||
+            boolValue(widget.controller.surroundingsData['grid_mode']);
+        
+        if (useFogGrid) {
+          return _SurroundFogPrototype(
+            controller: widget.controller,
+            developerPreview: widget.developerPreview,
+            previewBattleLauncher: widget.previewBattleLauncher,
+            onClose: closeAction,
+          );
+        }
 
-                return Center(
-                  child: SizedBox(
-                    width: windowWidth,
-                    height: windowHeight,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.zero,
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.075),
-                            borderRadius: BorderRadius.zero,
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.10),
-                              width: 1,
-                            ),
-                            boxShadow: <BoxShadow>[
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.20),
-                                blurRadius: 28,
-                                offset: const Offset(0, 12),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            children: <Widget>[
-                              _SurroundingsHeader(
-                                title: title,
-                                onClose: closeAction,
-                              ),
-                              Expanded(
-                                child: _allDefs.isEmpty
-                                    ? _buildRemoteState()
-                                    : Padding(
-                                        padding: EdgeInsets.fromLTRB(
-                                          compact ? 8 : 14,
-                                          compact ? 6 : 10,
-                                          compact ? 8 : 14,
-                                          0,
-                                        ),
-                                        child: Column(
-                                          children: <Widget>[
-                                            Expanded(
-                                              child: _SurroundStage(
-                                                defs: _allDefs,
-                                                visible: _visible,
-                                                positions: <String, Offset>{
-                                                  for (final id in _visible)
-                                                    id: _positionOf(id),
-                                                },
-                                                parentOf: _parentOf,
-                                                isExplorable: _isExplorable,
-                                                isExhausted: _isExhausted,
-                                                isDraggable: _isDraggable,
-                                                activeId: _activeId,
-                                                draggingId: _draggingId,
-                                                mergeTargetId: _mergeTargetId,
-                                                revealing: _revealing,
-                                                collecting: _collecting,
-                                                onResetLayout: _resetLayout,
-                                                onTutorial: _showTutorial,
-                                                onTap: _selectNode,
-                                                onDragStart: _beginDrag,
-                                                onDragUpdate: _updateDrag,
-                                                onDragEnd: _finishDrag,
-                                              ),
-                                            ),
-                                            SizedBox(
-                                              height: compact ? 106 : 102,
-                                              child: _SurroundInfoPanel(
-                                                info: _info,
-                                                labelOf: _labelOf,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                              ),
-                            ],
-                          ),
+        // 与世界地图同款的深空滤镜和渐变光效
+        return Material(
+          color: widget.embedded ? Colors.transparent : Colors.black.withOpacity(0.34),
+          child: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (!widget.embedded)
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: RadialGradient(
+                          center: Alignment(0, -.08),
+                          radius: 1.08,
+                          colors: <Color>[
+                            Color(0x164DA26A),
+                            Color(0x0FFFFFFF),
+                            Color(0x05000000),
+                          ],
+                          stops: <double>[0, .58, 1],
                         ),
                       ),
                     ),
+                  SafeArea(
+                    child: LayoutBuilder(
+                      builder: (context, viewport) {
+                        final compact = viewport.maxWidth < 620;
+                        final horizontalInset = compact ? 12.0 : 28.0;
+                        final verticalInset = compact ? 14.0 : 28.0;
+                        final maxWindowWidth = math.max(0.0, viewport.maxWidth - horizontalInset * 2);
+                        final maxWindowHeight = math.max(0.0, viewport.maxHeight - verticalInset * 2);
+                        final windowWidth = math.min(760.0, maxWindowWidth);
+                        final windowHeight = math.min(
+                          compact ? 680.0 : 720.0,
+                          maxWindowHeight * (compact ? .94 : .86),
+                        );
+
+                        return Center(
+                          child: SizedBox(
+                            width: windowWidth,
+                            height: windowHeight,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.075),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.15),
+                                      width: 1,
+                                    ),
+                                    boxShadow: <BoxShadow>[
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.20),
+                                        blurRadius: 28,
+                                        offset: const Offset(0, 12),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Column(
+                                    children: <Widget>[
+                                      _SurroundingsHeader(
+                                        title: title,
+                                        onClose: closeAction,
+                                      ),
+                                      Expanded(
+                                        child: _allDefs.isEmpty
+                                            ? _buildRemoteState()
+                                            : Padding(
+                                                padding: EdgeInsets.fromLTRB(
+                                                  compact ? 8 : 14,
+                                                  compact ? 6 : 10,
+                                                  compact ? 8 : 14,
+                                                  0,
+                                                ),
+                                                child: Column(
+                                                  children: <Widget>[
+                                                    Expanded(
+                                                      child: _SurroundStage(
+                                                        defs: _allDefs,
+                                                        visible: _visible,
+                                                        positions: <String, Offset>{
+                                                          for (final id in _visible)
+                                                            id: _positionOf(id),
+                                                        },
+                                                        parentOf: _parentOf,
+                                                        isExplorable: _isExplorable,
+                                                        isExhausted: _isExhausted,
+                                                        isDraggable: _isDraggable,
+                                                        activeId: _activeId,
+                                                        draggingId: _draggingId,
+                                                        mergeTargetId: _mergeTargetId,
+                                                        revealing: _revealing,
+                                                        collecting: _collecting,
+                                                        onResetLayout: _resetLayout,
+                                                        onTutorial: _showTutorial,
+                                                        onTap: _selectNode,
+                                                        onDragStart: _beginDrag,
+                                                        onDragUpdate: _updateDrag,
+                                                        onDragEnd: _finishDrag,
+                                                      ),
+                                                    ),
+                                                    SizedBox(
+                                                      height: compact ? 106 : 102,
+                                                      child: _SurroundInfoPanel(
+                                                        info: _info,
+                                                        labelOf: _labelOf,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ),
-                );
-              },
+                ],
+              ),
             ),
           ),
         );
@@ -1416,6 +1519,2341 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
     );
   }
 }
+
+enum _FogTileKind {
+  empty,
+  genericItem,
+  normalEnemy,
+  eliteEnemy,
+  branch,
+  stone,
+  vine,
+  coconutTree,
+  bottle,
+  scavenge,
+  cache,
+  hazard,
+}
+
+class _FogDrop {
+  const _FogDrop({
+    required this.name,
+    required this.amount,
+    required this.quality,
+  });
+
+  final String name;
+  final int amount;
+  final int quality;
+}
+
+class _FogTileDef {
+  const _FogTileDef({
+    required this.kind,
+    required this.label,
+    required this.text,
+    this.quality = 1,
+    this.energyBonus = 0,
+    this.rare = false,
+    this.nodeId = '',
+    this.collectible = false,
+  });
+
+  final _FogTileKind kind;
+  final String label;
+  final String text;
+  final int quality;
+  final int energyBonus;
+  final bool rare;
+  final String nodeId;
+  final bool collectible;
+}
+
+class _SurroundFogPrototype extends StatefulWidget {
+  const _SurroundFogPrototype({
+    required this.controller,
+    required this.developerPreview,
+    this.previewBattleLauncher,
+    this.onClose,
+  });
+
+  final NovelGameController controller;
+  final bool developerPreview;
+  final NovelSurroundingsPreviewBattleLauncher? previewBattleLauncher;
+  final VoidCallback? onClose;
+
+  @override
+  State<_SurroundFogPrototype> createState() => _SurroundFogPrototypeState();
+}
+
+class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
+  static const int _columns = 6;
+  static const int _rows = 6;
+  static const int _startIndex = 20;
+  static const int _maxEnergy = 22;
+  static const Color _dangerRed = Color(0xFFD96F6F);
+  static const Color _rareGold = Color(0xFFD8BF7A);
+
+  Map<int, _FogTileDef> _tiles = <int, _FogTileDef>{};
+  final Map<int, List<_FogDrop>> _lootByTile = <int, List<_FogDrop>>{};
+  final Set<int> _revealed = <int>{};
+  final Set<int> _searched = <int>{};
+  final Map<String, int> _bag = <String, int>{};
+  final Map<String, int> _bagQuality = <String, int>{};
+
+  int _seed = 0;
+  int _energy = _maxEnergy;
+  int _coconutBaseReward = 1;
+  String _message = '';
+  bool _completed = false;
+  bool _developerBattleOpening = false;
+  String _remoteSceneKey = '';
+
+  bool get _remote => !widget.developerPreview;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_remote) {
+      widget.controller.addListener(_handleRemoteChanged);
+      _syncRemote();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || widget.controller.surroundingsData.isNotEmpty) return;
+        unawaited(widget.controller.loadSurroundings());
+      });
+    } else {
+      _startNewRun();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_remote) widget.controller.removeListener(_handleRemoteChanged);
+    super.dispose();
+  }
+
+  void _handleRemoteChanged() {
+    if (!mounted) return;
+    setState(_syncRemote);
+  }
+
+  void _syncRemote() {
+    final payload = widget.controller.surroundingsData;
+    if (payload.isEmpty) {
+      _message = widget.controller.isSurroundingsLoading
+          ? '正在生成当前场景的格子探索…'
+          : '当前格子探索尚未载入。';
+      return;
+    }
+    final nextSceneKey = stringValue(payload['scene_key']).trim();
+    final sceneChanged = nextSceneKey != _remoteSceneKey;
+    _remoteSceneKey = nextSceneKey;
+    _seed = intValue(payload['scene_seed']);
+    _tiles = _generateRemoteMap(payload);
+    _revealed
+      ..clear()
+      ..addAll((payload['grid_revealed'] is List
+              ? payload['grid_revealed'] as List
+              : const <dynamic>[20])
+          .map(intValue));
+    _energy = intValue(payload['grid_energy'], _maxEnergy)
+        .clamp(0, _maxEnergy)
+        .toInt();
+    _completed = stringValue(payload['status']) == 'exhausted';
+    if (sceneChanged) {
+      _bag.clear();
+      _bagQuality.clear();
+    }
+    _searched.clear();
+    final resolved = (payload['resolved_encounters'] is List
+            ? payload['resolved_encounters'] as List
+            : const <dynamic>[])
+        .map(stringValue)
+        .toSet();
+    final claimed = (payload['claimed'] is List
+            ? payload['claimed'] as List
+            : const <dynamic>[])
+        .map(stringValue)
+        .toSet();
+    final consumed = (payload['consumed'] is List
+            ? payload['consumed'] as List
+            : const <dynamic>[])
+        .map(stringValue)
+        .toSet();
+    for (final entry in _tiles.entries) {
+      if (resolved.contains(entry.value.nodeId) ||
+          claimed.contains(entry.value.nodeId) ||
+          consumed.contains(entry.value.nodeId)) {
+        _searched.add(entry.key);
+      }
+    }
+    final eventText = stringValue(asJsonMap(payload['event'])['text']).trim();
+    _message = eventText.isNotEmpty
+        ? eventText
+        : stringValue(payload['goal'], '从亮起的迷雾边缘开始探索。');
+  }
+
+  Map<int, _FogTileDef> _generateRemoteMap(JsonMap payload) {
+    final layout = payload['grid_layout'] is List
+        ? payload['grid_layout'] as List
+        : const <dynamic>[];
+    final nodeMap = <String, JsonMap>{};
+    for (final raw in payload['grid_nodes'] is List
+        ? payload['grid_nodes'] as List
+        : const <dynamic>[]) {
+      final node = asJsonMap(raw);
+      final id = stringValue(node['id']).trim();
+      if (id.isNotEmpty) nodeMap[id] = node;
+    }
+    final result = <int, _FogTileDef>{};
+    for (var index = 0; index < math.min(36, layout.length); index++) {
+      final id = stringValue(layout[index]).trim();
+      final node = nodeMap[id];
+      if (id.isEmpty || node == null) continue;
+      final encounter = asJsonMap(node['encounter']);
+      final reward = asJsonMap(node['reward_preview']);
+      final tier = stringValue(encounter['tier']).trim();
+      final nodeType = stringValue(node['type']).trim();
+      final kind = encounter.isNotEmpty
+          ? (tier == 'elite'
+              ? _FogTileKind.eliteEnemy
+              : _FogTileKind.normalEnemy)
+          : nodeType == 'container'
+              ? _FogTileKind.scavenge
+              : _FogTileKind.genericItem;
+      result[index] = _FogTileDef(
+        kind: kind,
+        label: encounter.isNotEmpty
+            ? stringValue(encounter['name'], stringValue(node['label'], id))
+            : stringValue(node['label'], id),
+        text: stringValue(node['text']),
+        quality: intValue(encounter['quality'] ?? reward['quality'], 1),
+        rare: tier == 'elite' || nodeType == 'product',
+        nodeId: id,
+        collectible: boolValue(node['collectible']),
+      );
+    }
+    return result;
+  }
+
+  int _newSeed() {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    return (now ^ identityHashCode(this) ^ math.Random().nextInt(0x3fffffff)) &
+        0x7fffffff;
+  }
+
+  void _startNewRun({int? seed}) {
+    _seed = seed ?? _newSeed();
+    _lootByTile.clear();
+    _tiles = _generateMap(_seed);
+    _revealed
+      ..clear()
+      ..add(_startIndex);
+    _searched.clear();
+    _bag.clear();
+    _bagQuality.clear();
+    _energy = _maxEnergy;
+    _completed = false;
+    _coconutBaseReward = 1 + math.Random(_seed ^ 0x5F3759DF).nextInt(2);
+    _message = '从亮起的迷雾边缘开始。◇ 表示周围尚未揭开的目标数量，! 表示隐藏危险数量。';
+  }
+
+  int _quality(math.Random random, {int min = 1, int max = 6}) {
+    return min + random.nextInt(max - min + 1);
+  }
+
+  List<_FogDrop> _makeScavengeLoot(math.Random random, {bool rare = false}) {
+    final normalPool = <String>[
+      '木枝',
+      '石片',
+      '藤条',
+      '布条',
+      '生锈铁片',
+      '贝壳碎片',
+      '干粮碎包',
+    ];
+    final rarePool = <String>[
+      '旧银币',
+      '防水火柴',
+      '密封干粮',
+      '海蓝饰片',
+      '旧式指南针',
+    ];
+
+    final count = rare ? 1 + random.nextInt(2) : 1 + random.nextInt(3);
+    final drops = <_FogDrop>[];
+    for (var i = 0; i < count; i++) {
+      final pool = rare && i == 0 ? rarePool : normalPool;
+      final name = pool[random.nextInt(pool.length)];
+      drops.add(
+        _FogDrop(
+          name: name,
+          amount: name == '旧银币' ? 1 + random.nextInt(2) : 1,
+          quality: rare && i == 0
+              ? _quality(random, min: 6, max: 9)
+              : _quality(random, min: 1, max: rare ? 7 : 5),
+        ),
+      );
+    }
+    return drops;
+  }
+
+  Map<int, _FogTileDef> _generateMap(int seed) {
+    final random = math.Random(seed);
+    final used = <int>{_startIndex};
+    final result = <int, _FogTileDef>{};
+    final all = List<int>.generate(_rows * _columns, (index) => index)
+      ..remove(_startIndex);
+
+    int pick(
+      bool Function(int index) test, {
+      List<int> avoid = const <int>[],
+      int minDistanceFromAvoid = 0,
+    }) {
+      final candidates = all.where((index) {
+        if (used.contains(index) || !test(index)) return false;
+        if (minDistanceFromAvoid > 0 &&
+            avoid.any(
+              (other) => _gridDistance(index, other) < minDistanceFromAvoid,
+            )) {
+          return false;
+        }
+        return true;
+      }).toList()
+        ..shuffle(random);
+      if (candidates.isEmpty) {
+        final fallback = all.where((index) => !used.contains(index)).toList()
+          ..shuffle(random);
+        final chosen = fallback.first;
+        used.add(chosen);
+        return chosen;
+      }
+      final chosen = candidates.first;
+      used.add(chosen);
+      return chosen;
+    }
+
+    final tree = pick((index) => _gridDistance(index, _startIndex) >= 3);
+    final branch = pick((index) => _gridDistance(index, _startIndex) <= 2);
+    final stone = pick(
+      (index) => _gridDistance(index, _startIndex) <= 3,
+      avoid: <int>[branch],
+      minDistanceFromAvoid: 2,
+    );
+    final vine = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2 &&
+          _gridDistance(index, _startIndex) <= 3,
+      avoid: <int>[branch, stone],
+      minDistanceFromAvoid: 2,
+    );
+    final scavengeA = pick(
+      (index) => _gridDistance(index, _startIndex) >= 1 &&
+          _gridDistance(index, _startIndex) <= 3,
+      avoid: <int>[branch, stone, vine],
+      minDistanceFromAvoid: 1,
+    );
+    final scavengeB = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[scavengeA, tree],
+      minDistanceFromAvoid: 2,
+    );
+    final cache = pick(
+      (index) => _gridDistance(index, _startIndex) >= 3,
+      avoid: <int>[tree, scavengeB],
+      minDistanceFromAvoid: 2,
+    );
+    final bottle = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[cache],
+      minDistanceFromAvoid: 2,
+    );
+    final extraBranch = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[branch],
+      minDistanceFromAvoid: 2,
+    );
+
+    result[branch] = _FogTileDef(
+      kind: _FogTileKind.branch,
+      label: '干燥长枝',
+      text: '一根晒得很干的长枝，长度刚好可以加工成工具。',
+      quality: _quality(random, min: 2, max: 5),
+    );
+    result[stone] = _FogTileDef(
+      kind: _FogTileKind.stone,
+      label: '尖锐石片',
+      text: '边缘很锋利，也许能拿来加工木材。',
+      quality: _quality(random, min: 2, max: 5),
+    );
+    result[vine] = _FogTileDef(
+      kind: _FogTileKind.vine,
+      label: '柔韧藤条',
+      text: '被海风吹干的藤条依然很结实，适合捆扎。',
+      quality: _quality(random, min: 2, max: 5),
+    );
+    result[tree] = const _FogTileDef(
+      kind: _FogTileKind.coconutTree,
+      label: '低矮椰树',
+      text: '树冠上挂着成熟椰子，但徒手够不到。',
+    );
+    result[bottle] = _FogTileDef(
+      kind: _FogTileKind.bottle,
+      label: '漂流瓶',
+      text: '瓶口被蜡封住了，里面似乎塞着一张纸。',
+      quality: _quality(random, min: 3, max: 6),
+    );
+    result[extraBranch] = _FogTileDef(
+      kind: _FogTileKind.branch,
+      label: '短木枝',
+      text: '一截干木枝，可以作为备用材料。',
+      quality: _quality(random, min: 1, max: 4),
+    );
+
+    final normalScavengeLabels = <String>[
+      '漂流物堆',
+      '破布包',
+      '潮线杂物',
+      '搁浅木箱',
+    ]..shuffle(random);
+    result[scavengeA] = _FogTileDef(
+      kind: _FogTileKind.scavenge,
+      label: normalScavengeLabels[0],
+      text: '这里堆着一些被潮水留下的东西，也许能翻出可用物资。',
+    );
+    result[scavengeB] = _FogTileDef(
+      kind: _FogTileKind.scavenge,
+      label: normalScavengeLabels[1],
+      text: '表面看起来很普通，但里面可能混着还能利用的东西。',
+    );
+    _lootByTile[scavengeA] = _makeScavengeLoot(random);
+    _lootByTile[scavengeB] = _makeScavengeLoot(random);
+
+    final rareLabels = <String>[
+      '半埋木匣',
+      '破损补给箱',
+      '冲上海滩的密封包',
+      '贝壳堆下的暗匣',
+    ]..shuffle(random);
+    result[cache] = _FogTileDef(
+      kind: _FogTileKind.cache,
+      label: rareLabels.first,
+      text: '这处搜刮点保存得异常完整，里面很可能有更好的东西。',
+      energyBonus: 2 + random.nextInt(2),
+      rare: true,
+    );
+    _lootByTile[cache] = _makeScavengeLoot(random, rare: true);
+
+    final hazardA = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[branch, stone, vine],
+      minDistanceFromAvoid: 1,
+    );
+    final hazardB = pick(
+      (index) => _gridDistance(index, _startIndex) >= 3,
+      avoid: <int>[hazardA, tree],
+      minDistanceFromAvoid: 2,
+    );
+    result[hazardA] = const _FogTileDef(
+      kind: _FogTileKind.hazard,
+      label: '礁石缝',
+      text: '脚下一滑，尖锐礁石逼得你绕路。',
+    );
+    result[hazardB] = const _FogTileDef(
+      kind: _FogTileKind.hazard,
+      label: '寄居蟹群',
+      text: '你惊动了一群寄居蟹，只能退开重新找路。',
+    );
+
+    final normalEnemyA = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[hazardA, hazardB],
+      minDistanceFromAvoid: 1,
+    );
+    final normalEnemyB = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[normalEnemyA],
+      minDistanceFromAvoid: 2,
+    );
+    final eliteEnemy = pick(
+      (index) => _gridDistance(index, _startIndex) >= 3,
+      avoid: <int>[normalEnemyA, normalEnemyB],
+      minDistanceFromAvoid: 2,
+    );
+    result[normalEnemyA] = const _FogTileDef(
+      kind: _FogTileKind.normalEnemy,
+      label: '流浪鬣狗',
+      text: '开发者预览普通敌人。',
+      quality: 2,
+    );
+    result[normalEnemyB] = const _FogTileDef(
+      kind: _FogTileKind.normalEnemy,
+      label: '流浪鬣狗',
+      text: '开发者预览普通敌人。',
+      quality: 1,
+    );
+    result[eliteEnemy] = const _FogTileDef(
+      kind: _FogTileKind.eliteEnemy,
+      label: '巨型潮蜥',
+      text: '开发者预览高级敌人。',
+      quality: 5,
+      rare: true,
+    );
+
+    return result;
+  }
+
+  _FogTileDef _tileAt(int index) {
+    return _tiles[index] ??
+        const _FogTileDef(
+          kind: _FogTileKind.empty,
+          label: '空地',
+          text: '这里暂时没有发现可以带走的东西。',
+        );
+  }
+
+  int _rowOf(int index) => index ~/ _columns;
+  int _columnOf(int index) => index % _columns;
+
+  int _gridDistance(int a, int b) {
+    return math.max(
+      (_rowOf(a) - _rowOf(b)).abs(),
+      (_columnOf(a) - _columnOf(b)).abs(),
+    );
+  }
+
+  Iterable<int> _neighbors(int index) sync* {
+    final row = _rowOf(index);
+    final col = _columnOf(index);
+    for (var dr = -1; dr <= 1; dr++) {
+      for (var dc = -1; dc <= 1; dc++) {
+        if (dr == 0 && dc == 0) continue;
+        final nr = row + dr;
+        final nc = col + dc;
+        if (nr < 0 || nr >= _rows || nc < 0 || nc >= _columns) continue;
+        yield nr * _columns + nc;
+      }
+    }
+  }
+
+  bool _isFrontier(int index) {
+    if (_revealed.contains(index)) return false;
+    return _neighbors(index).any(_revealed.contains);
+  }
+
+  bool _isInteresting(_FogTileKind kind) {
+    return kind == _FogTileKind.genericItem ||
+        kind == _FogTileKind.branch ||
+        kind == _FogTileKind.stone ||
+        kind == _FogTileKind.vine ||
+        kind == _FogTileKind.coconutTree ||
+        kind == _FogTileKind.bottle ||
+        kind == _FogTileKind.scavenge ||
+        kind == _FogTileKind.cache;
+  }
+
+  int _nearbyInterest(int index) {
+    return _neighbors(index)
+        .where((other) =>
+            !_revealed.contains(other) && _isInteresting(_tileAt(other).kind))
+        .length;
+  }
+
+  int _nearbyDanger(int index) {
+    return _neighbors(index)
+        .where((other) =>
+            !_revealed.contains(other) &&
+            (_tileAt(other).kind == _FogTileKind.hazard ||
+                _tileAt(other).kind == _FogTileKind.normalEnemy ||
+                _tileAt(other).kind == _FogTileKind.eliteEnemy))
+        .length;
+  }
+
+  bool get _hasHook => (_bag['简易椰钩'] ?? 0) > 0;
+  int get _hookQuality => _bagQuality['简易椰钩'] ?? 1;
+  int get _foundCount => _searched.length;
+  bool get _canCraftSharpStick => (_bag['木枝'] ?? 0) > 0 && (_bag['石片'] ?? 0) > 0;
+  bool get _canCraftHook => (_bag['削尖长棍'] ?? 0) > 0 && (_bag['藤条'] ?? 0) > 0;
+
+  List<JsonMap> get _remoteRecipes => (widget.controller.surroundingsData['recipes']
+              is List
+          ? widget.controller.surroundingsData['recipes'] as List
+          : const <dynamic>[])
+      .map(asJsonMap)
+      .where((recipe) => recipe.isNotEmpty)
+      .toList();
+
+  Set<String> get _remoteVisible =>
+      (widget.controller.surroundingsData['visible'] is List
+              ? widget.controller.surroundingsData['visible'] as List
+              : const <dynamic>[])
+          .map(stringValue)
+          .where((id) => id.isNotEmpty)
+          .toSet();
+
+  JsonMap? get _availableRemoteRecipe {
+    if (!_remote) return null;
+    final visible = _remoteVisible;
+    for (final recipe in _remoteRecipes) {
+      final a = stringValue(recipe['a']).trim();
+      final b = stringValue(recipe['b']).trim();
+      final result = stringValue(recipe['result']).trim();
+      if (a.isNotEmpty && b.isNotEmpty && result.isNotEmpty &&
+          visible.contains(a) && visible.contains(b) &&
+          !visible.contains(result)) {
+        return recipe;
+      }
+    }
+    return null;
+  }
+
+  bool _isRemoteRecipeInput(String nodeId) {
+    if (!_remote || nodeId.isEmpty) return false;
+    return _remoteRecipes.any((recipe) =>
+        stringValue(recipe['a']) == nodeId ||
+        stringValue(recipe['b']) == nodeId);
+  }
+
+  String _remoteNodeLabel(String nodeId) {
+    for (final tile in _tiles.values) {
+      if (tile.nodeId == nodeId) return tile.label;
+    }
+    return nodeId;
+  }
+
+  String? get _availableCraftResult {
+    if (_remote) {
+      final recipe = _availableRemoteRecipe;
+      if (recipe == null) return null;
+      return _remoteNodeLabel(stringValue(recipe['result']));
+    }
+    if (!_hasHook && _canCraftHook) return '简易椰钩';
+    if (!_hasHook && _canCraftSharpStick) return '削尖长棍';
+    return null;
+  }
+
+  List<String> get _availableCraftInputs {
+    if (_remote) {
+      final recipe = _availableRemoteRecipe;
+      if (recipe == null) return const <String>[];
+      return <String>[
+        _remoteNodeLabel(stringValue(recipe['a'])),
+        _remoteNodeLabel(stringValue(recipe['b'])),
+      ];
+    }
+    return switch (_availableCraftResult) {
+      '简易椰钩' => const <String>['削尖长棍', '藤条'],
+      '削尖长棍' => const <String>['木枝', '石片'],
+      _ => const <String>[],
+    };
+  }
+
+  String get _availableCraftSummary {
+    final result = _availableCraftResult;
+    final inputs = _availableCraftInputs;
+    if (result == null || inputs.length != 2) return '';
+    return '${inputs[0]} + ${inputs[1]} → $result';
+  }
+
+  void _craftAvailableRecipe() {
+    if (_remote) {
+      final recipe = _availableRemoteRecipe;
+      if (recipe != null) unawaited(_combineRemoteRecipe(recipe));
+      return;
+    }
+    final result = _availableCraftResult;
+    if (result == null) return;
+    setState(() {
+      if (result == '削尖长棍') {
+        final resultQuality = _craftedQuality('木枝', '石片', bonus: 1);
+        if (_consumeItem('木枝') && _consumeItem('石片')) {
+          _addItem('削尖长棍', quality: resultQuality);
+          _message = _canCraftHook
+              ? '制作完成：获得「削尖长棍」· ${_qualityLabel(resultQuality)}。✦ 已可继续制作「简易椰钩」。'
+              : '制作完成：获得「削尖长棍」· ${_qualityLabel(resultQuality)}。搜到藤条后会自动提示下一步制作。';
+        }
+        return;
+      }
+      if (result == '简易椰钩') {
+        final resultQuality = _craftedQuality('削尖长棍', '藤条', bonus: 1);
+        if (_consumeItem('削尖长棍') && _consumeItem('藤条')) {
+          _addItem('简易椰钩', quality: resultQuality);
+          _message = '制作完成：获得「简易椰钩」· ${_qualityLabel(resultQuality)}！地图上的椰子树现在可以调查。';
+        }
+      }
+    });
+  }
+
+  String _craftHintAfterPickup() {
+    final summary = _availableCraftSummary;
+    return summary.isEmpty ? '' : ' ✦ 已发现可制作：$summary。';
+  }
+
+  void _reset() {
+    if (_remote) {
+      unawaited(widget.controller.loadSurroundings(force: true));
+      return;
+    }
+    setState(() => _startNewRun());
+  }
+
+  void _tapTile(int index) {
+    if (_developerBattleOpening) return;
+    if (_remote) {
+      unawaited(_tapRemoteTile(index));
+      return;
+    }
+    if (!_revealed.contains(index)) {
+      _revealTile(index);
+      return;
+    }
+    _interactWithRevealed(index);
+  }
+
+  Future<void> _openDeveloperBattle(int index, _FogTileDef tile) async {
+    final launcher = widget.previewBattleLauncher;
+    if (launcher == null || _developerBattleOpening) {
+      if (launcher == null) {
+        setState(() => _message = '当前开发者入口尚未接入战斗页面。');
+      }
+      return;
+    }
+
+    setState(() {
+      _developerBattleOpening = true;
+      _message = '正在进入与「${tile.label}」的战斗…';
+    });
+    try {
+      final outcome = await launcher(
+        enemyName: tile.label,
+        quality: tile.quality,
+        elite: tile.kind == _FogTileKind.eliteEnemy,
+      );
+      if (!mounted) return;
+      setState(() {
+        switch (outcome) {
+          case 'victory':
+            _searched.add(index);
+            _message = '战斗胜利：「${tile.label}」已处理。本次测试不产生掉落。';
+            break;
+          case 'defeat':
+            _message = '战斗失败。「${tile.label}」仍可再次挑战。';
+            break;
+          case 'escaped':
+            _message = '已从测试战斗中逃跑。「${tile.label}」仍可再次挑战。';
+            break;
+          default:
+            _message = '已退出测试战斗。「${tile.label}」仍可再次挑战。';
+        }
+      });
+    } finally {
+      if (mounted) setState(() => _developerBattleOpening = false);
+    }
+  }
+
+  Future<void> _combineRemoteRecipe(JsonMap recipe) async {
+    if (widget.controller.isSurroundingsActionRunning) return;
+    final a = stringValue(recipe['a']).trim();
+    final b = stringValue(recipe['b']).trim();
+    if (a.isEmpty || b.isEmpty) return;
+    setState(() => _message = '正在组合「${_remoteNodeLabel(a)}」与「${_remoteNodeLabel(b)}」…');
+    try {
+      final payload = await widget.controller.combineSurroundNodes(a, b);
+      if (!mounted) return;
+      final event = asJsonMap(payload['event']);
+      setState(() {
+        _message = stringValue(event['text'], '组合成功，新的物品格已经出现。');
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _message = widget.controller.surroundingsError.trim().isEmpty
+            ? '组合失败，请重试。'
+            : widget.controller.surroundingsError.trim();
+      });
+    }
+  }
+
+  Future<void> _tapRemoteTile(int index) async {
+    if (widget.controller.isSurroundingsActionRunning) return;
+    if (!_revealed.contains(index)) {
+      if (!_isFrontier(index)) {
+        setState(() => _message = '只能从已经探索过的格子向外推进。');
+        return;
+      }
+      if (_energy <= 0) {
+        setState(() => _message = '探索体力已经耗尽。');
+        return;
+      }
+      try {
+        await widget.controller.investigateSurroundNode('grid_$index');
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _message = widget.controller.surroundingsError.trim().isEmpty
+              ? '揭开格子失败，请重试。'
+              : widget.controller.surroundingsError.trim();
+        });
+      }
+      return;
+    }
+
+    if (index == _startIndex) {
+      setState(() => _message = '这里是探索起点。只能从亮起的相邻迷雾继续推进。');
+      return;
+    }
+    final tile = _tileAt(index);
+    if (tile.nodeId.isEmpty) {
+      setState(() => _message = '这里暂时没有发现可以带走的东西。');
+      return;
+    }
+    if (_searched.contains(index)) {
+      setState(() => _message = '「${tile.label}」已经处理过了。');
+      return;
+    }
+    if (tile.kind == _FogTileKind.normalEnemy ||
+        tile.kind == _FogTileKind.eliteEnemy) {
+      widget.onClose?.call();
+      await Future<void>.delayed(Duration.zero);
+      await widget.controller.startSurroundEncounter(
+        nodeId: tile.nodeId,
+        targetName: tile.label,
+      );
+      return;
+    }
+    if (_isRemoteRecipeInput(tile.nodeId)) {
+      setState(() {
+        _message = _availableRemoteRecipe == null
+            ? '「${tile.label}」是可组合材料，已保留。继续寻找与其匹配的材料。'
+            : '合成材料已经凑齐，请使用下方的“制作”按钮。';
+      });
+      return;
+    }
+    if (!tile.collectible) {
+      setState(() => _message = tile.text.isEmpty ? '这里没有更多发现。' : tile.text);
+      return;
+    }
+    try {
+      final payload = await widget.controller.claimSurroundReward(tile.nodeId);
+      if (!mounted) return;
+      final reward = asJsonMap(payload['reward']);
+      final name = stringValue(reward['name'], tile.label);
+      final quantity = intValue(reward['quantity'], 1);
+      final quality = intValue(reward['quality'], tile.quality).clamp(1, 10).toInt();
+      setState(() {
+        _addItem(name, amount: quantity, quality: quality);
+        _message = '获得「$name${quantity > 1 ? ' ×$quantity' : ''}」· ${_qualityLabel(quality)}。';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _message = widget.controller.surroundingsError.trim().isEmpty
+            ? '领取失败，请重试。'
+            : widget.controller.surroundingsError.trim();
+      });
+    }
+  }
+
+  void _revealTile(int index) {
+    if (!_isFrontier(index)) {
+      setState(() => _message = '只能从已经探索过的区域向外推进。');
+      return;
+    }
+    if (_energy <= 0) {
+      setState(() => _message = '体力耗尽了。现在只能结算战利品，或者开始新的 Seed。');
+      return;
+    }
+
+    final tile = _tileAt(index);
+    setState(() {
+      _revealed.add(index);
+      _energy = math.max(0, _energy - 1);
+
+      switch (tile.kind) {
+        case _FogTileKind.empty:
+          final clue = _nearbyInterest(index);
+          final danger = _nearbyDanger(index);
+          if (clue == 0 && danger == 0) {
+            final opened = _cascadeReveal(index);
+            _message = opened > 0
+                ? '这里很安静，迷雾向外散开了 $opened 格。'
+                : '这片沙地很安静，附近也没有明显线索。';
+          } else if (danger > 0) {
+            _message = '周围还有 $clue 个未探索目标，同时有 $danger 处隐藏危险。';
+          } else {
+            _message = '周围还有 $clue 个未探索目标。';
+          }
+          break;
+        case _FogTileKind.hazard:
+          _energy = math.max(0, _energy - 2);
+          _searched.add(index);
+          _message = '${tile.text} 额外损失 2 点体力。';
+          break;
+        case _FogTileKind.coconutTree:
+          _message = _hasHook
+              ? '发现「${tile.label}」。简易椰钩可以处理这里，点击摘取。'
+              : '发现「${tile.label}」。${tile.text} 先找材料制作长柄工具。';
+          break;
+        case _FogTileKind.scavenge:
+          _message = '发现搜刮点「${tile.label}」。再次点击翻找，可能得到 1～3 件物品。';
+          break;
+        case _FogTileKind.cache:
+          _message = '发现稀有搜刮点「${tile.label}」！再次点击打开。';
+          break;
+        default:
+          _message = '发现「${tile.label}」· ${_qualityLabel(tile.quality)}。再次点击拾取。';
+          break;
+      }
+    });
+  }
+
+  int _cascadeReveal(int origin) {
+    final queue = <int>[origin];
+    final visited = <int>{origin};
+    var opened = 0;
+
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      for (final next in _neighbors(current)) {
+        if (visited.contains(next) || _revealed.contains(next)) continue;
+        visited.add(next);
+        final tile = _tileAt(next);
+        if (tile.kind == _FogTileKind.hazard ||
+            tile.kind == _FogTileKind.normalEnemy ||
+            tile.kind == _FogTileKind.eliteEnemy) continue;
+
+        _revealed.add(next);
+        opened += 1;
+        if (tile.kind == _FogTileKind.empty &&
+            _nearbyInterest(next) == 0 &&
+            _nearbyDanger(next) == 0) {
+          queue.add(next);
+        }
+      }
+    }
+    return opened;
+  }
+
+  void _interactWithRevealed(int index) {
+    if (index == _startIndex) {
+      setState(() => _message = '这里是探索起点。向周围亮起的迷雾推进，也可以随时安全撤离。');
+      return;
+    }
+
+    final tile = _tileAt(index);
+    if (_searched.contains(index)) {
+      setState(() => _message = '「${tile.label}」已经处理过了。');
+      return;
+    }
+
+    switch (tile.kind) {
+      case _FogTileKind.empty:
+        final clue = _nearbyInterest(index);
+        final danger = _nearbyDanger(index);
+        setState(() {
+          _message = danger > 0
+              ? '周围还有 $clue 个未探索目标，同时有 $danger 处隐藏危险。'
+              : clue > 0
+                  ? '周围还有 $clue 个未探索目标。'
+                  : '这里没有更多发现。';
+        });
+        break;
+      case _FogTileKind.hazard:
+        setState(() => _message = '这里的危险已经避开了。');
+        break;
+      case _FogTileKind.coconutTree:
+        if (!_hasHook) {
+          setState(() => _message = '椰子还在高处。需要一件能勾住树冠的长柄工具。');
+          return;
+        }
+        setState(() {
+          _searched.add(index);
+          final efficiencyBonus = _energy >= 9 ? 1 : 0;
+          final qualityBonus = _hookQuality >= 6 ? 1 : 0;
+          final reward = _coconutBaseReward + efficiencyBonus + qualityBonus;
+          _addItem(
+            '椰子',
+            amount: reward,
+            quality: math.max(2, math.min(7, _hookQuality)),
+          );
+          _completed = true;
+          final bonusText = <String>[
+            if (efficiencyBonus > 0) '探索效率 +1',
+            if (qualityBonus > 0) '高品质工具 +1',
+          ];
+          _message = bonusText.isEmpty
+              ? '椰钩勾住果柄——获得「椰子 ×$reward」！核心目标完成，现在可以安全撤离。'
+              : '椰钩勾住果柄——获得「椰子 ×$reward」！${bonusText.join('、')}。可以现在撤离，也可以继续寻找稀有搜刮点。';
+        });
+        break;
+      case _FogTileKind.branch:
+        _collect(index, '木枝', quality: tile.quality);
+        break;
+      case _FogTileKind.stone:
+        _collect(index, '石片', quality: tile.quality);
+        break;
+      case _FogTileKind.vine:
+        _collect(index, '藤条', quality: tile.quality);
+        break;
+      case _FogTileKind.bottle:
+        _collect(index, '漂流瓶', quality: tile.quality);
+        break;
+      case _FogTileKind.scavenge:
+      case _FogTileKind.cache:
+        _lootScavengePoint(index, tile);
+        break;
+      case _FogTileKind.genericItem:
+        _collect(index, tile.label, quality: tile.quality);
+        break;
+      case _FogTileKind.normalEnemy:
+      case _FogTileKind.eliteEnemy:
+        unawaited(_openDeveloperBattle(index, tile));
+        break;
+    }
+  }
+
+  void _lootScavengePoint(int index, _FogTileDef tile) {
+    final drops = _lootByTile[index] ?? const <_FogDrop>[];
+    setState(() {
+      _searched.add(index);
+      for (final drop in drops) {
+        _addItem(drop.name, amount: drop.amount, quality: drop.quality);
+      }
+      if (tile.energyBonus > 0) {
+        _energy = math.min(_maxEnergy, _energy + tile.energyBonus);
+      }
+      final summary = drops.isEmpty
+          ? '没有找到可用物品'
+          : drops
+              .map(
+                (drop) =>
+                    '${drop.name}${drop.amount > 1 ? ' ×${drop.amount}' : ''} · ${_qualityLabel(drop.quality)}',
+              )
+              .join('、');
+      final craftHint = _craftHintAfterPickup();
+      _message = tile.rare
+          ? '稀有搜刮：$summary${tile.energyBonus > 0 ? '，恢复 ${tile.energyBonus} 点体力' : ''}。$craftHint'
+          : '搜刮完成：$summary。$craftHint';
+    });
+  }
+
+  void _collect(int index, String itemName, {required int quality}) {
+    setState(() {
+      _searched.add(index);
+      _addItem(itemName, quality: quality);
+      final craftHint = _craftHintAfterPickup();
+      _message = craftHint.isEmpty
+          ? '获得「$itemName」· ${_qualityLabel(quality)}。'
+          : '获得「$itemName」· ${_qualityLabel(quality)}。$craftHint';
+    });
+  }
+
+  void _addItem(String name, {int amount = 1, int quality = 1}) {
+    _bag[name] = (_bag[name] ?? 0) + amount;
+    final currentQuality = _bagQuality[name] ?? 0;
+    if (quality > currentQuality) _bagQuality[name] = quality;
+  }
+
+  bool _consumeItem(String name, {int amount = 1}) {
+    final current = _bag[name] ?? 0;
+    if (current < amount) return false;
+    final next = current - amount;
+    if (next <= 0) {
+      _bag.remove(name);
+      _bagQuality.remove(name);
+    } else {
+      _bag[name] = next;
+    }
+    return true;
+  }
+
+  int _craftedQuality(String a, String b, {int bonus = 0}) {
+    final qa = _bagQuality[a] ?? 1;
+    final qb = _bagQuality[b] ?? 1;
+    return math.min(10, math.max(1, ((qa + qb) / 2).round() + bonus));
+  }
+
+  String _qualityLabel(int quality) {
+    if (quality <= 2) return '普通';
+    if (quality <= 4) return '良好';
+    if (quality <= 6) return '精良';
+    if (quality <= 8) return '稀有';
+    if (quality == 9) return '史诗';
+    return '传说';
+  }
+
+  Color _qualityColor(int quality) {
+    if (quality >= 9) return _rareGold.withOpacity(.96);
+    if (quality >= 7) return const Color(0xFFC58AF9).withOpacity(.94);
+    if (quality >= 5) return const Color(0xFF74A8F7).withOpacity(.92);
+    if (quality >= 3) return _themeGreen.withOpacity(.90);
+    return Colors.white.withOpacity(.50);
+  }
+
+  int _withdrawBonus() {
+    if (_remote) return 0;
+    if (!_completed) return 0;
+    if (_energy >= 12) return 2;
+    if (_energy >= 7) return 1;
+    return 0;
+  }
+
+  Future<void> _showWithdrawDialog() async {
+    final bonus = _withdrawBonus();
+    final entries = _bag.entries.toList();
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(.42),
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 390),
+            child: ClipRect(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 15, 16, 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(.075),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(.11),
+                      width: .8,
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              _completed ? '安全撤离 · 目标已完成' : '提前撤离 · 保留当前战利品',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.94),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '体力 $_energy',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(.40),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 11),
+                      Container(height: 1, color: Colors.white.withOpacity(.07)),
+                      const SizedBox(height: 11),
+                      Text(
+                        entries.isEmpty
+                            ? '本轮还没有获得战利品。'
+                            : entries
+                                .map((entry) {
+                                  final q = _bagQuality[entry.key] ?? 1;
+                                  return '${entry.key}${entry.value > 1 ? ' ×${entry.value}' : ''} · ${_qualityLabel(q)}';
+                                })
+                                .join('\n'),
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.72),
+                          fontSize: 10,
+                          height: 1.6,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (bonus > 0) ...<Widget>[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: _themeGreen.withOpacity(.055),
+                            border: Border.all(
+                              color: _themeGreen.withOpacity(.24),
+                              width: .7,
+                            ),
+                          ),
+                          child: Text(
+                            '现在撤离可获得：新鲜椰肉 ×$bonus（剩余体力奖励）',
+                            style: TextStyle(
+                              color: _themeGreen.withOpacity(.90),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: SizedBox(
+                              height: 38,
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.of(dialogContext).pop(),
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(
+                                    color: Colors.white.withOpacity(.11),
+                                    width: .8,
+                                  ),
+                                  shape: const RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.zero,
+                                  ),
+                                ),
+                                child: Text(
+                                  '继续探索',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(.62),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(
+                            child: SizedBox(
+                              height: 38,
+                              child: TextButton(
+                                onPressed: () {
+                                  Navigator.of(dialogContext).pop();
+                                  if (bonus > 0) {
+                                    setState(() {
+                                      _addItem('新鲜椰肉', amount: bonus, quality: 4);
+                                    });
+                                  }
+                                  widget.onClose?.call();
+                                },
+                                style: TextButton.styleFrom(
+                                  backgroundColor: _themeGreen,
+                                  shape: const RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.zero,
+                                  ),
+                                ),
+                                child: Text(
+                                  '确定带走并离开',
+                                  style: TextStyle(
+                                    color: Colors.black.withOpacity(.78),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _inventoryChip(String item, int count) {
+    final important = item == '简易椰钩' || item == '椰子' || item == '新鲜椰肉';
+    final quality = _bagQuality[item] ?? 1;
+    final qualityColor = _qualityColor(quality);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: important
+            ? _themeGreen.withOpacity(.055)
+            : Colors.white.withOpacity(.040),
+        border: Border.all(
+          color: quality >= 9
+              ? _rareGold.withOpacity(.44)
+              : important
+                  ? _themeGreen.withOpacity(.38)
+                  : Colors.white.withOpacity(.09),
+          width: .7,
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                item,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.88),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (count > 1) ...<Widget>[
+                const SizedBox(width: 5),
+                Text(
+                  '×$count',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.40),
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            _qualityLabel(quality),
+            style: TextStyle(
+              color: qualityColor,
+              fontSize: 6.9,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _energyPill() {
+    final low = _energy <= 4;
+    final accent = low ? _dangerRed : _themeGreen;
+    return Tooltip(
+      message: '体力 $_energy / $_maxEnergy',
+      child: SizedBox(
+        height: 30,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              Icons.bolt_rounded,
+              size: 13,
+              color: accent.withOpacity(low ? .90 : .72),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '$_energy/$_maxEnergy',
+              style: TextStyle(
+                color: low
+                    ? _dangerRed.withOpacity(.94)
+                    : Colors.white.withOpacity(.84),
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget? _buildContextActionBar() {
+    final craftResult = _availableCraftResult;
+    if (craftResult != null) {
+      final summary = _availableCraftSummary;
+      return AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+        decoration: BoxDecoration(
+          color: _themeGreen.withOpacity(.045),
+          border: Border(
+            left: BorderSide(
+              color: _themeGreen.withOpacity(.55),
+              width: 2,
+            ),
+          ),
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              Icons.auto_fix_high_rounded,
+              size: 14,
+              color: _themeGreen.withOpacity(.88),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    '可制作',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.88),
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    summary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.40),
+                      fontSize: 8,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _craftAvailableRecipe,
+                borderRadius: BorderRadius.zero,
+                child: Container(
+                  height: 30,
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 13),
+                  color: _themeGreen.withOpacity(.88),
+                  child: const Text(
+                    '制作',
+                    style: TextStyle(
+                      color: Color(0xFF0F172A),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_completed) {
+      return _contextHint(
+        icon: Icons.flag_outlined,
+        text: '核心目标已完成。本轮收获已经可以结算。',
+        accent: _themeGreen,
+      );
+    }
+
+    if (_energy <= 3) {
+      return _contextHint(
+        icon: Icons.bolt_rounded,
+        text: '体力偏低，继续深入会明显增加风险。',
+        accent: _dangerRed,
+      );
+    }
+
+    if (_hasHook) {
+      return _contextHint(
+        icon: Icons.park_outlined,
+        text: '简易椰钩已完成。找到椰树后可以直接调查。',
+        accent: _themeGreen,
+      );
+    }
+
+    return null;
+  }
+
+  Widget _contextHint({
+    required IconData icon,
+    required String text,
+    required Color accent,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.018),
+        border: Border(
+          left: BorderSide(color: accent.withOpacity(.38), width: 2),
+        ),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(icon, size: 13, color: accent.withOpacity(.76)),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withOpacity(.46),
+                fontSize: 8.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _withdrawButton({bool expanded = false}) {
+    final completed = _completed;
+    final backgroundColor = completed ? _themeGreen : Colors.white;
+    final foregroundColor = Colors.black.withOpacity(completed ? .82 : .78);
+    final button = Material(
+      color: backgroundColor,
+      child: InkWell(
+        onTap: _showWithdrawDialog,
+        borderRadius: BorderRadius.zero,
+        child: SizedBox(
+          height: 38,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: expanded ? MainAxisSize.max : MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  Icons.exit_to_app_rounded,
+                  size: 14,
+                  color: foregroundColor,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '撤离',
+                  style: TextStyle(
+                    color: foregroundColor,
+                    fontSize: 9.4,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return Tooltip(
+      message: completed ? '目标已完成，结束探索并结算' : '提前结束探索并结算',
+      child: expanded ? SizedBox(width: double.infinity, child: button) : button,
+    );
+  }
+
+  Widget _buildGoalBar({required bool compact}) {
+    final bonus = _withdrawBonus();
+    final remoteGoal = stringValue(
+      widget.controller.surroundingsData['goal'],
+      '调查当前场景',
+    );
+
+    final title = _remote
+        ? (_completed ? '探索完成' : remoteGoal)
+        : (_completed ? '目标完成' : '想办法摘到椰子');
+
+    final subtitle = _remote
+        ? (_completed
+            ? '当前区域已处理完毕'
+            : _availableCraftResult != null
+                ? '材料已齐 · 可以制作'
+                : '揭开相邻格子，调查物品与遭遇')
+        : (_completed
+            ? (bonus > 0 ? '当前撤离奖励 ×$bonus' : '当前撤离奖励已耗尽')
+            : _hasHook
+                ? '椰钩已完成 · 寻找椰树'
+                : _availableCraftResult != null
+                    ? '材料已齐 · 可以制作'
+                    : '揭开迷雾，收集并组合材料');
+
+    return SizedBox(
+      height: compact ? 46 : 48,
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.92),
+                    fontSize: compact ? 11.2 : 12.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.34),
+                    fontSize: compact ? 8.1 : 8.7,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!compact) ...<Widget>[
+            const SizedBox(width: 10),
+            Text(
+              '发现 $_foundCount',
+              style: TextStyle(
+                color: Colors.white.withOpacity(.30),
+                fontSize: 8.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          const SizedBox(width: 10),
+          _energyPill(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMapPanel() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final side = math.max(
+          180.0,
+          math.min(constraints.maxWidth, constraints.maxHeight),
+        );
+        return Center(
+          child: SizedBox(
+            width: side,
+            height: side,
+            child: Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.white.withOpacity(.1),
+                  width: 1,
+                ),
+              ),
+              child: GridView.builder(
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: _columns,
+                  childAspectRatio: 1,
+                ),
+                itemCount: _rows * _columns,
+                itemBuilder: (context, index) => _FogTileWidget(
+                  index: index,
+                  tile: _tileAt(index),
+                  revealed: _revealed.contains(index),
+                  searched: _searched.contains(index),
+                  frontier: _isFrontier(index),
+                  hasHook: _hasHook,
+                  remote: _remote,
+                  isRemoteRecipeInput: _isRemoteRecipeInput(
+                    _tileAt(index).nodeId,
+                  ),
+                  nearbyInterest: _nearbyInterest(index),
+                  nearbyDanger: _nearbyDanger(index),
+                  isStartIndex: index == _startIndex,
+                  onTap: () => _tapTile(index),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMessagePanel() {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      width: double.infinity,
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: _completed
+            ? _themeGreen.withOpacity(.055)
+            : Colors.white.withOpacity(.032),
+        border: Border.all(
+          color: _completed
+              ? _themeGreen.withOpacity(.30)
+              : Colors.white.withOpacity(.075),
+          width: .7,
+        ),
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          _message,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.white.withOpacity(.73),
+            fontSize: 9.6,
+            height: 1.42,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBagPanel({bool fill = false}) {
+    final body = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.022),
+        border: Border.all(color: Colors.white.withOpacity(.065), width: .7),
+      ),
+      child: _bag.isEmpty
+          ? Center(
+              child: Text(
+                '还没有搜刮到物品',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.24),
+                  fontSize: 9,
+                ),
+              ),
+            )
+          : SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: Wrap(
+                spacing: 7,
+                runSpacing: 7,
+                children: _bag.entries
+                    .map((entry) => _inventoryChip(entry.key, entry.value))
+                    .toList(),
+              ),
+            ),
+    );
+
+    final action = _buildContextActionBar();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text(
+              '本轮收获',
+              style: TextStyle(
+                color: Colors.white.withOpacity(.84),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '${_bag.values.fold<int>(0, (sum, value) => sum + value)} 件',
+              style: TextStyle(
+                color: Colors.white.withOpacity(.26),
+                fontSize: 8.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 48,
+          child: action ??
+              Container(
+                width: double.infinity,
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.014),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(.035),
+                    width: .7,
+                  ),
+                ),
+                child: Text(
+                  '继续探索，关键操作会在这里出现。',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.20),
+                    fontSize: 8,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+        ),
+        const SizedBox(height: 8),
+        if (fill) Expanded(child: body) else SizedBox(height: 82, child: body),
+      ],
+    );
+  }
+
+  Widget _buildWideBody() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                _buildGoalBar(compact: false),
+                const SizedBox(height: 12),
+                Expanded(child: _buildMapPanel()),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 300,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                _buildMessagePanel(),
+                const SizedBox(height: 14),
+                Expanded(child: _buildBagPanel(fill: true)),
+                const SizedBox(height: 10),
+                Text(
+                  _remote
+                      ? '提示 · 危险格会进入战斗，材料齐全后自动出现制作入口'
+                      : '提示 · 微红代表危险，材料齐全后自动出现制作入口',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.22),
+                    fontSize: 7.9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _withdrawButton(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactBody() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _buildGoalBar(compact: true),
+          const SizedBox(height: 9),
+          Expanded(child: _buildMapPanel()),
+          const SizedBox(height: 8),
+          _buildMessagePanel(),
+          const SizedBox(height: 9),
+          _buildBagPanel(),
+          const SizedBox(height: 9),
+          _withdrawButton(expanded: true),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment(0, -.08),
+                    radius: 1.08,
+                    colors: <Color>[
+                      Color(0x164DA26A),
+                      Color(0x0FFFFFFF),
+                      Color(0x05000000),
+                    ],
+                    stops: <double>[0, .58, 1],
+                  ),
+                ),
+              ),
+              SafeArea(
+                child: Column(
+                  children: <Widget>[
+                    SizedBox(
+                      height: 58,
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 16, right: 8),
+                        child: Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    _remote
+                                        ? '探索 · ${widget.controller.locationTitle.trim().isEmpty ? '当前场景' : widget.controller.locationTitle.trim()}'
+                                        : '探索 · 海滩边缘',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.95),
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    _remote
+                                        ? 'Seed $_seed · 格子探索'
+                                        : 'Seed $_seed · 迷雾探索',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.34),
+                                      fontSize: 8.5,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Tooltip(
+                              message: _remote ? '重新生成当前场景' : '生成新地图',
+                              child: IconButton(
+                                onPressed: _reset,
+                                icon: Icon(
+                                  Icons.refresh_rounded,
+                                  size: 19,
+                                  color: Colors.white.withOpacity(.56),
+                                ),
+                              ),
+                            ),
+                            if (widget.onClose != null)
+                              Tooltip(
+                                message: '关闭',
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(21),
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                                    child: Container(
+                                      color: Colors.black.withOpacity(0.15),
+                                      child: IconButton(
+                                        onPressed: widget.onClose,
+                                        icon: const Icon(
+                                          Icons.close_rounded,
+                                          size: 20,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Container(height: 1, color: Colors.white.withOpacity(.07)),
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final wide = constraints.maxWidth >= 760 &&
+                              constraints.maxHeight >= 500;
+                          return wide ? _buildWideBody() : _buildCompactBody();
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 独立的格状组件，加入 Q 弹逻辑
+class _FogTileWidget extends StatefulWidget {
+  const _FogTileWidget({
+    required this.index,
+    required this.tile,
+    required this.revealed,
+    required this.searched,
+    required this.frontier,
+    required this.hasHook,
+    required this.remote,
+    required this.isRemoteRecipeInput,
+    required this.nearbyInterest,
+    required this.nearbyDanger,
+    required this.isStartIndex,
+    required this.onTap,
+  });
+
+  final int index;
+  final _FogTileDef tile;
+  final bool revealed;
+  final bool searched;
+  final bool frontier;
+  final bool hasHook;
+  final bool remote;
+  final bool isRemoteRecipeInput;
+  final int nearbyInterest;
+  final int nearbyDanger;
+  final bool isStartIndex;
+  final VoidCallback onTap;
+
+  @override
+  State<_FogTileWidget> createState() => _FogTileWidgetState();
+}
+
+class _FogTileWidgetState extends State<_FogTileWidget> {
+  bool _isPressed = false;
+
+  Color _tileBorderColor() {
+    if (!widget.revealed) {
+      return widget.frontier
+          ? Colors.white.withOpacity(.25)
+          : Colors.white.withOpacity(.055);
+    }
+    if (widget.searched) return Colors.white.withOpacity(.055);
+    if (widget.tile.kind == _FogTileKind.hazard ||
+        widget.tile.kind == _FogTileKind.normalEnemy ||
+        widget.tile.kind == _FogTileKind.eliteEnemy) {
+      return const Color(0xFFD96F6F).withOpacity(.46);
+    }
+    if (widget.tile.kind == _FogTileKind.cache) {
+      return const Color(0xFFD8BF7A).withOpacity(.62);
+    }
+    if (widget.tile.kind == _FogTileKind.coconutTree && widget.hasHook) {
+      return _themeGreen.withOpacity(.86);
+    }
+    if (widget.tile.kind == _FogTileKind.scavenge ||
+        widget.tile.kind == _FogTileKind.genericItem ||
+        widget.tile.kind == _FogTileKind.branch ||
+        widget.tile.kind == _FogTileKind.stone ||
+        widget.tile.kind == _FogTileKind.vine ||
+        widget.tile.kind == _FogTileKind.bottle) {
+      return _themeGreen.withOpacity(.40);
+    }
+    return Colors.white.withOpacity(.10);
+  }
+
+  IconData _tileIcon() {
+    switch (widget.tile.kind) {
+      case _FogTileKind.genericItem:
+        return Icons.category_outlined;
+      case _FogTileKind.normalEnemy:
+        return Icons.pets_outlined;
+      case _FogTileKind.eliteEnemy:
+        return Icons.local_fire_department_outlined;
+      case _FogTileKind.branch:
+        return Icons.park_outlined;
+      case _FogTileKind.stone:
+        return Icons.landscape_outlined;
+      case _FogTileKind.vine:
+        return Icons.link_rounded;
+      case _FogTileKind.coconutTree:
+        return Icons.park_rounded;
+      case _FogTileKind.bottle:
+        return Icons.local_drink_outlined;
+      case _FogTileKind.scavenge:
+        return Icons.inventory_2_outlined;
+      case _FogTileKind.cache:
+        return Icons.star_border_rounded;
+      case _FogTileKind.hazard:
+        return Icons.warning_amber_rounded;
+      case _FogTileKind.empty:
+        return Icons.circle_outlined;
+    }
+  }
+
+  Color _qualityColor(int quality) {
+    if (quality >= 9) return const Color(0xFFD8BF7A).withOpacity(.96);
+    if (quality >= 7) return const Color(0xFFC58AF9).withOpacity(.94);
+    if (quality >= 5) return const Color(0xFF74A8F7).withOpacity(.92);
+    if (quality >= 3) return _themeGreen.withOpacity(.90);
+    return Colors.white.withOpacity(.50);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Color background = Colors.white.withOpacity(.014);
+    if (!widget.revealed && widget.frontier) background = Colors.white.withOpacity(.052);
+    if (widget.revealed) background = Colors.white.withOpacity(.046);
+    if (widget.searched) background = Colors.white.withOpacity(.020);
+    final isEnemy = widget.tile.kind == _FogTileKind.normalEnemy || widget.tile.kind == _FogTileKind.eliteEnemy;
+    
+    if (widget.revealed && (widget.tile.kind == _FogTileKind.hazard || isEnemy)) {
+      background = const Color(0xFFD96F6F).withOpacity(.045);
+    }
+    if (widget.revealed && widget.tile.kind == _FogTileKind.cache && !widget.searched) {
+      background = const Color(0xFFD8BF7A).withOpacity(.045);
+    }
+    if (widget.revealed && widget.tile.kind == _FogTileKind.coconutTree && widget.hasHook && !widget.searched) {
+      background = _themeGreen.withOpacity(.075);
+    }
+
+    Widget content;
+    if (!widget.revealed) {
+      content = Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          Container(
+            width: widget.frontier ? 5 : 3,
+            height: widget.frontier ? 5 : 3,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(widget.frontier ? .72 : .12),
+              shape: BoxShape.circle,
+            ),
+          ),
+          if (widget.frontier) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              '探索',
+              style: TextStyle(
+                color: Colors.white.withOpacity(.42),
+                fontSize: 7.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      );
+    } else if (widget.isStartIndex) {
+      content = Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          Text(
+            '起点',
+            style: TextStyle(
+              color: Colors.white.withOpacity(.92),
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '海滩',
+            style: TextStyle(
+              color: Colors.white.withOpacity(.36),
+              fontSize: 7.5,
+            ),
+          ),
+        ],
+      );
+    } else if (widget.tile.kind == _FogTileKind.empty) {
+      content = Center(
+        child: widget.nearbyInterest == 0 && widget.nearbyDanger == 0
+            ? Text(
+                '·',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.20),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              )
+            : FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (widget.nearbyInterest > 0) ...<Widget>[
+                      Icon(
+                        Icons.diamond_outlined,
+                        size: 10,
+                        color: Colors.white.withOpacity(.68),
+                      ),
+                      const SizedBox(width: 2),
+                      Text(
+                        '${widget.nearbyInterest}',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.78),
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                    if (widget.nearbyInterest > 0 && widget.nearbyDanger > 0)
+                      const SizedBox(width: 6),
+                    if (widget.nearbyDanger > 0) ...<Widget>[
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        size: 10,
+                        color: const Color(0xFFD96F6F).withOpacity(.78),
+                      ),
+                      const SizedBox(width: 1),
+                      Text(
+                        '${widget.nearbyDanger}',
+                        style: TextStyle(
+                          color: const Color(0xFFD96F6F).withOpacity(.82),
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+      );
+    } else {
+      final actionable = !widget.searched &&
+          widget.tile.kind != _FogTileKind.hazard &&
+          (widget.tile.kind != _FogTileKind.coconutTree || widget.hasHook);
+      final isHazard = widget.tile.kind == _FogTileKind.hazard;
+      final isDanger = isHazard || isEnemy;
+      final isRare = widget.tile.kind == _FogTileKind.cache ||
+          widget.tile.kind == _FogTileKind.eliteEnemy ||
+          widget.tile.rare;
+      final iconColor = isDanger
+          ? const Color(0xFFD96F6F).withOpacity(.88)
+          : isRare
+              ? const Color(0xFFD8BF7A).withOpacity(.92)
+              : actionable && widget.remote
+                  ? _qualityColor(widget.tile.quality)
+                  : actionable
+                      ? _themeGreen.withOpacity(.86)
+                      : Colors.white.withOpacity(.44);
+                      
+      late final String statusText;
+      if (widget.searched) {
+        statusText = '已处理';
+      } else if (isHazard) {
+        statusText = '危险';
+      } else if (widget.tile.kind == _FogTileKind.eliteEnemy) {
+        statusText = '高级 · Q${widget.tile.quality}';
+      } else if (widget.tile.kind == _FogTileKind.normalEnemy) {
+        statusText = '普通 · Q${widget.tile.quality}';
+      } else if (widget.tile.kind == _FogTileKind.coconutTree && !widget.hasHook) {
+        statusText = '需工具';
+      } else if (widget.tile.kind == _FogTileKind.scavenge ||
+          widget.tile.kind == _FogTileKind.cache) {
+        statusText = '搜刮';
+      } else if (widget.remote && widget.isRemoteRecipeInput) {
+        statusText = '合成材料 · Q${widget.tile.quality}';
+      } else if (actionable) {
+        statusText = '拾取 · Q${widget.tile.quality}';
+      } else {
+        statusText = '';
+      }
+
+      content = Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(3, 4, 3, 3),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(_tileIcon(), size: 12.5, color: iconColor),
+                const SizedBox(height: 2),
+                Text(
+                  widget.tile.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: isDanger && !widget.searched
+                        ? const Color(0xFFD96F6F).withOpacity(.88)
+                        : Colors.white.withOpacity(widget.searched ? .28 : .90),
+                    fontSize: 7.8,
+                    height: 1.0,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (statusText.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 2),
+                  Text(
+                    statusText,
+                    maxLines: 1,
+                    overflow: TextOverflow.fade,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: isDanger
+                          ? const Color(0xFFD96F6F).withOpacity(.66)
+                          : isRare
+                              ? const Color(0xFFD8BF7A).withOpacity(.86)
+                              : actionable
+                                  ? _themeGreen.withOpacity(.80)
+                                  : Colors.white.withOpacity(.32),
+                      fontSize: 6.4,
+                      height: 1.0,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (widget.tile.rare && !widget.searched)
+            Positioned(
+              top: 2,
+              right: 2,
+              child: Icon(
+                Icons.star_rounded,
+                size: 7,
+                color: const Color(0xFFD8BF7A).withOpacity(.92),
+              ),
+            ),
+        ],
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(2.0),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => setState(() => _isPressed = true),
+        onTapUp: (_) => setState(() => _isPressed = false),
+        onTapCancel: () => setState(() => _isPressed = false),
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _isPressed ? 0.88 : 1.0,
+          duration: Duration(milliseconds: _isPressed ? 150 : 600),
+          curve: _isPressed ? Curves.easeOutCubic : Curves.elasticOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 170),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              color: background,
+              border: Border.all(
+                color: _tileBorderColor(),
+                width: widget.frontier ||
+                        widget.tile.kind == _FogTileKind.cache ||
+                        widget.tile.kind == _FogTileKind.hazard ||
+                        isEnemy ||
+                        (widget.tile.kind == _FogTileKind.coconutTree && widget.hasHook)
+                    ? .9
+                    : .6,
+              ),
+              boxShadow: widget.revealed &&
+                      !widget.searched &&
+                      (widget.tile.kind == _FogTileKind.cache ||
+                          widget.tile.kind == _FogTileKind.eliteEnemy ||
+                          (widget.tile.kind == _FogTileKind.coconutTree && widget.hasHook))
+                  ? <BoxShadow>[
+                      BoxShadow(
+                        color: widget.tile.kind == _FogTileKind.cache
+                            ? const Color(0xFFD8BF7A).withOpacity(.08)
+                            : _themeGreen.withOpacity(.09),
+                        blurRadius: 10,
+                      ),
+                    ]
+                  : const <BoxShadow>[],
+            ),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 class _SurroundPickupRewardToast extends StatefulWidget {
   const _SurroundPickupRewardToast({
@@ -1595,18 +4033,19 @@ class _SurroundingsHeader extends StatelessWidget {
             if (onClose != null)
               Tooltip(
                 message: '关闭',
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: onClose,
-                    borderRadius: BorderRadius.zero,
-                    child: SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: Icon(
-                        Icons.close_rounded,
-                        size: 19,
-                        color: Colors.white.withOpacity(0.62),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(21),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                    child: Container(
+                      color: Colors.black.withOpacity(0.15),
+                      child: IconButton(
+                        onPressed: onClose,
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          size: 19,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ),
@@ -1645,18 +4084,17 @@ class _SurroundTutorialStep extends StatelessWidget {
     bool plus = false,
     double width = 82,
   }) {
-    // 教程暗黑毛玻璃风格同步
     final bgColor = green
-        ? _archiveThemeGreen.withOpacity(0.15)
+        ? _themeGreen.withOpacity(0.15)
         : mergeReady
-            ? _archiveThemeGreen.withOpacity(0.1)
+            ? _themeGreen.withOpacity(0.1)
             : Colors.white.withOpacity(0.055);
     final borderColor = green
-        ? _archiveThemeGreen.withOpacity(0.9)
+        ? _themeGreen.withOpacity(0.9)
         : mergeReady
-            ? _archiveThemeGreen.withOpacity(0.5)
+            ? _themeGreen.withOpacity(0.5)
             : Colors.white.withOpacity(0.12);
-    final textColor = green ? _archiveThemeGreen : Colors.white.withOpacity(0.85);
+    final textColor = green ? _themeGreen : Colors.white.withOpacity(0.85);
 
     return ClipRRect(
       borderRadius: BorderRadius.zero,
@@ -1696,7 +4134,7 @@ class _SurroundTutorialStep extends StatelessWidget {
                 const Text(
                   '+',
                   style: TextStyle(
-                    color: _archiveThemeGreen,
+                    color: _themeGreen,
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
                   ),
@@ -1760,7 +4198,7 @@ class _SurroundTutorialStep extends StatelessWidget {
           children: <Widget>[
             Transform.translate(offset: const Offset(0, 5), child: _node('物品 A', width: 64)),
             const SizedBox(width: 6),
-            const Icon(Icons.center_focus_weak_rounded, size: 19, color: _archiveThemeGreen),
+            const Icon(Icons.center_focus_weak_rounded, size: 19, color: _themeGreen),
             const SizedBox(width: 6),
             Transform.translate(offset: const Offset(0, -5), child: _node('物品 B', width: 64)),
           ],
@@ -1790,7 +4228,7 @@ class _SurroundTutorialStep extends StatelessWidget {
                   child: Text(
                     number,
                     style: const TextStyle(
-                      color: _archiveThemeGreen,
+                      color: _themeGreen,
                       fontSize: 9.4,
                       fontWeight: FontWeight.w800,
                       letterSpacing: .3,
@@ -1914,7 +4352,6 @@ class _SurroundStageState extends State<_SurroundStage> {
   }
 
   Size _canvasSizeFor(Size viewportSize) {
-    // 画布比窗口大，但不要大到初始视角只剩很小的一团节点。
     return Size(
       math.max(viewportSize.width * 1.34, 760.0),
       math.max(viewportSize.height * 1.28, 520.0),
@@ -1936,8 +4373,10 @@ class _SurroundStageState extends State<_SurroundStage> {
       if (def == null) continue;
       final p = widget.positions[id] ?? def.position;
       final center = Offset(p.dx * canvasSize.width, p.dy * canvasSize.height);
-      final halfWidth = def.collectible ? 78.0 : 70.0;
-      final halfHeight = def.collectible ? 30.0 : 24.0;
+      final emphasized =
+          def.collectible || def.type == _SurroundNodeType.encounter;
+      final halfWidth = emphasized ? 78.0 : 70.0;
+      final halfHeight = emphasized ? 30.0 : 24.0;
       minX = math.min(minX, center.dx - halfWidth);
       minY = math.min(minY, center.dy - halfHeight);
       maxX = math.max(maxX, center.dx + halfWidth);
@@ -2036,8 +4475,6 @@ class _SurroundStageState extends State<_SurroundStage> {
                 boundaryMargin: const EdgeInsets.all(260),
                 minScale: .38,
                 maxScale: 2.4,
-                // 只有从空白区域开始拖动时才允许平移画布。
-                // 手指/鼠标按在任意节点上时，节点优先处理点击或物品拖拽。
                 panEnabled: !_nodePointerActive,
                 scaleEnabled: true,
                 trackpadScrollCausesScale: true,
@@ -2119,7 +4556,7 @@ class _SurroundStageState extends State<_SurroundStage> {
     final width = math
         .min(compact ? 112.0 : 132.0, math.max(88.0, size.width * .19))
         .toDouble();
-    final height = def.collectible
+    final height = def.collectible || def.type == _SurroundNodeType.encounter
         ? (compact ? 43.0 : 46.0)
         : (compact ? 34.0 : 37.0);
     final center = Offset(p.dx * size.width, p.dy * size.height);
@@ -2194,15 +4631,15 @@ class _SurroundStageState extends State<_SurroundStage> {
       child: IgnorePointer(
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: _archiveThemeGreen.withOpacity(0.16),
+            color: _themeGreen.withOpacity(0.16),
             borderRadius: BorderRadius.zero,
-            border: Border.all(color: _archiveThemeGreen.withOpacity(0.45)),
+            border: Border.all(color: _themeGreen.withOpacity(0.45)),
           ),
           child: const Center(
             child: Text(
               '松开组合',
               style: TextStyle(
-                color: _archiveThemeGreen,
+                color: _themeGreen,
                 fontSize: 9.5,
                 fontWeight: FontWeight.w700,
               ),
@@ -2317,8 +4754,12 @@ class _SurroundNodeButton extends StatefulWidget {
 class _SurroundNodeButtonState extends State<_SurroundNodeButton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulseController;
+  bool _isPressed = false; // 触控 Q弹 核心状态
 
-  bool get _shouldPulse => widget.def.collectible || widget.mergeReady;
+  bool get _shouldPulse =>
+      widget.def.collectible ||
+      widget.def.type == _SurroundNodeType.encounter ||
+      widget.mergeReady;
 
   @override
   void initState() {
@@ -2334,6 +4775,7 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
   void didUpdateWidget(covariant _SurroundNodeButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.def.collectible != widget.def.collectible ||
+        oldWidget.def.type != widget.def.type ||
         oldWidget.mergeReady != widget.mergeReady) {
       _syncPulse();
     }
@@ -2360,13 +4802,14 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
   Widget build(BuildContext context) {
     final def = widget.def;
     final collectible = def.collectible;
+    final encounter = def.type == _SurroundNodeType.encounter;
+    final encounterQualityColor = _surroundQualityColor(def.quality);
 
     final pulse = Curves.easeInOut.transform(_pulseController.value);
 
-    // 核心样式变量：与抽屉统一为浅白毛玻璃 + 细线
-    Color bgColor = Colors.white.withOpacity(0.055); 
+    Color bgColor = Colors.white.withOpacity(0.055);
     Color borderColor = Colors.white.withOpacity(0.08);
-    Color textColor = Colors.white.withOpacity(0.85); 
+    Color textColor = Colors.white.withOpacity(0.85);
     List<BoxShadow> glow = const <BoxShadow>[];
 
     if (widget.exhausted) {
@@ -2376,66 +4819,90 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
     }
 
     if (widget.active && !collectible && !widget.mergeReady) {
-      // 选中状态：微亮白底，极细绿色高亮线
-      bgColor = Colors.white.withOpacity(0.1); 
-      borderColor = _archiveThemeGreen.withOpacity(0.8);
+      bgColor = Colors.white.withOpacity(0.1);
+      borderColor = const Color(0xFF8BD7A2).withOpacity(0.8);
       textColor = Colors.white;
     }
 
     if (widget.mergeReady && !collectible) {
-      // 组合状态：暗黑绿色呼吸
-      bgColor = _archiveThemeGreen.withOpacity(0.08 + 0.05 * pulse);
-      borderColor = _archiveThemeGreen.withOpacity(0.4 + 0.2 * pulse);
+      bgColor = const Color(0xFF8BD7A2).withOpacity(0.08 + 0.05 * pulse);
+      borderColor = const Color(0xFF8BD7A2).withOpacity(0.4 + 0.2 * pulse);
     }
 
     if (collectible) {
-      // 拾取状态：不要整块纯绿，维持玻璃底，只用绿色边框/徽标/轻呼吸光提示可领取
       bgColor = Colors.white.withOpacity(0.075);
       textColor = Colors.white.withOpacity(0.94);
-      borderColor = _archiveThemeGreen.withOpacity(0.88);
+      borderColor = const Color(0xFF8BD7A2).withOpacity(0.88);
       glow = [
         BoxShadow(
-          color: _archiveThemeGreen.withOpacity(0.10 + 0.08 * pulse),
+          color: const Color(0xFF8BD7A2).withOpacity(0.10 + 0.08 * pulse),
           blurRadius: 14,
           spreadRadius: 0.6,
         ),
       ];
     }
 
+    if (encounter) {
+      bgColor = const Color(0xFFB44747).withOpacity(0.10 + 0.03 * pulse);
+      borderColor = encounterQualityColor.withOpacity(0.72 + 0.16 * pulse);
+      textColor = Colors.white;
+      glow = <BoxShadow>[
+        BoxShadow(
+          color: encounterQualityColor.withOpacity(0.08 + 0.06 * pulse),
+          blurRadius: 15,
+        ),
+      ];
+    }
+
     final selectedScale = widget.active && !collectible && !widget.mergeReady ? 1.022 : 1.0;
-    final pulseScale = collectible
+    final pulseScale = collectible || encounter
         ? 1 + .009 * pulse
         : widget.mergeReady
             ? 1 + .013 * pulse
             : 1.0;
 
+    // 加入按下时的缩小倍率
+    final targetScale = pulseScale * selectedScale * (_isPressed ? 0.88 : 1.0);
+
     return Semantics(
       button: true,
       label: def.label,
-      hint: collectible ? '点击拾取并放入背包' : null,
+      hint: collectible
+          ? '点击拾取并放入背包'
+          : encounter
+              ? '点击进入战斗'
+              : null,
       child: MouseRegion(
         cursor: widget.draggable
             ? SystemMouseCursors.grab
             : SystemMouseCursors.click,
         child: Listener(
           behavior: HitTestBehavior.opaque,
-          onPointerDown: (_) => widget.onPointerDown?.call(),
-          onPointerUp: (_) => widget.onPointerUp?.call(),
-          onPointerCancel: (_) => widget.onPointerUp?.call(),
+          onPointerDown: (_) {
+            setState(() => _isPressed = true);
+            widget.onPointerDown?.call();
+          },
+          onPointerUp: (_) {
+            setState(() => _isPressed = false);
+            widget.onPointerUp?.call();
+          },
+          onPointerCancel: (_) {
+            setState(() => _isPressed = false);
+            widget.onPointerUp?.call();
+          },
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: widget.dragging ? null : widget.onTap,
+            // 修复点：直接使用父级传下来的参数，无需再次判断
             onPanStart: widget.onPanStart,
             onPanUpdate: widget.onPanUpdate,
             onPanEnd: widget.onPanEnd,
             onPanCancel: widget.onPanCancel,
-            child: Transform.scale(
-              scale: pulseScale,
-              child: AnimatedScale(
-                scale: selectedScale,
-                duration: const Duration(milliseconds: 160),
-                curve: Curves.easeOutCubic,
-                child: ClipRect(
+            child: AnimatedScale(
+              scale: targetScale,
+              duration: Duration(milliseconds: _isPressed ? 150 : 600),
+              curve: _isPressed ? Curves.easeOutCubic : Curves.elasticOut,
+              child: ClipRect(
                 child: Container(
                   decoration: BoxDecoration(
                     color: bgColor,
@@ -2461,25 +4928,25 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                                     height: 18,
                                     alignment: Alignment.center,
                                     decoration: BoxDecoration(
-                                      color: _archiveThemeGreen.withOpacity(0.14),
+                                      color: const Color(0xFF8BD7A2).withOpacity(0.14),
                                       border: Border.all(
-                                        color: _archiveThemeGreen.withOpacity(0.34),
+                                        color: const Color(0xFF8BD7A2).withOpacity(0.34),
                                         width: .7,
                                       ),
                                     ),
                                     child: widget.collecting
-                                        ? SizedBox(
+                                        ? const SizedBox(
                                             width: 10,
                                             height: 10,
                                             child: CircularProgressIndicator(
                                               strokeWidth: 1.4,
-                                              color: _archiveThemeGreen,
+                                              color: Color(0xFF8BD7A2),
                                             ),
                                           )
                                         : const Icon(
                                             Icons.inventory_2_outlined,
                                             size: 11.5,
-                                            color: _archiveThemeGreen,
+                                            color: Color(0xFF8BD7A2),
                                           ),
                                   ),
                                   const SizedBox(width: 6),
@@ -2504,16 +4971,16 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                                       vertical: 2,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: _archiveThemeGreen.withOpacity(0.10 + 0.04 * pulse),
+                                      color: const Color(0xFF8BD7A2).withOpacity(0.10 + 0.04 * pulse),
                                       border: Border.all(
-                                        color: _archiveThemeGreen.withOpacity(0.34 + 0.12 * pulse),
+                                        color: const Color(0xFF8BD7A2).withOpacity(0.34 + 0.12 * pulse),
                                         width: .7,
                                       ),
                                     ),
                                     child: const Text(
                                       '可拾取',
                                       style: TextStyle(
-                                        color: _archiveThemeGreen,
+                                        color: Color(0xFF8BD7A2),
                                         fontSize: 7.8,
                                         height: 1,
                                         fontWeight: FontWeight.w700,
@@ -2545,18 +5012,44 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                         : Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: <Widget>[
+                              if (encounter) ...<Widget>[
+                                const Icon(
+                                  Icons.warning_amber_rounded,
+                                  size: 13,
+                                  color: Colors.white,
+                                ),
+                                const SizedBox(width: 4),
+                              ],
                               Flexible(
-                                child: Text(
-                                  def.label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: textColor, // 统一使用暗黑色系变量
-                                    fontSize: 10.8,
-                                    height: 1.1,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: .2,
-                                  ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    Text(
+                                      def.label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: textColor,
+                                        fontSize: 10.8,
+                                        height: 1.1,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: .2,
+                                      ),
+                                    ),
+                                    if (encounter)
+                                      Text(
+                                        '等级 ${def.quality} · ${def.eliteCount > 0 ? '精英敌人' : '普通敌人'}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: encounterQualityColor.withOpacity(.92),
+                                          fontSize: 7.8,
+                                          height: 1.2,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
                               if (widget.explorable) ...<Widget>[
@@ -2564,7 +5057,7 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                                 const Text(
                                   '+',
                                   style: TextStyle(
-                                    color: _archiveThemeGreen,
+                                    color: Color(0xFF8BD7A2),
                                     fontSize: 13,
                                     height: 1.1,
                                     fontWeight: FontWeight.w800,
@@ -2579,8 +5072,7 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
           ),
         ),
       ),
-    ),
-  );
+    );
   }
 }
 
@@ -2597,7 +5089,6 @@ class _SurroundLinePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 与抽屉一致的浅白细线，避免抢过节点本身
     final linePaint = Paint()
       ..color = Colors.white.withOpacity(.11)
       ..strokeWidth = .8
@@ -2765,7 +5256,7 @@ class _SurroundResultChip extends StatelessWidget {
               const TextSpan(
                 text: '获得 · ',
                 style: TextStyle(
-                  color: _archiveThemeGreen,
+                  color: _themeGreen,
                   fontWeight: FontWeight.w700,
                 ),
               ),

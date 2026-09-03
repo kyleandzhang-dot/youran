@@ -65,16 +65,14 @@ class _NovelChoiceDockSurroundingsActionState
   @override
   void didUpdateWidget(covariant _NovelChoiceDockSurroundingsAction oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.scope.visible != widget.scope.visible ||
+    if (oldWidget.scope.attention != widget.scope.attention ||
         oldWidget.scope.loading != widget.scope.loading) {
       _syncPulse();
     }
   }
 
   void _syncPulse() {
-    // 入口只要可用就让绿点持续轻呼吸，不再依赖后端 needs_attention。
-    // needs_attention 仍保留在 Scope 中供后续状态语义使用，但不决定提示动画。
-    if (widget.scope.visible && !widget.scope.loading) {
+    if (widget.scope.attention && !widget.scope.loading) {
       if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
     } else {
       _pulse
@@ -92,13 +90,10 @@ class _NovelChoiceDockSurroundingsActionState
   @override
   Widget build(BuildContext context) {
     final scope = widget.scope;
-    final pulseActive = scope.visible && !scope.loading;
-    final displayLabel =
-        scope.label.trim() == '探索周围' ? '探索附近' : scope.label;
 
     return Semantics(
       button: true,
-      label: displayLabel,
+      label: scope.label,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -110,66 +105,45 @@ class _NovelChoiceDockSurroundingsActionState
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                SizedBox(
-                  width: 19,
-                  height: 18,
-                  child: scope.loading
-                      ? Center(
-                          child: SizedBox(
-                            width: 11,
-                            height: 11,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.25,
-                              color: Colors.white.withOpacity(.58),
-                            ),
+                if (scope.loading)
+                  SizedBox(
+                    width: 9,
+                    height: 9,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.2,
+                      color: Colors.white.withOpacity(.52),
+                    ),
+                  )
+                else
+                  AnimatedBuilder(
+                    animation: _pulse,
+                    builder: (context, _) {
+                      final value = scope.attention ? _pulse.value : 0.0;
+                      return Container(
+                        width: 5,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6FD35F).withOpacity(
+                            scope.attention ? .72 + value * .28 : .58,
                           ),
-                        )
-                      : AnimatedBuilder(
-                          animation: _pulse,
-                          builder: (context, _) {
-                            final value = pulseActive ? _pulse.value : 0.0;
-                            return Stack(
-                              clipBehavior: Clip.none,
-                              children: <Widget>[
-                                Center(
-                                  child: Icon(
-                                    Icons.radar_rounded,
-                                    size: 15.5,
-                                    color: Colors.white.withOpacity(.76),
+                          shape: BoxShape.circle,
+                          boxShadow: scope.attention
+                              ? <BoxShadow>[
+                                  BoxShadow(
+                                    color: const Color(0xFF6FD35F)
+                                        .withOpacity(.14 + value * .28),
+                                    blurRadius: 2 + value * 4,
+                                    spreadRadius: value * .65,
                                   ),
-                                ),
-                                Positioned(
-                                  right: 0,
-                                  top: 0,
-                                  child: Transform.scale(
-                                    scale: .86 + value * .22,
-                                    child: Container(
-                                      width: 5,
-                                      height: 5,
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF6FD35F)
-                                            .withOpacity(.78 + value * .22),
-                                        shape: BoxShape.circle,
-                                        boxShadow: <BoxShadow>[
-                                          BoxShadow(
-                                            color: const Color(0xFF6FD35F)
-                                                .withOpacity(.24 + value * .52),
-                                            blurRadius: 3.5 + value * 5.5,
-                                            spreadRadius: .15 + value * .95,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
+                                ]
+                              : const <BoxShadow>[],
                         ),
-                ),
-                const SizedBox(width: 5),
+                      );
+                    },
+                  ),
+                const SizedBox(width: 6),
                 Text(
-                  displayLabel,
+                  scope.label,
                   style: TextStyle(
                     color: const Color(0xFFF7F2EA).withOpacity(.72),
                     fontSize: 11.5,
@@ -195,6 +169,7 @@ class _NovelChoiceDockSurroundingsActionState
 
 class NovelChoiceDock extends StatelessWidget {
   const NovelChoiceDock({
+    super.key,
     required this.choices,
     required this.onSelected,
   });
@@ -207,7 +182,7 @@ class NovelChoiceDock extends StatelessWidget {
     final compact = MediaQuery.sizeOf(context).width <= 600;
     final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
 
-    // 参考图：标题浮在场景上；卡片与底部自由输入框同宽。
+    // 移除了多余的 safeBottom 计算，避免与底层 DialogPanel 重复叠加导致留空过大
     return SizedBox(
       width: double.infinity,
       child: Column(
@@ -291,20 +266,12 @@ class NovelChoiceDock extends StatelessWidget {
   }
 }
 
-/// 选择卡片：透明玻璃感，不使用暖棕色底。
 class _ChoiceColors {
   static const Color line = Color(0xE6F3EEE9);
-  static const Color cardTop = Color(0x20FFFFFF);
-  static const Color cardMiddle = Color(0x15FFFFFF);
-  static const Color cardBottom = Color(0x0FFFFFFF);
-
-  // 整个选项框只用一圈较浅的白色描边。
-  // 对比度明显低于自由输入框，避免抢正文。
-  static const Color border = Color(0x33FFFFFF);
-
-  // 编号保持轻透明玻璃底；边框只比主外框略清晰。
-  static const Color numberBg = Color(0x14FFFFFF);
-  static const Color numberBorder = Color(0x66FFFFFF);
+  static const Color card = Color(0x0AFFFFFF);
+  static const Color border = Color(0x1AFFFFFF);
+  static const Color numberBg = Color(0x0AFFFFFF);
+  static const Color numberBorder = Color(0x38FFFFFF);
 }
 
 class _InlineNovelChoices extends StatelessWidget {
@@ -360,48 +327,31 @@ class _InlineNovelChoices extends StatelessWidget {
               bottom: isLast ? 0 : (compact ? 5 : 6),
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(3),
+              borderRadius: BorderRadius.zero,
               child: _AdaptiveBackdropBlur(
-                sigma: 18,
+                sigma: 15,
                 child: Material(
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: () => onSelected(choice),
-                    borderRadius: BorderRadius.circular(3),
-                    splashColor: Colors.white.withOpacity(.06),
-                    highlightColor: Colors.white.withOpacity(.025),
+                    borderRadius: BorderRadius.zero,
+                    splashColor: Colors.white.withOpacity(.075),
+                    highlightColor: Colors.white.withOpacity(.035),
                     child: Container(
                       width: double.infinity,
                       constraints: const BoxConstraints(minHeight: 48),
                       padding: const EdgeInsets.symmetric(vertical: 7),
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(3),
+                        color: _ChoiceColors.card,
+                        borderRadius: BorderRadius.zero,
                         border: Border.all(
                           color: _ChoiceColors.border,
-                          width: .55,
+                          width: .65,
                         ),
-                        gradient: const LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: <Color>[
-                            _ChoiceColors.cardTop,
-                            _ChoiceColors.cardMiddle,
-                            _ChoiceColors.cardBottom,
-                          ],
-                        ),
-                        boxShadow: const <BoxShadow>[
-                          BoxShadow(
-                            color: Color(0x26000000),
-                            blurRadius: 14,
-                            offset: Offset(0, 6),
-                          ),
-                        ],
                       ),
                       child: Stack(
                         alignment: Alignment.center,
                         children: <Widget>[
-                          // 左侧只保留“编号 + 类型 icon”。
-                          // icon 直接替代旧的“行动”文字标签，并且三种选项统一显示。
                           Positioned(
                             left: compact ? 10 : 12,
                             top: 0,
@@ -442,8 +392,6 @@ class _InlineNovelChoices extends StatelessWidget {
                               ],
                             ),
                           ),
-
-                          // 左侧给“编号 + 大 icon”预留空间；右侧只保留正常安全边距。
                           Padding(
                             padding: EdgeInsets.only(
                               left: compact ? 88 : 96,
@@ -517,16 +465,27 @@ class _NovelDialogFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 600;
     final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
-    // 输入栏已经由外层 Positioned 抬到键盘上沿；键盘出现时不再额外叠加
-    // home indicator 的安全区高度，避免输入框被抬得过头。
     final safeBottom = keyboardVisible
         ? 0.0
         : MediaQuery.viewPaddingOf(context).bottom;
 
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 170),
+    // 核心逻辑：精准判断右侧导航栏是否显示
+    final showBottomNav = controller.storyStarted && 
+                          !controller.isCinematic && 
+                          (controller.hasNext || controller.isGenerating) && 
+                          !keyboardVisible;
+    
+    // 计算右侧需要避让的宽度（导航图标宽度 + 间距）
+    final navOffsetRight = showBottomNav ? (compact ? 56.0 : 64.0) : 0.0;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
-      alignment: Alignment.bottomCenter,
+      // 底部永远贴底，通过 right 让出右侧导航栏的空间
+      padding: EdgeInsets.only(
+        bottom: safeBottom + 8.0, 
+        right: navOffsetRight, 
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
@@ -542,6 +501,7 @@ class _NovelDialogFooter extends StatelessWidget {
                   child: NovelInputBar(
                     controller: textController,
                     focusNode: focusNode,
+                    gameController: controller,
                     socketService: controller.socket,
                     enabled: inputEnabled,
                     luckyCardActive: controller.luckyCardActive,
@@ -552,57 +512,58 @@ class _NovelDialogFooter extends StatelessWidget {
                 ),
               ],
             ),
-            SizedBox(height: compact ? 4 : 6),
           ],
-          // 一级导航已经移到右侧，这里只避开系统底部安全区。
-          SizedBox(height: safeBottom),
         ],
       ),
     );
   }
 }
 
-// 主页面当前一级 Tab。0=剧情；积分星星只允许在剧情 Tab 出现。
 final ValueNotifier<int> _novelPrimaryTabIndex = ValueNotifier<int>(0);
 
-/// 右侧一级导航：放在积分下方，保持游戏 HUD 感。
-/// 无底板、无卡片、无发光，只使用线性 icon + 小文字。
-class NovelSideArchiveBar extends StatelessWidget {
-  const NovelSideArchiveBar({
+/// 右侧悬浮一级导航：【无界渐变】沉浸式设计
+/// 已由原先的底部横向改为右侧竖向排列，彻底释放底部文本与立绘空间。
+class NovelBottomArchiveBar extends StatelessWidget {
+  const NovelBottomArchiveBar({
     super.key,
     required this.selectedIndex,
     required this.onSelected,
+    this.onWorld,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onSelected;
+  final VoidCallback? onWorld;
 
   static const List<String> _labels = <String>[
     '剧情',
     '角色',
     '背包',
     '经历',
+    '地图',
   ];
 
-  // 右侧只保留长期档案/页面入口；当前地点的“周围探索”已移到场景 HUD。
   static const List<String> _iconAssets = <String>[
     'assets/images/novel/nav_story.png',
     'assets/images/novel/nav_character.png',
     'assets/images/novel/nav_inventory.png',
     'assets/images/novel/nav_journey.png',
+    'assets/images/novel/nav_world.png',
   ];
 
   static const List<IconData> _fallbackIcons = <IconData>[
-    Icons.circle_outlined,
-    Icons.circle_outlined,
-    Icons.circle_outlined,
-    Icons.circle_outlined,
+    Icons.auto_stories_rounded,
+    Icons.person_outline_rounded,
+    Icons.backpack_outlined,
+    Icons.explore_outlined,
+    Icons.public_outlined,
   ];
 
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 600;
     final activeIndex = selectedIndex.clamp(0, _labels.length - 1).toInt();
+    
     if (_novelPrimaryTabIndex.value != activeIndex) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_novelPrimaryTabIndex.value != activeIndex) {
@@ -611,33 +572,39 @@ class NovelSideArchiveBar extends StatelessWidget {
       });
     }
 
-    // 剧情页是深色场景，档案页是浅色背景；只切换前景色，不增加任何底板。
-    final lightArchive = activeIndex != 0;
-
-    return SizedBox(
-      width: compact ? 62 : 68,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          for (var i = 0; i < _labels.length; i++) ...<Widget>[
-            if (i > 0)
-              SizedBox(height: compact ? 5 : 7),
-            _MinimalSideNavAction(
-              semanticLabel: _labels[i],
-              iconAsset: _iconAssets[i],
-              fallbackIcon: _fallbackIcons[i],
-              selected: i == activeIndex,
-              lightTheme: lightArchive,
-              compact: compact,
-              onTap: () {
-                if (_novelPrimaryTabIndex.value != i) {
-                  _novelPrimaryTabIndex.value = i;
+    // 核心修改：使用 Align 固定在右下角
+    return Align(
+      alignment: Alignment.bottomRight,
+      child: Padding(
+        // 留出与屏幕右侧和底部的安全距离，避免阻挡文字或被手势误触
+        padding: EdgeInsets.only(
+          right: compact ? 12.0 : 16.0,
+          bottom: compact ? 40.0 : 56.0, // 距离底部稍微高一点，避开输入框
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min, // 紧凑包裹
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            for (var i = 0; i < _labels.length; i++) ...[
+              _MinimalSideNavAction(
+                semanticLabel: _labels[i],
+                iconAsset: _iconAssets[i],
+                fallbackIcon: _fallbackIcons[i],
+                selected: i == activeIndex,
+                compact: compact,
+                onTap: () {
+                  if (_novelPrimaryTabIndex.value != i) {
+                    _novelPrimaryTabIndex.value = i;
+                  }
+                  onSelected(i);
                 }
-                onSelected(i);
-              },
-            ),
+              ),
+              // 添加竖向排列时的图标间距
+              if (i < _labels.length - 1)
+                SizedBox(height: compact ? 18.0 : 22.0), 
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -649,7 +616,6 @@ class _MinimalSideNavAction extends StatelessWidget {
     required this.iconAsset,
     this.fallbackIcon = Icons.circle_outlined,
     required this.selected,
-    required this.lightTheme,
     required this.compact,
     required this.onTap,
   });
@@ -658,17 +624,14 @@ class _MinimalSideNavAction extends StatelessWidget {
   final String iconAsset;
   final IconData fallbackIcon;
   final bool selected;
-  final bool lightTheme;
   final bool compact;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    // nav PNG 始终保持素材自身原色；四个入口不再提供任何视觉选中态。
-    // selected 只保留给 Semantics，视觉上所有入口完全一致。
-    final color = lightTheme
-        ? const Color(0xE61D231E)
-        : const Color(0xF0F5F7F4);
+    // 保留透明图片原色，仅通过整体透明度区分选中状态。
+    final opacity = selected ? .88 : .62;
+    final color = Colors.white.withOpacity(opacity);
 
     return Semantics(
       button: true,
@@ -677,56 +640,59 @@ class _MinimalSideNavAction extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: SizedBox(
-          width: compact ? 60 : 66,
-          height: compact ? 70 : 76,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              SizedBox(
-                width: compact ? 44 : 48,
-                height: compact ? 44 : 48,
-                child: iconAsset.isEmpty
-                    ? Icon(
-                        fallbackIcon,
-                        size: compact ? 36 : 40,
-                        color: color,
-                      )
-                    : Image.asset(
-                        iconAsset,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.medium,
-                        // nav_*.png 保持素材自身原色；选中状态绝不再给 icon 染色。
-                        errorBuilder: (_, __, ___) => Icon(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            AnimatedScale(
+              scale: selected ? 1.12 : 1.0,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOutBack,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 250),
+                opacity: opacity,
+                child: SizedBox(
+                  width: compact ? 28 : 32,
+                  height: compact ? 28 : 32,
+                  child: iconAsset.isEmpty
+                      ? Icon(
                           fallbackIcon,
-                          size: compact ? 40 : 44,
-                          color: color,
+                          size: compact ? 26 : 30,
+                          color: Colors.white,
+                        )
+                      : Image.asset(
+                          iconAsset,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.medium,
+                          errorBuilder: (_, __, ___) => Icon(
+                            fallbackIcon,
+                            size: compact ? 26 : 30,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-              ),
-              SizedBox(height: compact ? 3 : 4),
-              Text(
-                semanticLabel,
-                maxLines: 1,
-                style: TextStyle(
-                  color: color,
-                  fontFamily: 'WenJinMinchoP0',
-                  fontSize: compact ? 10.8 : 11.4,
-                  height: 1,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: .20,
                 ),
               ),
-            ],
-          ),
+            ),
+            SizedBox(height: compact ? 4 : 6),
+            AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 250),
+              style: TextStyle(
+                color: color,
+                fontFamily: 'WenJinMinchoP0',
+                fontSize: compact ? 10.5 : 11.2,
+                height: 1,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                letterSpacing: 0.35,
+              ),
+              child: Text(semanticLabel, maxLines: 1),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-/// 自由输入框语音按钮：纯白圆形承载层，中间用透明镂空绘制简洁声波。
-/// 不再使用旧版向右扩散的弧线，改成 5 根对称圆角波形柱，视觉更干净。
 class _CutoutVoiceWavePainter extends CustomPainter {
   const _CutoutVoiceWavePainter({required this.speaking});
 
@@ -747,8 +713,6 @@ class _CutoutVoiceWavePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeWidth = speaking ? 2.55 : 2.35;
 
-    // 五段对称声波：短 / 中 / 长 / 中 / 短。
-    // speaking 时只轻微放大波幅，不改变整体图形语言。
     final boost = speaking ? 1.08 : 1.0;
     final heights = <double>[.18, .34, .50, .34, .18];
     final spacing = size.width * .105;
@@ -810,7 +774,6 @@ class _StoryImageAction extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                // 右侧入口必须始终可读：图标美术不动，只提高文字识别度。
                 color: NovelPalette.text.withOpacity(.94),
                 fontSize: 9.8,
                 fontWeight: FontWeight.w700,
@@ -874,53 +837,58 @@ class _StoryProgressLocator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 只有在回溯历史时才显示，保证最新剧情的极致干净。
     if (!isBrowsingHistory || totalCount <= 1) {
       return const SizedBox.shrink();
     }
 
-    // 段与段之间的间距：格子越多，间距越窄，避免拥挤。
-    final gap = totalCount > 24 ? 1.5 : totalCount > 12 ? 2.0 : 3.0;
-
-    // 进度不要铺满整条底部：收成一条较短的“剧情刻度”，视觉会轻很多。
-    final locatorWidth = (MediaQuery.sizeOf(context).width * .58)
-        .clamp(150.0, 320.0)
-        .toDouble();
+    // 当历史记录极其多时，优雅降级为文字显示，避免圆点溢出屏幕
+    final useDots = totalCount <= 40;
 
     return IgnorePointer(
-      child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 250),
-        opacity: isBrowsingHistory ? 1.0 : 0.0,
-        curve: Curves.easeOutCubic,
-        child: Center(
-          child: SizedBox(
-            width: locatorWidth,
-            child: Row(
-              children: List<Widget>.generate(totalCount, (index) {
-                final active = index == currentIndex;
-                return Expanded(
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeOutCubic,
-                    height: active ? 2.4 : 1.6,
-                    margin: EdgeInsets.symmetric(horizontal: gap / 2),
+      // 核心修复：将进度条对齐到父组件（对话框）的【顶部】，而不是底部！
+      // 这样它会永远贴着对话面板的最上沿，无论下方的正文长到几行，都绝对不会重叠。
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 14.0), // 距离对话面板顶边预留出呼吸空间
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 250),
+            opacity: isBrowsingHistory ? 1.0 : 0.0,
+            curve: Curves.easeOutCubic,
+            child: useDots
+                ? Row(
+                    mainAxisSize: MainAxisSize.min, // 紧凑居中排列，不再霸占整行
+                    children: List<Widget>.generate(totalCount, (index) {
+                      final active = index == currentIndex;
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 260),
+                        curve: Curves.easeOutBack,
+                        width: active ? 14.0 : 4.0,
+                        height: 4.0,
+                        margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(active ? 0.95 : 0.25),
+                          borderRadius: BorderRadius.circular(2.0),
+                        ),
+                      );
+                    }),
+                  )
+                : Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
                     decoration: BoxDecoration(
-                      // 剧情回溯底部进度仅改为白色，其它 UI 不动。
-                      color: Colors.white.withOpacity(active ? .88 : .18),
-                      borderRadius: BorderRadius.circular(2),
-                      boxShadow: active
-                          ? <BoxShadow>[
-                              BoxShadow(
-                                color: Colors.white.withOpacity(.18),
-                                blurRadius: 4,
-                              ),
-                            ]
-                          : null,
+                      color: Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${currentIndex + 1} / $totalCount',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.65),
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.2,
+                      ),
                     ),
                   ),
-                );
-              }),
-            ),
           ),
         ),
       ),
@@ -944,8 +912,6 @@ class _LuxurySwipeHintState extends State<_LuxurySwipeHint>
   @override
   void initState() {
     super.initState();
-    // 左右来回轻推 + 明暗呼吸，靠动画把注意力吸引过来，
-    // 静态小字太容易被忽略了。
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
@@ -1049,7 +1015,6 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
   Timer? _typingTimer;
   int _visibleLength = 0;
   String _lastRevealKey = '';
-  // 与普通剧情一致：用户主动跳过当前句后，后续流式补字保持全文直出且静音。
   String _skippedRevealKey = '';
   String _lastSafeText = '';
   List<int> _lastSafeRunes = const <int>[];
@@ -1119,10 +1084,6 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
     if (_revealing) _scheduleReveal();
   }
 
-  /// 电影模式与普通剧情使用同一套原则：
-  /// - 新句从 0 开始逐字显示并播放打字声；
-  /// - SSE 只是补长当前句时，不把已经显示的文字清零；
-  /// - 回退后再次看到已经展示过的句子，不重复播放音效。
   void _syncReveal({bool force = false}) {
     final safeText = _sanitizeNovelStreamingText(widget.text);
     final revealKey = _currentRevealKey;
@@ -1295,12 +1256,21 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
 
   @override
   Widget build(BuildContext context) {
+    // 1. 获取屏幕宽度，判断是否为小屏设备
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final compact = screenWidth < 480;
+    
+    // 2. 自适应计算：基础边距 + 右侧避让空间
+    final basePadding = compact ? 30.0 : 64.0; // 维持你原本的左右基础边距
+    final navBarWidth = compact ? 56.0 : 90.0; // 电脑端导航栏大一点，手机端小一点
+
     final safeText = _lastSafeText;
     final safeLength = _visibleLength.clamp(0, _lastSafeRunes.length);
     final displayText = safeLength >= _lastSafeRunes.length
         ? safeText
         : String.fromCharCodes(_lastSafeRunes.take(safeLength));
     final narration = widget.speakerName.trim().isEmpty;
+    
     return GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: _handleScreenTap,
@@ -1319,7 +1289,11 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
             Align(
                 alignment: narration ? const Alignment(0, -.02) : const Alignment(0, .36),
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: MediaQuery.sizeOf(context).width < 480 ? 30 : 64),
+                  // 3. 完美自适应：左侧用基础值，右侧 = 基础值 + 导航栏宽度
+                  padding: EdgeInsets.only(
+                    left: basePadding, 
+                    right: basePadding + navBarWidth, 
+                  ),
                   child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 880),
                       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: narration ? CrossAxisAlignment.center : CrossAxisAlignment.start, children: <Widget>[
@@ -1392,4 +1366,3 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
         ));
   }
 }
-
