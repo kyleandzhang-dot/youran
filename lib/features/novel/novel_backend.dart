@@ -74,6 +74,43 @@ abstract class NovelBackend {
     throw const NovelBackendException('当前后端不支持小说角色结缘');
   }
 
+  /// 消耗角色碎片升一星。角色从 0 星开始，最高 10 星。
+  Future<JsonMap> upgradeNovelCharacter({
+    required String mainSessionId,
+    required String characterInstanceId,
+  }) {
+    throw const NovelBackendException('当前后端不支持小说角色升星');
+  }
+
+  /// 读取 NPC 援战阵容与程序化技能（最多 3 人出战、每人最多 4 技能）。
+  Future<JsonMap> fetchNovelCompanions(String mainSessionId) {
+    throw const NovelBackendException('当前后端不支持 NPC 援战');
+  }
+
+  Future<JsonMap> updateNovelCompanionDeployment({
+    required String mainSessionId,
+    required String characterInstanceId,
+    required bool deployed,
+  }) {
+    throw const NovelBackendException('当前后端不支持调整援战阵容');
+  }
+
+  Future<JsonMap> drawNovelCompanionSkill({
+    required String mainSessionId,
+    required String characterInstanceId,
+  }) {
+    throw const NovelBackendException('当前后端不支持抽取援战技能');
+  }
+
+  Future<JsonMap> renameNovelCompanionSkill({
+    required String mainSessionId,
+    required String characterInstanceId,
+    required String skillId,
+    required String name,
+  }) {
+    throw const NovelBackendException('当前后端不支持命名援战技能');
+  }
+
   /// 读取小说角色页中某个已获得角色的私聊记录。
   Future<JsonMap> fetchNovelCharacterChatHistory({
     required String mainSessionId,

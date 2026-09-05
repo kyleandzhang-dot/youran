@@ -129,6 +129,8 @@ class NovelSceneArrivalTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 430;
+    final cleanSubtitle = subtitle.trim();
     return TweenAnimationBuilder<double>(
       key: ValueKey<String>('$title|$subtitle'),
       duration: const Duration(milliseconds: 2800),
@@ -147,43 +149,75 @@ class NovelSceneArrivalTitle extends StatelessWidget {
           ),
         );
       },
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFFF7F3EA),
-              fontSize: 35,
-              // 中文场景标题不要把行高压得低于 1，避免上下笔画被裁掉。
-              height: 1.12,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 4,
-              // 场景名称保持干净通透，不添加描边和阴影。
-              shadows: const <Shadow>[], 
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Container(width: 36, height: 1, color: Colors.white.withOpacity(.68)),
-              const SizedBox(width: 12),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: Colors.white.withOpacity(.74),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 4,
-                ),
-              ),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 430),
+        padding: EdgeInsets.fromLTRB(
+          compact ? 10 : 12,
+          9,
+          compact ? 30 : 48,
+          10,
+        ),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: <Color>[
+              Colors.black.withOpacity(.34),
+              Colors.black.withOpacity(.12),
+              Colors.transparent,
             ],
+            stops: const <double>[0, .58, 1],
           ),
-        ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: 2,
+              height: cleanSubtitle.isEmpty ? 29 : 43,
+              color: NovelPalette.accentSoft.withOpacity(.78),
+            ),
+            const SizedBox(width: 11),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: const Color(0xFFF7F3EA).withOpacity(.95),
+                      fontFamily: 'WenJinMinchoP0',
+                      fontSize: compact ? 23 : 26,
+                      height: 1.12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: compact ? 2 : 2.6,
+                      shadows: const <Shadow>[
+                        Shadow(color: Color(0xB0000000), blurRadius: 9),
+                      ],
+                    ),
+                  ),
+                  if (cleanSubtitle.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 5),
+                    Text(
+                      cleanSubtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.55),
+                        fontSize: compact ? 10.5 : 11.5,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -344,4 +378,3 @@ class NovelPortraitStage extends StatelessWidget {
     );
   }
 }
-

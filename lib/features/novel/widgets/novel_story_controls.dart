@@ -537,7 +537,8 @@ class NovelBottomArchiveBar extends StatelessWidget {
 
   static const List<String> _labels = <String>[
     '剧情',
-    '角色',
+    '人物',
+    '队伍',
     '背包',
     '经历',
     '地图',
@@ -546,6 +547,7 @@ class NovelBottomArchiveBar extends StatelessWidget {
   static const List<String> _iconAssets = <String>[
     'assets/images/novel/nav_story.png',
     'assets/images/novel/nav_character.png',
+    'assets/images/novel/nav_character_bond.png',
     'assets/images/novel/nav_inventory.png',
     'assets/images/novel/nav_journey.png',
     'assets/images/novel/nav_world.png',
@@ -554,6 +556,7 @@ class NovelBottomArchiveBar extends StatelessWidget {
   static const List<IconData> _fallbackIcons = <IconData>[
     Icons.auto_stories_rounded,
     Icons.person_outline_rounded,
+    Icons.groups_rounded,
     Icons.backpack_outlined,
     Icons.explore_outlined,
     Icons.public_outlined,
@@ -1260,9 +1263,8 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final compact = screenWidth < 480;
     
-    // 2. 自适应计算：基础边距 + 右侧避让空间
-    final basePadding = compact ? 30.0 : 64.0; // 维持你原本的左右基础边距
-    final navBarWidth = compact ? 56.0 : 90.0; // 电脑端导航栏大一点，手机端小一点
+    // 电影模式不显示右侧剧情按钮，正文使用完全对称的左右边距。
+    final basePadding = compact ? 30.0 : 64.0;
 
     final safeText = _lastSafeText;
     final safeLength = _visibleLength.clamp(0, _lastSafeRunes.length);
@@ -1289,11 +1291,7 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
             Align(
                 alignment: narration ? const Alignment(0, -.02) : const Alignment(0, .36),
                 child: Padding(
-                  // 3. 完美自适应：左侧用基础值，右侧 = 基础值 + 导航栏宽度
-                  padding: EdgeInsets.only(
-                    left: basePadding, 
-                    right: basePadding + navBarWidth, 
-                  ),
+                  padding: EdgeInsets.symmetric(horizontal: basePadding),
                   child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 880),
                       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: narration ? CrossAxisAlignment.center : CrossAxisAlignment.start, children: <Widget>[

@@ -160,7 +160,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     // 与实际输入栏宽度保持近似：页面主体最多 720，扣除继续按钮、幸运卡和发送键。
     var textWidth = math.min(availableWidth, 720.0) - 124.0;
     if (!choicesVisible) textWidth -= 56.0;
-    if (controller.luckyCardCount > 0) textWidth -= 54.0;
+    if (controller.luckyCardCount > 0) textWidth -= 50.0;
     textWidth = textWidth.clamp(150.0, 560.0).toDouble();
 
     final painter = TextPainter(
@@ -670,9 +670,14 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       builder: (context, constraints) {
         final screen = MediaQuery.sizeOf(context);
         final compact = screen.width <= 600;
-        // 只有旁白 / 剧情正文需要轻微避开右侧固定 HUD。
-        // 不再按整列导航宽度硬切正文，避免右边留下过大的空白。
-        final narrationRightSafeWidth = compact ? 24.0 : 34.0;
+        // 正文始终保持左右对称，不为右侧悬浮按钮预留宽度。
+        const narrationRightSafeWidth = 0.0;
+        // 角色对话框位于底部：非最后一页避开右侧剧情按钮；
+        // 最后一页按钮隐藏后取消避让，恢复完整宽度。
+        final dialogueRightSafeWidth =
+            (controller.hasNext || controller.isGenerating)
+                ? (compact ? 58.0 : 70.0)
+                : 0.0;
         final availableHeight = constraints.maxHeight.isFinite ? constraints.maxHeight : screen.height - MediaQuery.paddingOf(context).vertical;
         final browsingStory = controller.hasNext;
 
@@ -992,8 +997,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
               else
                 Positioned(
                   left: 0,
-                  // 角色对白不做右侧 HUD 宽度限制；保持原有左右构图与完整阅读宽度。
-                  right: 0,
+                  right: dialogueRightSafeWidth,
                   top: canShowChoices ? choiceContentTop : null,
                   bottom: canShowChoices ? choiceContentBottom : panelBottom,
                   child: ValueListenableBuilder<String>(

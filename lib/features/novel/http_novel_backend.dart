@@ -38,6 +38,11 @@ class NovelEndpointConfig {
     this.characterStatus = '/scenario/{scenarioId}/characters/status',
     this.novelCharacterRoster = '/chat/novel-character/roster',
     this.novelCharacterDraw = '/chat/novel-character/draw',
+    this.novelCharacterUpgrade = '/chat/novel-character/upgrade',
+    this.novelCompanions = '/novel/companions/{sessionId}',
+    this.novelCompanionDeployment = '/novel/companions/deployment',
+    this.novelCompanionSkillDraw = '/novel/companions/skills/draw',
+    this.novelCompanionSkillRename = '/novel/companions/skills/rename',
     this.novelCharacterHistory = '/chat/novel-character/history',
     this.novelCharacterStream = '/chat/novel-character/stream',
     this.journey = '/scenario/{scenarioId}/journey',
@@ -76,6 +81,11 @@ class NovelEndpointConfig {
   final String characterStatus;
   final String novelCharacterRoster;
   final String novelCharacterDraw;
+  final String novelCharacterUpgrade;
+  final String novelCompanions;
+  final String novelCompanionDeployment;
+  final String novelCompanionSkillDraw;
+  final String novelCompanionSkillRename;
   final String novelCharacterHistory;
   final String novelCharacterStream;
   final String journey;
@@ -834,6 +844,90 @@ class HttpNovelBackend
       body: <String, dynamic>{
         'main_session_id': int.tryParse(mainSessionId) ?? mainSessionId,
         'count': count,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> upgradeNovelCharacter({
+    required String mainSessionId,
+    required String characterInstanceId,
+  }) async {
+    final response = await _send(
+      'POST',
+      endpoints.novelCharacterUpgrade,
+      body: <String, dynamic>{
+        'main_session_id': int.tryParse(mainSessionId) ?? mainSessionId,
+        'character_instance_id':
+            int.tryParse(characterInstanceId) ?? characterInstanceId,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> fetchNovelCompanions(String mainSessionId) async {
+    final path = endpoints.resolve(
+      endpoints.novelCompanions,
+      sessionId: mainSessionId,
+    );
+    final response = await _get(path);
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> updateNovelCompanionDeployment({
+    required String mainSessionId,
+    required String characterInstanceId,
+    required bool deployed,
+  }) async {
+    final response = await _send(
+      'POST',
+      endpoints.novelCompanionDeployment,
+      body: <String, dynamic>{
+        'session_id': int.tryParse(mainSessionId) ?? mainSessionId,
+        'character_instance_id':
+            int.tryParse(characterInstanceId) ?? characterInstanceId,
+        'deployed': deployed,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> drawNovelCompanionSkill({
+    required String mainSessionId,
+    required String characterInstanceId,
+  }) async {
+    final response = await _send(
+      'POST',
+      endpoints.novelCompanionSkillDraw,
+      body: <String, dynamic>{
+        'session_id': int.tryParse(mainSessionId) ?? mainSessionId,
+        'character_instance_id':
+            int.tryParse(characterInstanceId) ?? characterInstanceId,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> renameNovelCompanionSkill({
+    required String mainSessionId,
+    required String characterInstanceId,
+    required String skillId,
+    required String name,
+  }) async {
+    final response = await _send(
+      'POST',
+      endpoints.novelCompanionSkillRename,
+      body: <String, dynamic>{
+        'session_id': int.tryParse(mainSessionId) ?? mainSessionId,
+        'character_instance_id':
+            int.tryParse(characterInstanceId) ?? characterInstanceId,
+        'skill_id': skillId,
+        'name': name,
       },
     );
     return asJsonMap(_dataOf(response));

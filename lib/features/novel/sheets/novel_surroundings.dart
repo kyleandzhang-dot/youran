@@ -10,7 +10,7 @@ part of '../novel_sheets.dart';
 // 从孤岛节点原型迁移：点击探索、拖拽、可组合高亮、消耗/保留/生成。
 // ============================================================================
 
-const Color _themeGreen = Color(0xFF8BD7A2);
+const Color _themeGreen = NovelPalette.accent;
 
 typedef NovelSurroundingsPreviewBattleLauncher = Future<String?> Function({
   required String enemyName,
@@ -929,15 +929,28 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
       if (!mounted) return;
       final reward = asJsonMap(payload['reward']);
       final rewardName = stringValue(reward['name'], def.label);
+      final rewardType = stringValue(
+        reward['type'] ?? reward['item_type'],
+      ).trim().toLowerCase();
+      final isScore = rewardType == 'score';
+      final rewardAmount = intValue(
+        reward['score'] ?? reward['quantity'],
+        1,
+      );
       setState(() {
         _collecting.remove(id);
         _info = _SurroundInfo(
-          title: '已放入背包',
-          text: '「$rewardName」已放入背包。',
+          title: isScore ? '获得星块' : '已放入背包',
+          text: isScore
+              ? '探索中发现星块 ×$rewardAmount。'
+              : '「$rewardName」已放入背包。',
           gain: <String>[id],
         );
       });
-      _showCollectedToast(rewardName);
+      _showCollectedToast(
+        rewardName,
+        scoreAmount: isScore ? rewardAmount : 0,
+      );
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -952,7 +965,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
     }
   }
 
-  void _showCollectedToast(String rewardName) {
+  void _showCollectedToast(String rewardName, {int scoreAmount = 0}) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
 
@@ -967,7 +980,9 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           left: 24,
           right: 24,
           child: _SurroundPickupRewardToast(
-            text: '$rewardName 已放入背包',
+            text: scoreAmount > 0
+                ? '获得星块 ×$scoreAmount'
+                : '$rewardName 已放入背包',
             onCompleted: () {
               if (_collectedToastEntry != entry) return;
               entry.remove();
@@ -1432,17 +1447,17 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
                                 filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
                                 child: Container(
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.075),
+                                    color: Colors.black.withOpacity(0.14),
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
-                                      color: Colors.white.withOpacity(0.15),
-                                      width: 1,
+                                      color: Colors.white.withOpacity(0.08),
+                                      width: 0.5,
                                     ),
                                     boxShadow: <BoxShadow>[
                                       BoxShadow(
-                                        color: Colors.black.withOpacity(0.20),
-                                        blurRadius: 28,
-                                        offset: const Offset(0, 12),
+                                        color: Colors.black.withOpacity(0.12),
+                                        blurRadius: 18,
+                                        offset: const Offset(0, 8),
                                       ),
                                     ],
                                   ),
@@ -2994,15 +3009,29 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
 
   Widget _withdrawButton({bool expanded = false}) {
     final completed = _completed;
-    final backgroundColor = completed ? _themeGreen : Colors.white;
-    final foregroundColor = Colors.black.withOpacity(completed ? .82 : .78);
+    final backgroundColor = completed
+        ? _themeGreen.withOpacity(.16)
+        : Colors.white.withOpacity(.035);
+    final foregroundColor = completed
+        ? _themeGreen.withOpacity(.95)
+        : Colors.white.withOpacity(.62);
     final button = Material(
       color: backgroundColor,
+      borderRadius: BorderRadius.circular(7),
       child: InkWell(
         onTap: _showWithdrawDialog,
-        borderRadius: BorderRadius.zero,
-        child: SizedBox(
-          height: 38,
+        borderRadius: BorderRadius.circular(7),
+        child: Container(
+          height: 36,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(
+              color: completed
+                  ? _themeGreen.withOpacity(.32)
+                  : Colors.white.withOpacity(.09),
+              width: .6,
+            ),
+          ),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(
@@ -3124,13 +3153,13 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
             width: side,
             height: side,
             child: Container(
-              padding: const EdgeInsets.all(5),
+              padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(.15),
-                borderRadius: BorderRadius.circular(8),
+                color: Colors.black.withOpacity(.08),
+                borderRadius: BorderRadius.circular(4),
                 border: Border.all(
-                  color: Colors.white.withOpacity(.1),
-                  width: 1,
+                  color: Colors.white.withOpacity(.055),
+                  width: .6,
                 ),
               ),
               child: GridView.builder(
@@ -3287,9 +3316,12 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
   }
 
   Widget _buildWideBody() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-      child: Row(
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1040),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 16, 22, 18),
+          child: Row(
         children: <Widget>[
           Expanded(
             child: Column(
@@ -3301,9 +3333,9 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
               ],
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 24),
           SizedBox(
-            width: 300,
+            width: 276,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
@@ -3332,6 +3364,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
             ),
           ),
         ],
+          ),
+        ),
       ),
     );
   }
@@ -3359,24 +3393,24 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.transparent,
+      color: NovelPalette.background.withOpacity(.72),
       child: ClipRect(
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: Stack(
             fit: StackFit.expand,
             children: [
               const DecoratedBox(
                 decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment(0, -.08),
-                    radius: 1.08,
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
                     colors: <Color>[
-                      Color(0x164DA26A),
-                      Color(0x0FFFFFFF),
-                      Color(0x05000000),
+                      Color(0x12000000),
+                      Color(0x28101718),
+                      Color(0x52080B0D),
                     ],
-                    stops: <double>[0, .58, 1],
+                    stops: <double>[0, .48, 1],
                   ),
                 ),
               ),
@@ -3384,7 +3418,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                 child: Column(
                   children: <Widget>[
                     SizedBox(
-                      height: 58,
+                      height: 54,
                       child: Padding(
                         padding: const EdgeInsets.only(left: 16, right: 8),
                         child: Row(
@@ -3400,37 +3434,72 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                                         : '探索 · 海滩边缘',
                                     style: TextStyle(
                                       color: Colors.white.withOpacity(.95),
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 1.1,
                                     ),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    _remote
-                                        ? 'Seed $_seed · 格子探索'
-                                        : 'Seed $_seed · 迷雾探索',
+                                    _completed
+                                        ? '现场调查完成'
+                                        : '拨开迷雾，留意物资与危险',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                      color: Colors.white.withOpacity(.34),
-                                      fontSize: 8.5,
+                                      color: Colors.white.withOpacity(.38),
+                                      fontSize: 9,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                            Tooltip(
-                              message: _remote ? '重新生成当前场景' : '生成新地图',
-                              child: IconButton(
-                                onPressed: _reset,
-                                icon: Icon(
-                                  Icons.refresh_rounded,
-                                  size: 19,
-                                  color: Colors.white.withOpacity(.56),
+                            if (!_remote)
+                              Tooltip(
+                                message: '生成新地图',
+                                child: IconButton(
+                                  onPressed: _reset,
+                                  icon: Icon(
+                                    Icons.refresh_rounded,
+                                    size: 18,
+                                    color: Colors.white.withOpacity(.46),
+                                  ),
                                 ),
                               ),
+                            Container(
+                              height: 28,
+                              padding: const EdgeInsets.fromLTRB(4, 3, 9, 3),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(.12),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(.065),
+                                  width: .5,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Image.asset(
+                                    'assets/images/xing.webp',
+                                    width: 20,
+                                    height: 20,
+                                    fit: BoxFit.contain,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${widget.controller.score.total}',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.78),
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
+                            const SizedBox(width: 4),
                             if (widget.onClose != null)
                               Tooltip(
                                 message: '关闭',
@@ -3439,7 +3508,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                                   child: BackdropFilter(
                                     filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
                                     child: Container(
-                                      color: Colors.black.withOpacity(0.15),
+                                      color: Colors.black.withOpacity(0.08),
                                       child: IconButton(
                                         onPressed: widget.onClose,
                                         icon: const Icon(
@@ -3456,7 +3525,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                         ),
                       ),
                     ),
-                    Container(height: 1, color: Colors.white.withOpacity(.07)),
+                    Container(height: .5, color: Colors.white.withOpacity(.055)),
                     Expanded(
                       child: LayoutBuilder(
                         builder: (context, constraints) {

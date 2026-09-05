@@ -541,4 +541,3 @@ class NovelStatusBanner extends StatelessWidget {
     ));
   }
 }
-

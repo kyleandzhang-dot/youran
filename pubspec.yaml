@@ -2,7 +2,7 @@ name: youran_ai
 description: "Youran AI interactive story platform."
 publish_to: 'none'
 
-version: 1.0.0+58
+version: 1.0.0+59
 
 environment:
   sdk: '>=3.8.0 <4.0.0'
@@ -52,6 +52,7 @@ flutter:
     - assets/audio/ui/
     - assets/animations/meru_book_story_continuing.json
     - assets/images/world_map/
+    - assets/images/companion_skill_icons/
 
   fonts:
     - family: NovelMiSans

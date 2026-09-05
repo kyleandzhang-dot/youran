@@ -66,8 +66,10 @@ class YoranBattleEnemy {
 /// 不再只显示技能名称，而是真正使用后端给出的伤害、消耗、冷却和附加效果。
 class YoranBattleSkill {
   const YoranBattleSkill({
+    this.id = '',
     required this.name,
     required this.detail,
+    this.archetype = 'direct',
     this.quality = 0,
     this.minDamage = 0,
     this.maxDamage = 0,
@@ -93,10 +95,14 @@ class YoranBattleSkill {
     this.piercesGuard = false,
     this.targetSelf = false,
     this.canSelfKill = false,
+    this.counterMin = 0,
+    this.counterMax = 0,
   });
 
+  final String id;
   final String name;
   final String detail;
+  final String archetype;
   final int quality;
   final int minDamage;
   final int maxDamage;
@@ -122,8 +128,28 @@ class YoranBattleSkill {
   final bool piercesGuard;
   final bool targetSelf;
   final bool canSelfKill;
+  final int counterMin;
+  final int counterMax;
 
   bool get isSelfAction => targetSelf || guarding || dodging || resting;
+
+  String get iconType {
+    final type = archetype.trim().toLowerCase();
+    if (const <String>{
+      'direct', 'dot', 'guard', 'evade', 'heal', 'energy',
+      'lifesteal', 'expose', 'counter', 'stun',
+    }.contains(type)) return type;
+    if (burnTurns > 0) return 'dot';
+    if (guarding) return 'guard';
+    if (dodging) return 'evade';
+    if (lifestealPercent > 0) return 'lifesteal';
+    if (exposes) return 'expose';
+    if (counterMax > 0) return 'counter';
+    if (stunTurns > 0) return 'stun';
+    if (healAmount > 0 && maxDamage <= 0) return 'heal';
+    if ((energyGain > 0 || resting) && maxDamage <= 0) return 'energy';
+    return 'direct';
+  }
 
   static int _asInt(dynamic value, [int fallback = 0]) {
     if (value is num) return value.round();
@@ -190,6 +216,8 @@ class YoranBattleSkill {
     var guarding = false;
     var dodging = false;
     var exposes = false;
+    var counterMin = 0;
+    var counterMax = 0;
     final effects = spec['effects'];
     if (effects is List) {
       for (final rawEffect in effects.take(2)) {
@@ -232,6 +260,14 @@ class YoranBattleSkill {
                 .clamp(0, 12)
                 .toInt();
             break;
+          case 'counter':
+            final counterDamage = _stringMap(effect['damage']);
+            counterMin = _asInt(counterDamage['min']).clamp(0, 60).toInt();
+            counterMax = math
+                .max(counterMin, _asInt(counterDamage['max']))
+                .clamp(0, 60)
+                .toInt();
+            break;
         }
       }
     }
@@ -247,8 +283,12 @@ class YoranBattleSkill {
     
     final designNote = '${spec['design_note'] ?? skill['description'] ?? ''}'.trim();
     return YoranBattleSkill(
+      id: '${skill['id'] ?? ''}'.trim(),
       name: name,
       detail: designNote.isEmpty ? '暂无技能描述' : designNote,
+      archetype: '${spec['archetype'] ?? skill['category'] ?? 'direct'}'
+          .trim()
+          .toLowerCase(),
       quality: quality,
       minDamage: minDamage,
       maxDamage: maxDamage,
@@ -273,6 +313,137 @@ class YoranBattleSkill {
       piercesGuard: '${spec['archetype'] ?? ''}'.trim().toLowerCase() == 'control',
       targetSelf: '${spec['target'] ?? ''}'.trim().toLowerCase() == 'self',
       canSelfKill: _asBool(spec['can_self_kill']),
+      counterMin: counterMin,
+      counterMax: counterMax,
+    );
+  }
+}
+
+String _battleSkillTypeName(String type) => switch (type) {
+      'direct' => '直击',
+      'dot' => '持续伤害',
+      'guard' => '守护',
+      'evade' => '闪避',
+      'heal' => '治疗',
+      'energy' => '精力恢复',
+      'lifesteal' => '吸血',
+      'expose' => '破绽',
+      'counter' => '反击',
+      'stun' => '压制',
+      _ => '直击',
+    };
+
+String _battleSkillTypeAsset(String type) =>
+    'assets/images/companion_skill_icons/${switch (type) {
+      'direct' => 'direct',
+      'dot' => 'dot',
+      'guard' => 'guard',
+      'evade' => 'evade',
+      'heal' => 'heal',
+      'energy' => 'energy',
+      'lifesteal' => 'lifesteal',
+      'expose' => 'expose',
+      'counter' => 'counter',
+      'stun' => 'stun',
+      _ => 'direct',
+    }}.webp';
+
+IconData _battleSkillFallbackIcon(String type) => switch (type) {
+      'direct' => Icons.flash_on_rounded,
+      'dot' => Icons.local_fire_department_rounded,
+      'guard' => Icons.shield_rounded,
+      'evade' => Icons.air_rounded,
+      'heal' => Icons.favorite_rounded,
+      'energy' => Icons.bolt_rounded,
+      'lifesteal' => Icons.bloodtype_rounded,
+      'expose' => Icons.gps_fixed_rounded,
+      'counter' => Icons.reply_rounded,
+      'stun' => Icons.auto_awesome_rounded,
+      _ => Icons.flash_on_rounded,
+    };
+
+Color _battleSkillQualityColor(int quality) =>
+    switch (quality.clamp(1, 10)) {
+      10 => const Color(0xFFFF5C7C),
+      9 => const Color(0xFFFFCA62),
+      8 => const Color(0xFFFF9D5C),
+      7 => const Color(0xFFD979FF),
+      6 => const Color(0xFFA88BFF),
+      5 => const Color(0xFF5BD9F5),
+      4 => const Color(0xFF64AEFF),
+      3 => const Color(0xFF62D6B3),
+      2 => const Color(0xFF91A9C7),
+      _ => const Color(0xFFB9C5D6),
+    };
+
+class _BattleSkillTypeIcon extends StatelessWidget {
+  const _BattleSkillTypeIcon({
+    required this.skill,
+    required this.size,
+    required this.color,
+  });
+
+  final YoranBattleSkill skill;
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final type = skill.iconType;
+    final typeName = _battleSkillTypeName(type);
+    return Tooltip(
+      message: typeName,
+      child: Image.asset(
+        _battleSkillTypeAsset(type),
+        width: size,
+        height: size,
+        color: color,
+        semanticLabel: typeName,
+        errorBuilder: (_, __, ___) => Icon(
+          _battleSkillFallbackIcon(type),
+          size: size,
+          color: color,
+          semanticLabel: typeName,
+        ),
+      ),
+    );
+  }
+}
+
+class YoranBattleCompanion {
+  const YoranBattleCompanion({
+    required this.id,
+    required this.name,
+    required this.avatar,
+    required this.portrait,
+    required this.skills,
+  });
+
+  final String id;
+  final String name;
+  final String avatar;
+  final String portrait;
+  final List<YoranBattleSkill> skills;
+
+  static YoranBattleCompanion? fromState(dynamic raw) {
+    final data = YoranBattleSkill._stringMap(raw);
+    final id = '${data['character_instance_id'] ?? data['id'] ?? ''}'.trim();
+    final name = '${data['name'] ?? ''}'.trim();
+    if (id.isEmpty || name.isEmpty) return null;
+    final skills = <YoranBattleSkill>[];
+    final rawSkills = data['skills'];
+    if (rawSkills is List) {
+      for (final item in rawSkills.take(4)) {
+        final skill = YoranBattleSkill.fromState(item);
+        if (skill != null && skill.id.isNotEmpty) skills.add(skill);
+      }
+    }
+    return YoranBattleCompanion(
+      id: id,
+      name: name,
+      avatar: '${data['avatar_url'] ?? ''}'.trim(),
+      portrait: '${data['portrait_url'] ?? ''}'.trim(),
+      skills: skills,
     );
   }
 }
@@ -404,7 +575,8 @@ class YoranBattleItemConsumption {
       };
 }
 
-typedef YoranBattleItemSettlementCallback = Future<bool> Function(
+/// 返回 null 表示结算失败；成功时返回后端的完整结算结果，供结束页展示奖励。
+typedef YoranBattleItemSettlementCallback = Future<Map<String, dynamic>?> Function(
   List<YoranBattleItemConsumption> consumptions,
   YoranBattleOutcome outcome,
 );
@@ -594,6 +766,7 @@ class YoranGeneratedBattleSetup {
     required this.playerAvatar,
     required this.playerPortrait,
     required this.playerSkills,
+    this.companions = const <YoranBattleCompanion>[],
     this.playerItems = const <YoranBattleItem>[],
     this.playerEquipment = const <YoranBattleEquipment>[],
     required this.enemy,
@@ -605,6 +778,7 @@ class YoranGeneratedBattleSetup {
   final String playerAvatar;
   final String playerPortrait;
   final List<YoranBattleSkill> playerSkills;
+  final List<YoranBattleCompanion> companions;
   final List<YoranBattleItem> playerItems;
   final List<YoranBattleEquipment> playerEquipment;
   final YoranBattleEnemy enemy;
@@ -658,6 +832,16 @@ class YoranGeneratedBattleSetup {
       result.add(item);
     }
     return result;
+  }
+
+  static List<YoranBattleCompanion> _companions(dynamic raw) {
+    if (raw is! List) return const <YoranBattleCompanion>[];
+    return raw
+        .map(YoranBattleCompanion.fromState)
+        .whereType<YoranBattleCompanion>()
+        .where((companion) => companion.skills.isNotEmpty)
+        .take(3)
+        .toList(growable: false);
   }
 
   static List<dynamic> _playerAssets(
@@ -759,6 +943,7 @@ class YoranGeneratedBattleSetup {
       playerAvatar: _string(playerAsset['avatar_url']),
       playerPortrait: _string(playerAsset['portrait_url']),
       playerSkills: playerSkills,
+      companions: _companions(player['companions']),
       playerItems: _items(playerAssets),
       playerEquipment: _equipment(playerAssets),
       difficultyLabel: _string(matchup['difficulty_label']),
@@ -808,6 +993,7 @@ const List<YoranBattleSkill> yoranBaseBattleSkills = <YoranBattleSkill>[
   YoranBattleSkill(
     name: '休整',
     detail: '放缓呼吸并调整状态，恢复大量精力',
+    archetype: 'energy',
     energyGain: 20,
     resting: true,
     targetSelf: true,
@@ -815,6 +1001,7 @@ const List<YoranBattleSkill> yoranBaseBattleSkills = <YoranBattleSkill>[
   YoranBattleSkill(
     name: '防御',
     detail: '稳住重心，大幅降低下次受到的伤害',
+    archetype: 'guard',
     energyCost: 5,
     guarding: true,
     guardReductionPercent: 50,
@@ -823,6 +1010,7 @@ const List<YoranBattleSkill> yoranBaseBattleSkills = <YoranBattleSkill>[
   YoranBattleSkill(
     name: '闪避',
     detail: '放轻脚步，提高敌方的命中难度',
+    archetype: 'evade',
     energyCost: 10,
     dodging: true,
     // D20 命中难度 +5：通常等价于敌方命中率下降约 25 个百分点，
@@ -864,6 +1052,7 @@ Future<YoranBattleOutcome?> showYoranBattlePage(
   NovelSocketService? socketService,
   List<YoranBattleEnemy> enemies = const <YoranBattleEnemy>[],
   List<YoranBattleSkill> skills = yoranDefaultBattleSkills,
+  List<YoranBattleCompanion> companions = const <YoranBattleCompanion>[],
   List<dynamic> items = const <dynamic>[],
   List<dynamic> equipment = const <dynamic>[],
   YoranBattleItemSettlementCallback? onSettleItems,
@@ -888,6 +1077,7 @@ Future<YoranBattleOutcome?> showYoranBattlePage(
         socketService: socketService,
         enemies: enemies,
         skills: skills,
+        companions: companions,
         items: items,
         equipment: equipment,
         onSettleItems: onSettleItems,
@@ -1068,6 +1258,7 @@ class _YoranGeneratedBattleLoaderPageState
         enemyPortrait: setup.enemy.portrait,
         enemies: <YoranBattleEnemy>[setup.enemy],
         skills: setup.playerSkills,
+        companions: setup.companions,
         items: setup.playerItems,
         equipment: setup.playerEquipment,
         sceneBackground: widget.sceneBackground,
@@ -1284,6 +1475,7 @@ class YoranBattlePage extends StatefulWidget {
     this.socketService,
     this.enemies = const <YoranBattleEnemy>[],
     this.skills = yoranDefaultBattleSkills,
+    this.companions = const <YoranBattleCompanion>[],
     this.items = const <dynamic>[],
     this.equipment = const <dynamic>[],
     this.onSettleItems,
@@ -1301,6 +1493,7 @@ class YoranBattlePage extends StatefulWidget {
   final NovelSocketService? socketService;
   final List<YoranBattleEnemy> enemies;
   final List<YoranBattleSkill> skills;
+  final List<YoranBattleCompanion> companions;
   final List<dynamic> items;
   final List<dynamic> equipment;
   final YoranBattleItemSettlementCallback? onSettleItems;
@@ -1311,7 +1504,7 @@ class YoranBattlePage extends StatefulWidget {
   State<YoranBattlePage> createState() => _YoranBattlePageState();
 }
 
-enum _BattleCommandCategory { skills, items }
+enum _BattleCommandCategory { skills, items, companions }
 
 enum _EnemyIntentKind {
   claw,
@@ -1346,6 +1539,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   late final AnimationController _playerGuardController;
   late final AnimationController _playerGuardImpactController;
   late final AnimationController _combatTextController;
+  late final AnimationController _companionAssistController;
   late final AnimationController _playerBreathController;
   late final AnimationController _enemyBreathController;
 
@@ -1365,6 +1559,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   late final List<YoranBattleEnemy> _battleEnemies;
   late final List<YoranBattleItem> _battleItems;
   late final List<YoranBattleEquipment> _playerEquipment;
+  late final List<YoranBattleCompanion> _battleCompanions;
   late List<YoranBattleSkill> _availableSkillsCache;
   late final int _playerMaxHp;
   late final int _playerMaxQi;
@@ -1379,9 +1574,21 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   int _itemUsesThisBattle = 0;
   bool _settlingItems = false;
   bool _settlementAccepted = false;
+  Map<String, dynamic> _battleSettlement = const <String, dynamic>{};
+  String _settlementError = '';
   int _enemyIndex = 0;
   String? _selectedSkillName;
   String? _selectedItemId;
+  String? _selectedCompanionId;
+  String? _selectedCompanionSkillId;
+  YoranBattleCompanion? _activeAssistCompanion;
+  YoranBattleSkill? _activeAssistSkill;
+  final Set<String> _usedCompanionSkillIds = <String>{};
+  bool _companionAssistUsedThisRound = false;
+  int _enemyStunnedByCompanion = 0;
+  int _companionCounterMin = 0;
+  int _companionCounterMax = 0;
+  String _companionCounterName = '';
   late int _playerQi;
   int _enemyQi = 100;
   int _enemyBurnTurns = 0;
@@ -1502,6 +1709,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         .map(YoranBattleEquipment.fromState)
         .whereType<YoranBattleEquipment>()
         .toList(growable: false);
+    _battleCompanions = widget.companions.take(3).toList(growable: false);
+    _selectedCompanionId =
+        _battleCompanions.isEmpty ? null : _battleCompanions.first.id;
     _availableSkillsCache = _collectAvailableSkills();
 
     final upperQuality = _qualityForSlot('upper');
@@ -1563,6 +1773,15 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _playerGuardController = _controller(520);
     _playerGuardImpactController = _controller(460);
     _combatTextController = _controller(760);
+    _companionAssistController = _controller(1080)
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted) {
+          setState(() {
+            _activeAssistCompanion = null;
+            _activeAssistSkill = null;
+          });
+        }
+      });
     _playerBreathController = _controller(3900)
       ..value = .18
       ..repeat(reverse: true);
@@ -1616,6 +1835,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _playerGuardController.dispose();
     _playerGuardImpactController.dispose();
     _combatTextController.dispose();
+    _companionAssistController.dispose();
     _playerBreathController.dispose();
     _enemyBreathController.dispose();
     _speechSessionId++;
@@ -1896,6 +2116,314 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         },
       ),
     );
+  }
+
+  Widget _buildCompanionSkillCard(
+    YoranBattleSkill skill, {
+    required bool compact,
+  }) {
+    final used = _usedCompanionSkillIds.contains(skill.id);
+    final selected = _selectedCompanionSkillId == skill.id;
+    final disabled = used || _companionAssistUsedThisRound || !_canAct;
+    final accent = _battleSkillQualityColor(skill.quality);
+    return GestureDetector(
+      onTap: disabled
+          ? null
+          : () {
+              setState(() {
+                _selectedCompanionSkillId = selected ? null : skill.id;
+                _selectedSkillName = null;
+                _selectedItemId = null;
+              });
+              unawaited(HapticFeedback.selectionClick());
+            },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 170),
+        padding: EdgeInsets.fromLTRB(
+          compact ? 8 : 10,
+          compact ? 6 : 9,
+          compact ? 8 : 10,
+          compact ? 5 : 8,
+        ),
+        decoration: BoxDecoration(
+          color: used
+              ? const Color(0xCC111318)
+              : selected
+                  ? accent.withOpacity(.18)
+                  : const Color(0xD9141820),
+          border: Border.all(
+            color: selected
+                ? Colors.white.withOpacity(.92)
+                : used
+                    ? Colors.white.withOpacity(.10)
+                    : accent.withOpacity(.66),
+            width: selected ? 1.6 : 1.05,
+          ),
+          boxShadow: selected
+              ? <BoxShadow>[
+                  BoxShadow(
+                    color: accent.withOpacity(.30),
+                    blurRadius: 14,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                _BattleSkillTypeIcon(
+                  skill: skill,
+                  size: compact ? 15 : 18,
+                  color: disabled ? Colors.white30 : accent,
+                ),
+                SizedBox(width: compact ? 5 : 7),
+                Expanded(
+                  child: Text(
+                    skill.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: used ? Colors.white30 : Colors.white,
+                      fontSize: compact ? 11 : 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                if (used)
+                  const Icon(
+                    Icons.check_circle_rounded,
+                    size: 13,
+                    color: Colors.white24,
+                  ),
+              ],
+            ),
+            SizedBox(height: compact ? 3 : 7),
+            Expanded(
+              child: Text(
+                skill.detail,
+                maxLines: compact ? 1 : 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: used ? Colors.white24 : Colors.white60,
+                  fontSize: compact ? 8.5 : 9.5,
+                  height: 1.3,
+                ),
+              ),
+            ),
+            const SizedBox(height: 3),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    used
+                        ? '本场已使用'
+                        : _companionAssistUsedThisRound
+                            ? '本回合已援战'
+                            : '限定技 · 0精力',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: disabled ? Colors.white30 : accent,
+                      fontSize: compact ? 8 : 9,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                if (!compact)
+                  Text(
+                    _battleSkillTypeName(skill.iconType),
+                    style: TextStyle(
+                      color: used ? Colors.white24 : accent.withOpacity(.86),
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompanionCards() {
+    YoranBattleCompanion? activeCompanion;
+    for (final companion in _battleCompanions) {
+      if (companion.id == _selectedCompanionId) {
+        activeCompanion = companion;
+        break;
+      }
+    }
+    activeCompanion ??=
+        _battleCompanions.isEmpty ? null : _battleCompanions.first;
+    final entries = activeCompanion == null
+        ? const <MapEntry<YoranBattleCompanion, YoranBattleSkill>>[]
+        : activeCompanion.skills
+            .map((skill) =>
+                MapEntry<YoranBattleCompanion, YoranBattleSkill>(
+                  activeCompanion!,
+                  skill,
+                ))
+            .toList(growable: false);
+    if (entries.isEmpty) {
+      return const Center(
+        child: Text(
+          '暂无出战角色或援战技能',
+          style: TextStyle(color: Colors.white38, fontSize: 12),
+        ),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 520 ? 4 : 2;
+        final rowCount = (entries.length / columns).ceil();
+        const gap = 8.0;
+        final compact = rowCount > 1;
+        final rows = <Widget>[];
+        for (var row = 0; row < rowCount; row++) {
+          final cells = <Widget>[];
+          for (var column = 0; column < columns; column++) {
+            final index = row * columns + column;
+            cells.add(
+              Expanded(
+                child: index < entries.length
+                    ? _buildCompanionSkillCard(
+                        entries[index].value,
+                        compact: compact,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            );
+            if (column < columns - 1) cells.add(const SizedBox(width: gap));
+          }
+          rows.add(Expanded(child: Row(children: cells)));
+          if (row < rowCount - 1) rows.add(const SizedBox(height: gap));
+        }
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(18, 4, 18, 0),
+          child: Column(children: rows),
+        );
+      },
+    );
+  }
+
+  MapEntry<YoranBattleCompanion, YoranBattleSkill>? _selectedCompanionSkill() {
+    final selectedId = _selectedCompanionSkillId;
+    if (selectedId == null) return null;
+    for (final companion in _battleCompanions) {
+      for (final skill in companion.skills) {
+        if (skill.id == selectedId) {
+          return MapEntry<YoranBattleCompanion, YoranBattleSkill>(companion, skill);
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _useCompanionSkill(
+    YoranBattleCompanion companion,
+    YoranBattleSkill skill,
+  ) async {
+    if (!_canAct ||
+        _companionAssistUsedThisRound ||
+        _usedCompanionSkillIds.contains(skill.id)) return;
+    setState(() {
+      _busy = true;
+      _usedCompanionSkillIds.add(skill.id);
+      _companionAssistUsedThisRound = true;
+      _selectedCompanionSkillId = null;
+      _activeAssistCompanion = companion;
+      _activeAssistSkill = skill;
+    });
+    unawaited(_companionAssistController.forward(from: 0));
+    unawaited(HapticFeedback.mediumImpact());
+    if (!await _pause(260)) return;
+
+    final rolledDamage = skill.maxDamage > 0
+        ? _scalePlayerDamage(_rollBetween(skill.minDamage, skill.maxDamage))
+        : 0;
+    final actualDamage = math.min(_enemyHp, rolledDamage);
+    final recovered = math.min(
+      skill.healAmount + (actualDamage * skill.lifestealPercent / 100).round(),
+      _playerMaxHp - _playerHp,
+    );
+    final beforeQi = _playerQi;
+    setState(() {
+      _enemyHp = _clampEnemyHp(_enemyHp - actualDamage);
+      _playerHp = _clampPlayerHp(_playerHp + recovered);
+      _playerQi = _clampPlayerQi(_playerQi + skill.energyGain);
+      if (skill.burnTurns > 0 && skill.burnDamage > 0) {
+        _enemyBurnTurns = math.max(_enemyBurnTurns, skill.burnTurns);
+        _enemyBurnDamage = math.max(_enemyBurnDamage, skill.burnDamage);
+      }
+      if (skill.guarding) {
+        _playerGuarding = true;
+        _playerGuardReductionPercent = math.max(
+          _playerGuardReductionPercent,
+          skill.guardReductionPercent,
+        );
+      }
+      if (skill.dodging) {
+        _playerDodging = true;
+        _playerDodgeDifficultyBonus = math.max(
+          _playerDodgeDifficultyBonus,
+          skill.enemyHitDifficultyBonus,
+        );
+      }
+      if (skill.exposes) {
+        _enemyExposedTurns = math.max(_enemyExposedTurns, 1);
+        _enemyExposedHitBonus = math.max(_enemyExposedHitBonus, skill.exposeHitBonus);
+        _enemyExposedExtraDamageMin = math.max(
+          _enemyExposedExtraDamageMin,
+          skill.exposeExtraDamageMin,
+        );
+        _enemyExposedExtraDamageMax = math.max(
+          _enemyExposedExtraDamageMax,
+          skill.exposeExtraDamageMax,
+        );
+      }
+      if (skill.stunTurns > 0) {
+        _enemyStunnedByCompanion = math.max(_enemyStunnedByCompanion, 1);
+      }
+      if (skill.counterMax > 0) {
+        _companionCounterMin = skill.counterMin;
+        _companionCounterMax = skill.counterMax;
+        _companionCounterName = companion.name;
+      }
+    });
+    if (actualDamage > 0) {
+      unawaited(_enemyDamageController.forward(from: 0));
+      _showCombatText('-$actualDamage', onEnemy: true, color: _BattleColors.player);
+    }
+    if (recovered > 0) unawaited(_playerHealController.forward(from: 0));
+    _addLog(
+      _BattleLogEntry(
+        label: '${companion.name} · ${skill.name}',
+        before: '${companion.name}发动援战技能。',
+        meta: <String>[
+          '${skill.quality}品',
+          if (actualDamage > 0) '伤害$actualDamage',
+          if (recovered > 0) '生命+$recovered',
+          if (_playerQi > beforeQi) '精力+${_playerQi - beforeQi}',
+          '本场剩余${_battleCompanions.fold<int>(0, (sum, item) => sum + item.skills.where((candidate) => !_usedCompanionSkillIds.contains(candidate.id)).length)}个援战技能',
+        ].join(' · '),
+        tone: _BattleLogTone.success,
+      ),
+    );
+    if (!await _pause(520)) return;
+    if (_enemyHp <= 0) {
+      await _finishVictory();
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _busy = false;
+        _activeCategory = _BattleCommandCategory.skills;
+      });
+    }
   }
 
   Future<void> _finishHoldListening({bool commit = true}) async {
@@ -2207,6 +2735,18 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _enemyHp = _enemyStartingHp;
     _selectedSkillName = null;
     _selectedItemId = null;
+    _selectedCompanionId =
+        _battleCompanions.isEmpty ? null : _battleCompanions.first.id;
+    _selectedCompanionSkillId = null;
+    _activeAssistCompanion = null;
+    _activeAssistSkill = null;
+    _companionAssistController.reset();
+    _usedCompanionSkillIds.clear();
+    _companionAssistUsedThisRound = false;
+    _enemyStunnedByCompanion = 0;
+    _companionCounterMin = 0;
+    _companionCounterMax = 0;
+    _companionCounterName = '';
     _itemCounts.clear();
     for (final item in _battleItems) {
       _itemCounts[item.id] = item.quantity;
@@ -2215,6 +2755,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _itemUsesThisBattle = 0;
     _settlingItems = false;
     _settlementAccepted = false;
+    _battleSettlement = const <String, dynamic>{};
+    _settlementError = '';
     _playerQi = (_playerMaxQi * .40).round();
     _enemyQi = _enemyStartingQi;
     _enemyBurnTurns = 0;
@@ -2465,14 +3007,20 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       if (skill.cooldown > 0) {
         _skillCooldowns[skill.name] = skill.cooldown;
       }
-      _playerGuarding = skill.guarding;
-      _playerDodging = skill.dodging;
-      _playerGuardReductionPercent = skill.guarding
-          ? math.max(1, skill.guardReductionPercent)
-          : 0;
-      _playerDodgeDifficultyBonus = skill.dodging
-          ? math.max(1, skill.enemyHitDifficultyBonus)
-          : 0;
+      if (skill.guarding) {
+        _playerGuarding = true;
+        _playerGuardReductionPercent = math.max(
+          _playerGuardReductionPercent,
+          math.max(1, skill.guardReductionPercent),
+        );
+      }
+      if (skill.dodging) {
+        _playerDodging = true;
+        _playerDodgeDifficultyBonus = math.max(
+          _playerDodgeDifficultyBonus,
+          math.max(1, skill.enemyHitDifficultyBonus),
+        );
+      }
     });
     _actionFocus.unfocus();
     _addLog(
@@ -2659,10 +3207,13 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
       _tickSkillCooldowns();
       _playerQi = _clampPlayerQi(_playerQi - energyCost);
-      _playerDodging = dodging;
-      _playerGuarding = !dodging;
-      _playerGuardReductionPercent = dodging ? 0 : 50;
-      _playerDodgeDifficultyBonus = dodging ? 5 : 0;
+      if (dodging) {
+        _playerDodging = true;
+        _playerDodgeDifficultyBonus = math.max(_playerDodgeDifficultyBonus, 5);
+      } else {
+        _playerGuarding = true;
+        _playerGuardReductionPercent = math.max(_playerGuardReductionPercent, 50);
+      }
     });
     _addLog(
       _BattleLogEntry(
@@ -2913,6 +3464,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         _playerDodging = false;
         _playerGuardReductionPercent = 0;
         _playerDodgeDifficultyBonus = 0;
+        _companionAssistUsedThisRound = false;
+        _selectedCompanionSkillId = null;
+        _enemyStunnedByCompanion = 0;
+        _companionCounterMin = 0;
+        _companionCounterMax = 0;
+        _companionCounterName = '';
         _round++;
         _chooseNextEnemyIntent();
         _busy = true;
@@ -3373,8 +3930,44 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       await _finishVictory();
       return true;
     }
+    if (await _triggerCompanionCounter(damage)) return true;
     await _openNextPlayerTurn();
     return true;
+  }
+
+  Future<bool> _triggerCompanionCounter(int receivedDamage) async {
+    if (receivedDamage <= 0 || _companionCounterMax <= 0 || _enemyHp <= 0) {
+      return false;
+    }
+    final sourceName = _companionCounterName.isEmpty ? '支援角色' : _companionCounterName;
+    final damage = math.min(
+      _enemyHp,
+      _scalePlayerDamage(_rollBetween(_companionCounterMin, _companionCounterMax)),
+    );
+    setState(() {
+      _enemyHp = _clampEnemyHp(_enemyHp - damage);
+      _companionCounterMin = 0;
+      _companionCounterMax = 0;
+      _companionCounterName = '';
+    });
+    unawaited(_enemyDamageController.forward(from: 0));
+    _showCombatText('-$damage', onEnemy: true, color: _BattleColors.energy);
+    _addLog(
+      _BattleLogEntry(
+        label: '$sourceName · 援护反击',
+        before: '$sourceName抓住敌方攻击后的空隙反击，造成 ',
+        emphasis: '$damage',
+        after: ' 点伤害。',
+        meta: '反击效果已消耗',
+        tone: _BattleLogTone.success,
+      ),
+    );
+    if (!await _pause(360)) return true;
+    if (_enemyHp <= 0) {
+      await _finishVictory();
+      return true;
+    }
+    return false;
   }
 
   Future<void> _enemyAction() async {
@@ -3410,6 +4003,20 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         return;
       }
       if (!await _pause(360)) return;
+    }
+
+    if (_enemyStunnedByCompanion > 0) {
+      setState(() => _enemyStunnedByCompanion--);
+      _addLog(
+        _BattleLogEntry(
+          label: '援战压制',
+          before: '$_enemyName被援战技能压制，本次行动被打断。',
+          meta: '敌方跳过行动',
+          tone: _BattleLogTone.success,
+        ),
+      );
+      await _openNextPlayerTurn();
+      return;
     }
 
     if (_enemyIntent == _EnemyIntentKind.skill) {
@@ -3576,6 +4183,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       await _finishBattle(YoranBattleOutcome.defeat);
       return;
     }
+    if (await _triggerCompanionCounter(damage)) return;
     await _openNextPlayerTurn();
   }
 
@@ -3613,6 +4221,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     final stunned = _playerStunnedTurns > 0;
     setState(() {
       _round++;
+      _companionAssistUsedThisRound = false;
+      _selectedCompanionSkillId = null;
       if (stunned) _playerStunnedTurns--;
       _playerGuarding = false;
       _playerDodging = false;
@@ -3652,6 +4262,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _playerBreathController.stop(canceled: false);
     _enemyBreathController.stop(canceled: false);
     setState(() => _outcome = outcome);
+    // 胜利后立即进行权威结算，拿到奖励后留在结算页展示。
+    // 失败不立即提交，玩家仍可无副作用地重新挑战。
+    if (outcome == YoranBattleOutcome.victory) {
+      await _settleBattle(outcome, returnAfterSettlement: false);
+    }
   }
 
   List<YoranBattleItemConsumption> _battleConsumptions() {
@@ -3665,16 +4280,26 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         .toList(growable: false);
   }
 
-  Future<void> _settleItemsAndReturn(YoranBattleOutcome outcome) async {
+  Future<void> _settleBattle(
+    YoranBattleOutcome outcome, {
+    required bool returnAfterSettlement,
+  }) async {
     if (_settlingItems) return;
+    if (_settlementAccepted) {
+      if (returnAfterSettlement && mounted) Navigator.of(context).pop(outcome);
+      return;
+    }
     final consumptions = _battleConsumptions();
-    setState(() => _settlingItems = true);
-    var accepted = true;
+    setState(() {
+      _settlingItems = true;
+      _settlementError = '';
+    });
+    Map<String, dynamic>? settlement = const <String, dynamic>{};
     try {
       // 正式战斗无论是否使用道具都必须回传胜负。旧逻辑只在 consumptions
       // 非空时调用回调，会让绝大多数战斗永远停留在 active 状态。
       if (widget.onSettleItems != null) {
-        accepted = await widget.onSettleItems!(consumptions, outcome);
+        settlement = await widget.onSettleItems!(consumptions, outcome);
       } else if (consumptions.isNotEmpty && widget.onConsumeItem != null) {
         // 兼容旧接入：仍然延迟到战斗结束才调用，不在使用瞬间扣库存。
         for (final consumption in consumptions) {
@@ -3682,26 +4307,195 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           if (item == null) continue;
           for (var i = 0; i < consumption.quantity; i++) {
             if (!await widget.onConsumeItem!(item)) {
-              accepted = false;
+              settlement = null;
               break;
             }
           }
-          if (!accepted) break;
+          if (settlement == null) break;
         }
       }
     } catch (_) {
-      accepted = false;
+      settlement = null;
     }
     if (!mounted) return;
-    if (!accepted) {
-      setState(() => _settlingItems = false);
+    if (settlement == null) {
+      setState(() {
+        _settlingItems = false;
+        _settlementError = '战斗结算失败，请重试';
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('战斗结算失败，请重试。')),
       );
       return;
     }
-    setState(() => _settlementAccepted = true);
-    Navigator.of(context).pop(outcome);
+    setState(() {
+      _settlingItems = false;
+      _settlementAccepted = true;
+      _battleSettlement = settlement!;
+    });
+    if (returnAfterSettlement) Navigator.of(context).pop(outcome);
+  }
+
+  Widget _buildCompanionAssistOverlay() {
+    final companion = _activeAssistCompanion;
+    final skill = _activeAssistSkill;
+    if (companion == null || skill == null) return const SizedBox.shrink();
+    final accent = _battleSkillQualityColor(skill.quality);
+    final portrait = companion.portrait.trim().isNotEmpty
+        ? companion.portrait
+        : companion.avatar;
+
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _companionAssistController,
+        builder: (context, _) {
+          final t = _companionAssistController.value;
+          double phase(double start, double end) =>
+              ((t - start) / (end - start)).clamp(0.0, 1.0).toDouble();
+          final enter = Curves.easeOutCubic.transform(phase(0, .24));
+          final exit = Curves.easeInCubic.transform(phase(.76, 1));
+          final opacity =
+              (math.min(enter, 1 - exit)).clamp(0.0, 1.0).toDouble();
+
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 560;
+              final panelHeight = (constraints.maxHeight * (compact ? .34 : .40))
+                  .clamp(190.0, 320.0)
+                  .toDouble();
+              final slideX = -constraints.maxWidth * .58 * (1 - enter) +
+                  constraints.maxWidth * .30 * exit;
+              final fallback = Center(
+                child: Icon(
+                  Icons.person_rounded,
+                  size: panelHeight * .42,
+                  color: accent.withOpacity(.55),
+                ),
+              );
+
+              return Opacity(
+                opacity: opacity,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    ColoredBox(color: Colors.black.withOpacity(.18 * opacity)),
+                    Center(
+                      child: Transform.translate(
+                        offset: Offset(slideX, 0),
+                        child: SizedBox(
+                          width: constraints.maxWidth,
+                          height: panelHeight,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: <Widget>[
+                              Positioned.fill(
+                                left: -28,
+                                right: -28,
+                                child: Transform.rotate(
+                                  angle: -.035,
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: <Color>[
+                                          Colors.black.withOpacity(.92),
+                                          accent.withOpacity(.34),
+                                          Colors.black.withOpacity(.84),
+                                        ],
+                                        stops: const <double>[0, .58, 1],
+                                      ),
+                                      border: Border.symmetric(
+                                        horizontal: BorderSide(
+                                          color: accent.withOpacity(.72),
+                                          width: 1.2,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                left: compact ? -8 : 20,
+                                top: -panelHeight * .14,
+                                bottom: -panelHeight * .03,
+                                width: constraints.maxWidth * (compact ? .58 : .48),
+                                child: _BattleImage(
+                                  source: portrait,
+                                  fallback: fallback,
+                                  logicalWidth: constraints.maxWidth * .5,
+                                  maxCacheWidth: 900,
+                                  fit: BoxFit.contain,
+                                  alignment: Alignment.bottomCenter,
+                                ),
+                              ),
+                              Positioned(
+                                left: constraints.maxWidth * (compact ? .43 : .46),
+                                right: compact ? 18 : 48,
+                                top: panelHeight * .22,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    Row(
+                                      children: <Widget>[
+                                        _BattleSkillTypeIcon(
+                                          skill: skill,
+                                          size: compact ? 20 : 25,
+                                          color: accent,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          '限定技',
+                                          style: TextStyle(
+                                            color: accent,
+                                            fontSize: compact ? 10 : 12,
+                                            fontWeight: FontWeight.w900,
+                                            letterSpacing: 2,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 9),
+                                    Text(
+                                      companion.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: compact ? 12 : 15,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      skill.name,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontFamily: 'WenJinMinchoP0',
+                                        fontSize: compact ? 22 : 31,
+                                        height: 1.08,
+                                        fontWeight: FontWeight.w800,
+                                        shadows: const <Shadow>[
+                                          Shadow(color: Colors.black, blurRadius: 8),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -3731,6 +4525,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             ),
             child: _buildBattleBody(),
           ),
+          _buildCompanionAssistOverlay(),
           if (_entranceVisible)
             _BattleEntranceOverlay(
               animation: _entranceController,
@@ -4129,7 +4924,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
   void _handleConfirm() {
     if (!_canAct) return;
-    if (_selectedSkillName != null) {
+    if (_activeCategory == _BattleCommandCategory.companions) {
+      final selected = _selectedCompanionSkill();
+      if (selected == null) return;
+      unawaited(_useCompanionSkill(selected.key, selected.value));
+    } else if (_selectedSkillName != null) {
       final skill = _selectedSkillName!;
       setState(() {
         _selectedSkillName = null;
@@ -4144,9 +4943,124 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
   }
 
+  void _openCompanionSkills(YoranBattleCompanion companion) {
+    if (!_canAct) return;
+    _actionFocus.unfocus();
+    setState(() {
+      _selectedCompanionId = companion.id;
+      _selectedCompanionSkillId = null;
+      _selectedSkillName = null;
+      _selectedItemId = null;
+      _activeCategory = _BattleCommandCategory.companions;
+    });
+    unawaited(HapticFeedback.selectionClick());
+  }
+
+  Widget _buildCompanionAvatarStrip() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: _battleCompanions.map((companion) {
+        final selected =
+            _activeCategory == _BattleCommandCategory.companions &&
+                companion.id == _selectedCompanionId;
+        final remaining = companion.skills
+            .where((skill) => !_usedCompanionSkillIds.contains(skill.id))
+            .length;
+        final allUsed = remaining == 0;
+        final source = companion.avatar.trim().isNotEmpty
+            ? companion.avatar
+            : companion.portrait;
+        final fallback = Center(
+          child: Text(
+            companion.name.isEmpty
+                ? '?'
+                : String.fromCharCode(companion.name.runes.first),
+            style: TextStyle(
+              color: allUsed ? Colors.white30 : _BattleColors.energy,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        );
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Tooltip(
+            message: '${companion.name} · 剩余$remaining个限定技',
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _canAct ? () => _openCompanionSkills(companion) : null,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: 32,
+                height: 32,
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? _BattleColors.energy.withOpacity(.15)
+                      : Colors.black.withOpacity(.24),
+                  border: Border.all(
+                    color: selected
+                        ? _BattleColors.energy
+                        : Colors.white.withOpacity(allUsed ? .04 : .14),
+                    width: selected ? 1.4 : .8,
+                  ),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    Opacity(
+                      opacity: allUsed ? .34 : 1,
+                      child: ClipRect(
+                        child: source.isEmpty
+                            ? fallback
+                            : _BattleImage(
+                                source: source,
+                                fallback: fallback,
+                                logicalWidth: 30,
+                                maxCacheWidth: 120,
+                                fit: BoxFit.cover,
+                              ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 12,
+                        height: 12,
+                        alignment: Alignment.center,
+                        color: allUsed
+                            ? const Color(0xCC343840)
+                            : const Color(0xD90B1423),
+                        child: Text(
+                          '$remaining',
+                          style: TextStyle(
+                            color: allUsed
+                                ? Colors.white38
+                                : _BattleColors.energy,
+                            fontSize: 7.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(growable: false),
+    );
+  }
+
   Widget _buildControls({required bool compact}) {
     final bool isSkills = _activeCategory == _BattleCommandCategory.skills;
     final bool isItems = _activeCategory == _BattleCommandCategory.items;
+    final bool isCompanions =
+        _activeCategory == _BattleCommandCategory.companions;
 
     bool canConfirm = false;
     if (isSkills && _selectedSkillName != null) {
@@ -4155,6 +5069,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       canConfirm = _canAct &&
           _selectedItemId != null &&
           _canUseItem(_selectedItemId!);
+    } else if (isCompanions) {
+      final selected = _selectedCompanionSkill();
+      canConfirm = _canAct &&
+          !_companionAssistUsedThisRound &&
+          selected != null &&
+          !_usedCompanionSkillIds.contains(selected.value.id);
     }
 
     return Container(
@@ -4176,30 +5096,48 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             padding: const EdgeInsets.symmetric(horizontal: 18),
             child: Row(
               children: <Widget>[
-                _buildMenuTab(
-                  label: '行动',
-                  symbol: '✦',
-                  isSelected: isSkills,
-                  onTap: () {
-                    if (_canAct) {
-                      _toggleCategory(_BattleCommandCategory.skills);
-                    }
-                  },
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          _buildMenuTab(
+                            label: '行动',
+                            symbol: '✦',
+                            isSelected: isSkills,
+                            onTap: () {
+                              if (_canAct) {
+                                _toggleCategory(_BattleCommandCategory.skills);
+                              }
+                            },
+                          ),
+                          const SizedBox(width: 7),
+                          _buildMenuTab(
+                            label: '道具',
+                            symbol: '▣',
+                            isSelected: isItems,
+                            onTap: () {
+                              if (_canAct) {
+                                _toggleCategory(_BattleCommandCategory.items);
+                              }
+                            },
+                          ),
+                          const SizedBox(width: 7),
+                          _buildEscapeAction(),
+                          if (_battleCompanions.isNotEmpty) ...<Widget>[
+                            const SizedBox(width: 7),
+                            _buildCompanionAvatarStrip(),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 7),
-                _buildMenuTab(
-                  label: '道具',
-                  symbol: '▣',
-                  isSelected: isItems,
-                  onTap: () {
-                    if (_canAct) {
-                      _toggleCategory(_BattleCommandCategory.items);
-                    }
-                  },
-                ),
-                const SizedBox(width: 7),
-                _buildEscapeAction(),
-                const Spacer(),
+                const SizedBox(width: 8),
                 AnimatedOpacity(
                   duration: const Duration(milliseconds: 160),
                   opacity: canConfirm ? 1 : 0,
@@ -4233,7 +5171,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           const SizedBox(height: 13),
           SizedBox(
             height: 140,
-            child: isSkills ? _buildSkillCards() : _buildItemCards(),
+            child: isSkills
+                ? _buildSkillCards()
+                : isItems
+                    ? _buildItemCards()
+                    : _buildCompanionCards(),
           ),
         ],
       ),
@@ -4357,6 +5299,124 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
+  Widget _buildSettlementRewards(YoranBattleOutcome outcome) {
+    if (outcome != YoranBattleOutcome.victory) {
+      return Text(
+        outcome == YoranBattleOutcome.defeat
+            ? '重新挑战不会消耗本场使用的道具；继续剧情将接受本次失败。'
+            : '脱离战斗不会获得战斗奖励。',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: Colors.white.withOpacity(.48),
+          fontSize: 11.5,
+          height: 1.55,
+        ),
+      );
+    }
+    if (_settlingItems) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
+            ),
+            SizedBox(width: 9),
+            Text('正在结算奖励…', style: TextStyle(color: Colors.white60, fontSize: 11.5)),
+          ],
+        ),
+      );
+    }
+    if (_settlementError.isNotEmpty) {
+      return TextButton.icon(
+        onPressed: () => unawaited(
+          _settleBattle(outcome, returnAfterSettlement: false),
+        ),
+        icon: const Icon(Icons.refresh_rounded, size: 15),
+        label: Text(_settlementError),
+      );
+    }
+
+    final rewards = <Widget>[];
+    final rawScore = _battleSettlement['score_reward'];
+    if (rawScore is Map) {
+      final gained = int.tryParse('${rawScore['score'] ?? 0}') ?? 0;
+      if (gained > 0) {
+        rewards.add(_buildRewardRow(Icons.auto_awesome_rounded, '星块', '×$gained'));
+      }
+    }
+    final rawAcquired = _battleSettlement['acquired'];
+    if (rawAcquired is List) {
+      for (final raw in rawAcquired) {
+        if (raw is! Map) continue;
+        final name = '${raw['name'] ?? ''}'.trim();
+        if (name.isEmpty) continue;
+        final quantity = int.tryParse('${raw['quantity'] ?? 1}') ?? 1;
+        rewards.add(_buildRewardRow(
+          Icons.inventory_2_outlined,
+          name,
+          quantity > 1 ? '×$quantity' : '获得',
+        ));
+      }
+    }
+    final rawSkill = _battleSettlement['skill_reward'];
+    if (rawSkill is Map) {
+      final name = '${rawSkill['name'] ?? ''}'.trim();
+      if (name.isNotEmpty) {
+        rewards.add(_buildRewardRow(Icons.bolt_rounded, name, '新技能'));
+      }
+    }
+    if (!_settlementAccepted) return const SizedBox(height: 18);
+    if (rewards.isEmpty) {
+      return Text(
+        '本场没有额外战利品',
+        style: TextStyle(color: Colors.white.withOpacity(.42), fontSize: 11.5),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Text(
+          '获得奖励',
+          style: TextStyle(
+            color: Colors.white.withOpacity(.48),
+            fontSize: 10,
+            letterSpacing: 1.6,
+          ),
+        ),
+        const SizedBox(height: 10),
+        ...rewards,
+      ],
+    );
+  }
+
+  Widget _buildRewardRow(IconData icon, String name, String trailing) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.035),
+        border: Border.all(color: Colors.white.withOpacity(.08), width: .7),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(icon, size: 15, color: _BattleColors.accent),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 11.5)),
+          ),
+          Text(
+            trailing,
+            style: TextStyle(color: Colors.white.withOpacity(.50), fontSize: 10.5),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEndOverlay(YoranBattleOutcome outcome) {
     final title = switch (outcome) {
       YoranBattleOutcome.victory => '战斗胜利',
@@ -4390,7 +5450,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
-            width: 300,
+            width: 340,
             padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.075),
@@ -4420,45 +5480,48 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 letterSpacing: 2.6,
               ),
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 15),
+            _buildSettlementRewards(outcome),
+            const SizedBox(height: 16),
             Row(
               children: <Widget>[
-                Expanded(
-                  child: SizedBox(
-                    height: 42,
-                    child: TextButton(
-                      onPressed: () => _resetBattle(),
-                      style: TextButton.styleFrom(
-                        foregroundColor: Colors.white.withOpacity(0.72),
-                        backgroundColor: Colors.white.withOpacity(0.035),
-                        padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.zero,
-                          side: BorderSide(
-                            color: Colors.white.withOpacity(0.12),
-                            width: 0.8,
+                if (outcome == YoranBattleOutcome.defeat) ...<Widget>[
+                  Expanded(
+                    child: SizedBox(
+                      height: 42,
+                      child: TextButton(
+                        onPressed: _settlingItems ? null : () => _resetBattle(),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white.withOpacity(0.72),
+                          backgroundColor: Colors.white.withOpacity(0.035),
+                          padding: EdgeInsets.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.zero,
+                            side: BorderSide(
+                              color: Colors.white.withOpacity(0.12),
+                              width: 0.8,
+                            ),
                           ),
                         ),
-                      ),
-                      child: const Text(
-                        '重新开始',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: .4,
+                        child: const Text(
+                          '重新挑战',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .4),
                         ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 10),
+                  const SizedBox(width: 10),
+                ],
                 Expanded(
                   child: SizedBox(
                     height: 42,
                     child: FilledButton(
                       onPressed: _settlingItems
                           ? null
-                          : () => unawaited(_settleItemsAndReturn(outcome)),
+                          : () => unawaited(_settleBattle(
+                                outcome,
+                                returnAfterSettlement: true,
+                              )),
                       style: FilledButton.styleFrom(
                         backgroundColor: _BattleColors.accent,
                         foregroundColor: const Color(0xFF0F140F),
@@ -4471,7 +5534,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         ),
                       ),
                       child: Text(
-                        _settlingItems ? '结算中…' : '返回剧情',
+                        _settlingItems
+                            ? '结算中…'
+                            : outcome == YoranBattleOutcome.defeat
+                                ? '接受失败并继续'
+                                : '继续剧情',
                         style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
@@ -6192,10 +7259,26 @@ class _BattleCard extends StatelessWidget {
                           ),
                         ),
                       ),
+                    Positioned(
+                      top: 8,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: _BattleSkillTypeIcon(
+                          skill: skill,
+                          size: 17,
+                          color: isLocked
+                              ? Colors.white24
+                              : (isSelected
+                                  ? Colors.white
+                                  : _battleSkillQualityColor(skill.quality)),
+                        ),
+                      ),
+                    ),
                     // 技能名称
                     Center(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        padding: const EdgeInsets.fromLTRB(4, 19, 4, 0),
                         child: Text(
                           skill.name,
                           textAlign: TextAlign.center,

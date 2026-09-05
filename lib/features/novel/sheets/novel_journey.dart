@@ -9,6 +9,15 @@ part of '../novel_sheets.dart';
 // 其余以下划线 `_` 开头的类型/方法均为该页面内部实现或共享私有实现。
 // ============================================================================
 
+const Color _journeyBackground = Color(0xFF0A0F0D);
+const Color _journeySurface = Color(0xFF131A17);
+const Color _journeySurfaceSoft = Color(0xFF17201C);
+const Color _journeyText = Color(0xFFEEF2EF);
+const Color _journeyTextSoft = Color(0xFFC4CCC7);
+const Color _journeyMuted = Color(0xFF7F8B84);
+const Color _journeyMutedSoft = Color(0xFF55605A);
+const Color _journeyLine = Color(0xFF26312B);
+
 Future<void> showNovelJourneySheet(
   BuildContext context,
   NovelGameController controller,
@@ -286,7 +295,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
         return _GameStyleBackdrop(
           controller: widget.controller,
           embedded: widget.embedded,
-          lightTheme: true,
+          lightTheme: false,
           child: Padding(
             padding: EdgeInsets.zero,
             child: Column(
@@ -297,11 +306,22 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                 onClose: widget.embedded
                     ? null
                     : () => Navigator.of(context).pop(),
-                lightTheme: true,
+                lightTheme: false,
               ),
               Expanded(
-                child: ColoredBox(
-                  color: _archiveBackground,
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(
+                    gradient: RadialGradient(
+                      center: Alignment(-.45, -.35),
+                      radius: 1.15,
+                      colors: <Color>[
+                        Color(0xFF17201C),
+                        _journeyBackground,
+                        Color(0xFF070A09),
+                      ],
+                      stops: <double>[0, .58, 1],
+                    ),
+                  ),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final compact = constraints.maxWidth < 620;
@@ -318,7 +338,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                             child: RefreshIndicator(
                               onRefresh: _refresh,
                               color: NovelPalette.accent,
-                              backgroundColor: _archiveSurface,
+                              backgroundColor: _journeySurface,
                               child: hasContent
                                   ? ListView(
                                       physics:
@@ -374,7 +394,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                                                   '“',
                                                   style: TextStyle(
                                                     color:
-                                                        Color(0xFFD7DCD7),
+                                                        Color(0xFF435048),
                                                     fontSize: 52,
                                                     height: .8,
                                                     fontWeight:
@@ -387,7 +407,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                                                       ? '正在整理你的故事…'
                                                       : '故事刚刚开始',
                                                   style: const TextStyle(
-                                                    color: _archiveText,
+                                                    color: _journeyText,
                                                     fontSize: 14,
                                                     fontWeight:
                                                         FontWeight.w700,
@@ -401,7 +421,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                                                       : '当新的选择留下痕迹，它们会在这里成为你的旅程。',
                                                   textAlign: TextAlign.center,
                                                   style: const TextStyle(
-                                                    color: _archiveMuted,
+                                                    color: _journeyMuted,
                                                     fontSize: 11.2,
                                                     height: 1.65,
                                                   ),
@@ -454,7 +474,7 @@ class _JourneyStoryOpening extends StatelessWidget {
           const Text(
             'STORY JOURNAL',
             style: TextStyle(
-              color: NovelPalette.accentDeep,
+              color: NovelPalette.accentSoft,
               fontSize: 8.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 2.4,
@@ -464,10 +484,10 @@ class _JourneyStoryOpening extends StatelessWidget {
           Text(
             title,
             style: const TextStyle(
-              color: _archiveText,
+              color: _journeyText,
               fontSize: 27,
               height: 1.08,
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w700,
               letterSpacing: .5,
             ),
           ),
@@ -476,16 +496,20 @@ class _JourneyStoryOpening extends StatelessWidget {
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
             decoration: BoxDecoration(
-              color: _archiveSurfaceSoft,
-              border: Border.all(color: _archiveLine, width: .8),
-              borderRadius: BorderRadius.circular(10),
+              color: _journeySurfaceSoft,
+              border: const Border(
+                left: BorderSide(color: NovelPalette.accent, width: 2),
+                top: BorderSide(color: _journeyLine, width: .7),
+                right: BorderSide(color: _journeyLine, width: .7),
+                bottom: BorderSide(color: _journeyLine, width: .7),
+              ),
             ),
             child: Text(
               summary.isEmpty
                   ? '故事仍在继续。每一次选择、相遇与转折，都会在这里留下痕迹。'
                   : summary,
               style: const TextStyle(
-                color: _archiveTextSoft,
+                color: _journeyTextSoft,
                 fontSize: 12.6,
                 height: 1.78,
                 fontWeight: FontWeight.w500,
@@ -503,7 +527,7 @@ class _JourneyStoryOpening extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          Container(height: 1, color: _archiveLine),
+          Container(height: 1, color: _journeyLine),
         ],
       ),
     );
@@ -524,7 +548,7 @@ class _JourneyCountText extends StatelessWidget {
     return Text(
       '$label  $value',
       style: const TextStyle(
-        color: _archiveMuted,
+        color: _journeyMuted,
         fontSize: 9.8,
         fontWeight: FontWeight.w600,
         letterSpacing: .25,
@@ -554,7 +578,7 @@ class _GameStyleJourneySection extends StatelessWidget {
           Text(
             eyebrow,
             style: const TextStyle(
-              color: NovelPalette.accentDeep,
+              color: NovelPalette.accentSoft,
               fontSize: 8.2,
               fontWeight: FontWeight.w700,
               letterSpacing: 2.0,
@@ -566,7 +590,7 @@ class _GameStyleJourneySection extends StatelessWidget {
               Text(
                 title,
                 style: const TextStyle(
-                  color: _archiveText,
+                  color: _journeyText,
                   fontSize: 14.2,
                   fontWeight: FontWeight.w800,
                   letterSpacing: .2,
@@ -576,7 +600,7 @@ class _GameStyleJourneySection extends StatelessWidget {
               Text(
                 '${records.length}',
                 style: const TextStyle(
-                  color: _archiveMuted,
+                  color: _journeyMuted,
                   fontSize: 9.5,
                   fontWeight: FontWeight.w600,
                 ),
@@ -626,7 +650,7 @@ class _GameStyleJourneyEntry extends StatelessWidget {
               child: Text(
                 number,
                 style: const TextStyle(
-                  color: _archiveMutedSoft,
+                  color: _journeyMutedSoft,
                   fontSize: 9.2,
                   fontWeight: FontWeight.w700,
                   letterSpacing: .7,
@@ -642,7 +666,7 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                   Text(
                     record.time,
                     style: const TextStyle(
-                      color: _archiveMuted,
+                      color: _journeyMuted,
                       fontSize: 9.3,
                       fontWeight: FontWeight.w600,
                       letterSpacing: .25,
@@ -653,7 +677,7 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                 Text(
                   record.title,
                   style: const TextStyle(
-                    color: _archiveText,
+                    color: _journeyText,
                     fontSize: 12.7,
                     height: 1.55,
                     fontWeight: FontWeight.w700,
@@ -664,7 +688,7 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                   Text(
                     record.detail,
                     style: const TextStyle(
-                      color: _archiveTextSoft,
+                      color: _journeyTextSoft,
                       fontSize: 11.5,
                       height: 1.72,
                       fontWeight: FontWeight.w500,
@@ -673,7 +697,7 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                 ],
                 if (!last) ...<Widget>[
                   const SizedBox(height: 17),
-                  Container(height: .8, color: _archiveLine),
+                  Container(height: .8, color: _journeyLine),
                   const SizedBox(height: 17),
                 ],
               ],

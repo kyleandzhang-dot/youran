@@ -329,15 +329,15 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     ];
 
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.only(top: 14),
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         padding: EdgeInsets.zero,
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2, 
-          mainAxisSpacing: 10, 
-          crossAxisSpacing: 20, 
+          mainAxisSpacing: 8, 
+          crossAxisSpacing: 16, 
           mainAxisExtent: 16, 
         ),
         itemCount: bonuses.length,
@@ -418,16 +418,16 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
             color: Colors.transparent,
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                maxWidth: 330,
+                maxWidth: 320, 
                 maxHeight: MediaQuery.of(dialogContext).size.height * .82,
               ),
               child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20),
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                margin: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
                 decoration: BoxDecoration(
                   color: _inventoryInkSoft,
                   border: Border.all(color: _inventoryGold.withOpacity(.28), width: .8),
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(6),
                   boxShadow: const <BoxShadow>[
                     BoxShadow(color: Color(0x66000000), blurRadius: 32, offset: Offset(0, 14)),
                   ],
@@ -445,7 +445,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                             item.name,
                             style: TextStyle(
                               color: qualityColor, 
-                              fontSize: 17,
+                              fontSize: 16, 
                               fontWeight: FontWeight.w900,
                             ),
                           ),
@@ -460,7 +460,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 7),
+                    const SizedBox(height: 5),
                     Text(
                       wearable
                           ? '品质 $quality  ·  ${affixes.length}条词条'
@@ -472,27 +472,27 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                       ),
                     ),
                     if (item.quantity > 1) ...<Widget>[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Text(
                         '持有 ×${item.quantity}',
                         style: const TextStyle(color: _inventoryTextSoft, fontSize: 10.5),
                       ),
                     ],
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 12),
                     Container(height: .7, color: Colors.white.withOpacity(.08)),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 12),
                     Text(
                       item.description.trim().isEmpty ? '暂无详细描述' : item.description.trim(),
                       style: const TextStyle(
                         color: _inventoryTextSoft,
-                        fontSize: 12,
-                        height: 1.65,
+                        fontSize: 11.5,
+                        height: 1.6,
                       ),
                     ),
                     if (wearable) ...<Widget>[
-                      const SizedBox(height: 16),
-                      Container(height: .7, color: Colors.white.withOpacity(.08)),
                       const SizedBox(height: 14),
+                      Container(height: .7, color: Colors.white.withOpacity(.08)),
+                      const SizedBox(height: 12),
                       const Text(
                         '基础效果',
                         style: TextStyle(
@@ -501,16 +501,16 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const SizedBox(height: 7),
+                      const SizedBox(height: 6),
                       Text(
                         _baseEquipmentEffect(item),
                         style: const TextStyle(
                           color: _inventoryText,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 15),
+                      const SizedBox(height: 12),
                       const Text(
                         '附加词条',
                         style: TextStyle(
@@ -519,20 +519,20 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const SizedBox(height: 7),
+                      const SizedBox(height: 6),
                       if (affixes.isEmpty)
                         const Text(
                           '无额外词条',
                           style: TextStyle(
                             color: _inventoryMuted,
-                            fontSize: 11.5,
+                            fontSize: 11,
                           ),
                         )
                       else
                         ...affixes.map((affix) {
                           final label = _affixDisplayNames[affix.key] ?? '属性';
                           return Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.only(bottom: 4), 
                             child: Row(
                               children: <Widget>[
                                 Expanded(
@@ -558,7 +558,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                           );
                         }),
                     ],
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 18),
                     Row(
                       children: <Widget>[
                         Expanded(
@@ -569,12 +569,8 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                               ),
                               overlayColor: WidgetStateProperty.resolveWith<Color?>(
                                 (states) {
-                                  if (states.contains(WidgetState.hovered)) {
-                                    return const Color(0x0A000000);
-                                  }
-                                  if (states.contains(WidgetState.pressed)) {
-                                    return const Color(0x12000000);
-                                  }
+                                  if (states.contains(WidgetState.hovered)) return const Color(0x0A000000);
+                                  if (states.contains(WidgetState.pressed)) return const Color(0x12000000);
                                   return Colors.transparent;
                                 },
                               ),
@@ -599,7 +595,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                     ? _inventoryTextSoft
                                     : _inventoryText,
                                 shape: const RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.all(Radius.circular(3)),
+                                  borderRadius: BorderRadius.all(Radius.circular(4)),
                                 ),
                               ),
                               onPressed: busy.isNotEmpty
@@ -643,7 +639,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         .join('  ·  ');
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 2),
+      padding: const EdgeInsets.fromLTRB(16, 8, 24, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -651,15 +647,15 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
               Container(
-                width: 76,
-                height: 76,
+                width: 56, 
+                height: 56, 
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(color: _inventoryGold.withOpacity(.42), width: 1),
                   boxShadow: <BoxShadow>[
                     BoxShadow(
                       color: _inventoryBlue.withOpacity(.22),
-                      blurRadius: 20,
+                      blurRadius: 16, 
                     ),
                   ],
                 ),
@@ -671,7 +667,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   fallbackText: name,
                 ),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -682,19 +678,19 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: _inventoryText,
-                        fontSize: 20,
-                        height: 1.05,
+                        fontSize: 18, 
+                        height: 1.1,
                         fontWeight: FontWeight.w900,
                         letterSpacing: .5,
                       ),
                     ),
                     if (metaTags.isNotEmpty) ...[
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 4),
                       Text(
                         metaTags,
                         style: const TextStyle(
                           color: _inventoryTextSoft,
-                          fontSize: 11,
+                          fontSize: 10.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -708,7 +704,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
           _equipmentBonusPanel(equipped),
           
           if (skills.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 20),
+            const SizedBox(height: 16), 
             Row(
               children: <Widget>[
                 Expanded(
@@ -721,12 +717,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                       onTap: () => setState(() => _skillsExpanded = !_skillsExpanded),
                       borderRadius: BorderRadius.circular(4),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), 
                         child: Text(
                           _skillsExpanded ? '收起' : '展开',
                           style: const TextStyle(
-                    color: _inventoryMuted,
-                            fontSize: 10.5,
+                            color: _inventoryMuted,
+                            fontSize: 10,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -735,16 +731,16 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 6, 
+              runSpacing: 6,
               children: skills.take(_skillsExpanded ? skills.length : 3).map((skill) {
                 final meta = skill.isAbility
                     ? '能力'
                     : (skill.mastery.isEmpty ? '' : skill.mastery);
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), 
                   decoration: BoxDecoration(
                     color: _inventoryInkSoft.withOpacity(.72),
                     borderRadius: BorderRadius.circular(4),
@@ -754,7 +750,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                     meta.isEmpty ? skill.name : '${skill.name} · $meta',
                     style: const TextStyle(
                       color: _inventoryTextSoft,
-                      fontSize: 10.5,
+                      fontSize: 10,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -764,7 +760,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
           ],
           
           if (equipped.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 20),
+            const SizedBox(height: 16), 
             Row(
               children: <Widget>[
                 Expanded(
@@ -780,12 +776,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                       onTap: () => setState(() => _equippedExpanded = !_equippedExpanded),
                       borderRadius: BorderRadius.circular(4),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         child: Text(
                           _equippedExpanded ? '收起' : '展开',
                           style: const TextStyle(
                             color: _inventoryMuted,
-                            fontSize: 10.5,
+                            fontSize: 10,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -794,10 +790,10 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Wrap(
-              spacing: 12,
-              runSpacing: 10,
+              spacing: 8, 
+              runSpacing: 8,
               children: equipped
                   .take(_equippedExpanded ? equipped.length : 3)
                   .map((item) {
@@ -808,10 +804,10 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: itemBusy ? null : () => unawaited(_showItemDetail(item)),
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(4),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 160),
-                      padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+                      padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
                       decoration: BoxDecoration(
                         color: _inventoryInkSoft.withOpacity(.74),
                         borderRadius: BorderRadius.circular(4),
@@ -827,15 +823,15 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: qualityColor,
-                                fontSize: 11,
+                                fontSize: 10.5,
                                 fontWeight: FontWeight.w800,
                               ),
                             ),
                           ),
-                          const SizedBox(width: 9),
+                          const SizedBox(width: 6),
                           if (itemBusy)
                             const SizedBox.square(
-                              dimension: 11,
+                              dimension: 10,
                               child: CircularProgressIndicator(
                                 strokeWidth: 1.4,
                                 color: _inventoryMuted,
@@ -846,7 +842,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                               '详情',
                               style: TextStyle(
                                 color: _inventoryMuted,
-                                fontSize: 9.5,
+                                fontSize: 9,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -865,21 +861,21 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
 
   Widget _inventoryList(List<NovelInventoryItem> items) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      padding: const EdgeInsets.fromLTRB(16, 12, 24, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           if (items.isEmpty)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 40),
+              padding: const EdgeInsets.symmetric(vertical: 32),
               alignment: Alignment.center,
               child: Text(
                 loading ? '正在整理…' : '空空如也',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: _inventoryMuted,
-                  fontSize: 11.5,
+                  fontSize: 11,
                 ),
               ),
             )
@@ -970,11 +966,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                       final compact = constraints.maxWidth < 620;
                       return Padding(
                         padding: EdgeInsets.fromLTRB(
-  compact ? 24 : 50,
-  compact ? 2 : 8,
-  compact ? 24 : 50,
-  compact ? 2 : 6,
-),
+                          compact ? 8 : 24,
+                          compact ? 2 : 8,
+                          compact ? 16 : 40,
+                          compact ? 2 : 6,
+                        ),
                         child: Center(
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 820),
@@ -1018,24 +1014,36 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
 
   Widget _inventoryFilterBar() {
     return SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 820),
-              child: Row(
-                children: <Widget>[
-                  Expanded(child: _buildFilterBtn('全部', 0)),
-                  const SizedBox(width: 1),
-                  Expanded(child: _buildFilterBtn('穿戴', 1)),
-                  const SizedBox(width: 1),
-                  Expanded(child: _buildFilterBtn('道具', 2)),
-                ],
-              ),
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 24, 16), 
+        child: Center(
+          child: Container(
+            height: 44,
+            constraints: const BoxConstraints(maxWidth: 360), 
+            decoration: BoxDecoration(
+              color: _inventoryInkSoft.withOpacity(0.65), 
+              borderRadius: BorderRadius.circular(6), 
+              border: Border.all(color: Colors.white.withOpacity(0.08), width: 0.8),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Expanded(child: _buildFilterBtn('全部', 0)),
+                Expanded(child: _buildFilterBtn('穿戴', 1)),
+                Expanded(child: _buildFilterBtn('道具', 2)),
+              ],
             ),
           ),
         ),
+      ),
     );
   }
 
@@ -1043,34 +1051,32 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     final selected = _filterIndex == index;
     return Material(
       color: Colors.transparent,
-      borderRadius: BorderRadius.circular(3),
       child: InkWell(
         onTap: () => setState(() => _filterIndex = index),
-        borderRadius: BorderRadius.circular(3),
-        child: SizedBox(
-          height: 42,
-          child: Center(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-              decoration: BoxDecoration(
-                color: selected ? _inventoryBlue.withOpacity(.18) : Colors.transparent,
-                borderRadius: BorderRadius.circular(3),
-                border: Border.all(
-                  color: selected
-                      ? _inventoryGold.withOpacity(.28)
-                      : Colors.transparent,
-                ),
-              ),
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: selected ? _inventoryText : _inventoryMuted,
-                  fontSize: 11.5,
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  letterSpacing: .7,
-                ),
-              ),
+        borderRadius: BorderRadius.circular(6),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          alignment: Alignment.center,
+          decoration: selected
+              ? BoxDecoration(
+                  color: _inventoryBlue.withOpacity(0.2), 
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: _inventoryGold.withOpacity(0.3)), 
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: _inventoryBlue.withOpacity(0.12),
+                      blurRadius: 8,
+                    )
+                  ],
+                )
+              : const BoxDecoration(),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? _inventoryGold : _inventoryMuted,
+              fontSize: 11.5,
+              fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+              letterSpacing: 0.8,
             ),
           ),
         ),
@@ -1146,9 +1152,9 @@ class _InventoryHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 68,
+      height: 64, 
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           children: <Widget>[
             const Expanded(
@@ -1322,7 +1328,7 @@ class _EquipmentBonusMeter extends StatelessWidget {
           ),
           const SizedBox(width: 5),
           SizedBox(
-            width: 34,
+            width: 32, 
             child: Text(
               valueText,
               maxLines: 1,
@@ -1334,7 +1340,7 @@ class _EquipmentBonusMeter extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 7),
+          const SizedBox(width: 6),
           Expanded(
             child: _QualitySegments(level: normalized),
           ),
@@ -1376,7 +1382,8 @@ class _GameStyleInventoryRow extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.fromLTRB(14, 13, 11, 13),
+          // 极致压缩列表项的上下边距
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
           decoration: BoxDecoration(
             color: _inventoryInkSoft.withOpacity(.68),
             borderRadius: BorderRadius.circular(4),
@@ -1399,26 +1406,26 @@ class _GameStyleInventoryRow extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: qualityColor,
-                              fontSize: 13,
+                              fontSize: 12.5,
                               fontWeight: FontWeight.w800,
                               height: 1.15,
                             ),
                           ),
                         ),
                         if (equipped) ...<Widget>[
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                             decoration: BoxDecoration(
                               color: _inventoryBlue.withOpacity(.14),
-                              borderRadius: BorderRadius.circular(4),
+                              borderRadius: BorderRadius.circular(3),
                               border: Border.all(color: _inventoryGold.withOpacity(.2)),
                             ),
                             child: const Text(
                               '已穿戴',
                               style: TextStyle(
                                 color: _inventoryGold,
-                                fontSize: 9,
+                                fontSize: 8.5,
                                 height: 1.0,
                                 fontWeight: FontWeight.w800,
                                 letterSpacing: .25,
@@ -1428,25 +1435,25 @@ class _GameStyleInventoryRow extends StatelessWidget {
                         ],
                       ],
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4), // 缩短标题与描述的间距
                     Text(
                       description.isEmpty ? '点击查看详情' : description,
-                      maxLines: 2,
+                      maxLines: 1, // 强制限制为单行
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: description.isEmpty
                             ? _inventoryMuted
                             : _inventoryTextSoft,
-                        fontSize: 10.8,
-                        height: 1.35,
+                        fontSize: 10.5,
+                        height: 1.2,
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               SizedBox(
-                width: 58,
+                width: 50,
                 child: Align(
                   alignment: Alignment.centerRight,
                   child: Text(
@@ -1458,21 +1465,21 @@ class _GameStyleInventoryRow extends StatelessWidget {
                       color: _inventoryMuted,
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: .25,
+                      letterSpacing: .2,
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               SizedBox(
-                width: 54,
+                width: 52,
                 child: wearable
                     ? InkWell(
                         onTap: busy ? null : onWear,
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(4),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 160),
-                          height: 30,
+                          height: 26, // 进一步压缩按钮高度
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
                             color: equipped
@@ -1487,7 +1494,7 @@ class _GameStyleInventoryRow extends StatelessWidget {
                           ),
                           child: busy
                               ? SizedBox.square(
-                                  dimension: 12,
+                                  dimension: 11,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 1.5,
                                     color: equipped
@@ -1501,7 +1508,7 @@ class _GameStyleInventoryRow extends StatelessWidget {
                                     color: equipped
                                         ? Colors.white
                                         : _inventoryText,
-                                    fontSize: 11,
+                                    fontSize: 10.5,
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),

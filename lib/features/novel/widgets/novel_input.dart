@@ -835,7 +835,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
           children: <Widget>[
             if (widget.luckyCardCount > 0) ...<Widget>[
               ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.zero,
                   child: _AdaptiveBackdropBlur(
                     sigma: 14,
                     child: Material(
@@ -848,7 +848,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                           width: 44,
                           height: 50,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.zero,
                             border: Border.all(
                               color: widget.luckyCardActive
                                   ? NovelPalette.accent.withOpacity(.40)
@@ -880,7 +880,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                       ),
                     ),
                   )),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
             ],
             Expanded(
               child: Column(

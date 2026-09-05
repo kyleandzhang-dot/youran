@@ -45,6 +45,7 @@ class NovelGamePage extends StatefulWidget {
 enum _NovelPrimaryTab {
   story,
   characters,
+  team,
   inventory,
   journey,
   world,
@@ -768,6 +769,43 @@ class _NovelGamePageState extends State<NovelGamePage>
           ];
   }
 
+  List<YoranBattleCompanion> _currentBattleCompanions() {
+    final result = <YoranBattleCompanion>[];
+    final seen = <String>{};
+    for (final raw in controller.novelCharacterRoster.values) {
+      if (!boolValue(raw['deployed'])) continue;
+      final companion = YoranBattleCompanion.fromState(raw);
+      if (companion == null ||
+          companion.skills.isEmpty ||
+          !seen.add(companion.id)) {
+        continue;
+      }
+      result.add(companion);
+      if (result.length >= 3) break;
+    }
+    return result;
+  }
+
+  YoranGeneratedBattleSetup _withLocalCompanionFallback(
+    YoranGeneratedBattleSetup setup,
+  ) {
+    if (setup.companions.isNotEmpty) return setup;
+    final companions = _currentBattleCompanions();
+    if (companions.isEmpty) return setup;
+    return YoranGeneratedBattleSetup(
+      playerName: setup.playerName,
+      playerAvatar: setup.playerAvatar,
+      playerPortrait: setup.playerPortrait,
+      playerSkills: setup.playerSkills,
+      companions: companions,
+      playerItems: setup.playerItems,
+      playerEquipment: setup.playerEquipment,
+      enemy: setup.enemy,
+      difficultyLabel: setup.difficultyLabel,
+      openingEstimate: setup.openingEstimate,
+    );
+  }
+
   YoranBattleEnemy _developerSurroundingsEnemy({
     required String name,
     required int quality,
@@ -893,6 +931,7 @@ class _NovelGamePageState extends State<NovelGamePage>
       playerAvatar: protagonist?.avatarUrl.trim() ?? '',
       playerPortrait: protagonist?.portraitUrl.trim() ?? '',
       skills: _currentPreviewBattleSkills(),
+      companions: _currentBattleCompanions(),
       items: inventory,
       equipment: inventory,
       enemyName: enemy.name,
@@ -961,6 +1000,13 @@ class _NovelGamePageState extends State<NovelGamePage>
         ? localPlayer!.name.trim()
         : controller.protagonistName;
 
+    try {
+      await controller.refreshNovelCharacterRoster(notify: false);
+    } catch (_) {
+      // 测试入口允许使用当前缓存；接口响应仍是队伍数据的第一优先级。
+    }
+    if (!mounted) return;
+
     await showYoranGeneratedBattlePage(
       context,
       playerName: localPlayerName,
@@ -978,7 +1024,9 @@ class _NovelGamePageState extends State<NovelGamePage>
             name: opponentName,
             description: description,
           );
-          return YoranGeneratedBattleSetup.fromJson(response);
+          return _withLocalCompanionFallback(
+            YoranGeneratedBattleSetup.fromJson(response),
+          );
         } on NovelBackendException catch (error) {
           throw Exception(error.message);
         } on FormatException catch (error) {
@@ -986,14 +1034,13 @@ class _NovelGamePageState extends State<NovelGamePage>
         }
       },
       onSettleItems: (consumptions, outcome) async {
-        await backend.settleBattleItems(
+        return backend.settleBattleItems(
           sessionId: controller.sessionId,
           consumptions: consumptions
               .map((item) => item.toJson())
               .toList(growable: false),
           outcome: outcome.name,
         );
-        return true;
       },
     );
   }
@@ -1123,6 +1170,7 @@ class _NovelGamePageState extends State<NovelGamePage>
             ? setup.playerPortrait.trim()
             : localPortrait,
         skills: setup.playerSkills,
+        companions: setup.companions,
         items: setup.playerItems,
         equipment: setup.playerEquipment,
         onSettleItems: (consumptions, result) {
@@ -1201,7 +1249,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     try {
       await Future.wait<void>(<Future<void>>[
         controller.refreshCharacterStatus(notify: false),
-        controller.refreshInventory(notify: false),
+        // 角色列表刷新会同时读取协同出战状态、NPC 技能和背包。
+        controller.refreshNovelCharacterRoster(notify: false),
       ]);
     } catch (_) {
       // 预览入口允许在离线状态继续打开，下面会使用当前已有快照。
@@ -1210,6 +1259,7 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     final protagonist = controller.protagonist;
     final battleSkills = _currentPreviewBattleSkills();
+    final battleCompanions = _currentBattleCompanions();
     final battleInventory = _battleInventorySnapshot();
 
     await showYoranBattlePage(
@@ -1222,6 +1272,7 @@ class _NovelGamePageState extends State<NovelGamePage>
       playerAvatar: protagonist?.avatarUrl.trim() ?? '',
       playerPortrait: protagonist?.portraitUrl.trim() ?? '',
       skills: battleSkills,
+      companions: battleCompanions,
       items: battleInventory,
       equipment: battleInventory,
 
@@ -1392,7 +1443,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     });
   }
 
-  void _openCurrentSpeakerInCharacters() {
+  Future<void> _openCurrentSpeakerProfile() async {
     final character = controller.currentSpeakerCharacter;
     if (character == null) return;
 
@@ -1402,13 +1453,14 @@ class _NovelGamePageState extends State<NovelGamePage>
     if (key.isEmpty) return;
 
     FocusManager.instance.primaryFocus?.unfocus();
-    unawaited(controller.bgm.stopTypingSound());
-    setState(() {
-      _characterFocusKey = key;
-      _characterFocusRequestId++;
-      _primaryTab = _NovelPrimaryTab.characters;
-      _mountedPrimaryTabs.add(_NovelPrimaryTab.characters);
-    });
+    await controller.bgm.stopTypingSound();
+    if (!mounted) return;
+
+    if (character.isMain) {
+      await showNovelHostProfileSheet(context, controller);
+      return;
+    }
+    await showNovelNpcProfileSheet(context, controller, character);
   }
 
 
@@ -1420,6 +1472,8 @@ class _NovelGamePageState extends State<NovelGamePage>
           focusCharacterKey: _characterFocusKey,
           focusRequestId: _characterFocusRequestId,
         ),
+      _NovelPrimaryTab.team =>
+        NovelTeamTab(controller: controller),
       _NovelPrimaryTab.inventory =>
         NovelInventoryTab(controller: controller),
       _NovelPrimaryTab.journey =>
@@ -1554,6 +1608,8 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 controller: controller,
                                 onMenu: widget.onBack ?? openDrawer,
                                 onOpenProfile: () => showNovelHostProfileSheet(context, controller),
+                                onOpenStore: () =>
+                                    showNovelStoreSheet(context, controller),
                                 onOpenSettings: () => showNovelSettingsSheet(
                                   context,
                                   controller,
@@ -1628,18 +1684,21 @@ class _NovelGamePageState extends State<NovelGamePage>
                             if (controller.storyStarted && !controller.isCinematic)
                               Align(
                                 alignment: Alignment.bottomCenter,
-                                // 外层绝对不加 Padding，确保里面的立绘贴合在屏幕绝对最底部
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 720),
-                                  child: NovelChoiceDockActionScope(
-                                    visible: controller.shouldShowSurroundingsAction,
-                                    label: controller.surroundingsActionLabel,
-                                    attention: controller.surroundingsNeedsAttention,
-                                    loading: controller.isSurroundingsLoading,
-                                    onTap: () => _selectPrimaryTab(
-                                      _NovelPrimaryTab.surroundings,
-                                    ),
-                                    child: NovelDialogPanel(
+                                child: Padding(
+                                  // 剧情区域始终保持左右对称，不为右侧悬浮按钮预留宽度。
+                                  padding: EdgeInsets.zero,
+                                  child: ConstrainedBox(
+                                    constraints:
+                                        const BoxConstraints(maxWidth: 720),
+                                    child: NovelChoiceDockActionScope(
+                                      visible: controller.shouldShowSurroundingsAction,
+                                      label: controller.surroundingsActionLabel,
+                                      attention: controller.surroundingsNeedsAttention,
+                                      loading: controller.isSurroundingsLoading,
+                                      onTap: () => _selectPrimaryTab(
+                                        _NovelPrimaryTab.surroundings,
+                                      ),
+                                      child: NovelDialogPanel(
                                       controller: controller,
                                       active: _primaryTab == _NovelPrimaryTab.story,
                                       textController: _inputController,
@@ -1666,7 +1725,8 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       onOpenPortrait:
                                           controller.currentSpeakerCharacter == null
                                               ? null
-                                              : _openCurrentSpeakerInCharacters,
+                                              : _openCurrentSpeakerProfile,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -1691,6 +1751,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                   if (controller.storyStarted && !controller.isCinematic)
                     for (final tab in const <_NovelPrimaryTab>[
                       _NovelPrimaryTab.characters,
+                      _NovelPrimaryTab.team,
                       _NovelPrimaryTab.inventory,
                       _NovelPrimaryTab.journey,
                       _NovelPrimaryTab.world,
@@ -1708,23 +1769,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                           ),
                         ),
 
-                  if (!_immersiveInputMode &&
-                      controller.storyStarted &&
-                      !controller.isGenerating &&
-                      !controller.isCinematic &&
-                      _primaryTab != _NovelPrimaryTab.surroundings)
-                    Positioned(
-                      top: (MediaQuery.paddingOf(context).top < 10
-                              ? 10
-                              : MediaQuery.paddingOf(context).top) +
-                          57,
-                      right: 17,
-                      child: NovelScoreChip(
-                        score: controller.score,
-                        onTap: () => showNovelStoreSheet(context, controller),
-                      ),
-                    ),
-
                   // 底部导航栏
                   if (showBottomNav)
                     Positioned(
@@ -1737,18 +1781,20 @@ class _NovelGamePageState extends State<NovelGamePage>
                           // 因为加入了 surroundings，索引不再是一一对应，需要精准映射
                           selectedIndex: switch (_primaryTab) {
                             _NovelPrimaryTab.characters => 1,
-                            _NovelPrimaryTab.inventory => 2,
-                            _NovelPrimaryTab.journey => 3,
-                            _NovelPrimaryTab.world => 4,
+                            _NovelPrimaryTab.team => 2,
+                            _NovelPrimaryTab.inventory => 3,
+                            _NovelPrimaryTab.journey => 4,
+                            _NovelPrimaryTab.world => 5,
                             _ => 0, 
                           },
                           // 注意：删掉了 onWorld 属性
                           onSelected: (index) {
                             final tab = switch(index) {
                               1 => _NovelPrimaryTab.characters,
-                              2 => _NovelPrimaryTab.inventory,
-                              3 => _NovelPrimaryTab.journey,
-                              4 => _NovelPrimaryTab.world,
+                              2 => _NovelPrimaryTab.team,
+                              3 => _NovelPrimaryTab.inventory,
+                              4 => _NovelPrimaryTab.journey,
+                              5 => _NovelPrimaryTab.world,
                               _ => _NovelPrimaryTab.story,
                             };
                             _selectPrimaryTab(tab);

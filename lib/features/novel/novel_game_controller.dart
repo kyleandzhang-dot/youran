@@ -1583,8 +1583,21 @@ class NovelGameController extends ChangeNotifier {
     try {
       final payload = await backend.claimSurroundReward(sessionId, nodeId);
       _applySurroundingsPayload(payload);
-      await refreshInventory(notify: false);
-      return surroundingsData;
+      final reward = asJsonMap(payload['reward']);
+      final rewardType = stringValue(
+        reward['type'] ?? reward['item_type'],
+      ).trim().toLowerCase();
+      if (rewardType == 'score') {
+        final gained = intValue(reward['score'] ?? reward['quantity']);
+        score = NovelScore(
+          total: intValue(reward['new_score'], score.total + gained),
+          delta: gained,
+          reason: '探索发现',
+        );
+      } else {
+        await refreshInventory(notify: false);
+      }
+      return payload;
     } on NovelBackendException catch (error) {
       surroundingsError = error.message;
       rethrow;
@@ -1838,7 +1851,8 @@ class NovelGameController extends ChangeNotifier {
     _notify();
   }
 
-  Future<bool> settleStoryBattle({
+  /// 返回完整结算数据供战斗结束页展示；null 表示结算失败。
+  Future<JsonMap?> settleStoryBattle({
     required String battleId,
     required String outcome,
     required List<JsonMap> consumptions,
@@ -1847,34 +1861,57 @@ class NovelGameController extends ChangeNotifier {
     if (battleId.trim().isEmpty) {
       lastError = '当前战斗缺少有效结算标识。';
       _notify();
-      return false;
+      return null;
     }
     try {
+      JsonMap settlement = const <String, dynamic>{};
       if (settler != null) {
-        await settler(
+        settlement = await settler(
           sessionId,
           battleId.trim(),
           outcome.trim().toLowerCase(),
           consumptions,
         );
       } else {
-        await backend.settleBattleItems(
+        settlement = await backend.settleBattleItems(
           sessionId: sessionId,
           battleId: battleId.trim(),
           outcome: outcome.trim().toLowerCase(),
           consumptions: consumptions,
         );
       }
+      final scoreReward = asJsonMap(settlement['score_reward']);
+      if (scoreReward.isNotEmpty) {
+        final gained = intValue(scoreReward['score']);
+        score = NovelScore(
+          total: intValue(scoreReward['new_score'], score.total + gained),
+          delta: gained,
+          reason: stringValue(scoreReward['source']) == 'story_battle'
+              ? '主线战斗奖励'
+              : '探索战斗奖励',
+        );
+      }
+      final skillReward = asJsonMap(settlement['skill_reward']);
+      if (skillReward.isNotEmpty) {
+        await refreshCharacterStatus(notify: false);
+        _enqueueHudEvent(
+          kind: 'skill',
+          title: '领悟新技能',
+          detail: stringValue(skillReward['name'], '新技能'),
+          tone: 'accent',
+          dedupeKey: 'battle-skill:$battleId',
+        );
+      }
       await refreshInventory(notify: false);
       await refreshSurroundingsAvailability(notify: false);
       _notify();
-      return true;
+      return settlement;
     } catch (error) {
       lastError = error is NovelBackendException
           ? error.message
           : '战斗结算失败，请重试。';
       _notify();
-      return false;
+      return null;
     }
   }
 
@@ -2578,6 +2615,12 @@ class NovelGameController extends ChangeNotifier {
     );
   }
 
+  int novelCharacterStar(String characterInstanceId) {
+    return intValue(
+      novelCharacterRosterEntry(characterInstanceId)['star'],
+    ).clamp(0, 10).toInt();
+  }
+
   void _applyNovelCharacterRosterPayload(JsonMap payload) {
     novelCharacterFlowers = intValue(
       payload['flowers'],
@@ -2589,11 +2632,36 @@ class NovelGameController extends ChangeNotifier {
       final id = stringValue(
         item['character_instance_id'] ?? item['character_id'] ?? item['id'],
       ).trim();
-      if (id.isNotEmpty) next[id] = item;
+      if (id.isNotEmpty) {
+        final previous = novelCharacterRoster[id];
+        next[id] = <String, dynamic>{
+          ...item,
+          if (previous != null && previous.containsKey('deployed'))
+            'deployed': previous['deployed'],
+          if (previous != null && previous.containsKey('skills'))
+            'skills': previous['skills'],
+        };
+      }
     }
     if (next.isNotEmpty || payload.containsKey('characters')) {
       novelCharacterRoster = next;
     }
+  }
+
+  void _applyNovelCompanionPayload(JsonMap payload) {
+    final next = Map<String, JsonMap>.from(novelCharacterRoster);
+    for (final raw in asJsonList(payload['characters'])) {
+      final item = asJsonMap(raw);
+      final id = stringValue(
+        item['character_instance_id'] ?? item['character_id'] ?? item['id'],
+      ).trim();
+      if (id.isEmpty) continue;
+      next[id] = <String, dynamic>{
+        ...?next[id],
+        ...item,
+      };
+    }
+    novelCharacterRoster = next;
   }
 
   Future<void> refreshNovelCharacterRoster({bool notify = true}) async {
@@ -2602,6 +2670,9 @@ class NovelGameController extends ChangeNotifier {
     try {
       final payload = await backend.fetchNovelCharacterRoster(sessionId);
       _applyNovelCharacterRosterPayload(payload);
+      final companionPayload = await backend.fetchNovelCompanions(sessionId);
+      _applyNovelCompanionPayload(companionPayload);
+      await refreshInventory(notify: false);
     } finally {
       isNovelCharacterRosterLoading = false;
       if (notify) _notify();
@@ -2609,15 +2680,97 @@ class NovelGameController extends ChangeNotifier {
   }
 
   Future<JsonMap> drawNovelCharacters(int count) async {
-    if (count != 1 && count != 10) {
-      throw const NovelBackendException('只支持结缘一次或十次');
+    // 把 10 改为 5，或者改为支持 1, 5, 10
+    if (count != 1 && count != 5 && count != 10) {
+      throw const NovelBackendException('只支持结缘一次、五次或十次');
     }
+    
     final payload = await backend.drawNovelCharacters(
       mainSessionId: sessionId,
       count: count,
     );
+    
     _applyNovelCharacterRosterPayload(payload);
-    await refreshCharacterStatus(notify: false);
+    
+    await Future.wait(<Future<void>>[
+      refreshInventory(notify: false),
+      refreshCharacterStatus(notify: false),
+    ]);
+    
+    _notify();
+    return payload;
+}
+
+  Future<JsonMap> upgradeNovelCharacter(String characterInstanceId) async {
+    final id = characterInstanceId.trim();
+    if (id.isEmpty) {
+      throw const NovelBackendException('角色 ID 不能为空');
+    }
+    final payload = await backend.upgradeNovelCharacter(
+      mainSessionId: sessionId,
+      characterInstanceId: id,
+    );
+    _applyNovelCharacterRosterPayload(payload);
+    _notify();
+    return payload;
+  }
+
+  List<JsonMap> novelCompanionSkills(String characterInstanceId) {
+    return asJsonList(
+      novelCharacterRosterEntry(characterInstanceId)['skills'],
+    ).map(asJsonMap).where((item) => item.isNotEmpty).toList(growable: false);
+  }
+
+  bool isNovelCompanionDeployed(String characterInstanceId) {
+    return boolValue(
+      novelCharacterRosterEntry(characterInstanceId)['deployed'],
+    );
+  }
+
+  int get deployedNovelCompanionCount => novelCharacterRoster.values
+      .where((item) => boolValue(item['deployed']))
+      .length;
+
+  Future<JsonMap> updateNovelCompanionDeployment(
+    String characterInstanceId,
+    bool deployed,
+  ) async {
+    final id = characterInstanceId.trim();
+    if (id.isEmpty) throw const NovelBackendException('角色 ID 不能为空');
+    final payload = await backend.updateNovelCompanionDeployment(
+      mainSessionId: sessionId,
+      characterInstanceId: id,
+      deployed: deployed,
+    );
+    _applyNovelCompanionPayload(payload);
+    _notify();
+    return payload;
+  }
+
+  Future<JsonMap> drawNovelCompanionSkill(String characterInstanceId) async {
+    final id = characterInstanceId.trim();
+    if (id.isEmpty) throw const NovelBackendException('角色 ID 不能为空');
+    final payload = await backend.drawNovelCompanionSkill(
+      mainSessionId: sessionId,
+      characterInstanceId: id,
+    );
+    _applyNovelCompanionPayload(payload);
+    _notify();
+    return payload;
+  }
+
+  Future<JsonMap> renameNovelCompanionSkill({
+    required String characterInstanceId,
+    required String skillId,
+    required String name,
+  }) async {
+    final payload = await backend.renameNovelCompanionSkill(
+      mainSessionId: sessionId,
+      characterInstanceId: characterInstanceId.trim(),
+      skillId: skillId.trim(),
+      name: name.trim(),
+    );
+    _applyNovelCompanionPayload(payload);
     _notify();
     return payload;
   }
@@ -2753,6 +2906,9 @@ class NovelGameController extends ChangeNotifier {
         }
         _syncProtagonistStatus(savedProtagonist);
       }
+      novelCharacterFlowers = inventory.consumables
+          .where((item) => item.itemType == 'gift')
+          .fold<int>(0, (sum, item) => sum + item.quantity);
       luckyCardCount = inventory.consumables
           .where((item) => item.itemType == 'lucky_card')
           .fold<int>(0, (sum, item) => sum + item.quantity);

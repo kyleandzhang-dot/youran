@@ -55,18 +55,14 @@ class _StoreSheetState extends State<_StoreSheet> {
               title: '道具兑换',
               subtitle: '用星块换取故事中的特殊机会',
               trailing: Container(
-                // 顶部资产胶囊：高级深色玻璃质感
-                padding: const EdgeInsets.fromLTRB(6, 4, 12, 4), 
+                padding: const EdgeInsets.fromLTRB(5, 3, 10, 3),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.35), // 加深底色提升对比度
-                  borderRadius: BorderRadius.circular(8), // 微圆角
+                  color: Colors.black.withOpacity(.14),
+                  borderRadius: BorderRadius.circular(7),
                   border: Border.all(
-                    color: Colors.white.withOpacity(.12), 
+                    color: Colors.white.withOpacity(.07),
                     width: 0.5,
                   ),
-                  boxShadow: const <BoxShadow>[
-                    BoxShadow(color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 2)),
-                  ],
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -108,6 +104,8 @@ class _StoreSheetState extends State<_StoreSheet> {
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         final item = widget.controller.shopItems[index];
+                        final affordable =
+                            widget.controller.score.total >= item.price;
                         return _ItemCard(
                           iconUrl: item.imageUrl,
                           itemType: item.itemType,
@@ -118,6 +116,7 @@ class _StoreSheetState extends State<_StoreSheet> {
                           actionText: '${item.price}',
                           showPointIcon: true,
                           loading: busy == item.itemType,
+                          enabled: affordable && busy.isEmpty,
                           onAction: () async {
                             if (busy.isNotEmpty) return;
                             setState(() => busy = item.itemType);
@@ -155,6 +154,7 @@ class _ItemCard extends StatelessWidget {
     required this.badge,
     required this.actionText,
     required this.loading,
+    required this.enabled,
     required this.onAction,
     this.showPointIcon = false,
   });
@@ -167,28 +167,21 @@ class _ItemCard extends StatelessWidget {
   final String badge;
   final String actionText;
   final bool loading;
+  final bool enabled;
   final VoidCallback onAction;
   final bool showPointIcon;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      // 核心提升：为每个商品包裹一层高质感的微圆角暗卡
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(.25), // 沉稳的底色，压住浮躁感
-        borderRadius: BorderRadius.circular(10), // TRPG 风格偏好的硬朗微圆角
+        color: Colors.black.withOpacity(.12),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: Colors.white.withOpacity(.06), // 极微弱的边缘反光
+          color: Colors.white.withOpacity(.055),
           width: 0.5,
         ),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -201,7 +194,7 @@ class _ItemCard extends StatelessWidget {
                 width: 54,
                 height: 54,
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.4), // 深色托盘
+                  color: Colors.black.withOpacity(.18),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.white.withOpacity(.04)),
                 ),
@@ -277,24 +270,27 @@ class _ItemCard extends StatelessWidget {
           // 按钮区域：采用具有真实点击欲望的立体悬浮按钮
           if (actionText.isNotEmpty) ...<Widget>[
             const SizedBox(width: 12),
-            Material(
-              color: Colors.white.withOpacity(.08), // 按钮底色比卡片略亮
-              borderRadius: BorderRadius.circular(8),
-              child: InkWell(
-                onTap: loading ? null : onAction,
-                borderRadius: BorderRadius.circular(8),
-                splashColor: Colors.white.withOpacity(.06),
-                highlightColor: Colors.white.withOpacity(.04),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(.15), // 按钮边缘高光
-                      width: 0.5,
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 180),
+              opacity: enabled || loading ? 1 : .34,
+              child: Material(
+                color: Colors.white.withOpacity(enabled ? .055 : .025),
+                borderRadius: BorderRadius.circular(7),
+                child: InkWell(
+                  onTap: loading || !enabled ? null : onAction,
+                  borderRadius: BorderRadius.circular(7),
+                  splashColor: Colors.white.withOpacity(.04),
+                  highlightColor: Colors.white.withOpacity(.025),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(7),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(enabled ? .10 : .045),
+                        width: 0.5,
+                      ),
                     ),
-                  ),
-                  child: loading
+                    child: loading
                       ? SizedBox.square(
                           dimension: 14,
                           child: CircularProgressIndicator(
@@ -326,6 +322,7 @@ class _ItemCard extends StatelessWidget {
                             ),
                           ],
                         ),
+                  ),
                 ),
               ),
             ),

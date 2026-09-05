@@ -83,7 +83,7 @@ Future<void> _pushWorldMapPage(
   return Navigator.of(context).push<void>(
     PageRouteBuilder<void>(
       opaque: false,
-      barrierColor: Colors.black.withOpacity(.28),
+      barrierColor: Colors.black.withOpacity(.58),
       transitionDuration: const Duration(milliseconds: 260),
       reverseTransitionDuration: const Duration(milliseconds: 210),
       pageBuilder: (context, animation, secondaryAnimation) =>
@@ -339,9 +339,9 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
         final loading = !widget.developerPreview && controller.isSceneMapLoading;
 
         return Scaffold(
-          backgroundColor: Colors.transparent,
+          backgroundColor: const Color(0xFF0A0F0D),
           body: Material(
-            color: const Color(0xFFF7F9F7),
+            color: const Color(0xFF0A0F0D),
             child: ClipRect(
               child: Stack(
                 fit: StackFit.expand,
@@ -352,9 +352,9 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                         center: Alignment(0, -.08),
                         radius: 1.1,
                         colors: <Color>[
-                          Color(0xFFFFFFFF),
-                          Color(0xFFF4F6F4),
-                          Color(0xFFE8ECE8),
+                          Color(0xFF17201C),
+                          Color(0xFF0E1512),
+                          Color(0xFF080C0B),
                         ],
                         stops: <double>[0, .58, 1],
                       ),
@@ -504,7 +504,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                       onClose: widget.embedded 
                           ? null 
                           : () => Navigator.of(context).pop(),
-                      lightTheme: true,
+                      lightTheme: false,
                     ),
                   ),
                   
@@ -557,19 +557,17 @@ class _WorldMapGlassPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(4),
+    return ClipRect(
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: backgroundColor ?? Colors.white.withOpacity(.85),
+            color: backgroundColor ?? const Color(0xD91A211E),
             border: Border.all(
-              color: borderColor ?? Colors.black.withOpacity(.06),
-              width: 1,
+              color: borderColor ?? Colors.white.withOpacity(.12),
+              width: .75,
             ),
-            borderRadius: BorderRadius.circular(4),
           ),
           child: child,
         ),
@@ -659,7 +657,7 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                       builder: (context, child) {
                         return CustomPaint(
                           painter: _GlowDiamondPainter(
-                            glowOpacity: 0.25 + 0.5 * _pulseController.value,
+                            glowOpacity: 0.12 + 0.28 * _pulseController.value,
                           ),
                         );
                       },
@@ -672,7 +670,7 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                     child: Stack(
                       fit: StackFit.expand,
                       children: <Widget>[
-                        const ColoredBox(color: Color(0x0A000000)),
+                        const ColoredBox(color: Color(0x33000000)),
                         _WorldSceneImage(source: entry.imageUrl),
                         const DecoratedBox(
                           decoration: BoxDecoration(
@@ -680,9 +678,9 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                               colors: <Color>[
-                                Color(0x00000000),
-                                Color(0x03000000),
-                                Color(0x33000000),
+                                Color(0x26070B09),
+                                Color(0x52070B09),
+                                Color(0xD9070B09),
                               ],
                               stops: <double>[0, .60, 1],
                             ),
@@ -712,11 +710,11 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                           vertical: 5,
                         ),
                         borderColor: entry.current
-                            ? const Color(0xFF6FD35F)
-                            : Colors.black.withOpacity(.08),
+                            ? const Color(0x996FD35F)
+                            : Colors.white.withOpacity(.10),
                         backgroundColor: entry.current
-                            ? const Color(0xFFF2FAF4)
-                            : Colors.white.withOpacity(.85),
+                            ? const Color(0xE616241D)
+                            : const Color(0xD9151B18),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
@@ -724,7 +722,7 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                               const Icon(
                                 Icons.my_location_rounded,
                                 size: 11,
-                                color: Color(0xFF4DA26A),
+                                color: Color(0xFF82D779),
                               ),
                               const SizedBox(width: 5),
                             ],
@@ -735,10 +733,10 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   color: entry.current
-                                      ? const Color(0xFF1B4F29)
-                                      : const Color(0xFF22231F),
+                                      ? const Color(0xFFE8F7E7)
+                                      : const Color(0xFFD8DEDA),
                                   fontSize: 10.5,
-                                  fontWeight: FontWeight.w800,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -771,7 +769,7 @@ class _WorldSceneImage extends StatelessWidget {
       child: Icon(
         Icons.landscape_outlined,
         size: 23,
-        color: Colors.black.withOpacity(.12),
+        color: Colors.white.withOpacity(.20),
       ),
     );
     if (clean.startsWith('http://') || clean.startsWith('https://')) {
@@ -822,7 +820,7 @@ class _GlowDiamondPainter extends CustomPainter {
       path,
       Paint()
         ..color = const Color(0xFF6FD35F).withOpacity(glowOpacity)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20),
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14),
     );
   }
 
@@ -843,11 +841,11 @@ class _WorldDiamondBorderPainter extends CustomPainter {
       path,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = current ? 2.2 : 1.15
+        ..strokeWidth = current ? 1.7 : .9
         ..strokeJoin = StrokeJoin.round
         ..color = current
-            ? const Color(0xE66FD35F)
-            : const Color(0x33000000), 
+            ? const Color(0xB86FD35F)
+            : const Color(0x2EFFFFFF),
     );
   }
 
@@ -884,7 +882,7 @@ class _WorldEmptyDiamondPainter extends CustomPainter {
       path,
       Paint()
         ..style = PaintingStyle.fill
-        ..color = Colors.black.withOpacity(0.06 * opacity),
+        ..color = const Color(0xFF111815).withOpacity(0.62 * opacity),
     );
     canvas.drawPath(
       path,
@@ -892,7 +890,7 @@ class _WorldEmptyDiamondPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2
         ..strokeJoin = StrokeJoin.round
-        ..color = Colors.black.withOpacity(0.18 * opacity),
+        ..color = Colors.white.withOpacity(0.075 * opacity),
     );
   }
 
@@ -924,13 +922,13 @@ class _WorldMapGestureHint extends StatelessWidget {
             Icon(
               Icons.pan_tool_alt_outlined,
               size: 12,
-              color: Colors.black.withOpacity(.32),
+              color: Colors.white.withOpacity(.36),
             ),
             const SizedBox(width: 6),
             Text(
               '双指缩放 · 双击聚焦点',
               style: TextStyle(
-                color: Colors.black.withOpacity(.32),
+                color: Colors.white.withOpacity(.36),
                 fontSize: 9.2,
                 fontWeight: FontWeight.w600,
               ),
@@ -941,4 +939,3 @@ class _WorldMapGestureHint extends StatelessWidget {
     );
   }
 }
-

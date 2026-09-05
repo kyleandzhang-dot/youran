@@ -10,12 +10,14 @@ class NovelTopHud extends StatelessWidget {
     required this.controller,
     required this.onMenu,
     required this.onOpenProfile,
+    required this.onOpenStore,
     required this.onOpenSettings,
   });
 
   final NovelGameController controller;
   final VoidCallback onMenu;
   final VoidCallback onOpenProfile;
+  final VoidCallback onOpenStore;
   final VoidCallback onOpenSettings;
 
   @override
@@ -96,11 +98,21 @@ class NovelTopHud extends StatelessWidget {
             ),
             Align(
               alignment: Alignment.centerRight,
-              child: _TopIconButton(
-                tooltip: '设置',
-                icon: Icons.settings_outlined,
-                onTap: onOpenSettings,
-                size: 20,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  NovelScoreChip(
+                    score: controller.score,
+                    onTap: onOpenStore,
+                  ),
+                  const SizedBox(width: 2),
+                  _TopIconButton(
+                    tooltip: '设置',
+                    icon: Icons.settings_outlined,
+                    onTap: onOpenSettings,
+                    size: 20,
+                  ),
+                ],
               ),
             ),
           ],
