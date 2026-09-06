@@ -7,7 +7,7 @@ part of '../novel_sheets.dart';
 
 // ============================================================================
 // 当前场景“周围”互动页
-// 从孤岛节点原型迁移：点击探索、拖拽、可组合高亮、消耗/保留/生成。
+// 走路探索版：格子仅作为后台坐标与事件数据，不绘制格子或雾霾遮罩。
 // ============================================================================
 
 const Color _themeGreen = NovelPalette.accent;
@@ -72,6 +72,31 @@ class NovelSurroundingsTab extends StatelessWidget {
   }
 }
 
+/// 剧情主页底部的常驻探索舞台。
+///
+/// 与完整“周围”页面共用同一套远端探索状态、掉落和战斗入口，
+/// 但只渲染走路场景，不显示独立页面标题栏、背包面板或关闭按钮。
+class NovelSurroundingsInlineDock extends StatelessWidget {
+  const NovelSurroundingsInlineDock({
+    super.key,
+    required this.controller,
+    this.enabled = true,
+  });
+
+  final NovelGameController controller;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurroundFogPrototype(
+      controller: controller,
+      developerPreview: false,
+      embedded: true,
+      movementEnabled: enabled,
+    );
+  }
+}
+
 enum _SurroundNodeType {
   environment,
   container,
@@ -96,6 +121,15 @@ Color _surroundQualityColor(int quality) {
   ];
   final index = quality.clamp(1, 10).toInt() - 1;
   return colors[index];
+}
+
+String _surroundRewardAsset(String itemType) {
+  return switch (itemType.trim().toLowerCase()) {
+    'score' => 'assets/images/xing.webp',
+    'gift' => 'assets/images/gift.webp',
+    'lucky_card' => 'assets/images/lucky_card.webp',
+    _ => '',
+  };
 }
 
 class _SurroundNodeDef {
@@ -933,23 +967,59 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
         reward['type'] ?? reward['item_type'],
       ).trim().toLowerCase();
       final isScore = rewardType == 'score';
+      final isRareShopItem =
+          rewardType == 'gift' || rewardType == 'lucky_card';
       final rewardAmount = intValue(
         reward['score'] ?? reward['quantity'],
         1,
       );
+      final rewardAsset = stringValue(
+        reward['image_asset'],
+        _surroundRewardAsset(rewardType),
+      ).trim();
+      final bonusRewards = (payload['bonus_rewards'] is List
+              ? payload['bonus_rewards'] as List
+              : const <dynamic>[])
+          .map(asJsonMap)
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+      final bonusLabels = bonusRewards.map((bonus) {
+        final name = stringValue(bonus['name'], '额外奖励');
+        final amount = intValue(bonus['score'] ?? bonus['quantity'], 1);
+        return '$name ×$amount';
+      }).toList(growable: false);
+      final bonusAssets = bonusRewards
+          .map((bonus) => stringValue(
+                bonus['image_asset'],
+                _surroundRewardAsset(stringValue(
+                  bonus['type'] ?? bonus['item_type'],
+                )),
+              ).trim())
+          .where((asset) => asset.isNotEmpty)
+          .toList(growable: false);
       setState(() {
         _collecting.remove(id);
         _info = _SurroundInfo(
-          title: isScore ? '获得星块' : '已放入背包',
-          text: isScore
-              ? '探索中发现星块 ×$rewardAmount。'
-              : '「$rewardName」已放入背包。',
+          title: isScore
+              ? '获得星块'
+              : isRareShopItem
+                  ? '稀有发现'
+                  : '已放入背包',
+          text: (isScore || isRareShopItem
+              ? '探索中发现$rewardName ×$rewardAmount。'
+              : '「$rewardName」已放入背包。') +
+              (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。'),
           gain: <String>[id],
         );
       });
       _showCollectedToast(
-        rewardName,
+        bonusLabels.isEmpty
+            ? rewardName
+            : '$rewardName + ${bonusLabels.join('、')}',
+        assetPath: rewardAsset,
+        assetPaths: bonusAssets,
         scoreAmount: isScore ? rewardAmount : 0,
+        quantity: rewardAmount,
       );
     } catch (_) {
       if (!mounted) return;
@@ -965,7 +1035,13 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
     }
   }
 
-  void _showCollectedToast(String rewardName, {int scoreAmount = 0}) {
+  void _showCollectedToast(
+    String rewardName, {
+    String assetPath = '',
+    List<String> assetPaths = const <String>[],
+    int scoreAmount = 0,
+    int quantity = 1,
+  }) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
 
@@ -980,9 +1056,11 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           left: 24,
           right: 24,
           child: _SurroundPickupRewardToast(
+            assetPath: assetPath,
+            assetPaths: assetPaths,
             text: scoreAmount > 0
                 ? '获得星块 ×$scoreAmount'
-                : '$rewardName 已放入背包',
+                : '获得$rewardName${quantity > 1 ? ' ×$quantity' : ''}',
             onCompleted: () {
               if (_collectedToastEntry != entry) return;
               entry.remove();
@@ -1590,22 +1668,26 @@ class _SurroundFogPrototype extends StatefulWidget {
     required this.developerPreview,
     this.previewBattleLauncher,
     this.onClose,
+    this.embedded = false,
+    this.movementEnabled = true,
   });
 
   final NovelGameController controller;
   final bool developerPreview;
   final NovelSurroundingsPreviewBattleLauncher? previewBattleLauncher;
   final VoidCallback? onClose;
+  final bool embedded;
+  final bool movementEnabled;
 
   @override
   State<_SurroundFogPrototype> createState() => _SurroundFogPrototypeState();
 }
 
-class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
+class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
+    with SingleTickerProviderStateMixin {
   static const int _columns = 6;
   static const int _rows = 6;
   static const int _startIndex = 20;
-  static const int _maxEnergy = 22;
   static const Color _dangerRed = Color(0xFFD96F6F);
   static const Color _rareGold = Color(0xFFD8BF7A);
 
@@ -1615,20 +1697,43 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
   final Set<int> _searched = <int>{};
   final Map<String, int> _bag = <String, int>{};
   final Map<String, int> _bagQuality = <String, int>{};
+  OverlayEntry? _rewardToastEntry;
+  int? _scoreOverride;
 
   int _seed = 0;
-  int _energy = _maxEnergy;
   int _coconutBaseReward = 1;
   String _message = '';
   bool _completed = false;
   bool _developerBattleOpening = false;
   String _remoteSceneKey = '';
 
+  // 走路探索：格子仍作为后台数据坐标，但不再作为 UI 展示。
+  late final AnimationController _walkTicker;
+  Duration _walkLastElapsed = Duration.zero;
+  Offset _walkInput = Offset.zero;
+  Offset? _walkTapTarget; // dx = 世界 X，dy = 纵深比例。
+  double _playerWorldX = 0;
+  double _playerDepth = .74;
+  double _walkWorldWidth = 900;
+  double _walkStageHeight = 420;
+  bool _walkLayoutReady = false;
+  bool _playerFacingLeft = false;
+  bool _playerMoving = false;
+  Uint8List? _previewBackgroundBytes;
+  Uint8List? _previewPortraitBytes;
+  final Set<int> _walkPendingReveal = <int>{};
+
   bool get _remote => !widget.developerPreview;
 
   @override
   void initState() {
     super.initState();
+    _walkTicker = AnimationController(
+      vsync: this,
+      duration: const Duration(hours: 1),
+    )
+      ..addListener(_tickWalk)
+      ..repeat();
     if (_remote) {
       widget.controller.addListener(_handleRemoteChanged);
       _syncRemote();
@@ -1643,6 +1748,11 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
 
   @override
   void dispose() {
+    _rewardToastEntry?.remove();
+    _rewardToastEntry = null;
+    _walkTicker
+      ..removeListener(_tickWalk)
+      ..dispose();
     if (_remote) widget.controller.removeListener(_handleRemoteChanged);
     super.dispose();
   }
@@ -1656,8 +1766,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
     final payload = widget.controller.surroundingsData;
     if (payload.isEmpty) {
       _message = widget.controller.isSurroundingsLoading
-          ? '正在生成当前场景的格子探索…'
-          : '当前格子探索尚未载入。';
+          ? '正在生成当前场景的探索内容…'
+          : '当前探索内容尚未载入。';
       return;
     }
     final nextSceneKey = stringValue(payload['scene_key']).trim();
@@ -1671,13 +1781,15 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
               ? payload['grid_revealed'] as List
               : const <dynamic>[20])
           .map(intValue));
-    _energy = intValue(payload['grid_energy'], _maxEnergy)
-        .clamp(0, _maxEnergy)
-        .toInt();
+    // 走路探索版不再读取 grid_energy：客户端探索没有体力限制。
     _completed = stringValue(payload['status']) == 'exhausted';
     if (sceneChanged) {
       _bag.clear();
       _bagQuality.clear();
+      _walkLayoutReady = false;
+      _playerWorldX = 0;
+      _walkTapTarget = null;
+      _walkInput = Offset.zero;
     }
     _searched.clear();
     final resolved = (payload['resolved_encounters'] is List
@@ -1705,7 +1817,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
     final eventText = stringValue(asJsonMap(payload['event'])['text']).trim();
     _message = eventText.isNotEmpty
         ? eventText
-        : stringValue(payload['goal'], '从亮起的迷雾边缘开始探索。');
+        : stringValue(payload['goal'], '在场景中自由走动并调查周围。');
   }
 
   Map<int, _FogTileDef> _generateRemoteMap(JsonMap payload) {
@@ -1767,10 +1879,13 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
     _searched.clear();
     _bag.clear();
     _bagQuality.clear();
-    _energy = _maxEnergy;
     _completed = false;
+    _walkLayoutReady = false;
+    _playerWorldX = 0;
+    _walkTapTarget = null;
+    _walkInput = Offset.zero;
     _coconutBaseReward = 1 + math.Random(_seed ^ 0x5F3759DF).nextInt(2);
-    _message = '从亮起的迷雾边缘开始。◇ 表示周围尚未揭开的目标数量，! 表示隐藏危险数量。';
+    _message = '自由走动探索。走近区域会自动发现周围内容，发现目标后可直接调查。';
   }
 
   int _quality(math.Random random, {int min = 1, int max = 6}) {
@@ -2291,21 +2406,13 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
   Future<void> _tapRemoteTile(int index) async {
     if (widget.controller.isSurroundingsActionRunning) return;
     if (!_revealed.contains(index)) {
-      if (!_isFrontier(index)) {
-        setState(() => _message = '只能从已经探索过的格子向外推进。');
-        return;
-      }
-      if (_energy <= 0) {
-        setState(() => _message = '探索体力已经耗尽。');
-        return;
-      }
       try {
         await widget.controller.investigateSurroundNode('grid_$index');
       } catch (_) {
         if (!mounted) return;
         setState(() {
           _message = widget.controller.surroundingsError.trim().isEmpty
-              ? '揭开格子失败，请重试。'
+              ? '探索这片区域失败，请重试。'
               : widget.controller.surroundingsError.trim();
         });
       }
@@ -2313,7 +2420,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
     }
 
     if (index == _startIndex) {
-      setState(() => _message = '这里是探索起点。只能从亮起的相邻迷雾继续推进。');
+      setState(() => _message = '这里是探索起点。继续向场景深处走动。');
       return;
     }
     final tile = _tileAt(index);
@@ -2352,12 +2459,67 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
       if (!mounted) return;
       final reward = asJsonMap(payload['reward']);
       final name = stringValue(reward['name'], tile.label);
-      final quantity = intValue(reward['quantity'], 1);
+      final rewardType = stringValue(
+        reward['type'] ?? reward['item_type'],
+      ).trim().toLowerCase();
+      final isScore = rewardType == 'score';
+      final isRareShopItem =
+          rewardType == 'gift' || rewardType == 'lucky_card';
+      final quantity = intValue(
+        reward['score'] ?? reward['quantity'],
+        1,
+      );
       final quality = intValue(reward['quality'], tile.quality).clamp(1, 10).toInt();
+      final rewardAsset = stringValue(
+        reward['image_asset'],
+        _surroundRewardAsset(rewardType),
+      ).trim();
+      final newScore = intValue(reward['new_score'], -1);
+      final bonusRewards = (payload['bonus_rewards'] is List
+              ? payload['bonus_rewards'] as List
+              : const <dynamic>[])
+          .map(asJsonMap)
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+      final bonusLabels = bonusRewards.map((bonus) {
+        final bonusName = stringValue(bonus['name'], '额外奖励');
+        final bonusAmount = intValue(bonus['score'] ?? bonus['quantity'], 1);
+        return '$bonusName ×$bonusAmount';
+      }).toList(growable: false);
+      final bonusAssets = bonusRewards
+          .map((bonus) => stringValue(
+                bonus['image_asset'],
+                _surroundRewardAsset(stringValue(
+                  bonus['type'] ?? bonus['item_type'],
+                )),
+              ).trim())
+          .where((asset) => asset.isNotEmpty)
+          .toList(growable: false);
+      final bonusScore = bonusRewards
+          .where((bonus) => stringValue(
+                bonus['type'] ?? bonus['item_type'],
+              ).trim().toLowerCase() == 'score')
+          .map((bonus) => intValue(bonus['new_score'], -1))
+          .fold<int>(-1, (current, value) => math.max(current, value).toInt());
       setState(() {
-        _addItem(name, amount: quantity, quality: quality);
-        _message = '获得「$name${quantity > 1 ? ' ×$quantity' : ''}」· ${_qualityLabel(quality)}。';
+        if (isScore && newScore >= 0) _scoreOverride = newScore;
+        if (bonusScore >= 0) _scoreOverride = bonusScore;
+        if (!isScore && !isRareShopItem) {
+          _addItem(name, amount: quantity, quality: quality);
+        }
+        _message = (isScore || isRareShopItem
+            ? '探索中发现$name ×$quantity。'
+            : '获得「$name${quantity > 1 ? ' ×$quantity' : ''}」· ${_qualityLabel(quality)}。') +
+            (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。');
       });
+      _showRemoteRewardToast(
+        text: isScore
+            ? '获得星块 ×$quantity'
+            : '获得$name${quantity > 1 ? ' ×$quantity' : ''}' +
+                (bonusLabels.isEmpty ? '' : ' + ${bonusLabels.join('、')}'),
+        assetPath: rewardAsset,
+        assetPaths: bonusAssets,
+      );
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -2368,54 +2530,71 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
     }
   }
 
-  void _revealTile(int index) {
-    if (!_isFrontier(index)) {
-      setState(() => _message = '只能从已经探索过的区域向外推进。');
-      return;
-    }
-    if (_energy <= 0) {
-      setState(() => _message = '体力耗尽了。现在只能结算战利品，或者开始新的 Seed。');
-      return;
-    }
+  void _showRemoteRewardToast({
+    required String text,
+    String assetPath = '',
+    List<String> assetPaths = const <String>[],
+  }) {
+    final overlay = Overlay.maybeOf(context, rootOverlay: true);
+    if (overlay == null) return;
 
+    _rewardToastEntry?.remove();
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (overlayContext) {
+        final media = MediaQuery.of(overlayContext);
+        return Positioned(
+          top: media.padding.top + media.size.height * .33,
+          left: 24,
+          right: 24,
+          child: _SurroundPickupRewardToast(
+            text: text,
+            assetPath: assetPath,
+            assetPaths: assetPaths,
+            onCompleted: () {
+              if (_rewardToastEntry != entry) return;
+              entry.remove();
+              _rewardToastEntry = null;
+            },
+          ),
+        );
+      },
+    );
+    _rewardToastEntry = entry;
+    overlay.insert(entry);
+  }
+
+  void _revealTile(int index) {
+    if (_revealed.contains(index)) return;
     final tile = _tileAt(index);
     setState(() {
       _revealed.add(index);
-      _energy = math.max(0, _energy - 1);
 
       switch (tile.kind) {
         case _FogTileKind.empty:
-          final clue = _nearbyInterest(index);
-          final danger = _nearbyDanger(index);
-          if (clue == 0 && danger == 0) {
-            final opened = _cascadeReveal(index);
-            _message = opened > 0
-                ? '这里很安静，迷雾向外散开了 $opened 格。'
-                : '这片沙地很安静，附近也没有明显线索。';
-          } else if (danger > 0) {
-            _message = '周围还有 $clue 个未探索目标，同时有 $danger 处隐藏危险。';
-          } else {
-            _message = '周围还有 $clue 个未探索目标。';
-          }
+          _message = '你走进一片安静区域，视野向前展开。';
           break;
         case _FogTileKind.hazard:
-          _energy = math.max(0, _energy - 2);
           _searched.add(index);
-          _message = '${tile.text} 额外损失 2 点体力。';
+          _message = '${tile.text} 你及时避开了危险。';
           break;
         case _FogTileKind.coconutTree:
           _message = _hasHook
-              ? '发现「${tile.label}」。简易椰钩可以处理这里，点击摘取。'
-              : '发现「${tile.label}」。${tile.text} 先找材料制作长柄工具。';
+              ? '发现「${tile.label}」。简易椰钩可以处理这里。'
+              : '发现「${tile.label}」。${tile.text}';
           break;
         case _FogTileKind.scavenge:
-          _message = '发现搜刮点「${tile.label}」。再次点击翻找，可能得到 1～3 件物品。';
+          _message = '发现搜刮点「${tile.label}」。靠近后调查可以翻找物资。';
           break;
         case _FogTileKind.cache:
-          _message = '发现稀有搜刮点「${tile.label}」！再次点击打开。';
+          _message = '发现稀有搜刮点「${tile.label}」！';
+          break;
+        case _FogTileKind.normalEnemy:
+        case _FogTileKind.eliteEnemy:
+          _message = '前方发现「${tile.label}」。继续靠近可以选择交战。';
           break;
         default:
-          _message = '发现「${tile.label}」· ${_qualityLabel(tile.quality)}。再次点击拾取。';
+          _message = '发现「${tile.label}」· ${_qualityLabel(tile.quality)}。';
           break;
       }
     });
@@ -2450,7 +2629,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
 
   void _interactWithRevealed(int index) {
     if (index == _startIndex) {
-      setState(() => _message = '这里是探索起点。向周围亮起的迷雾推进，也可以随时安全撤离。');
+      setState(() => _message = '这里是探索起点。继续走动即可调查周围，也可以随时安全撤离。');
       return;
     }
 
@@ -2482,9 +2661,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
         }
         setState(() {
           _searched.add(index);
-          final efficiencyBonus = _energy >= 9 ? 1 : 0;
           final qualityBonus = _hookQuality >= 6 ? 1 : 0;
-          final reward = _coconutBaseReward + efficiencyBonus + qualityBonus;
+          final reward = _coconutBaseReward + qualityBonus;
           _addItem(
             '椰子',
             amount: reward,
@@ -2492,7 +2670,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
           );
           _completed = true;
           final bonusText = <String>[
-            if (efficiencyBonus > 0) '探索效率 +1',
             if (qualityBonus > 0) '高品质工具 +1',
           ];
           _message = bonusText.isEmpty
@@ -2533,9 +2710,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
       for (final drop in drops) {
         _addItem(drop.name, amount: drop.amount, quality: drop.quality);
       }
-      if (tile.energyBonus > 0) {
-        _energy = math.min(_maxEnergy, _energy + tile.energyBonus);
-      }
       final summary = drops.isEmpty
           ? '没有找到可用物品'
           : drops
@@ -2546,7 +2720,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
               .join('、');
       final craftHint = _craftHintAfterPickup();
       _message = tile.rare
-          ? '稀有搜刮：$summary${tile.energyBonus > 0 ? '，恢复 ${tile.energyBonus} 点体力' : ''}。$craftHint'
+          ? '稀有搜刮：$summary。$craftHint'
           : '搜刮完成：$summary。$craftHint';
     });
   }
@@ -2604,13 +2778,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
     return Colors.white.withOpacity(.50);
   }
 
-  int _withdrawBonus() {
-    if (_remote) return 0;
-    if (!_completed) return 0;
-    if (_energy >= 12) return 2;
-    if (_energy >= 7) return 1;
-    return 0;
-  }
+  int _withdrawBonus() => 0;
 
   Future<void> _showWithdrawDialog() async {
     final bonus = _withdrawBonus();
@@ -2653,7 +2821,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                             ),
                           ),
                           Text(
-                            '体力 $_energy',
+                            '自由探索',
                             style: TextStyle(
                               color: Colors.white.withOpacity(.40),
                               fontSize: 9,
@@ -2681,27 +2849,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      if (bonus > 0) ...<Widget>[
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: _themeGreen.withOpacity(.055),
-                            border: Border.all(
-                              color: _themeGreen.withOpacity(.24),
-                              width: .7,
-                            ),
-                          ),
-                          child: Text(
-                            '现在撤离可获得：新鲜椰肉 ×$bonus（剩余体力奖励）',
-                            style: TextStyle(
-                              color: _themeGreen.withOpacity(.90),
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
                       const SizedBox(height: 14),
                       Row(
                         children: <Widget>[
@@ -2774,6 +2921,857 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
     );
   }
 
+  Future<void> _pickWalkPreviewImage({required bool portrait}) async {
+    // 开发者完整预览可上传背景/立绘；正文底部嵌入版至少允许临时上传背景图测试效果。
+    if (!widget.developerPreview && !widget.embedded) return;
+    try {
+      // 与项目现有角色立绘上传逻辑保持一致。
+      final result = await FilePicker.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: true,
+      );
+      final file = result?.files.single;
+      if (!mounted || file == null || file.bytes == null) return;
+      final bytes = file.bytes!;
+      if (bytes.isEmpty) {
+        setState(() => _message = '图片读取失败，请换一张 PNG / JPG / WEBP 再试。');
+        return;
+      }
+      setState(() {
+        if (portrait) {
+          _previewPortraitBytes = bytes;
+          _message = '主角立绘已载入。现在可以直接在场景里走动测试比例与待机效果。';
+        } else {
+          _previewBackgroundBytes = bytes;
+          _message = '场景背景已载入。走动时镜头会跟随主角横向移动。';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _message = '选择图片失败，请重试。');
+    }
+  }
+
+  void _ensureWalkLayout(double worldWidth, double stageHeight) {
+    final oldWidth = _walkWorldWidth;
+    _walkWorldWidth = worldWidth;
+    _walkStageHeight = stageHeight;
+    if (!_walkLayoutReady) {
+      final start = _walkTilePoint(_startIndex, worldWidth, stageHeight);
+      _playerWorldX = start.dx;
+      _playerDepth = (start.dy / stageHeight)
+          .clamp(widget.embedded ? .58 : .50, .91)
+          .toDouble();
+      _walkLayoutReady = true;
+      return;
+    }
+    if (oldWidth > 0 && (oldWidth - worldWidth).abs() > .5) {
+      _playerWorldX = (_playerWorldX * worldWidth / oldWidth)
+          .clamp(32.0, math.max(32.0, worldWidth - 32.0))
+          .toDouble();
+    }
+  }
+
+  Offset _walkTilePoint(int index, double worldWidth, double stageHeight) {
+    final row = _rowOf(index);
+    final col = _columnOf(index);
+    final x = (col + .5) / _columns * worldWidth;
+    final depth = .50 + (row / math.max(1, _rows - 1)) * .40;
+    return Offset(x, stageHeight * depth);
+  }
+
+  double _walkDistanceToIndex(int index) {
+    final point = _walkTilePoint(index, _walkWorldWidth, _walkStageHeight);
+    final playerY = _walkStageHeight * _playerDepth;
+    final dx = point.dx - _playerWorldX;
+    final dy = (point.dy - playerY) * 1.75;
+    return math.sqrt(dx * dx + dy * dy);
+  }
+
+  void _setWalkInput(Offset value) {
+    if (!widget.movementEnabled) return;
+    final length = value.distance;
+    final normalized = length > 1 ? value / length : value;
+    setState(() {
+      _walkInput = normalized;
+      if (normalized.distanceSquared > .002) _walkTapTarget = null;
+    });
+  }
+
+  void _stopWalkInput() {
+    if (_walkInput == Offset.zero) return;
+    setState(() => _walkInput = Offset.zero);
+  }
+
+  void _setWalkTapTarget(TapDownDetails details, double cameraX) {
+    if (!widget.movementEnabled) return;
+    final local = details.localPosition;
+    final targetDepth = (local.dy / math.max(1.0, _walkStageHeight))
+        .clamp(widget.embedded ? .58 : .50, .91)
+        .toDouble();
+    setState(() {
+      _walkTapTarget = Offset(
+        (cameraX + local.dx)
+            .clamp(32.0, math.max(32.0, _walkWorldWidth - 32.0))
+            .toDouble(),
+        targetDepth,
+      );
+    });
+  }
+
+  void _tickWalk() {
+    if (!mounted || !_walkLayoutReady) return;
+    if (!widget.movementEnabled) {
+      if (_walkInput != Offset.zero || _walkTapTarget != null || _playerMoving) {
+        setState(() {
+          _walkInput = Offset.zero;
+          _walkTapTarget = null;
+          _playerMoving = false;
+        });
+      }
+      return;
+    }
+    final elapsed = _walkTicker.lastElapsedDuration ?? Duration.zero;
+    if (_walkLastElapsed == Duration.zero) {
+      _walkLastElapsed = elapsed;
+      return;
+    }
+    final rawDt = (elapsed - _walkLastElapsed).inMicroseconds / 1000000.0;
+    _walkLastElapsed = elapsed;
+    if (rawDt <= 0) return;
+    final dt = rawDt.clamp(0.0, .05).toDouble();
+
+    var input = _walkInput;
+    final target = _walkTapTarget;
+    if (input.distanceSquared <= .002 && target != null) {
+      final dx = target.dx - _playerWorldX;
+      final dyPx = (target.dy - _playerDepth) * _walkStageHeight;
+      final distance = math.sqrt(dx * dx + dyPx * dyPx);
+      if (distance < 8) {
+        _walkTapTarget = null;
+        input = Offset.zero;
+      } else {
+        input = Offset(dx / distance, dyPx / distance);
+      }
+    }
+
+    final moving = input.distanceSquared > .002;
+    if (!moving) {
+      if (_playerMoving) setState(() => _playerMoving = false);
+      return;
+    }
+
+    const speed = 235.0;
+    final nextX = (_playerWorldX + input.dx * speed * dt)
+        .clamp(32.0, math.max(32.0, _walkWorldWidth - 32.0))
+        .toDouble();
+    final nextDepth = (_playerDepth +
+            input.dy * speed * dt / math.max(1.0, _walkStageHeight))
+        .clamp(widget.embedded ? .58 : .50, .91)
+        .toDouble();
+    final facingLeft = input.dx < -.05
+        ? true
+        : input.dx > .05
+            ? false
+            : _playerFacingLeft;
+
+    setState(() {
+      _playerWorldX = nextX;
+      _playerDepth = nextDepth;
+      _playerFacingLeft = facingLeft;
+      _playerMoving = true;
+    });
+    _discoverByWalking();
+  }
+
+  void _discoverByWalking() {
+    int? nearest;
+    var best = double.infinity;
+    for (var index = 0; index < _rows * _columns; index++) {
+      if (_revealed.contains(index) || _walkPendingReveal.contains(index)) continue;
+      final distance = _walkDistanceToIndex(index);
+      if (distance < 68 && distance < best) {
+        best = distance;
+        nearest = index;
+      }
+    }
+    if (nearest == null) return;
+    if (_remote) {
+      unawaited(_revealRemoteByWalking(nearest));
+    } else {
+      _revealTile(nearest);
+    }
+  }
+
+  Future<void> _revealRemoteByWalking(int index) async {
+    if (_walkPendingReveal.contains(index) || _revealed.contains(index)) return;
+    if (widget.controller.isSurroundingsActionRunning) return;
+    _walkPendingReveal.add(index);
+    try {
+      await widget.controller.investigateSurroundNode('grid_$index');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _message = widget.controller.surroundingsError.trim().isEmpty
+            ? '这片区域暂时无法调查，请继续走动或稍后重试。'
+            : widget.controller.surroundingsError.trim();
+      });
+    } finally {
+      _walkPendingReveal.remove(index);
+    }
+  }
+
+  int? _nearestWalkInteractableIndex({double maxDistance = 86}) {
+    int? nearest;
+    var best = maxDistance;
+    for (var index = 0; index < _rows * _columns; index++) {
+      if (index == _startIndex || !_revealed.contains(index) || _searched.contains(index)) {
+        continue;
+      }
+      final tile = _tileAt(index);
+      if (tile.kind == _FogTileKind.empty || tile.kind == _FogTileKind.hazard) continue;
+      final distance = _walkDistanceToIndex(index);
+      if (distance < best) {
+        best = distance;
+        nearest = index;
+      }
+    }
+    return nearest;
+  }
+
+  IconData _walkTileIcon(_FogTileKind kind) {
+    return switch (kind) {
+      _FogTileKind.normalEnemy => Icons.warning_amber_rounded,
+      _FogTileKind.eliteEnemy => Icons.local_fire_department_outlined,
+      _FogTileKind.coconutTree => Icons.park_outlined,
+      _FogTileKind.scavenge => Icons.search_rounded,
+      _FogTileKind.cache => Icons.inventory_2_outlined,
+      _FogTileKind.bottle => Icons.local_drink_outlined,
+      _FogTileKind.branch => Icons.horizontal_rule_rounded,
+      _FogTileKind.stone => Icons.landscape_outlined,
+      _FogTileKind.vine => Icons.grass_rounded,
+      _FogTileKind.genericItem => Icons.diamond_outlined,
+      _ => Icons.circle_outlined,
+    };
+  }
+
+  Color _walkTileColor(_FogTileDef tile) {
+    if (tile.kind == _FogTileKind.normalEnemy || tile.kind == _FogTileKind.eliteEnemy) {
+      return _dangerRed;
+    }
+    if (tile.rare || tile.kind == _FogTileKind.cache) return _rareGold;
+    return _themeGreen;
+  }
+
+  Widget _buildWalkObject(int index, double cameraX) {
+    final tile = _tileAt(index);
+    if (!_revealed.contains(index) || tile.kind == _FogTileKind.empty || index == _startIndex) {
+      return const SizedBox.shrink();
+    }
+    final point = _walkTilePoint(index, _walkWorldWidth, _walkStageHeight);
+    final searched = _searched.contains(index);
+    final accent = _walkTileColor(tile);
+    final near = _walkDistanceToIndex(index) < 90;
+    return Positioned(
+      left: point.dx - cameraX - 46,
+      top: point.dy - 66,
+      width: 92,
+      height: 62,
+      child: IgnorePointer(
+        ignoring: searched,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 180),
+          opacity: searched ? .24 : 1,
+          child: GestureDetector(
+            onTap: () => _tapTile(index),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: <Widget>[
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  width: near ? 34 : 30,
+                  height: near ? 34 : 30,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(.42),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: accent.withOpacity(near ? .86 : .46),
+                      width: near ? 1.2 : .8,
+                    ),
+                    boxShadow: <BoxShadow>[
+                      if (near)
+                        BoxShadow(
+                          color: accent.withOpacity(.18),
+                          blurRadius: 14,
+                          spreadRadius: 2,
+                        ),
+                    ],
+                  ),
+                  child: Icon(
+                    _walkTileIcon(tile.kind),
+                    size: near ? 17 : 15,
+                    color: accent.withOpacity(.94),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  constraints: const BoxConstraints(maxWidth: 88),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(.48),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    searched ? '已调查' : tile.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(searched ? .38 : .86),
+                      fontSize: 8.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _walkImageSource(
+    String source, {
+    required BoxFit fit,
+    Alignment alignment = Alignment.center,
+    Widget? fallback,
+  }) {
+    final value = source.trim();
+    if (value.isEmpty) return fallback ?? const SizedBox.shrink();
+    if (value.startsWith('assets/')) {
+      return Image.asset(
+        value,
+        fit: fit,
+        alignment: alignment,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => fallback ?? const SizedBox.shrink(),
+      );
+    }
+    return Image.network(
+      value,
+      fit: fit,
+      alignment: alignment,
+      filterQuality: FilterQuality.high,
+      errorBuilder: (_, __, ___) => fallback ?? const SizedBox.shrink(),
+    );
+  }
+
+  Widget _walkPlayerFallback() {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        width: widget.embedded ? 36 : 42,
+        height: widget.embedded ? 70 : 82,
+        decoration: BoxDecoration(
+          color: const Color(0xFF182428).withOpacity(.96),
+          borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(18),
+            bottom: Radius.circular(7),
+          ),
+          border: Border.all(
+            color: Colors.white.withOpacity(.18),
+            width: .8,
+          ),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withOpacity(.46),
+              blurRadius: 12,
+              offset: const Offset(0, 7),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          '主角',
+          style: TextStyle(
+            color: Colors.white.withOpacity(.74),
+            fontSize: 9,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWalkPlayer(double cameraX) {
+    final playerY = _walkStageHeight * _playerDepth;
+    final depthScale = .86 + ((_playerDepth - .50) / .41).clamp(0.0, 1.0) * .18;
+    final portraitBytes = _previewPortraitBytes;
+    final protagonist = widget.controller.protagonist;
+    // 正文底部探索优先使用玩家已经创建好的“主角立绘”。
+    // 只有立绘 URL 为空时才退回头像，避免正常情况下显示成头像小圆图。
+    final protagonistPortrait = protagonist?.portraitUrl.trim() ?? '';
+    final protagonistAvatar = protagonist?.avatarUrl.trim() ?? '';
+    final portraitSource = protagonistPortrait.isNotEmpty
+        ? protagonistPortrait
+        : protagonistAvatar;
+    // 嵌入正文底部时，人物不能沿用独立探索页的大尺寸。
+    // 按当前舞台高度动态缩放，让完整立绘（尤其头部/脚部）更容易留在画面内。
+    final playerHeight = widget.embedded
+        ? (_walkStageHeight * .42).clamp(72.0, 96.0).toDouble()
+        : 132.0;
+    final playerWidth = widget.embedded
+        ? (playerHeight * .64).clamp(46.0, 62.0).toDouble()
+        : 88.0;
+    return Positioned(
+      left: _playerWorldX - cameraX - playerWidth / 2,
+      top: playerY - playerHeight,
+      width: playerWidth,
+      height: playerHeight,
+      child: IgnorePointer(
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 160),
+          opacity: widget.movementEnabled ? 1 : .74,
+          child: AnimatedBuilder(
+            animation: _walkTicker,
+            builder: (context, child) {
+              final seconds = (_walkTicker.lastElapsedDuration?.inMilliseconds ?? 0) / 1000.0;
+              final bob = _playerMoving
+                  ? math.sin(seconds * 11.5) * 2.0
+                  : math.sin(seconds * 2.2) * 1.0;
+              final breath = _playerMoving ? 1.0 : 1.0 + math.sin(seconds * 2.2) * .008;
+              return Transform.translate(
+                offset: Offset(0, bob),
+                child: Transform.scale(
+                  scaleX: (_playerFacingLeft ? -1.0 : 1.0) * depthScale,
+                  scaleY: depthScale * breath,
+                  alignment: Alignment.bottomCenter,
+                  child: child,
+                ),
+              );
+            },
+            child: portraitBytes != null
+                ? Image.memory(
+                    portraitBytes,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.bottomCenter,
+                    filterQuality: FilterQuality.high,
+                  )
+                : portraitSource.isNotEmpty
+                    ? _walkImageSource(
+                        portraitSource,
+                        fit: BoxFit.contain,
+                        alignment: Alignment.bottomCenter,
+                        fallback: _walkPlayerFallback(),
+                      )
+                    : _walkPlayerFallback(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWalkJoystick() {
+    final size = widget.embedded ? 58.0 : 82.0;
+    return SizedBox(
+      width: size,
+      height: size,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (details) {
+          final delta = details.localPosition - Offset(size / 2, size / 2);
+          _setWalkInput(delta / (size / 2));
+        },
+        onPanUpdate: (details) {
+          final delta = details.localPosition - Offset(size / 2, size / 2);
+          _setWalkInput(delta / (size / 2));
+        },
+        onPanEnd: (_) => _stopWalkInput(),
+        onPanCancel: _stopWalkInput,
+        child: Stack(
+          alignment: Alignment.center,
+          children: <Widget>[
+            Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(.18),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withOpacity(.10), width: .8),
+              ),
+            ),
+            Transform.translate(
+              offset: _walkInput * 20,
+              child: Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white.withOpacity(.22), width: .8),
+                ),
+                child: Icon(
+                  Icons.control_camera_rounded,
+                  size: 15,
+                  color: Colors.white.withOpacity(.62),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWalkStage() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportWidth = math.max(1.0, constraints.maxWidth);
+        final stageHeight = math.max(170.0, constraints.maxHeight);
+        // 正文底部是“单屏横版舞台”，不再强行做 1.9 屏的超宽世界。
+        // 原来把一张 16:9 场景硬撑到近两屏宽，再用 cover，会把上下裁掉很多。
+        // 嵌入模式保持接近当前可视宽度，人物仍可左右走动；独立探索页继续保留横向卷轴。
+        final worldWidth = widget.embedded
+            ? viewportWidth
+            : math.max(
+                viewportWidth * 1.90,
+                stageHeight * (16 / 9),
+              ).toDouble();
+        _ensureWalkLayout(worldWidth, stageHeight);
+        final cameraX = (_playerWorldX - viewportWidth * .5)
+            .clamp(0.0, math.max(0.0, worldWidth - viewportWidth))
+            .toDouble();
+        final nearest = _nearestWalkInteractableIndex();
+        final goal = _remote
+            ? stringValue(widget.controller.surroundingsData['goal'], '调查当前场景')
+            : '自由探索海滩，收集材料并寻找目标';
+
+        return ClipRect(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) => _setWalkTapTarget(details, cameraX),
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                Positioned(
+                  left: -cameraX,
+                  top: 0,
+                  width: worldWidth,
+                  height: stageHeight,
+                  child: _previewBackgroundBytes != null
+                      ? Image.memory(
+                          _previewBackgroundBytes!,
+                          // 底部横版优先完整保留场景的左右信息；
+                          // 16:9 / 2:1 场景只会产生很轻的上下裁切或留白。
+                          fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
+                          alignment: widget.embedded
+                              ? Alignment.bottomCenter
+                              : Alignment.center,
+                          filterQuality: FilterQuality.high,
+                        )
+                      : widget.controller.world.backgroundUrl.trim().isNotEmpty
+                          ? _walkImageSource(
+                              widget.controller.world.backgroundUrl.trim(),
+                              fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
+                              alignment: widget.embedded
+                                  ? Alignment.bottomCenter
+                                  : Alignment.center,
+                              fallback: DecoratedBox(
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: <Color>[
+                                Color(0xFF273B3B),
+                                Color(0xFF17272A),
+                                Color(0xFF0C1417),
+                              ],
+                              stops: <double>[0, .55, 1],
+                            ),
+                          ),
+                          child: Stack(
+                            children: <Widget>[
+                              Positioned(
+                                left: worldWidth * .12,
+                                top: stageHeight * .28,
+                                child: Icon(
+                                  Icons.park_rounded,
+                                  size: 120,
+                                  color: Colors.black.withOpacity(.16),
+                                ),
+                              ),
+                              Positioned(
+                                left: worldWidth * .63,
+                                top: stageHeight * .31,
+                                child: Icon(
+                                  Icons.landscape_rounded,
+                                  size: 150,
+                                  color: Colors.black.withOpacity(.18),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                            )
+                          : DecoratedBox(
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: <Color>[
+                                Color(0xFF273B3B),
+                                Color(0xFF17272A),
+                                Color(0xFF0C1417),
+                              ],
+                              stops: <double>[0, .55, 1],
+                            ),
+                          ),
+                          child: Stack(
+                            children: <Widget>[
+                              Positioned(
+                                left: worldWidth * .12,
+                                top: stageHeight * .28,
+                                child: Icon(
+                                  Icons.park_rounded,
+                                  size: 120,
+                                  color: Colors.black.withOpacity(.16),
+                                ),
+                              ),
+                              Positioned(
+                                left: worldWidth * .63,
+                                top: stageHeight * .31,
+                                child: Icon(
+                                  Icons.landscape_rounded,
+                                  size: 150,
+                                  color: Colors.black.withOpacity(.18),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                ),
+                ...List<Widget>.generate(
+                  _rows * _columns,
+                  (index) => _buildWalkObject(index, cameraX),
+                ),
+                _buildWalkPlayer(cameraX),
+                Positioned(
+                  left: widget.embedded ? 9 : 12,
+                  top: widget.embedded ? 7 : 11,
+                  right: widget.embedded
+                      ? 94
+                      : (widget.developerPreview ? 116 : 9),
+                  child: IgnorePointer(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(.36),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.white.withOpacity(.08), width: .6),
+                          ),
+                          child: Text(
+                            goal,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(.82),
+                              fontSize: 9.2,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          widget.movementEnabled
+                              ? '拖动摇杆或点击地面移动 · 走近自动探索'
+                              : '剧情输出中 · 移动暂时锁定',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(.42),
+                            fontSize: 7.7,
+                            fontWeight: FontWeight.w600,
+                            shadows: const <Shadow>[Shadow(color: Colors.black, blurRadius: 4)],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (widget.embedded)
+                  Positioned(
+                    right: 8,
+                    top: 8,
+                    child: _walkInlineBackgroundButton(),
+                  )
+                else if (widget.developerPreview)
+                  Positioned(
+                    right: 8,
+                    top: 8,
+                    child: Row(
+                      children: <Widget>[
+                        _walkToolButton(
+                          icon: Icons.image_outlined,
+                          tooltip: '选择场景背景图',
+                          onTap: () => unawaited(_pickWalkPreviewImage(portrait: false)),
+                        ),
+                        const SizedBox(width: 5),
+                        _walkToolButton(
+                          icon: Icons.person_outline_rounded,
+                          tooltip: '选择主角立绘',
+                          onTap: () => unawaited(_pickWalkPreviewImage(portrait: true)),
+                        ),
+                      ],
+                    ),
+                  ),
+                Positioned(
+                  left: widget.embedded ? 8 : 12,
+                  bottom: widget.embedded ? 8 : 12,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 160),
+                    opacity: widget.movementEnabled ? 1 : .34,
+                    child: IgnorePointer(
+                      ignoring: !widget.movementEnabled,
+                      child: _buildWalkJoystick(),
+                    ),
+                  ),
+                ),
+                if (nearest != null)
+                  Positioned(
+                    left: 104,
+                    right: 12,
+                    bottom: 15,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: widget.movementEnabled
+                              ? () => _tapTile(nearest)
+                              : null,
+                          borderRadius: BorderRadius.circular(18),
+                          child: Container(
+                            constraints: const BoxConstraints(maxWidth: 260),
+                            height: 38,
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(.56),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: _walkTileColor(_tileAt(nearest)).withOpacity(.48),
+                                width: .8,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Icon(
+                                  _walkTileIcon(_tileAt(nearest).kind),
+                                  size: 14,
+                                  color: _walkTileColor(_tileAt(nearest)).withOpacity(.92),
+                                ),
+                                const SizedBox(width: 7),
+                                Flexible(
+                                  child: Text(
+                                    '${_tileAt(nearest).kind == _FogTileKind.normalEnemy || _tileAt(nearest).kind == _FogTileKind.eliteEnemy ? '交战' : '调查'} · ${_tileAt(nearest).label}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.88),
+                                      fontSize: 9.4,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _walkInlineBackgroundButton() {
+    final replaced = _previewBackgroundBytes != null;
+    return Tooltip(
+      message: replaced ? '重新选择探索背景图' : '上传探索背景图',
+      child: Material(
+        color: Colors.black.withOpacity(.42),
+        shape: RoundedRectangleBorder(
+          side: BorderSide(
+            color: Colors.white.withOpacity(replaced ? .22 : .12),
+            width: .7,
+          ),
+          borderRadius: BorderRadius.zero,
+        ),
+        child: InkWell(
+          onTap: () => unawaited(_pickWalkPreviewImage(portrait: false)),
+          borderRadius: BorderRadius.zero,
+          child: SizedBox(
+            height: 30,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 9),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    replaced ? Icons.image_rounded : Icons.add_photo_alternate_outlined,
+                    size: 14,
+                    color: Colors.white.withOpacity(.82),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    replaced ? '更换背景' : '上传背景',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.82),
+                      fontSize: 9.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _walkToolButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.black.withOpacity(.40),
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Icon(icon, size: 16, color: Colors.white.withOpacity(.78)),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _inventoryChip(String item, int count) {
     final important = item == '简易椰钩' || item == '椰子' || item == '新鲜椰肉';
     final quality = _bagQuality[item] ?? 1;
@@ -2831,38 +3829,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _energyPill() {
-    final low = _energy <= 4;
-    final accent = low ? _dangerRed : _themeGreen;
-    return Tooltip(
-      message: '体力 $_energy / $_maxEnergy',
-      child: SizedBox(
-        height: 30,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(
-              Icons.bolt_rounded,
-              size: 13,
-              color: accent.withOpacity(low ? .90 : .72),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              '$_energy/$_maxEnergy',
-              style: TextStyle(
-                color: low
-                    ? _dangerRed.withOpacity(.94)
-                    : Colors.white.withOpacity(.84),
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -2950,14 +3916,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
         icon: Icons.flag_outlined,
         text: '核心目标已完成。本轮收获已经可以结算。',
         accent: _themeGreen,
-      );
-    }
-
-    if (_energy <= 3) {
-      return _contextHint(
-        icon: Icons.bolt_rounded,
-        text: '体力偏低，继续深入会明显增加风险。',
-        accent: _dangerRed,
       );
     }
 
@@ -3081,14 +4039,14 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
             ? '当前区域已处理完毕'
             : _availableCraftResult != null
                 ? '材料已齐 · 可以制作'
-                : '揭开相邻格子，调查物品与遭遇')
+                : '走近区域自动探索，发现后调查目标')
         : (_completed
             ? (bonus > 0 ? '当前撤离奖励 ×$bonus' : '当前撤离奖励已耗尽')
             : _hasHook
                 ? '椰钩已完成 · 寻找椰树'
                 : _availableCraftResult != null
                     ? '材料已齐 · 可以制作'
-                    : '揭开迷雾，收集并组合材料');
+                    : '自由走动，收集并组合材料');
 
     return SizedBox(
       height: compact ? 46 : 48,
@@ -3135,63 +4093,30 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
             ),
           ],
           const SizedBox(width: 10),
-          _energyPill(),
+          Container(
+            height: 26,
+            padding: const EdgeInsets.symmetric(horizontal: 9),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.035),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: Colors.white.withOpacity(.07), width: .6),
+            ),
+            child: Text(
+              '自由探索',
+              style: TextStyle(
+                color: Colors.white.withOpacity(.58),
+                fontSize: 8.2,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildMapPanel() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final side = math.max(
-          180.0,
-          math.min(constraints.maxWidth, constraints.maxHeight),
-        );
-        return Center(
-          child: SizedBox(
-            width: side,
-            height: side,
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(.08),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: Colors.white.withOpacity(.055),
-                  width: .6,
-                ),
-              ),
-              child: GridView.builder(
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: _columns,
-                  childAspectRatio: 1,
-                ),
-                itemCount: _rows * _columns,
-                itemBuilder: (context, index) => _FogTileWidget(
-                  index: index,
-                  tile: _tileAt(index),
-                  revealed: _revealed.contains(index),
-                  searched: _searched.contains(index),
-                  frontier: _isFrontier(index),
-                  hasHook: _hasHook,
-                  remote: _remote,
-                  isRemoteRecipeInput: _isRemoteRecipeInput(
-                    _tileAt(index).nodeId,
-                  ),
-                  nearbyInterest: _nearbyInterest(index),
-                  nearbyDanger: _nearbyDanger(index),
-                  isStartIndex: index == _startIndex,
-                  onTap: () => _tapTile(index),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
+  Widget _buildMapPanel() => _buildWalkStage();
 
   Widget _buildMessagePanel() {
     return AnimatedContainer(
@@ -3345,7 +4270,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                 const SizedBox(height: 10),
                 Text(
                   _remote
-                      ? '提示 · 危险格会进入战斗，材料齐全后自动出现制作入口'
+                      ? '提示 · 靠近危险目标可进入战斗，材料齐全后自动出现制作入口'
                       : '提示 · 微红代表危险，材料齐全后自动出现制作入口',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -3371,20 +4296,50 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
   }
 
   Widget _buildCompactBody() {
+    final action = _buildContextActionBar();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _buildGoalBar(compact: true),
-          const SizedBox(height: 9),
           Expanded(child: _buildMapPanel()),
-          const SizedBox(height: 8),
+          const SizedBox(height: 7),
           _buildMessagePanel(),
-          const SizedBox(height: 9),
-          _buildBagPanel(),
-          const SizedBox(height: 9),
-          _withdrawButton(expanded: true),
+          if (action != null) ...<Widget>[
+            const SizedBox(height: 7),
+            SizedBox(height: 48, child: action),
+          ],
+          const SizedBox(height: 7),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Container(
+                  height: 34,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  alignment: Alignment.centerLeft,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(.022),
+                    borderRadius: BorderRadius.circular(7),
+                    border: Border.all(color: Colors.white.withOpacity(.055), width: .6),
+                  ),
+                  child: Text(
+                    _bag.isEmpty
+                        ? '本轮收获 · 暂无'
+                        : '本轮收获 · ${_bag.values.fold<int>(0, (sum, value) => sum + value)} 件',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.46),
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 7),
+              _withdrawButton(),
+            ],
+          ),
         ],
       ),
     );
@@ -3392,6 +4347,16 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) {
+      // 主页底部常驻版本：不再套独立页面的毛玻璃、标题栏和背包面板，
+      // 只保留清晰场景与实际走路交互。
+      return Material(
+        color: Colors.transparent,
+        // 不再画顶部白色分割线，让底部场景更像正文背景自然延伸。
+        child: _buildWalkStage(),
+      );
+    }
+
     return Material(
       color: NovelPalette.background.withOpacity(.72),
       child: ClipRect(
@@ -3443,7 +4408,9 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                                   Text(
                                     _completed
                                         ? '现场调查完成'
-                                        : '拨开迷雾，留意物资与危险',
+                                        : (widget.developerPreview
+                                            ? '走路探索测试 · 可上传背景与主角立绘'
+                                            : '自由走动，走到哪里就探索到哪里'),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -3455,6 +4422,34 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                                 ],
                               ),
                             ),
+                            if (widget.developerPreview) ...<Widget>[
+                              Tooltip(
+                                message: '选择场景背景图',
+                                child: IconButton(
+                                  onPressed: () => unawaited(
+                                    _pickWalkPreviewImage(portrait: false),
+                                  ),
+                                  icon: Icon(
+                                    Icons.image_outlined,
+                                    size: 17,
+                                    color: Colors.white.withOpacity(.52),
+                                  ),
+                                ),
+                              ),
+                              Tooltip(
+                                message: '选择主角立绘',
+                                child: IconButton(
+                                  onPressed: () => unawaited(
+                                    _pickWalkPreviewImage(portrait: true),
+                                  ),
+                                  icon: Icon(
+                                    Icons.person_outline_rounded,
+                                    size: 17,
+                                    color: Colors.white.withOpacity(.52),
+                                  ),
+                                ),
+                              ),
+                            ],
                             if (!_remote)
                               Tooltip(
                                 message: '生成新地图',
@@ -3489,7 +4484,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype> {
                                   ),
                                   const SizedBox(width: 4),
                                   Text(
-                                    '${widget.controller.score.total}',
+                                    '${_scoreOverride ?? widget.controller.score.total}',
                                     style: TextStyle(
                                       color: Colors.white.withOpacity(.78),
                                       fontSize: 10.5,
@@ -3928,10 +4923,14 @@ class _SurroundPickupRewardToast extends StatefulWidget {
   const _SurroundPickupRewardToast({
     required this.text,
     required this.onCompleted,
+    this.assetPath = '',
+    this.assetPaths = const <String>[],
   });
 
   final String text;
   final VoidCallback onCompleted;
+  final String assetPath;
+  final List<String> assetPaths;
 
   @override
   State<_SurroundPickupRewardToast> createState() =>
@@ -4029,32 +5028,61 @@ class _SurroundPickupRewardToastState extends State<_SurroundPickupRewardToast>
             );
           },
           child: Center(
-            child: Text(
-              widget.text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                inherit: false,
-                color: Colors.white,
-                fontSize: 15,
-                height: 1.15,
-                fontWeight: FontWeight.w700,
-                letterSpacing: .16,
-                decoration: TextDecoration.none,
-                decorationColor: Colors.transparent,
-                shadows: <Shadow>[
-                  Shadow(
-                    color: Color(0xB3000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (widget.assetPath.isNotEmpty || widget.assetPaths.isNotEmpty) ...<Widget>[
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      for (final asset in <String>{
+                        if (widget.assetPath.isNotEmpty) widget.assetPath,
+                        ...widget.assetPaths.where((path) => path.isNotEmpty),
+                      })
+                        Padding(
+                          padding: const EdgeInsets.only(right: 3),
+                          child: Image.asset(
+                            asset,
+                            width: 38,
+                            height: 38,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                          ),
+                        ),
+                    ],
                   ),
-                  Shadow(
-                    color: Color(0x52000000),
-                    blurRadius: 16,
-                  ),
+                  const SizedBox(width: 8),
                 ],
-              ),
+                Flexible(
+                  child: Text(
+                    widget.text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      inherit: false,
+                      color: Colors.white,
+                      fontSize: 15,
+                      height: 1.15,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: .16,
+                      decoration: TextDecoration.none,
+                      decorationColor: Colors.transparent,
+                      shadows: <Shadow>[
+                        Shadow(
+                          color: Color(0xB3000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                        Shadow(
+                          color: Color(0x52000000),
+                          blurRadius: 16,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

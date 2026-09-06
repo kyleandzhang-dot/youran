@@ -850,15 +850,15 @@ class _NovelScoreChipState extends State<NovelScoreChip>
                         // 1. 星块图标（尺寸收敛一点，显得更精致）
                         AnimatedContainer(
                           duration: const Duration(milliseconds: 180),
-                          width: animating ? 26.0 : 24.0, 
-                          height: animating ? 26.0 : 24.0,
+                          width: animating ? 21.0 : 19.0,
+                          height: animating ? 21.0 : 19.0,
                           child: Image.asset(
                             'assets/images/xing.webp',
                             fit: BoxFit.contain,
                           ),
                         ),
                         
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         
                         // 2. 纯白极简字体，去掉所有浮夸的颜色和阴影
                         AnimatedSwitcher(

@@ -20,6 +20,7 @@ class NovelDialogPanel extends StatefulWidget {
     required this.onRevert,
     this.onOpenPortrait,
     this.active = true,
+    this.bottomReservedHeight = 0,
   });
 
   final NovelGameController controller;
@@ -34,6 +35,11 @@ class NovelDialogPanel extends StatefulWidget {
   final VoidCallback onOpenJourney;
   final VoidCallback onRevert;
   final VoidCallback? onOpenPortrait;
+
+  /// 剧情页底部由外层占用的固定高度。
+  /// 例如主页内嵌的走路探索区会占据屏幕底部，正文、选择框与输入栏
+  /// 统一基于这个高度上移，而不是各自硬编码偏移。
+  final double bottomReservedHeight;
 
   /// 剧情页虽然会被右侧一级 Tab 盖住，但 State 仍然保留。
   /// active=false 时必须暂停本地逐字 Timer，并停止打字音，避免后台继续“打字”。
@@ -697,10 +703,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
         final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
         final keyboardActive = compact && keyboardInset > 0;
-        // 页面本身不再 resize。只有输入栏在手机键盘出现时抬到键盘上沿，
-        // 剧情正文、选项、角色立绘和其它 HUD 都保持原坐标。
-        final composerBottom = keyboardActive ? keyboardInset : 0.0;
-        const footerBottom = 0.0;
+        // 主页可在底部常驻一块探索舞台。键盘出现时探索区由外层隐藏，
+        // 因此这里不再保留探索高度，只把输入栏抬到键盘上沿。
+        final reservedBottom = keyboardActive
+            ? 0.0
+            : math.max(0.0, widget.bottomReservedHeight);
+        final composerBottom = keyboardActive ? keyboardInset : reservedBottom;
+        final footerBottom = reservedBottom;
 
         // 按真实视觉高度预留，不再给选择区留过多空白。
         final choiceCount = controller.choices.length;
@@ -799,7 +808,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     final protagonistRightOffset = -(portraitWidth * edgePush);
 
                     return Positioned(
-                      bottom: sinkOffset, // 使用上面计算好的高低偏移
+                      // 底部探索区常驻时，人物立绘也以探索区上沿作为新的
+                      // “屏幕底部”，避免腿部和底部探索角色互相压在一起。
+                      bottom: reservedBottom + sinkOffset,
                       left: showOnRight ? null : npcLeftOffset,
                       right: showOnRight ? protagonistRightOffset : null,
                       child: ValueListenableBuilder<String>(

@@ -5355,10 +5355,15 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         final name = '${raw['name'] ?? ''}'.trim();
         if (name.isEmpty) continue;
         final quantity = int.tryParse('${raw['quantity'] ?? 1}') ?? 1;
+        final quality = int.tryParse('${raw['quality'] ?? 0}') ?? 0;
         rewards.add(_buildRewardRow(
           Icons.inventory_2_outlined,
           name,
-          quantity > 1 ? '×$quantity' : '获得',
+          quality > 0
+              ? 'Q$quality${quantity > 1 ? ' · ×$quantity' : ''}'
+              : quantity > 1
+                  ? '×$quantity'
+                  : '获得',
         ));
       }
     }
@@ -5366,7 +5371,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     if (rawSkill is Map) {
       final name = '${rawSkill['name'] ?? ''}'.trim();
       if (name.isNotEmpty) {
-        rewards.add(_buildRewardRow(Icons.bolt_rounded, name, '新技能'));
+        final quality = int.tryParse('${rawSkill['quality'] ?? 0}') ?? 0;
+        rewards.add(_buildRewardRow(
+          Icons.bolt_rounded,
+          name,
+          quality > 0 ? '新技能 · Q$quality' : '新技能',
+        ));
       }
     }
     if (!_settlementAccepted) return const SizedBox(height: 18);

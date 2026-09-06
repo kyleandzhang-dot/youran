@@ -445,27 +445,31 @@ AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适�
     );
   }
 
+  // ===== 全新优化的顶部品牌区域 =====
   Widget _buildBrand({
     required bool compact,
     required bool narrow,
   }) {
-    final logoSize = narrow
-        ? 70.0
-        : compact
-            ? 82.0
-            : 92.0;
+    // 稍微调整 Logo 尺寸，使其更精致
+    final logoSize = narrow ? 72.0 : (compact ? 80.0 : 88.0);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
+        // 1. Logo 区域优化：增加弥散阴影
         Container(
           width: logoSize,
           height: logoSize,
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(
-              logoSize * .24,
-            ),
+            borderRadius: BorderRadius.circular(logoSize * 0.28),
+            boxShadow: [
+              BoxShadow(
+                color: _ink.withOpacity(0.06),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Image.asset(
             _logoAsset,
@@ -473,73 +477,44 @@ AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适�
             filterQuality: FilterQuality.high,
             errorBuilder: (_, __, ___) {
               return Container(
-                color: Colors.white.withOpacity(.55),
+                color: Colors.white.withOpacity(.8),
                 alignment: Alignment.center,
                 child: Icon(
                   LucideIcons.image,
-                  size: 26,
-                  color: _muted.withOpacity(.52),
+                  size: 28,
+                  color: _muted.withOpacity(.4),
                 ),
               );
             },
           ),
         ),
-        SizedBox(
-          height: compact ? 22 : 26,
-        ),
+        
+        SizedBox(height: compact ? 24 : 28),
+        
+        // 2. 主标题优化：加重字重，收紧字间距，显得更具品牌张力
         Text(
           'YO RAN',
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: _ink.withOpacity(.92),
-            // 字号整体调小，显得更精致
-            fontSize: narrow
-                ? 24
-                : compact
-                    ? 26
-                    : 28,
-            height: 1.05,
-            // 减轻字重，去除“太粗”的感觉
-            fontWeight: FontWeight.w400,
-            letterSpacing: narrow ? 3.2 : 4.2,
+            color: _ink,
+            fontSize: narrow ? 26 : (compact ? 28 : 32),
+            height: 1.1,
+            fontWeight: FontWeight.w800, 
+            letterSpacing: 2.0, 
           ),
         ),
-        const SizedBox(height: 13),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Container(
-              width: 36,
-              height: 1,
-              color: const Color(0xFFC9C0A4).withOpacity(.72),
-            ),
-            const SizedBox(width: 8),
-            Transform.rotate(
-              angle: .785398,
-              child: Container(
-                width: 6,
-                height: 6,
-                color: const Color(0xFFB8AD8C).withOpacity(.82),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              width: 36,
-              height: 1,
-              color: const Color(0xFFC9C0A4).withOpacity(.72),
-            ),
-          ],
-        ),
-        const SizedBox(height: 15),
+        
+        const SizedBox(height: 8), 
+        
+        // 3. 删除了原先丑陋的装饰线条。副标题优化：拉大间距，降低色彩存在感
         Text(
-          // 改为“专属世界”
           '进入你的专属世界',
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: _ink.withOpacity(.72),
+            color: _muted.withOpacity(0.8), 
             fontSize: narrow ? 12 : 13,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 1.5,
+            fontWeight: FontWeight.w400,
+            letterSpacing: 6.0, 
           ),
         ),
       ],
@@ -801,7 +776,6 @@ AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适�
 
         return AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          // 稍微调高一点，从 44 增加到 48
           height: 48,
           decoration: BoxDecoration(
             color: Colors.white,
@@ -966,7 +940,6 @@ class _LoginPrimaryButton extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(8),
           child: Ink(
-            // 高度同步从 44 调整为 48
             height: 48,
             decoration: BoxDecoration(
               color: _LoginSheetState._accent,

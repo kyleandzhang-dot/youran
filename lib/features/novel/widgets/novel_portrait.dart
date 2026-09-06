@@ -144,79 +144,71 @@ class NovelSceneArrivalTitle extends StatelessWidget {
         return Opacity(
           opacity: opacity.clamp(0.0, 1.0).toDouble(),
           child: Transform.translate(
-            offset: Offset(-12.0 * (1.0 - value.clamp(0.0, .3).toDouble() / .3), 8.0 * (1.0 - value.clamp(0.0, .3).toDouble() / .3)),
+            offset: Offset(
+              0,
+              6.0 *
+                  (1.0 - value.clamp(0.0, .3).toDouble() / .3),
+            ),
             child: child,
           ),
         );
       },
-      child: Container(
+      child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 430),
-        padding: EdgeInsets.fromLTRB(
-          compact ? 10 : 12,
-          9,
-          compact ? 30 : 48,
-          10,
-        ),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: <Color>[
-              Colors.black.withOpacity(.34),
-              Colors.black.withOpacity(.12),
-              Colors.transparent,
-            ],
-            stops: const <double>[0, .58, 1],
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 4 : 6,
+            vertical: 8,
           ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Container(
-              width: 2,
-              height: cleanSubtitle.isEmpty ? 29 : 43,
-              color: NovelPalette.accentSoft.withOpacity(.78),
-            ),
-            const SizedBox(width: 11),
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: const Color(0xFFF7F3EA).withOpacity(.95),
-                      fontFamily: 'WenJinMinchoP0',
-                      fontSize: compact ? 23 : 26,
-                      height: 1.12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: compact ? 2 : 2.6,
-                      shadows: const <Shadow>[
-                        Shadow(color: Color(0xB0000000), blurRadius: 9),
-                      ],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.98),
+                  fontFamily: 'WenJinMinchoP0',
+                  fontSize: compact ? 23 : 26,
+                  height: 1.12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: compact ? 2 : 2.6,
+                  shadows: <Shadow>[
+                    Shadow(
+                      color: Colors.white.withOpacity(.72),
+                      blurRadius: 8,
                     ),
-                  ),
-                  if (cleanSubtitle.isNotEmpty) ...<Widget>[
-                    const SizedBox(height: 5),
-                    Text(
-                      cleanSubtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.55),
-                        fontSize: compact ? 10.5 : 11.5,
-                        fontWeight: FontWeight.w400,
-                        letterSpacing: 1,
-                      ),
+                    Shadow(
+                      color: Colors.white.withOpacity(.28),
+                      blurRadius: 18,
                     ),
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
+              if (cleanSubtitle.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 5),
+                Text(
+                  cleanSubtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.62),
+                    fontSize: compact ? 10.5 : 11.5,
+                    fontWeight: FontWeight.w400,
+                    letterSpacing: 1,
+                    shadows: <Shadow>[
+                      Shadow(
+                        color: Colors.white.withOpacity(.20),
+                        blurRadius: 7,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

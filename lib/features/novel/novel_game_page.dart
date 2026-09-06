@@ -1560,6 +1560,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final compact = constraints.maxWidth < 430;
+                        // 当前 Stack 位于 SafeArea(minimum: 左右14) 内。
+                        // 底部探索需要视觉上横向铺满整个屏幕，所以单独向两侧越过这层 inset。
+                        final screenPadding = MediaQuery.paddingOf(context);
+                        final inlineEdgeLeft = math.max(14.0, screenPadding.left);
+                        final inlineEdgeRight = math.max(14.0, screenPadding.right);
                         final sceneArrivalTitle =
                             _sceneArrivalPreviewTitle ?? controller.locationTitle;
                         final sceneArrivalSubtitle =
@@ -1581,7 +1586,38 @@ class _NovelGamePageState extends State<NovelGamePage>
                             ? const Duration(milliseconds: 180)
                             : const Duration(milliseconds: 620);
 
+                        // “周围”不再切成独立页：正文页始终保留底部探索舞台。
+                        // 是否可调查只控制交互，不再决定探索舞台是否显示。
+                        // 底部高度不再按屏高硬切 30%，而是优先跟随横版场景的宽高比。
+                        // 这样 16:9 左右的背景能更完整地展示，也不会把正文切得过重。
+                        final inlineSurroundingsVisible =
+                            _primaryTab == _NovelPrimaryTab.story &&
+                            controller.storyStarted &&
+                            !controller.isCinematic &&
+                            !keyboardActive;
+                        final inlineFullWidth = constraints.maxWidth +
+                            inlineEdgeLeft +
+                            inlineEdgeRight;
+                        final inlineSurroundingsHeight = inlineSurroundingsVisible
+                            ? (inlineFullWidth / (compact ? 1.82 : 2.05))
+                                .clamp(
+                                  compact ? 172.0 : 188.0,
+                                  compact ? 222.0 : 250.0,
+                                )
+                                .toDouble()
+                            : 0.0;
+                        final inlineSurroundingsEnabled =
+                            inlineSurroundingsVisible &&
+                            !controller.isGenerating &&
+                            !controller.hasNext &&
+                            !_sceneArrivalActive &&
+                            !_battleOpen &&
+                            !_endingOpen;
+
                         return Stack(
+                          // 允许底部探索区单独越过 SafeArea 的左右 14px，
+                          // 做成真正贴屏的连续横版场景。
+                          clipBehavior: Clip.none,
                           children: <Widget>[
                             if (controller.storyStarted && controller.isCinematic)
                               Positioned.fill(
@@ -1691,7 +1727,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                                     constraints:
                                         const BoxConstraints(maxWidth: 720),
                                     child: NovelChoiceDockActionScope(
-                                      visible: controller.shouldShowSurroundingsAction,
+                                      // 探索已经常驻在正文底部，不再额外显示“周围/探索”
+                                      // 跳页按钮，避免同一功能出现两个入口。
+                                      visible: false,
                                       label: controller.surroundingsActionLabel,
                                       attention: controller.surroundingsNeedsAttention,
                                       loading: controller.isSurroundingsLoading,
@@ -1700,6 +1738,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       ),
                                       child: NovelDialogPanel(
                                       controller: controller,
+                                      bottomReservedHeight: inlineSurroundingsHeight,
                                       active: _primaryTab == _NovelPrimaryTab.story,
                                       textController: _inputController,
                                       focusNode: _inputFocusNode,
@@ -1728,6 +1767,24 @@ class _NovelGamePageState extends State<NovelGamePage>
                                               : _openCurrentSpeakerProfile,
                                       ),
                                     ),
+                                  ),
+                                ),
+                              ),
+                            if (inlineSurroundingsVisible)
+                              Positioned(
+                                // 只让探索区越过 SafeArea 的左右安全边距，
+                                // 正文、HUD 仍保持原来的 14px 阅读安全区。
+                                left: -inlineEdgeLeft,
+                                right: -inlineEdgeRight,
+                                bottom: 0,
+                                height: inlineSurroundingsHeight,
+                                child: RepaintBoundary(
+                                  child: NovelSurroundingsInlineDock(
+                                    key: ValueKey<String>(
+                                      'inline-surroundings|${controller.locationTitle}|${controller.locationSubtitle}',
+                                    ),
+                                    controller: controller,
+                                    enabled: inlineSurroundingsEnabled,
                                   ),
                                 ),
                               ),
