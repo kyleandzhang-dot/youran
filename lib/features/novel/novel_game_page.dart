@@ -450,6 +450,7 @@ class _NovelGamePageState extends State<NovelGamePage>
       NovelTimePeriod.evening => NovelTimePeriod.night,
       NovelTimePeriod.night => NovelTimePeriod.midnight,
       NovelTimePeriod.midnight => null,
+      _ => NovelTimePeriod.morning,
     };
     if (mounted) setState(() => _timePreviewOverride = next);
   }
@@ -1490,7 +1491,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   @override
-  @override
   Widget build(BuildContext context) {
     return GameShell(
       activeScenarioId: controller.scenarioId,
@@ -1539,13 +1539,13 @@ class _NovelGamePageState extends State<NovelGamePage>
               body: Stack(
                 fit: StackFit.expand,
                 children: <Widget>[
+                  // 1. 修复背景发黑 
                   RepaintBoundary(
                     child: NovelWorldBackground(
                       url: background,
                       fallbackAsset: 'assets/images/background_home.png',
-                      characterPresent: controller.storyStarted &&
-                          controller.currentSpeakerName.isNotEmpty &&
-                          !controller.isCinematic,
+                      // 修改此处：强制关闭角色发言时的背景压暗效果
+                      characterPresent: false, 
                       isGenerating: controller.isGenerating,
                       weatherEffect: _weatherPreviewOverride != null
                           ? activeWeather
@@ -1560,11 +1560,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final compact = constraints.maxWidth < 430;
-                        // 当前 Stack 位于 SafeArea(minimum: 左右14) 内。
-                        // 底部探索需要视觉上横向铺满整个屏幕，所以单独向两侧越过这层 inset。
-                        final screenPadding = MediaQuery.paddingOf(context);
-                        final inlineEdgeLeft = math.max(14.0, screenPadding.left);
-                        final inlineEdgeRight = math.max(14.0, screenPadding.right);
                         final sceneArrivalTitle =
                             _sceneArrivalPreviewTitle ?? controller.locationTitle;
                         final sceneArrivalSubtitle =
@@ -1586,39 +1581,46 @@ class _NovelGamePageState extends State<NovelGamePage>
                             ? const Duration(milliseconds: 180)
                             : const Duration(milliseconds: 620);
 
-                        // “周围”不再切成独立页：正文页始终保留底部探索舞台。
-                        // 是否可调查只控制交互，不再决定探索舞台是否显示。
-                        // 底部高度不再按屏高硬切 30%，而是优先跟随横版场景的宽高比。
-                        // 这样 16:9 左右的背景能更完整地展示，也不会把正文切得过重。
-                        final inlineSurroundingsVisible =
+                        // 剧情舞台直接复用探索页的可移动区域。
+                        final stageEdgeLeft = math.max(14.0, MediaQuery.paddingOf(context).left);
+                        final stageEdgeRight = math.max(14.0, MediaQuery.paddingOf(context).right);
+                        final storyWalkVisible =
                             _primaryTab == _NovelPrimaryTab.story &&
                             controller.storyStarted &&
-                            !controller.isCinematic &&
                             !keyboardActive;
-                        final inlineFullWidth = constraints.maxWidth +
-                            inlineEdgeLeft +
-                            inlineEdgeRight;
-                        final inlineSurroundingsHeight = inlineSurroundingsVisible
-                            ? (inlineFullWidth / (compact ? 1.82 : 2.05))
-                                .clamp(
-                                  compact ? 172.0 : 188.0,
-                                  compact ? 222.0 : 250.0,
-                                )
-                                .toDouble()
-                            : 0.0;
-                        final inlineSurroundingsEnabled =
-                            inlineSurroundingsVisible &&
+                        final storyWalkEnabled = storyWalkVisible &&
                             !controller.isGenerating &&
+                            !controller.isReaderRevealing &&
                             !controller.hasNext &&
                             !_sceneArrivalActive &&
                             !_battleOpen &&
                             !_endingOpen;
 
                         return Stack(
-                          // 允许底部探索区单独越过 SafeArea 的左右 14px，
-                          // 做成真正贴屏的连续横版场景。
                           clipBehavior: Clip.none,
                           children: <Widget>[
+                            // 2. 修复摇杆被输入框遮挡 
+                          if (storyWalkVisible)
+                            Positioned(
+                              left: -stageEdgeLeft,
+                              right: -stageEdgeRight,
+                              top: 0,
+                              // 增加底边距：如果有底部导航栏则抬高 130，否则抬高 80（数值可根据实际输入框高度微调）
+                              bottom: showBottomNav ? 130.0 : 80.0, 
+                              child: RepaintBoundary(
+                                child: AbsorbPointer(
+                                  absorbing: !storyWalkEnabled,
+                                  child: NovelStoryWalkStage(
+                                    key: ValueKey<String>(
+                                      'story-walk|${controller.locationTitle}|${controller.locationSubtitle}',
+                                    ),
+                                    controller: controller,
+                                    enabled: storyWalkEnabled,
+                                  ),
+                                ),
+                              ),
+                            ),
+
                             if (controller.storyStarted && controller.isCinematic)
                               Positioned.fill(
                                 child: NovelCinematicControls(
@@ -1654,11 +1656,10 @@ class _NovelGamePageState extends State<NovelGamePage>
                               ),
                             ),
                             
-                            // 完美左对齐 + 高度紧凑优化：把位置和目标包在一个 Column 里
                             if (!_immersiveInputMode && controller.storyStarted && !keyboardActive)
                               Positioned(
                                 left: 0,
-                                top: 56, // 统一锁定在顶部起点
+                                top: 56, 
                                 child: AnimatedSlide(
                                   duration: sceneHudTransitionDuration,
                                   curve: Curves.easeOutCubic,
@@ -1681,7 +1682,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                             onTap: null,
                                           ),
                                         if (_showLegacyLocationHud)
-                                          const SizedBox(height: 6), // 舒适又紧凑的间距
+                                          const SizedBox(height: 6),
                                         NovelGoalHud(
                                           text: controller.currentGoal,
                                           feedbackEvent: controller.hudEvent,
@@ -1721,14 +1722,14 @@ class _NovelGamePageState extends State<NovelGamePage>
                               Align(
                                 alignment: Alignment.bottomCenter,
                                 child: Padding(
-                                  // 剧情区域始终保持左右对称，不为右侧悬浮按钮预留宽度。
-                                  padding: EdgeInsets.zero,
+                                  // 修改这里：直接删掉 70.0 的空气墙，换成贴合底部的 12.0 舒适间距
+                                  padding: EdgeInsets.only(
+                                    bottom: keyboardActive ? 0 : 12.0, 
+                                  ),
                                   child: ConstrainedBox(
                                     constraints:
                                         const BoxConstraints(maxWidth: 720),
                                     child: NovelChoiceDockActionScope(
-                                      // 探索已经常驻在正文底部，不再额外显示“周围/探索”
-                                      // 跳页按钮，避免同一功能出现两个入口。
                                       visible: false,
                                       label: controller.surroundingsActionLabel,
                                       attention: controller.surroundingsNeedsAttention,
@@ -1738,7 +1739,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       ),
                                       child: NovelDialogPanel(
                                       controller: controller,
-                                      bottomReservedHeight: inlineSurroundingsHeight,
                                       active: _primaryTab == _NovelPrimaryTab.story,
                                       textController: _inputController,
                                       focusNode: _inputFocusNode,
@@ -1768,23 +1768,21 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       ),
                                     ),
                                   ),
-                                ),
                               ),
-                            if (inlineSurroundingsVisible)
+                            ),
+                            
+                            // NPC 层必须位于阅读器之后：NPC 台词气泡是舞台
+                            // 最上层元素，可以覆盖底部剧情文字和其他立绘。
+                            if (storyWalkVisible)
                               Positioned(
-                                // 只让探索区越过 SafeArea 的左右安全边距，
-                                // 正文、HUD 仍保持原来的 14px 阅读安全区。
-                                left: -inlineEdgeLeft,
-                                right: -inlineEdgeRight,
+                                left: -stageEdgeLeft,
+                                right: -stageEdgeRight,
+                                top: 0,
                                 bottom: 0,
-                                height: inlineSurroundingsHeight,
-                                child: RepaintBoundary(
-                                  child: NovelSurroundingsInlineDock(
-                                    key: ValueKey<String>(
-                                      'inline-surroundings|${controller.locationTitle}|${controller.locationSubtitle}',
-                                    ),
+                                child: IgnorePointer(
+                                  child: _StoryTownNpcLayer(
                                     controller: controller,
-                                    enabled: inlineSurroundingsEnabled,
+                                    stageHeight: constraints.maxHeight,
                                   ),
                                 ),
                               ),
@@ -1835,7 +1833,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                       child: SafeArea(
                         top: false,
                         child: NovelBottomArchiveBar(
-                          // 因为加入了 surroundings，索引不再是一一对应，需要精准映射
                           selectedIndex: switch (_primaryTab) {
                             _NovelPrimaryTab.characters => 1,
                             _NovelPrimaryTab.team => 2,
@@ -1844,7 +1841,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                             _NovelPrimaryTab.world => 5,
                             _ => 0, 
                           },
-                          // 注意：删掉了 onWorld 属性
                           onSelected: (index) {
                             final tab = switch(index) {
                               1 => _NovelPrimaryTab.characters,
@@ -1941,6 +1937,374 @@ class _NovelGamePageState extends State<NovelGamePage>
           },
         );
       },
+    );
+  }
+}
+
+/// 剧情舞台中的 NPC 层。
+class _StoryTownNpcLayer extends StatefulWidget {
+  const _StoryTownNpcLayer({
+    required this.controller,
+    required this.stageHeight,
+  });
+
+  final NovelGameController controller;
+  final double stageHeight;
+
+  @override
+  State<_StoryTownNpcLayer> createState() => _StoryTownNpcLayerState();
+}
+
+class _StoryTownNpcLayerState extends State<_StoryTownNpcLayer> {
+  static const int _segmentLength = 150;
+  static const Duration _characterDelay = Duration(milliseconds: 34);
+
+  Timer? _bubbleTimer;
+  String _speechKey = '';
+  String _speechCharacterId = '';
+  String _speechCharacterName = '';
+  String _targetText = '';
+  String _visibleText = '';
+  int _segmentStart = 0;
+
+  NovelGameController get controller => widget.controller;
+  double get stageHeight => widget.stageHeight;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncSpeech(force: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _StoryTownNpcLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncSpeech();
+  }
+
+  @override
+  void dispose() {
+    _bubbleTimer?.cancel();
+    super.dispose();
+  }
+
+  bool _isSameCharacter(dynamic a, dynamic b) {
+    if (a == null || b == null) return false;
+    final aId = (a.id as String?)?.trim() ?? '';
+    final bId = (b.id as String?)?.trim() ?? '';
+    if (aId.isNotEmpty && bId.isNotEmpty) return aId == bId;
+    final aName = (a.name as String?)?.trim() ?? '';
+    final bName = (b.name as String?)?.trim() ?? '';
+    return aName.isNotEmpty && aName == bName;
+  }
+
+  void _syncSpeech({bool force = false}) {
+    final sentence = controller.currentSentence;
+    final speaker = controller.currentSpeakerCharacter;
+    
+    final actualSpeakerName = sentence?.speakerName.trim() ?? '';
+    final isNarration = actualSpeakerName.isEmpty;
+    
+    // 主角说话、过场动画 或 旁白时，清空气泡当前层，让它只在底部的对话面板显示，防止黑团霸屏。
+    if (controller.isCinematic || (speaker != null && speaker.isMain) || isNarration) {
+      if (_speechKey.isNotEmpty) {
+        _speechKey = '';
+        _speechCharacterId = '';
+        _speechCharacterName = '';
+        _targetText = '';
+        _visibleText = '';
+        _bubbleTimer?.cancel();
+        if (mounted) setState(() {});
+      }
+      return;
+    }
+
+    // 只有明确的 NPC 说话时，才在头顶渲染气泡流式打字
+    final valid = sentence != null && sentence.text.trim().isNotEmpty;
+
+    if (valid) {
+      final target = sentence.text.trim();
+      final key = '${controller.currentSentenceIndex}|${speaker?.id ?? ''}|$actualSpeakerName';
+
+      if (key != _speechKey) {
+        _speechKey = key;
+        _speechCharacterId = sentence.characterId.trim().isNotEmpty == true
+            ? sentence.characterId.trim()
+            : (speaker?.id.trim() ?? '');
+        _speechCharacterName = actualSpeakerName;
+        _targetText = target;
+        _visibleText = '';
+        _segmentStart = 0;
+        _bubbleTimer?.cancel();
+        _scheduleReveal();
+        if (mounted) setState(() {});
+        return;
+      }
+
+      if (target != _targetText) {
+        _targetText = target;
+        _scheduleReveal();
+        if (mounted) setState(() {});
+      } else if (force) {
+        _scheduleReveal();
+      }
+    } else if (force) {
+      if (_targetText.isEmpty) {
+        _speechKey = '';
+        if (mounted) setState(() {});
+      }
+    }
+  }
+
+  void _scheduleReveal() {
+    if (_targetText.isEmpty || _bubbleTimer?.isActive == true) {
+      return;
+    }
+    _bubbleTimer = Timer.periodic(_characterDelay, (_) {
+      if (!mounted) return;
+      final runes = _targetText.runes.toList(growable: false);
+      final end = math.min(_segmentStart + _segmentLength, runes.length);
+      final shown = _visibleText.runes.length;
+      if (_segmentStart + shown < end) {
+        _visibleText = String.fromCharCodes(
+          runes.sublist(_segmentStart, _segmentStart + shown + 1),
+        );
+        setState(() {});
+        return;
+      }
+      
+      // 如果文字还没完全下发完毕，继续等待
+      if (controller.isGenerating && end >= runes.length) return;
+      
+      _bubbleTimer?.cancel();
+      
+      // 文字已经全部显示完毕，停留在最后的状态，不再清空 _visibleText。
+      setState(() {
+        _visibleText = _targetText;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 移除这句错误的拦截： if (_visibleText.isEmpty) return const SizedBox.shrink();
+
+    final npcs = (controller.scenario?.characters.values ?? const <NovelCharacter>[])
+        .where((character) => character.isMain != true)
+        .where((character) {
+          final portrait = (character.portraitUrl as String?)?.trim() ?? '';
+          final avatar = (character.avatarUrl as String?)?.trim() ?? '';
+          return portrait.isNotEmpty || avatar.isNotEmpty;
+        })
+        .take(4)
+        .toList(growable: false);
+    if (npcs.isEmpty) return const SizedBox.shrink();
+
+    final speaker = controller.currentSpeakerCharacter;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final count = npcs.length;
+        final slotWidth = constraints.maxWidth / count;
+        final characterWidth = math.min(
+          (stageHeight * .22).clamp(52.0, 78.0).toDouble(),
+          (slotWidth * .68).clamp(44.0, 78.0).toDouble(),
+        );
+        final characterHeight = (characterWidth / .58).clamp(82.0, 132.0).toDouble();
+        final positions = List<double>.generate(
+          count,
+          (index) {
+            final ratio = count == 1 ? .56 : .24 + (.64 * index / (count - 1));
+            return constraints.maxWidth * ratio;
+          },
+          growable: false,
+        );
+        
+        // 即使没有文字说话人也是 -1，这样只会渲染角色，不会渲染空的气泡
+        final speakingIndex = _visibleText.isEmpty ? -1 : npcs.indexWhere((character) {
+          final id = character.id.trim();
+          if (_speechCharacterId.isNotEmpty && id.isNotEmpty) {
+            return id == _speechCharacterId;
+          }
+          if (_isSameCharacter(character, speaker)) return true;
+          return _speechCharacterName.isNotEmpty &&
+              character.matchesName(_speechCharacterName);
+        });
+
+        return Stack(
+          clipBehavior: Clip.none,
+          children: <Widget>[
+            // 让角色永远保持显示
+            for (var index = 0; index < npcs.length; index++)
+              Positioned(
+                left: (positions[index] - characterWidth / 2)
+                    .clamp(0.0, math.max(0.0, constraints.maxWidth - characterWidth))
+                    .toDouble(),
+                bottom: stageHeight * .25,
+                width: characterWidth,
+                height: characterHeight + 30,
+                child: _StoryTownNpc(
+                  character: npcs[index],
+                  name: (npcs[index].name as String?)?.trim() ?? 'NPC',
+                  portraitWidth: characterWidth,
+                  portraitHeight: characterHeight,
+                ),
+              ),
+            // 只有特定角色说话且文字不为空时，才弹出悬浮气泡
+            if (speakingIndex >= 0)
+              () {
+                final bubbleWidth = math.min(320.0, constraints.maxWidth - 24.0);
+                final npcCenterX = positions[speakingIndex];
+                final bubbleLeft = (npcCenterX - bubbleWidth / 2)
+                    .clamp(12.0, math.max(12.0, constraints.maxWidth - bubbleWidth - 12.0))
+                    .toDouble();
+                final tailRelativeX = npcCenterX - bubbleLeft;
+
+                return Positioned(
+                  left: bubbleLeft,
+                  bottom: stageHeight * .25 + characterHeight + 34,
+                  width: bubbleWidth,
+                  child: _StoryTownNpcBubble(
+                    text: _visibleText,
+                    tailOffset: tailRelativeX,
+                  ),
+                );
+              }(),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _StoryTownNpc extends StatelessWidget {
+  const _StoryTownNpc({
+    required this.character,
+    required this.name,
+    required this.portraitWidth,
+    required this.portraitHeight,
+  });
+
+  final dynamic character;
+  final String name;
+  final double portraitWidth;
+  final double portraitHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    final portrait = (character.portraitUrl as String?)?.trim() ?? '';
+    final avatar = (character.avatarUrl as String?)?.trim() ?? '';
+    final imageUrl = portrait.isNotEmpty ? portrait : avatar;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        SizedBox(
+          width: portraitWidth,
+          height: portraitHeight,
+          child: NovelArtwork(
+            url: imageUrl,
+            fit: BoxFit.contain,
+            fallbackText: name,
+            fallbackIcon: Icons.person_rounded,
+          ),
+        ),
+        Container(
+          margin: const EdgeInsets.only(top: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(.38),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 8.5,
+              fontWeight: FontWeight.w700,
+              shadows: <Shadow>[Shadow(color: Colors.black, blurRadius: 3)],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StoryTownNpcBubble extends StatelessWidget {
+  const _StoryTownNpcBubble({
+    required this.text,
+    required this.tailOffset,
+  });
+
+  final String text;
+  final double tailOffset;
+
+  @override
+  Widget build(BuildContext context) {
+    // 使用 TweenAnimationBuilder 加上 easeOutBack 弹性曲线，让气泡 "Q弹" 出现
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0.0, end: 1.0),
+      duration: const Duration(milliseconds: 350), // 动画时间
+      curve: Curves.easeOutBack, // 关键：超出再回弹的阻尼曲线
+      builder: (context, scale, child) {
+        return Transform.scale(
+          scale: scale,
+          alignment: Alignment(
+            // 让气泡从底下的小尾巴（说话人的位置）开始放大弹出
+            (tailOffset / MediaQuery.sizeOf(context).width) * 2 - 1, 
+            1.0
+          ),
+          child: Opacity(
+            opacity: scale.clamp(0.0, 1.0),
+            child: child,
+          ),
+        );
+      },
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: <Widget>[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+            decoration: BoxDecoration(
+              color: const Color(0xF7FFFDF8),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE1DCCF), width: .6),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black.withOpacity(.15), // 稍微调淡一点阴影，更清爽
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Text(
+              text,
+              softWrap: true,
+              style: const TextStyle(
+                color: Color(0xFF302B29),
+                fontSize: 10.5, // 稍微加大一点对白字号
+                height: 1.45,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -5,
+            left: tailOffset - 5,
+            child: Transform.rotate(
+              angle: math.pi / 4,
+              child: const SizedBox(
+                width: 10,
+                height: 10,
+                child: ColoredBox(color: Color(0xFFF7F5EF)),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

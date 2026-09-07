@@ -24,29 +24,7 @@ class NovelChoicePanel extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Container(
-              width: 3,
-              height: 14,
-              decoration: BoxDecoration(
-                color: NovelPalette.accent,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(
-                color: NovelPalette.text,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                letterSpacing: .5,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
+        // 删除了包含竖线和 title 的 Row 以及下方的 SizedBox
         for (int i = 0; i < options.length; i++) ...<Widget>[
           if (i > 0) const SizedBox(height: 10),
           _NovelChoiceCard(

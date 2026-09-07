@@ -635,8 +635,6 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
   @override
   Widget build(BuildContext context) {
-    // 地图入口位于 NovelDialogPanel 外部，因此把逐字显示状态同步给
-    // Controller。这样地图仍可随时查看，但“前往”会等当前段落读完。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) controller.setReaderRevealing(widget.active && _revealing);
     });
@@ -656,9 +654,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         ? controller.affectionPulseFor(character, speaker)
         : null;
 
-    // 剧情页人物层只显示真正的立绘，不再把头像/首字母当成立绘顶上去。
-    final portraitUrl = <String>[
-      controller.currentPortraitUrl,
+    final avatarUrl = <String>[
+      controller.currentAvatarUrl,
+      character?.avatarUrl ?? '',
+      sentence?.avatarUrl ?? '',
       character?.portraitUrl ?? '',
       sentence?.portraitUrl ?? '',
     ].map((value) => value.trim()).firstWhere(
@@ -669,434 +668,105 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     final canShowChoices = controller.choices.isNotEmpty && !controller.hasNext && !controller.isGenerating && !_revealing;
     final inputEnabled = !controller.isGenerating && !_revealing && !controller.isCinematic && !controller.pendingFateRevert;
 
-    final emptyTextFallback =
-        controller.isGenerating ? '' : '等待故事继续…';
+    final emptyTextFallback = controller.isGenerating ? '' : '等待故事继续…';
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final screen = MediaQuery.sizeOf(context);
         final compact = screen.width <= 600;
-        // 正文始终保持左右对称，不为右侧悬浮按钮预留宽度。
-        const narrationRightSafeWidth = 0.0;
-        // 角色对话框位于底部：非最后一页避开右侧剧情按钮；
-        // 最后一页按钮隐藏后取消避让，恢复完整宽度。
-        final dialogueRightSafeWidth =
-            (controller.hasNext || controller.isGenerating)
-                ? (compact ? 58.0 : 70.0)
-                : 0.0;
         final availableHeight = constraints.maxHeight.isFinite ? constraints.maxHeight : screen.height - MediaQuery.paddingOf(context).vertical;
         final browsingStory = controller.hasNext;
 
-        // 一级导航已移回右侧 HUD，不再占据底部。
-        // 回看历史 / 逐字显示 / 生成中只影响输入区；底部只保留系统安全区。
-        final composerVisible =
-            !browsingStory && !controller.isGenerating && !_revealing;
+        final composerVisible = !browsingStory && !controller.isGenerating && !_revealing;
         final navigationHeight = MediaQuery.viewPaddingOf(context).bottom;
         final composerHeight = composerVisible
-            ? _adaptiveFooterHeight(
-                availableWidth: constraints.maxWidth,
-                compact: compact,
-                choicesVisible: canShowChoices,
-              )
+            ? _adaptiveFooterHeight(availableWidth: constraints.maxWidth, compact: compact, choicesVisible: canShowChoices)
             : 0.0;
-        final footerHeight = navigationHeight +
-            (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
+        final footerHeight = navigationHeight + (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
         final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
         final keyboardActive = compact && keyboardInset > 0;
-        // 主页可在底部常驻一块探索舞台。键盘出现时探索区由外层隐藏，
-        // 因此这里不再保留探索高度，只把输入栏抬到键盘上沿。
-        final reservedBottom = keyboardActive
-            ? 0.0
-            : math.max(0.0, widget.bottomReservedHeight);
+        
+        final reservedBottom = keyboardActive ? 0.0 : math.max(0.0, widget.bottomReservedHeight);
         final composerBottom = keyboardActive ? keyboardInset : reservedBottom;
         final footerBottom = reservedBottom;
 
-        // 按真实视觉高度预留，不再给选择区留过多空白。
         final choiceCount = controller.choices.length;
         final choiceHeaderExtent = compact ? 42.0 : 44.0;
         final choiceItemHeight = 48.0;
         final choiceItemGap = compact ? 5.0 : 6.0;
         final choiceDockHeight = canShowChoices
-            ? choiceHeaderExtent +
-                choiceCount * choiceItemHeight +
-                (choiceCount > 1 ? (choiceCount - 1) * choiceItemGap : 0)
+            ? choiceHeaderExtent + choiceCount * choiceItemHeight + (choiceCount > 1 ? (choiceCount - 1) * choiceItemGap : 0)
             : 0.0;
-
-        // 最后一条选择与自由输入框之间只保留轻微呼吸距离。
         final choiceBottomGap = compact ? 4.0 : 5.0;
 
-        // 正文与选择区之间只留一条很小的安全距离。
-        final contentChoiceGap = compact ? 5.0 : 6.0;
-
-        // 右侧 HUD 不占底部空间；对白只保留必要的呼吸距离。
-        // 底部一级导航已撤走，角色对白不再贴着输入区/屏幕底边。
-        // 底部导航撤走后继续把角色对白上提，避免对白视觉重心压在屏幕底边。
-        final dialogGap = compact ? 92.0 : 106.0;
-        final panelBottom = footerBottom + footerHeight + dialogGap;
-
-        // 最后一句出现选项时，不再把正文整体按选项数量不断往上推。
-        // 选择区上方只保留一个固定高度的“正文阅读窗口”：
-        // 短正文自然居中/靠下显示；长正文直接在窗口内滚动。
-        final choiceContentBottom = footerBottom +
-            footerHeight +
-            choiceBottomGap +
-            choiceDockHeight +
-            contentChoiceGap;
-        // 最后一句正文不再使用固定比例/固定高度。
-        // 上边界只避开顶部 HUD，其余整块屏幕空间都交给正文使用。
-        // 正文从选择框上方向上自然生长；只有真正占满剩余屏幕后才滚动。
-        final choiceContentTop =
-            MediaQuery.paddingOf(context).top + (compact ? 74.0 : 86.0);
-        final choiceAvailableContentHeight =
-            (availableHeight - choiceContentTop - choiceContentBottom)
-                .clamp(0.0, availableHeight)
-                .toDouble();
-
-        return GestureDetector(
-          // 整个对话舞台都能接收横滑，而不是只有命中内部文字/按钮时才生效。
-          behavior: HitTestBehavior.translucent,
-          onHorizontalDragStart: _handleHorizontalDragStart,
-          onHorizontalDragUpdate: _handleHorizontalDragUpdate,
-          onHorizontalDragEnd: _handleHorizontalDragEnd,
-          onHorizontalDragCancel: _handleHorizontalDragCancel,
-          child: SizedBox(
-            width: double.infinity,
-            height: availableHeight,
-            child: Stack(
+        return SizedBox(
+          width: double.infinity,
+          height: availableHeight,
+          child: Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
-              // 当前角色半身立绘。
-              // 500×800 原图只显示顶部约 64%，避免把完整全身硬塞进画面。
-              // NPC 靠左；主角/玩家靠右。
-              if (mode != _NovelLineMode.narration && portraitUrl.isNotEmpty)
-                Builder(
-                  builder: (context) {
-                    final stageSize = MediaQuery.sizeOf(context);
-
-                    // 真正的自适应：不再用 <1000 这种一刀切断点，
-                    // 而是在“窄屏基准 360”与“宽屏基准 1400”之间按实际宽度连续插值，
-                    // 数值会随屏幕宽度平滑变化，不会在临界宽度处突然跳一下。
-                    const double minStage = 360.0;
-                    const double maxStage = 1400.0;
-                    final double t = ((stageSize.width - minStage) /
-                            (maxStage - minStage))
-                        .clamp(0.0, 1.0);
-
-                    // 对话构图改为真正的左右分区：
-                    // NPC 占左侧，主角占右侧，中央与另一侧留给对应对白。
-                    // 不再把立绘放大到几乎铺满整个屏幕，否则文字即使移动也仍像“浮在人物身上”。
-                    final widthRatio = lerpDouble(.98, .68, t)!;
-                    final minPortraitWidth = lerpDouble(400.0, 700.0, t)!;
-                    final maxPortraitWidth = lerpDouble(600.0, 1020.0, t)!;
-                    final portraitWidth = (stageSize.width * widthRatio)
-                        .clamp(minPortraitWidth, maxPortraitWidth)
-                        .toDouble();
-
-                    final fullPortraitHeight = portraitWidth * 1.22;
-                    final showOnRight = mode == _NovelLineMode.protagonist;
-
-                    // 对话立绘采用偏半身构图：人物整体向屏幕底部沉，
-                    // 让腿部自然超出画面，只保留约 7–8 成上半身。
-                    // 手机更窄，额外多下沉一点；宽屏则稍微克制，避免人物显得过低。
-                    final sinkRatio = lerpDouble(.25, .09, t)!;
-                    final sinkOffset = -(fullPortraitHeight * sinkRatio);
-
-                    // NPC 真正贴向最左；主角镜像贴向最右。
-                    // 窄屏把人物再向外推出一点，给另一侧文字腾出可读空间。
-                    final edgePush = lerpDouble(.35, .055, t)!;
-                    final npcLeftOffset = -(portraitWidth * edgePush);
-                    final protagonistRightOffset = -(portraitWidth * edgePush);
-
-                    return Positioned(
-                      // 底部探索区常驻时，人物立绘也以探索区上沿作为新的
-                      // “屏幕底部”，避免腿部和底部探索角色互相压在一起。
-                      bottom: reservedBottom + sinkOffset,
-                      left: showOnRight ? null : npcLeftOffset,
-                      right: showOnRight ? protagonistRightOffset : null,
-                      child: ValueListenableBuilder<String>(
-                        valueListenable: _displayTextNotifier,
-                        builder: (context, visibleText, _) {
-                          final dialogueStarted =
-                              _novelDialogueHasStarted(
-                            sentence,
-                            visibleText,
-                          );
-                          return AnimatedSlide(
-                            // 人物随对白柔和入场，避免 180ms 的突然“弹出”感。
-                            duration: const Duration(milliseconds: 340),
-                            curve: Curves.easeOutCubic,
-                            offset: dialogueStarted
-                                ? Offset.zero
-                                : Offset(showOnRight ? .04 : -.04, .008),
-                            child: AnimatedOpacity(
-                              duration: const Duration(milliseconds: 280),
-                              curve: Curves.easeOutCubic,
-                              opacity: dialogueStarted ? 1 : 0,
-                              child: _withSwipeMotion(
-                                IgnorePointer(
-                                  child: SizedBox(
-                                    width: portraitWidth,
-                                    height: fullPortraitHeight,
-                                    child: AnimatedSwitcher(
-                                      duration:
-                                          const Duration(milliseconds: 360),
-                                      switchInCurve: Curves.easeOutCubic,
-                                      switchOutCurve: Curves.easeInCubic,
-                                      // 呼吸和前倾会略微超出原始图片边界；这里不裁切，
-                                      // 避免头发顶部随着呼吸出现一条生硬的切线。
-                                      layoutBuilder:
-                                          (currentChild, previousChildren) =>
-                                              Stack(
-                                        alignment: Alignment.center,
-                                        clipBehavior: Clip.none,
-                                        children: <Widget>[
-                                          ...previousChildren,
-                                          if (currentChild != null)
-                                            currentChild,
-                                        ],
-                                      ),
-                                      transitionBuilder: (child, animation) =>
-                                          FadeTransition(
-                                        opacity: animation,
-                                        child: child,
-                                      ),
-                                      child: _NovelPortraitMotion(
-                                        key: ValueKey<String>(
-                                          'portrait-motion|$portraitUrl',
-                                        ),
-                                        speaking: dialogueStarted,
-                                        alignRight: showOnRight,
-                                        child: _StagePortraitArtwork(
-                                          url: portraitUrl,
-                                          fit: BoxFit.cover,
-                                          alignment: Alignment.topCenter,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                stageSize.width,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    );
-                  },
+              // 【核心修复1】：全屏点击热区，并通过 top: 80 强行避开顶部的系统菜单
+              Positioned(
+                top: 80,
+                left: 0,
+                right: 0,
+                // 将 bottom 改为 composerBottom 加上一定的安全距离（例如 100）
+                // 这样热区只覆盖画面中上部，底部留给摇杆和 UI
+                bottom: composerBottom + 100.0, 
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _handleStoryTap,
+                  child: const SizedBox.expand(),
                 ),
+              ),
 
-              // 混合页只是把正文与对白安排在同一页，并不改变各自的视觉语义：
-              // 正文仍留在独立的叙事区域，对白仍留在角色对白区域。
-              if (mode != _NovelLineMode.narration &&
-                  sentence?.hasMixedContent == true)
+              if (mode == _NovelLineMode.protagonist)
                 Positioned(
-                  left: 0,
-                  right: narrationRightSafeWidth,
-                  // 混合页有角色立绘时，把正文重心抬到屏幕中间偏上，
-                  // 给下方/侧边人物留出更干净的视觉空间；没有立绘时保持原来的居中。
-                  // 这里从页面一开始就按 portraitUrl 判定，避免立绘淡入后正文突然跳位。
-                  top: canShowChoices ? choiceContentTop : 0,
-                  bottom: canShowChoices ? choiceContentBottom : 0,
-                  child: _withSwipeMotion(
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: compact ? 20 : 34,
-                      ),
-                      child: Align(
-                        alignment: portraitUrl.isNotEmpty
-                            ? const Alignment(0, -.36)
-                            : Alignment.center,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 650),
-                          child: _NovelMixedNarrationSurface(
-                            sentence: sentence!,
-                            displayTextListenable: _displayTextNotifier,
-                            isRevealing: _revealing,
-                            fontFamily: controller.settings.fontFamily,
-                            fontSize: controller.settings.fontSize,
-                            onTap: _handleStoryTap,
-                          ),
-                        ),
-                      ),
-                    ),
-                    screen.width,
+                  left: compact ? 10 : 22,
+                  right: compact ? 10 : 22,
+                  top: compact ? 84 : 96,
+                  // 【核心修复2】：彻底删掉 _withSwipeMotion 外壳，消灭命中测试崩溃红屏 Bug
+                  child: _NovelStageDialogueBubble(
+                    sentence: sentence,
+                    speakerName: speaker.isEmpty ? (mode == _NovelLineMode.protagonist ? controller.protagonistName : '角色') : speaker,
+                    avatarUrl: avatarUrl,
+                    isHost: mode == _NovelLineMode.protagonist,
+                    displayTextListenable: _displayTextNotifier,
+                    isGenerating: controller.isGenerating,
+                    fontFamily: controller.settings.fontFamily,
+                    fontSize: controller.settings.fontSize,
+                    onTap: _handleStoryTap,
                   ),
                 ),
 
-              if (mode == _NovelLineMode.narration)
-                if (canShowChoices)
-                  Positioned(
-                    left: 0,
-                    right: narrationRightSafeWidth,
-                    top: choiceContentTop,
-                    bottom: choiceContentBottom,
-                    child: _withSwipeMotion(
-                      Padding(
-                        // 右侧 HUD 只占窄列，正文仍保持主体居中。
-                        padding: EdgeInsets.symmetric(
-                          horizontal: compact ? 16 : 30,
-                        ),
-                      child: Align(
-                        // 短正文始终贴着选择框上方；
-                        // 内容增加时只向上扩展，不会跑到屏幕中间悬空。
-                        alignment: Alignment.bottomCenter,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 650),
-                          child: _NovelNarrationSurface(
-                            key: ValueKey<String>('narration-${controller.currentSentenceIndex}'),
-                            displayTextListenable: _displayTextNotifier,
-                            emptyTextFallback: emptyTextFallback,
-                            isGenerating: controller.isGenerating,
-                            isRevealing: _revealing,
-                            fontFamily: controller.settings.fontFamily,
-                            fontSize: controller.settings.fontSize,
-                            hasNext: controller.hasNext,
-                            choices: controller.choices,
-                            playerHint: controller.playerHint,
-                            onSelected: controller.selectChoice,
-                            onCustomInput: () => widget.focusNode.requestFocus(),
-                            onForceContinue: widget.onForceContinue,
-                            onTap: _handleStoryTap,
-                            ),
-                          ),
-                        ),
-                      ),
-                      screen.width,
-                    ),
-                  )
-                else
-                  Positioned(
-                    left: 0,
-                    right: narrationRightSafeWidth,
-                    top: 0,
-                    bottom: footerHeight + footerBottom + 8,
-                    child: _withSwipeMotion(
-                      Align(
-                        alignment: const Alignment(0, -.02),
-                      child: Padding(
-                        // 右侧 HUD 保持轻量，不额外挤压旁白主体。
-                        padding: EdgeInsets.symmetric(
-                          horizontal: compact ? 16 : 30,
-                        ),
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: 650,
-                            maxHeight: availableHeight * .60,
-                          ),
-                          child: _NovelNarrationSurface(
-                            key: ValueKey<String>('narration-${controller.currentSentenceIndex}'),
-                            displayTextListenable: _displayTextNotifier,
-                            emptyTextFallback: emptyTextFallback,
-                            isGenerating: controller.isGenerating,
-                            isRevealing: _revealing,
-                            fontFamily: controller.settings.fontFamily,
-                            fontSize: controller.settings.fontSize,
-                            hasNext: controller.hasNext,
-                            choices: const <NovelChoice>[],
-                            playerHint: controller.playerHint,
-                            onSelected: controller.selectChoice,
-                            onCustomInput: () => widget.focusNode.requestFocus(),
-                            onForceContinue: widget.onForceContinue,
-                            onTap: _handleStoryTap,
-                            ),
-                          ),
-                        ),
-                      ),
-                      screen.width,
-                    ),
-                  )
-              else
+              if (mode == _NovelLineMode.narration || sentence?.hasMixedContent == true)
                 Positioned(
-                  left: 0,
-                  right: dialogueRightSafeWidth,
-                  top: canShowChoices ? choiceContentTop : null,
-                  bottom: canShowChoices ? choiceContentBottom : panelBottom,
-                  child: ValueListenableBuilder<String>(
-                    valueListenable: _displayTextNotifier,
-                    builder: (context, visibleText, _) {
-                      final dialogueStarted = _novelDialogueHasStarted(
-                        sentence,
-                        visibleText,
-                      );
-                      return IgnorePointer(
-                        ignoring: !dialogueStarted,
-                        child: AnimatedSlide(
-                          duration: const Duration(milliseconds: 180),
-                          curve: Curves.easeOutCubic,
-                          offset: dialogueStarted
-                              ? Offset.zero
-                              : Offset(
-                                  mode == _NovelLineMode.protagonist
-                                      ? -.025
-                                      : .025,
-                                  0,
-                                ),
-                          child: AnimatedOpacity(
-                            duration: const Duration(milliseconds: 180),
-                            curve: Curves.easeOutCubic,
-                            opacity: dialogueStarted ? 1 : 0,
-                            child: _withSwipeMotion(
-                              _NovelCharacterDialogueSurface(
-                                key: ValueKey<String>(
-                                  '${mode.name}-${controller.currentSentenceIndex}-$speaker',
-                                ),
-                                mode: mode,
-                                sentence: sentence,
-                                speakerName: speaker.isEmpty
-                                    ? (mode == _NovelLineMode.protagonist
-                                        ? controller.protagonistName
-                                        : '角色')
-                                    : speaker,
-                                affection: affection,
-                                affectionPulse: affectionPulse,
-                                onAffectionPulseConsumed:
-                                    controller.consumeAffectionPulse,
-                                displayTextListenable: _displayTextNotifier,
-                                emptyTextFallback: emptyTextFallback,
-                                isGenerating: controller.isGenerating,
-                                isRevealing: _revealing,
-                                fontFamily: controller.settings.fontFamily,
-                                fontSize: controller.settings.fontSize,
-                                hasNext: controller.hasNext,
-                                choices: canShowChoices
-                                    ? controller.choices
-                                    : const <NovelChoice>[],
-                                playerHint: controller.playerHint,
-                                showPlayerHint: !_revealing &&
-                                    !controller.hasNext &&
-                                    !controller.isGenerating,
-                                maxPanelHeight: canShowChoices
-                                    ? choiceAvailableContentHeight
-                                    : availableHeight *
-                                        (compact ? .38 : .31),
-                                onSelected: controller.selectChoice,
-                                onCustomInput: () =>
-                                    widget.focusNode.requestFocus(),
-                                onForceContinue: widget.onForceContinue,
-                                onTap: _handleStoryTap,
-                                onOpenPortrait: widget.onOpenPortrait,
-                              ),
-                              screen.width,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
+                  left: compact ? 14 : 30,
+                  right: compact ? 14 : 30,
+                  bottom: footerBottom + footerHeight + (canShowChoices ? choiceDockHeight + choiceBottomGap + 8.0 : (compact ? 8.0 : 12.0)),
+                  // 【核心修复3】：同样删掉 _withSwipeMotion
+                  child: _NovelStageNarrationStrip(
+                    sentence: sentence,
+                    displayTextListenable: _displayTextNotifier,
+                    emptyTextFallback: emptyTextFallback,
+                    isGenerating: controller.isGenerating,
+                    fontFamily: controller.settings.fontFamily,
+                    fontSize: controller.settings.fontSize,
+                    onTap: _handleStoryTap,
                   ),
                 ),
+
               if (canShowChoices && !controller.isGenerating && !_revealing)
                 Positioned(
                   left: 0,
                   right: 0,
                   bottom: footerBottom + footerHeight + choiceBottomGap,
-                  child: _withSwipeMotion(
-                    NovelChoiceDock(
-                      choices: controller.choices,
-                      onSelected: controller.selectChoice,
-                    ),
-                    screen.width,
+                  child: NovelChoiceDock(
+                    choices: controller.choices,
+                    onSelected: controller.selectChoice,
                   ),
                 ),
+
               Positioned(
                 left: 0,
                 right: 0,
@@ -1115,35 +785,306 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   onContinue: widget.onContinue,
                 ),
               ),
-              if (_showSwipeHint &&
-                  !canShowChoices &&
-                  !controller.isGenerating &&
-                  !_revealing &&
-                  (controller.hasPrevious || controller.hasNext))
-                Positioned(
-                  // 左右保持统一安全边距；右侧功能入口独立悬浮。
-                  left: compact ? 18 : 34,
-                  right: compact ? 18 : 34,
-                  // 回溯历史时进度条会出现在最底部，滑动提示居中放在它正上方。
-                  bottom: footerBottom + footerHeight + (browsingStory ? 26 : 7),
-                  child: const Center(
-                    child: _LuxurySwipeHint(),
-                  ),
-                ),
-              // 历史刻度贴近底部安全区；回看时输入区会自动收起。
-              Positioned(
-                left: compact ? 18 : 34,
-                right: compact ? 18 : 34,
-                bottom: footerBottom + navigationHeight + (compact ? 6 : 8),
-                child: _StoryProgressLocator(
-                  currentIndex: controller.currentSentenceIndex,
-                  totalCount: controller.sentences.length,
-                  isBrowsingHistory: browsingStory,
-                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _NovelStageDialogueBubble extends StatelessWidget {
+  const _NovelStageDialogueBubble({
+    required this.sentence,
+    required this.speakerName,
+    required this.avatarUrl,
+    required this.isHost,
+    required this.displayTextListenable,
+    required this.isGenerating,
+    required this.fontFamily,
+    required this.fontSize,
+    required this.onTap,
+  });
+
+  final NovelSentence? sentence;
+  final String speakerName;
+  final String avatarUrl;
+  final bool isHost;
+  final ValueListenable<String> displayTextListenable;
+  final bool isGenerating;
+  final String? fontFamily;
+  final double fontSize;
+  final VoidCallback onTap;
+
+  Widget _avatarImage() {
+    final source = avatarUrl.trim();
+    if (source.isEmpty) {
+      return const ColoredBox(
+        color: Color(0xFFE9E9E6),
+        child: Icon(Icons.person_rounded, color: Color(0xFF6C706D), size: 25),
+      );
+    }
+    if (source.startsWith('assets/')) {
+      return Image.asset(
+        source,
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => const ColoredBox(
+          color: Color(0xFFE9E9E6),
+          child: Icon(Icons.person_rounded, color: Color(0xFF6C706D), size: 25),
+        ),
+      );
+    }
+    return Image.network(
+      source,
+      fit: BoxFit.cover,
+      alignment: Alignment.topCenter,
+      filterQuality: FilterQuality.high,
+      errorBuilder: (_, __, ___) => const ColoredBox(
+        color: Color(0xFFE9E9E6),
+        child: Icon(Icons.person_rounded, color: Color(0xFF6C706D), size: 25),
+      ),
+    );
+  }
+
+  Widget _avatar(double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white.withOpacity(.92), width: 2),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x55000000),
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: _avatarImage(),
+    );
+  }
+
+  Widget _bubble({
+    required BuildContext context,
+    required String display,
+    required TextStyle textStyle,
+    required bool compact,
+  }) {
+    final tailOnRight = isHost;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        Container(
+          constraints: BoxConstraints(
+            maxWidth: compact ? 282 : 470,
+            maxHeight: compact ? 138 : 166,
+          ),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 14 : 17,
+            compact ? 10 : 12,
+            compact ? 14 : 17,
+            compact ? 11 : 13,
+          ),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F8F5),
+            borderRadius: BorderRadius.circular(compact ? 15 : 17),
+            boxShadow: const <BoxShadow>[
+              BoxShadow(
+                color: Color(0x3F000000),
+                blurRadius: 14,
+                offset: Offset(0, 5),
               ),
             ],
           ),
+          child: SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment:
+                  isHost ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  speakerName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: const Color(0xFF6E716D),
+                    fontSize: compact ? 10.2 : 11.2,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .7,
+                  ),
+                ),
+                SizedBox(height: compact ? 4 : 6),
+                if (display.isNotEmpty)
+                  Text.rich(
+                    TextSpan(
+                      children: _buildNovelDialogueDisplaySpans(display, textStyle),
+                    ),
+                    textAlign: isHost ? TextAlign.right : TextAlign.left,
+                  )
+                else
+                  Text('……', style: textStyle),
+              ],
+            ),
+          ),
         ),
+        Positioned(
+          top: compact ? 19 : 22,
+          left: tailOnRight ? null : -6,
+          right: tailOnRight ? -6 : null,
+          child: Transform.rotate(
+            angle: math.pi / 4,
+            child: const SizedBox(
+              width: 13,
+              height: 13,
+              child: ColoredBox(color: Color(0xFFF8F8F5)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 600;
+    final avatarSize = compact ? 44.0 : 50.0;
+    return ValueListenableBuilder<String>(
+      valueListenable: displayTextListenable,
+      builder: (context, value, _) {
+        final parts = _visibleReaderParts(sentence, value);
+        final display = parts.dialogue.trim();
+        if (display.isEmpty && !isGenerating) return const SizedBox.shrink();
+
+        final textStyle = TextStyle(
+          color: const Color(0xFF252827),
+          fontFamily: fontFamily,
+          fontSize: fontSize + (compact ? 0 : .5),
+          height: 1.48,
+          fontWeight: FontWeight.w600,
+          letterSpacing: .08,
+        );
+
+        // NPC 的舞台立绘已经负责身份识别，阅读器兜底对白不再重复显示头像；
+        // 主角仍保留原有头像。
+        final avatar = isHost ? _avatar(avatarSize) : const SizedBox.shrink();
+        final bubble = _bubble(
+          context: context,
+          display: display,
+          textStyle: textStyle,
+          compact: compact,
+        );
+
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: onTap,
+          child: Align(
+            alignment: isHost ? Alignment.centerRight : Alignment.centerLeft,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: isHost
+                  ? <Widget>[
+                      Flexible(child: bubble),
+                      SizedBox(width: compact ? 11 : 13),
+                      avatar,
+                    ]
+                  : <Widget>[
+                      avatar,
+                      SizedBox(width: compact ? 11 : 13),
+                      Flexible(child: bubble),
+                    ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _NovelStageNarrationStrip extends StatelessWidget {
+  const _NovelStageNarrationStrip({
+    required this.sentence,
+    required this.displayTextListenable,
+    required this.emptyTextFallback,
+    required this.isGenerating,
+    required this.fontFamily,
+    required this.fontSize,
+    required this.onTap,
+  });
+
+  final NovelSentence? sentence;
+  final ValueListenable<String> displayTextListenable;
+  final String emptyTextFallback;
+  final bool isGenerating;
+  final String? fontFamily;
+  final double fontSize;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 600;
+    return ValueListenableBuilder<String>(
+      valueListenable: displayTextListenable,
+      builder: (context, value, _) {
+        final parts = _visibleReaderParts(sentence, value);
+        final isMixed = sentence?.hasMixedContent == true;
+        final narration = isMixed
+            ? <String>[
+                _novelVisibleNarrationText(parts.leadingNarration).trim(),
+                _novelVisibleNarrationText(parts.trailingNarration).trim(),
+              ].where((part) => part.isNotEmpty).join(' ')
+            : _novelVisibleNarrationText(value).trim();
+        final display = narration.isNotEmpty
+            ? narration
+            : (value.isEmpty && !isGenerating ? emptyTextFallback : '');
+        if (display.trim().isEmpty) return const SizedBox.shrink();
+
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: onTap,
+          child: Center(
+            child: ConstrainedBox(
+              // 1. 增加一个最大高度，防止上千字的超长文本直接顶穿屏幕
+              constraints: BoxConstraints(
+                maxWidth: compact ? 560 : 760,
+                maxHeight: 280, 
+              ),
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 13 : 18,
+                  vertical: compact ? 8 : 10,
+                ),
+                decoration: const BoxDecoration(
+                  color: Colors.transparent, // 保持全透明，没有丑陋的黑色遮罩
+                ),
+                // 2. 套一层滑动组件，让文字完整呈现。超长剧情可以在这里滑动看完
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: Text(
+                    display,
+                    // 3. 核心修复：彻底删掉 maxLines: 3 和 overflow: TextOverflow.ellipsis！
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: const Color(0xEAF4F1EA),
+                      fontFamily: fontFamily,
+                      fontSize: math.max(12.0, fontSize - (compact ? 1.0 : .4)),
+                      height: 1.5,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: .12,
+                      shadows: const <Shadow>[
+                        Shadow(color: Color(0xD0000000), blurRadius: 7),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         );
       },
     );
@@ -1190,7 +1131,7 @@ class _NovelNarrationSurface extends StatelessWidget {
       behavior: HitTestBehavior.translucent,
       onTap: onTap,
       child: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
+        physics: const NeverScrollableScrollPhysics(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1333,7 +1274,7 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
       behavior: HitTestBehavior.translucent,
       onTap: onTap,
       child: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
+        physics: const NeverScrollableScrollPhysics(),
         child: ValueListenableBuilder<String>(
           valueListenable: displayTextListenable,
           builder: (context, value, _) {
@@ -1484,7 +1425,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
           maxHeight: maxPanelHeight.clamp(0.0, 520.0).toDouble(),
         ),
         child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
+          physics: const NeverScrollableScrollPhysics(),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,

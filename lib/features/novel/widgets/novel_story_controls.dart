@@ -182,77 +182,25 @@ class NovelChoiceDock extends StatelessWidget {
     final compact = MediaQuery.sizeOf(context).width <= 600;
     final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
 
-    // 移除了多余的 safeBottom 计算，避免与底层 DialogPanel 重复叠加导致留空过大
     return SizedBox(
       width: double.infinity,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: <Widget>[
-                    const Text(
-                      '请做出你的选择',
-                      style: TextStyle(
-                        color: Color(0xFFF7F2EA),
-                        fontSize: 16.5,
-                        height: 1.15,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: .45,
-                        shadows: <Shadow>[
-                          Shadow(
-                            color: Color(0xCC000000),
-                            blurRadius: 8,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (surroundingsAction?.visible == true) ...<Widget>[
-                      const Spacer(),
-                      _NovelChoiceDockSurroundingsAction(
-                        scope: surroundingsAction!,
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Transform.rotate(
-                      angle: .7853981633974483,
-                      child: Container(
-                        width: 5,
-                        height: 5,
-                        color: _ChoiceColors.line.withOpacity(.58),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      width: compact ? 108 : 138,
-                      height: 1,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: <Color>[
-                            _ChoiceColors.line.withOpacity(.30),
-                            _ChoiceColors.line.withOpacity(0),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+          // 仅保留右侧可能的探索按钮，删除了所有标题文字和线条代码
+          if (surroundingsAction?.visible == true)
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 8),
+              child: Row(
+                children: <Widget>[
+                  const Spacer(),
+                  _NovelChoiceDockSurroundingsAction(
+                    scope: surroundingsAction!,
+                  ),
+                ],
+              ),
             ),
-          ),
           SizedBox(height: compact ? 7 : 8),
           _InlineNovelChoices(
             choices: choices,
@@ -294,7 +242,7 @@ class _InlineNovelChoices extends StatelessWidget {
   }
 
   Widget _buildChoiceIcon(NovelChoice choice, {required bool compact}) {
-    final size = compact ? 30.0 : 32.0;
+    final size = compact ? 20.0 : 22.0; // 图标稍微改小一点，适应胶囊按钮
     return SizedBox(
       width: size,
       height: size,
@@ -316,120 +264,78 @@ class _InlineNovelChoices extends StatelessWidget {
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 600;
 
-    return Column(
-      children: <Widget>[
-        ...choices.asMap().entries.map((entry) {
-          final choice = entry.value;
-          final isLast = entry.key == choices.length - 1;
+    return SizedBox(
+      height: 38,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        // 修改这里：删掉 left: 14.0，直接改为 EdgeInsets.zero！
+        padding: EdgeInsets.zero, 
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: choices.asMap().entries.map((entry) {
+            final index = entry.key;
+            final choice = entry.value;
 
-          return Padding(
-            padding: EdgeInsets.only(
-              bottom: isLast ? 0 : (compact ? 5 : 6),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.zero,
-              child: _AdaptiveBackdropBlur(
-                sigma: 15,
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => onSelected(choice),
-                    borderRadius: BorderRadius.zero,
-                    splashColor: Colors.white.withOpacity(.075),
-                    highlightColor: Colors.white.withOpacity(.035),
-                    child: Container(
-                      width: double.infinity,
-                      constraints: const BoxConstraints(minHeight: 48),
-                      padding: const EdgeInsets.symmetric(vertical: 7),
-                      decoration: BoxDecoration(
-                        color: _ChoiceColors.card,
-                        borderRadius: BorderRadius.zero,
-                        border: Border.all(
-                          color: _ChoiceColors.border,
-                          width: .65,
-                        ),
-                      ),
-                      child: Stack(
+            return Padding(
+              // 【修改 2】：把选项之间的间距从 8.0 缩小到 4.0，让它们贴合得更紧凑
+              padding: EdgeInsets.only(right: index < choices.length - 1 ? 4.0 : 0),
+              child: ClipRRect(
+                borderRadius: BorderRadius.zero,
+                child: _AdaptiveBackdropBlur(
+                  sigma: 15,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => onSelected(choice),
+                      splashColor: Colors.white.withOpacity(.075),
+                      highlightColor: Colors.white.withOpacity(.035),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12), // 缩减内部留白
                         alignment: Alignment.center,
-                        children: <Widget>[
-                          Positioned(
-                            left: compact ? 10 : 12,
-                            top: 0,
-                            bottom: 0,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                Container(
-                                  width: 23,
-                                  height: 23,
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: _ChoiceColors.numberBg,
-                                    borderRadius: BorderRadius.circular(2),
-                                    border: Border.all(
-                                      color: _ChoiceColors.numberBorder,
-                                      width: .65,
-                                    ),
-                                  ),
-                                  child: Text(
-                                    '${entry.key + 1}',
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.76),
-                                      fontSize: 11.5,
-                                      height: 1,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: compact ? 8 : 9),
-                                Opacity(
-                                  opacity: .90,
-                                  child: _buildChoiceIcon(
-                                    choice,
-                                    compact: compact,
-                                  ),
-                                ),
-                              ],
-                            ),
+                        decoration: BoxDecoration(
+                          color: _ChoiceColors.card,
+                          borderRadius: BorderRadius.zero, // 纯直角
+                          border: Border.all(
+                            color: _ChoiceColors.border,
+                            width: .65,
                           ),
-                          Padding(
-                            padding: EdgeInsets.only(
-                              left: compact ? 88 : 96,
-                              right: compact ? 18 : 22,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Opacity(
+                              opacity: .90,
+                              child: _buildChoiceIcon(choice, compact: true),
                             ),
-                            child: Center(
-                              child: Text(
-                                choice.text,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(.80),
-                                  fontSize: compact ? 13.5 : 14,
-                                  height: 1.25,
-                                  fontWeight: FontWeight.w500,
-                                  letterSpacing: .08,
-                                  shadows: const <Shadow>[
-                                    Shadow(
-                                      color: Color(0x99000000),
-                                      blurRadius: 4,
-                                      offset: Offset(0, 1),
-                                    ),
-                                  ],
-                                ),
+                            const SizedBox(width: 6),
+                            Text(
+                              choice.text,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.90),
+                                fontSize: compact ? 12.5 : 13.0, // 字号调得更精致干练
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: .5,
+                                shadows: const <Shadow>[
+                                  Shadow(
+                                    color: Color(0x99000000),
+                                    blurRadius: 4,
+                                    offset: Offset(0, 1),
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          );
-        }),
-      ],
+            );
+          }).toList(),
+        ),
+      ),
     );
   }
 }
@@ -1276,15 +1182,6 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
     return GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: _handleScreenTap,
-        onHorizontalDragEnd: (details) {
-          final velocity = details.primaryVelocity ?? 0;
-          if (velocity.abs() < 260) return;
-          if (velocity < 0 && !widget.isLast) {
-            _handleNext();
-          } else if (velocity > 0 && !widget.isFirst) {
-            _handlePrevious();
-          }
-        },
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
@@ -1327,14 +1224,7 @@ class _NovelCinematicControlsState extends State<NovelCinematicControls> {
                             style: TextStyle(color: NovelPalette.text, fontFamily: widget.fontFamily, fontSize: widget.fontSize + (narration ? 3 : 2), height: narration ? 1.95 : 1.8, fontWeight: narration ? FontWeight.w500 : FontWeight.w400, letterSpacing: narration ? .7 : .25, shadows: const <Shadow>[Shadow(color: Color(0x24000000), blurRadius: 2, offset: Offset(0, 1))])),
                       ])),
                 )),
-            Align(
-                alignment: Alignment.bottomCenter,
-                child: IgnorePointer(
-                    child: Container(
-                  height: 210,
-                  decoration: BoxDecoration(
-                      gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: <Color>[Colors.transparent, Colors.black.withOpacity(.74), Colors.black.withOpacity(.92)])),
-                ))),
+           
             Align(
                 alignment: Alignment.bottomCenter,
                 child: SafeArea(

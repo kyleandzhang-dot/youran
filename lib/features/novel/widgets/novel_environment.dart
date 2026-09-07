@@ -947,17 +947,16 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
   @override
   Widget build(BuildContext context) {
+    // 1. 移除了默认的强压暗，只在雷暴或暴雪等极端天气时保留极轻微的氛围光暗度
     final weatherDim = switch (widget.weatherEffect) {
-      NovelWeatherEffect.thunderstorm => .30,
-      NovelWeatherEffect.heavyRain => .16,
-      NovelWeatherEffect.blizzard => .14,
-      NovelWeatherEffect.cloudy => .08,
+      NovelWeatherEffect.thunderstorm => .25,
+      NovelWeatherEffect.heavyRain => .12,
+      NovelWeatherEffect.blizzard => .10,
       _ => .0,
     };
-    final dim = math.max(
-      weatherDim,
-      widget.characterPresent ? .12 : .08,
-    );
+    
+    // 不再因为“有角色在场”就强制变暗
+    final dim = weatherDim;
     final blur = widget.characterPresent ? 2.2 : 0.0;
 
     final imageLayer = AnimatedSwitcher(
@@ -978,7 +977,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
             ),
           );
         } else {
-          // 【老图退场 - 核心修复】：直接 return child，不做任何透明度衰减！
+          // 【老图退场】：直接 return child，不做任何透明度衰减！
           // AnimatedSwitcher 默认会将新图盖在老图上方。
           // 这样老图会在整个 1.5 秒内保持 100% 可见，直到新图完全覆盖并结束动画，
           // 完美吃掉网络图片加载的延迟白屏，实现真正的无缝溶解。
@@ -1034,43 +1033,36 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
           period: widget.timePeriod,
           weatherEffect: widget.weatherEffect,
         ),
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 760),
-          curve: Curves.easeOutCubic,
-          color: Colors.black.withOpacity(dim),
-        ),
+        
+        // 2. 天气导致的基础环境压暗（现已极其微弱）
+        if (dim > 0)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 760),
+            curve: Curves.easeOutCubic,
+            color: Colors.black.withOpacity(dim),
+          ),
+          
         if (widget.weatherEffect != NovelWeatherEffect.none)
           NovelWeatherOverlay(effect: widget.weatherEffect),
-        DecoratedBox(
+          
+        // 3. 彻底删除了高达 72% 透明度的深蓝灰阅读遮罩！
+        // 彻底删除了 70% 透明度的四周 RadialGradient 暗角晕影！
+
+        // 仅在最底部保留一层极淡极淡的渐变，防止背景正好是纯白色时影响摇杆/导航栏视认性
+        const DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              // 深蓝灰阅读遮罩：保留场景层次，同时让中下部正文在
-              // 明亮或细节复杂的背景上也有稳定对比度。
-              stops: const <double>[0, .45, 1],
-              colors: <Color>[
-                const Color(0xFF0F172A).withOpacity(.12),
-                const Color(0xFF0F172A).withOpacity(.36),
-                const Color(0xFF0F172A).withOpacity(.72),
-              ],
-            ),
-          ),
-        ),
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(0, -.12),
-              radius: 1.03,
-              stops: <double>[.46, .82, 1],
+              stops: <double>[0.7, 1.0],
               colors: <Color>[
                 Colors.transparent,
-                Color(0x19000000),
-                Color(0x70000000),
+                Color(0x1A000000), // 只有 10% 的极弱黑边，几乎不可见
               ],
             ),
           ),
         ),
+        
         IgnorePointer(
           child: AnimatedOpacity(
             opacity: widget.isGenerating ? .18 : .07,

@@ -153,7 +153,6 @@ class _NovelInputBarState extends State<NovelInputBar> {
     }.contains(type);
   }
 
-
   bool _isItemReferenced(NovelInventoryItem item) {
     final name = item.name.trim();
     return name.isNotEmpty && _referencedItemNames.contains(name);
@@ -827,6 +826,14 @@ class _NovelInputBarState extends State<NovelInputBar> {
     final micEnabled = widget.enabled && !_speechFinishing;
     final inventoryPickerOpen = _inventoryOverlay != null;
 
+    final currentSpeaker = widget.gameController?.currentSpeakerName.trim() ?? '';
+    final isProtagonist = currentSpeaker == (widget.gameController?.protagonistName ?? '');
+    final hasSpeakerTarget = currentSpeaker.isNotEmpty && !isProtagonist;
+    
+    final defaultHint = hasSpeakerTarget 
+        ? '与 $currentSpeaker 交谈...' 
+        : '描述你想做的事…';
+
     return AnimatedOpacity(
         opacity: widget.enabled ? 1 : .50,
         duration: const Duration(milliseconds: 160),
@@ -1044,7 +1051,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                             ? '正在听… 松开后转成文字'
                                             : (widget.luckyCardActive
                                                 ? '运气已加持，描述你的行动…'
-                                                : '描述你想做的事…'),
+                                                : defaultHint),
                                     hintStyle: TextStyle(
                                       color: speechBusy
                                           ? NovelPalette.accent.withOpacity(.76)
