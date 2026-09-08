@@ -35,8 +35,8 @@ class NovelChoiceDockActionScope extends InheritedWidget {
   }
 }
 
-class _NovelChoiceDockSurroundingsAction extends StatefulWidget {
-  const _NovelChoiceDockSurroundingsAction({
+class _NovelFloatingSurroundingsAction extends StatefulWidget {
+  const _NovelFloatingSurroundingsAction({
     required this.scope,
     this.compact = false,
   });
@@ -45,44 +45,52 @@ class _NovelChoiceDockSurroundingsAction extends StatefulWidget {
   final bool compact;
 
   @override
-  State<_NovelChoiceDockSurroundingsAction> createState() =>
-      _NovelChoiceDockSurroundingsActionState();
+  State<_NovelFloatingSurroundingsAction> createState() =>
+      _NovelFloatingSurroundingsActionState();
 }
 
-class _NovelChoiceDockSurroundingsActionState
-    extends State<_NovelChoiceDockSurroundingsAction>
+class _NovelFloatingSurroundingsActionState
+    extends State<_NovelFloatingSurroundingsAction>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulse;
+  bool _animationsDisabled = false;
 
   @override
   void initState() {
     super.initState();
     _pulse = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1650),
+      duration: const Duration(milliseconds: 2200),
       lowerBound: 0,
       upperBound: 1,
     );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _animationsDisabled = MediaQuery.of(context).disableAnimations;
     _syncPulse();
   }
 
   @override
-  void didUpdateWidget(covariant _NovelChoiceDockSurroundingsAction oldWidget) {
+  void didUpdateWidget(covariant _NovelFloatingSurroundingsAction oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.scope.attention != widget.scope.attention ||
-        oldWidget.scope.loading != widget.scope.loading) {
+        oldWidget.scope.loading != widget.scope.loading ||
+        oldWidget.scope.visible != widget.scope.visible) {
       _syncPulse();
     }
   }
 
   void _syncPulse() {
-    if (widget.scope.attention && !widget.scope.loading) {
-      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
-    } else {
+    if (_animationsDisabled || widget.scope.loading || !widget.scope.visible) {
       _pulse
         ..stop()
-        ..value = 0;
+        ..value = .35;
+      return;
     }
+    if (!_pulse.isAnimating) _pulse.repeat();
   }
 
   @override
@@ -94,80 +102,142 @@ class _NovelChoiceDockSurroundingsActionState
   @override
   Widget build(BuildContext context) {
     final scope = widget.scope;
+    final compact = widget.compact;
+    final haloSize = compact ? 44.0 : 50.0;
+    final coreSize = compact ? 34.0 : 39.0;
+    final semanticLabel =
+        scope.label.trim().isEmpty ? '探索周围' : scope.label.trim();
 
     return Semantics(
       button: true,
-      label: scope.label,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
+      enabled: !scope.loading,
+      label: semanticLabel,
+      child: Tooltip(
+        message: semanticLabel,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: scope.loading ? null : scope.onTap,
-          splashColor: Colors.white.withOpacity(.05),
-          highlightColor: Colors.white.withOpacity(.025),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              widget.compact ? 4 : 6,
-              widget.compact ? 2 : 3,
-              1,
-              widget.compact ? 2 : 3,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (scope.loading)
-                  SizedBox(
-                    width: widget.compact ? 8 : 9,
-                    height: widget.compact ? 8 : 9,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.2,
-                      color: Colors.white.withOpacity(.52),
-                    ),
-                  )
-                else
-                  AnimatedBuilder(
-                    animation: _pulse,
-                    builder: (context, _) {
-                      final value = scope.attention ? _pulse.value : 0.0;
-                      return Container(
-                        width: widget.compact ? 4 : 5,
-                        height: widget.compact ? 4 : 5,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF6FD35F).withOpacity(
-                            scope.attention ? .72 + value * .28 : .58,
-                          ),
-                          shape: BoxShape.circle,
-                          boxShadow: scope.attention
-                              ? <BoxShadow>[
+          child: SizedBox(
+            width: compact ? 62 : 70,
+            height: compact ? 68 : 78,
+            child: AnimatedBuilder(
+              animation: _pulse,
+              builder: (context, _) {
+                final wave =
+                    (math.sin(_pulse.value * math.pi * 2) + 1.0) * .5;
+                final emphasis = scope.attention ? 1.0 : .64;
+                final glowOpacity = (.10 + wave * .16) * emphasis;
+                final ringOpacity = (.18 + wave * .16) * emphasis;
+                final glowScale = .94 + wave * .10;
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    SizedBox(
+                      width: haloSize,
+                      height: haloSize,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        clipBehavior: Clip.none,
+                        children: <Widget>[
+                          Transform.scale(
+                            scale: glowScale,
+                            child: Container(
+                              width: haloSize,
+                              height: haloSize,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: const Color(0xFFF7EEDC)
+                                      .withOpacity(ringOpacity),
+                                  width: .7,
+                                ),
+                                boxShadow: <BoxShadow>[
                                   BoxShadow(
-                                    color: const Color(0xFF6FD35F)
-                                        .withOpacity(.14 + value * .28),
-                                    blurRadius: 2 + value * 4,
-                                    spreadRadius: value * .65,
+                                    color: const Color(0xFFF7EEDC)
+                                        .withOpacity(glowOpacity),
+                                    blurRadius: 10 + wave * 10,
+                                    spreadRadius: .5 + wave * 1.6,
                                   ),
-                                ]
-                              : const <BoxShadow>[],
+                                ],
+                              ),
+                            ),
+                          ),
+                          Container(
+                            width: coreSize,
+                            height: coreSize,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: const Color(0x24101110),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(.22),
+                                width: .65,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: scope.loading
+                                ? SizedBox.square(
+                                    dimension: compact ? 14 : 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 1.35,
+                                      color: const Color(0xFFF7EEDC)
+                                          .withOpacity(.82),
+                                    ),
+                                  )
+                                : Icon(
+                                    Icons.explore_outlined,
+                                    size: compact ? 20 : 23,
+                                    color: const Color(0xFFF7F2EA)
+                                        .withOpacity(.94),
+                                    shadows: <Shadow>[
+                                      Shadow(
+                                        color: const Color(0xFFF7EEDC)
+                                            .withOpacity(
+                                              (.20 + wave * .18) * emphasis,
+                                            ),
+                                        blurRadius: 8 + wave * 5,
+                                      ),
+                                      const Shadow(
+                                        color: Color(0xB3000000),
+                                        blurRadius: 5,
+                                        offset: Offset(0, 1),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: compact ? 3 : 4),
+                    Text(
+                      scope.loading ? '探索中' : '可探索',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: const Color(0xFFF7F2EA).withOpacity(
+                          scope.loading ? .58 : .88,
                         ),
-                      );
-                    },
-                  ),
-                SizedBox(width: widget.compact ? 4 : 6),
-                Text(
-                  scope.label,
-                  style: TextStyle(
-                    color: const Color(0xFFF7F2EA).withOpacity(.72),
-                    fontSize: widget.compact ? 10.2 : 11.5,
-                    height: 1,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: .28,
-                  ),
-                ),
-                const SizedBox(width: 1),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  size: widget.compact ? 12 : 14,
-                  color: Colors.white.withOpacity(.28),
-                ),
-              ],
+                        fontFamily: 'WenJinMinchoP0',
+                        fontSize: compact ? 9.5 : 10.4,
+                        height: 1,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: compact ? .8 : 1.0,
+                        shadows: <Shadow>[
+                          Shadow(
+                            color: const Color(0xFFF7EEDC)
+                                .withOpacity(glowOpacity * .85),
+                            blurRadius: 7 + wave * 4,
+                          ),
+                          const Shadow(
+                            color: Color(0xCC000000),
+                            blurRadius: 5,
+                            offset: Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -451,9 +521,6 @@ class _NovelDialogFooter extends StatelessWidget {
     final shortWide = viewport.shortWide;
     final wideDialogueLayout = viewport.useDesktopDialogue;
     final keyboardVisible = media.viewInsets.bottom > 0;
-    final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
-    final showSurroundingsAction =
-        showComposer && !keyboardVisible && surroundingsAction?.visible == true;
 
     // NovelDialogPanel 本身已经位于 NovelGamePage 的 SafeArea 内。
     // 这里不能再次叠加 viewPadding.bottom，否则 iPhone Home Indicator
@@ -494,25 +561,9 @@ class _NovelDialogFooter extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               if (showComposer) ...<Widget>[
-            if (showSurroundingsAction && !shortWide) ...<Widget>[
-              Align(
-                alignment: Alignment.centerLeft,
-                child: _NovelChoiceDockSurroundingsAction(
-                  scope: surroundingsAction!,
-                ),
-              ),
-              SizedBox(height: compact ? 2 : 3),
-            ],
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
-                if (showSurroundingsAction && shortWide) ...<Widget>[
-                  _NovelChoiceDockSurroundingsAction(
-                    scope: surroundingsAction!,
-                    compact: true,
-                  ),
-                  const SizedBox(width: 8),
-                ],
                 if (!choicesAvailable) ...<Widget>[
                   _GameContinueButton(onTap: onContinue),
                   const SizedBox(width: 9),

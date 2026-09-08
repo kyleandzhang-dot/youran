@@ -53,5 +53,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMotionUsageDescription</key>
+	<string>用于根据设备倾斜控制剧情背景的2.5D景深视差效果。</string>
 </dict>
 </plist>

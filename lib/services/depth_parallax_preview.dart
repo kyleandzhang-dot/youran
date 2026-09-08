@@ -45,7 +45,7 @@ class _DepthParallaxPreviewPageState extends State<DepthParallaxPreviewPage> {
 
   double _viewX = 0;
   double _viewY = 0;
-  double _strength = .72;
+  double _strength = 1.0;
 
   @override
   void initState() {

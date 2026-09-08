@@ -774,28 +774,78 @@ class NovelWorldBackground extends StatefulWidget {
   State<NovelWorldBackground> createState() => _NovelWorldBackgroundState();
 }
 
+class _ResolvedNovelBackgroundImage {
+  _ResolvedNovelBackgroundImage({
+    required this.bytes,
+    required this.image,
+  });
+
+  final Uint8List bytes;
+  final ui.Image image;
+
+  void dispose() => image.dispose();
+}
+
 class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     with SingleTickerProviderStateMixin {
+  static const double _parallaxStrength = 1.0;
+
   late final AnimationController _motionController;
   bool _lowPowerEffects = false;
   bool _animationsDisabled = false;
 
-  // 【核心修复】真正显示在屏幕上的 url，只有在新图完整解码完成后才会更新。
-  // widget.url 变化并不会立刻触发 AnimatedSwitcher 切换，
-  // 避免“动画计时器跑完了，但图片还没解码完”导致的黑屏/白屏。
+  // 真正显示在屏幕上的 URL：新图完整解码后才更新，避免切图黑屏。
   late String _displayedUrl;
   int _loadToken = 0;
 
-  // iOS 首阶段：先验证 Depth Anything 本地推理链路。
-  // 这里只生成并预览 depth map，还没有接 3D Shader / 陀螺仪。
+  // 2.5D 资源。人物立绘不进入这条链路，只有世界背景参与 Depth + Shader。
   Uint8List? _debugDepthPng;
   bool _depthGenerating = false;
   String _depthSourceKey = '';
   String _depthError = '';
+  String _shaderError = '';
   int _depthToken = 0;
+  ui.FragmentProgram? _parallaxProgram;
+  ui.FragmentShader? _parallaxShader;
+  ui.Image? _parallaxSourceImage;
+  ui.Image? _parallaxDepthImage;
 
-  bool get _depthTestSupported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+  // 设备运动：陀螺仪负责即时响应，加速度计的重力方向负责慢速锚定，
+  // 避免纯陀螺仪积分长期漂移。
+  StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
+  StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
+  DateTime? _lastGyroscopeTimestamp;
+  double? _gravityOriginX;
+  double? _gravityOriginY;
+  double _sensorViewX = 0;
+  double _sensorViewY = 0;
+  bool? _lastLandscape;
+
+  // 手指只作为背景视差的“辅助输入”。使用 PointerRouter 监听原始指针，
+  // 不创建新的横滑 GestureRecognizer，因此不会抢 NovelDialogPanel 的翻页手势。
+  int? _activeTouchPointer;
+  Offset? _touchAnchor;
+  double _touchStartX = 0;
+  double _touchStartY = 0;
+  double _touchViewX = 0;
+  double _touchViewY = 0;
+  Timer? _touchReturnTimer;
+  bool _pointerRouteRegistered = false;
+
+  double _viewX = 0;
+  double _viewY = 0;
+
+  bool get _depthParallaxSupported =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.android);
+
+  bool get _parallaxReady =>
+      _depthParallaxSupported &&
+      _depthSourceKey == _displayedUrl.trim() &&
+      _parallaxShader != null &&
+      _parallaxSourceImage != null &&
+      _parallaxDepthImage != null;
 
   @override
   void initState() {
@@ -805,6 +855,15 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       duration: const Duration(seconds: 22),
     );
     _displayedUrl = widget.url.trim();
+
+    if (_depthParallaxSupported) {
+      WidgetsBinding.instance.pointerRouter.addGlobalRoute(
+        _handleGlobalPointerEvent,
+      );
+      _pointerRouteRegistered = true;
+      _startMotionSensors();
+      unawaited(_loadParallaxShader());
+    }
 
     // context / ImageConfiguration 在首帧后才稳定；此时再从已经显示的
     // ImageProvider 取像素并交给 Depth Anything。
@@ -819,19 +878,24 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     final media = MediaQuery.of(context);
     final nextLowPower = media.size.shortestSide < 600;
     final nextAnimationsDisabled = media.disableAnimations;
+    final nextLandscape = media.size.width > media.size.height;
 
+    if (_lastLandscape != null && _lastLandscape != nextLandscape) {
+      _resetMotionReference();
+    }
+    _lastLandscape = nextLandscape;
     _lowPowerEffects = nextLowPower;
     _animationsDisabled = nextAnimationsDisabled;
 
-    // 手机端也保留背景运动。手机只关闭昂贵的持续模糊，
-    // 使用更小幅度的 translate + scale 来保持流畅与“活起来”的感觉。
     if (_animationsDisabled) {
-      _motionController
-        ..stop()
-        ..value = .5;
-    } else if (!_motionController.isAnimating) {
-      _motionController.repeat(reverse: true);
+      _sensorViewX = 0;
+      _sensorViewY = 0;
+      _touchViewX = 0;
+      _touchViewY = 0;
+      _viewX = 0;
+      _viewY = 0;
     }
+    _syncLegacyBackgroundMotion();
   }
 
   @override
@@ -845,10 +909,236 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
   @override
   void dispose() {
+    if (_pointerRouteRegistered) {
+      WidgetsBinding.instance.pointerRouter.removeGlobalRoute(
+        _handleGlobalPointerEvent,
+      );
+    }
+    _touchReturnTimer?.cancel();
+    final gyroscopeSubscription = _gyroscopeSubscription;
+    final accelerometerSubscription = _accelerometerSubscription;
+    if (gyroscopeSubscription != null) {
+      unawaited(gyroscopeSubscription.cancel());
+    }
+    if (accelerometerSubscription != null) {
+      unawaited(accelerometerSubscription.cancel());
+    }
+    _parallaxSourceImage?.dispose();
+    _parallaxDepthImage?.dispose();
+    _parallaxShader?.dispose();
     _motionController.dispose();
     _loadToken++; // 让所有还在飞行中的 precache 回调失效
     _depthToken++; // 丢弃仍在执行中的 depth 结果
     super.dispose();
+  }
+
+  void _syncLegacyBackgroundMotion() {
+    if (_animationsDisabled || _parallaxReady) {
+      _motionController.stop();
+      if (_animationsDisabled) _motionController.value = .5;
+      return;
+    }
+    if (!_motionController.isAnimating) {
+      _motionController.repeat(reverse: true);
+    }
+  }
+
+  void _resetMotionReference() {
+    _lastGyroscopeTimestamp = null;
+    _gravityOriginX = null;
+    _gravityOriginY = null;
+    _sensorViewX = 0;
+    _sensorViewY = 0;
+    _viewX = _touchViewX.clamp(-1.0, 1.0).toDouble();
+    _viewY = _touchViewY.clamp(-1.0, 1.0).toDouble();
+  }
+
+  void _startMotionSensors() {
+    if (!_depthParallaxSupported) return;
+
+    _gyroscopeSubscription = gyroscopeEventStream(
+      samplingPeriod: SensorInterval.gameInterval,
+    ).listen(
+      _handleGyroscopeEvent,
+      onError: (Object error, StackTrace stack) {
+        debugPrint('2.5D gyroscope unavailable: $error');
+      },
+      cancelOnError: true,
+    );
+
+    _accelerometerSubscription = accelerometerEventStream(
+      samplingPeriod: SensorInterval.uiInterval,
+    ).listen(
+      _handleAccelerometerEvent,
+      onError: (Object error, StackTrace stack) {
+        debugPrint('2.5D accelerometer unavailable: $error');
+      },
+      cancelOnError: true,
+    );
+  }
+
+  void _handleGyroscopeEvent(GyroscopeEvent event) {
+    if (!mounted || _animationsDisabled) return;
+
+    final previous = _lastGyroscopeTimestamp;
+    _lastGyroscopeTimestamp = event.timestamp;
+    if (previous == null) return;
+
+    var dt = event.timestamp.difference(previous).inMicroseconds / 1000000.0;
+    if (!dt.isFinite || dt <= 0 || dt > .20) return;
+    dt = dt.clamp(.004, .05).toDouble();
+
+    final landscape = _lastLandscape ?? false;
+    final horizontalRate = landscape ? -event.x : event.y;
+    final verticalRate = landscape ? event.y : -event.x;
+
+    _sensorViewX =
+        (_sensorViewX + horizontalRate * dt * .92).clamp(-.88, .88).toDouble();
+    _sensorViewY =
+        (_sensorViewY + verticalRate * dt * .92).clamp(-.88, .88).toDouble();
+    _publishParallaxView();
+  }
+
+  void _handleAccelerometerEvent(AccelerometerEvent event) {
+    if (!mounted || _animationsDisabled) return;
+
+    _gravityOriginX ??= event.x;
+    _gravityOriginY ??= event.y;
+    final originX = _gravityOriginX;
+    final originY = _gravityOriginY;
+    if (originX == null || originY == null) return;
+
+    final dx = event.x - originX;
+    final dy = event.y - originY;
+    final landscape = _lastLandscape ?? false;
+
+    final targetX = (landscape ? -dy : dx) / 5.2;
+    final targetY = (landscape ? -dx : -dy) / 5.2;
+
+    // 只做慢速锚定；快速瞬态仍由陀螺仪承担。
+    _sensorViewX = (_sensorViewX * .90 +
+            targetX.clamp(-.78, .78).toDouble() * .10)
+        .clamp(-.88, .88)
+        .toDouble();
+    _sensorViewY = (_sensorViewY * .90 +
+            targetY.clamp(-.78, .78).toDouble() * .10)
+        .clamp(-.88, .88)
+        .toDouble();
+    _publishParallaxView();
+  }
+
+  void _handleGlobalPointerEvent(PointerEvent event) {
+    if (!mounted || !_depthParallaxSupported || _animationsDisabled) return;
+    if (event.kind != PointerDeviceKind.touch &&
+        event.kind != PointerDeviceKind.stylus &&
+        event.kind != PointerDeviceKind.invertedStylus) {
+      return;
+    }
+
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return;
+    final localPosition = renderObject.globalToLocal(event.position);
+    final localBounds = Offset.zero & renderObject.size;
+
+    if (event is PointerDownEvent) {
+      if (_activeTouchPointer != null || !localBounds.contains(localPosition)) {
+        return;
+      }
+      _touchReturnTimer?.cancel();
+      _activeTouchPointer = event.pointer;
+      _touchAnchor = localPosition;
+      _touchStartX = _touchViewX;
+      _touchStartY = _touchViewY;
+      return;
+    }
+
+    if (event.pointer != _activeTouchPointer) return;
+
+    if (event is PointerMoveEvent) {
+      final anchor = _touchAnchor;
+      if (anchor == null) return;
+      final width = math.max(1.0, renderObject.size.width);
+      final height = math.max(1.0, renderObject.size.height);
+      final delta = localPosition - anchor;
+
+      _touchViewX = (_touchStartX + delta.dx / (width * .42))
+          .clamp(-.62, .62)
+          .toDouble();
+      _touchViewY = (_touchStartY + delta.dy / (height * .36))
+          .clamp(-.62, .62)
+          .toDouble();
+      _publishParallaxView();
+      return;
+    }
+
+    if (event is PointerUpEvent || event is PointerCancelEvent) {
+      _activeTouchPointer = null;
+      _touchAnchor = null;
+      _scheduleTouchRecentering();
+    }
+  }
+
+  void _scheduleTouchRecentering() {
+    _touchReturnTimer?.cancel();
+    if (_touchViewX.abs() < .001 && _touchViewY.abs() < .001) return;
+
+    _touchReturnTimer = Timer.periodic(
+      const Duration(milliseconds: 16),
+      (timer) {
+        if (!mounted || _activeTouchPointer != null) {
+          timer.cancel();
+          return;
+        }
+        _touchViewX *= .82;
+        _touchViewY *= .82;
+        if (_touchViewX.abs() < .002 && _touchViewY.abs() < .002) {
+          _touchViewX = 0;
+          _touchViewY = 0;
+          timer.cancel();
+        }
+        _publishParallaxView();
+      },
+    );
+  }
+
+  void _publishParallaxView() {
+    final nextX = (_sensorViewX + _touchViewX).clamp(-1.0, 1.0).toDouble();
+    final nextY = (_sensorViewY + _touchViewY).clamp(-1.0, 1.0).toDouble();
+    if ((nextX - _viewX).abs() < .0015 &&
+        (nextY - _viewY).abs() < .0015) {
+      return;
+    }
+
+    _viewX = nextX;
+    _viewY = nextY;
+    if (_parallaxReady && mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _loadParallaxShader() async {
+    if (!_depthParallaxSupported) return;
+    try {
+      final program =
+          await ui.FragmentProgram.fromAsset('shaders/depth_parallax.frag');
+      final shader = program.fragmentShader();
+      if (!mounted) {
+        shader.dispose();
+        return;
+      }
+      _parallaxShader?.dispose();
+      _parallaxProgram = program;
+      _parallaxShader = shader;
+      _shaderError = '';
+      _syncLegacyBackgroundMotion();
+      setState(() {});
+    } catch (error, stack) {
+      debugPrint('2.5D shader load failed: $error');
+      debugPrint('$stack');
+      if (!mounted) return;
+      setState(() => _shaderError = error.toString());
+      _syncLegacyBackgroundMotion();
+    }
   }
 
   ImageProvider? _providerFor(String value) {
@@ -875,15 +1165,19 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     if (value.isEmpty) {
       if (mounted && token == _loadToken) {
         setState(() => _displayedUrl = value);
+        _clearParallaxImages();
+        _syncLegacyBackgroundMotion();
       }
       return;
     }
 
     final provider = _providerFor(value);
     if (provider == null) {
-      // 无法识别的 url（比如 data: 解析失败），直接切换让 errorBuilder 兜底。
+      // 无法识别的 URL（比如 data: 解析失败），直接切换让 errorBuilder 兜底。
       if (mounted && token == _loadToken) {
         setState(() => _displayedUrl = value);
+        _clearParallaxImages();
+        _syncLegacyBackgroundMotion();
       }
       return;
     }
@@ -891,39 +1185,57 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     try {
       await precacheImage(provider, context);
     } catch (_) {
-      // 加载失败也要切换过去：交给 _image() 里的 errorBuilder 兜底，
-      // 不要让背景永远卡在旧图上一动不动。
+      // 加载失败也要切换过去：交给 _image() 里的 errorBuilder 兜底。
     }
 
-    // token 不一致说明这期间 url 又变了（用户快速连续切换场景），
-    // 这次已经过期的加载结果直接丢弃，只认最新的那次。
+    // token 不一致说明这期间 URL 又变了，只认最新的那次。
     if (!mounted || token != _loadToken) return;
     setState(() => _displayedUrl = value);
+    _syncLegacyBackgroundMotion();
     unawaited(_prepareDepthForDisplayedImage());
   }
 
-  Future<Uint8List?> _imageBytesFromProvider(ImageProvider provider) async {
-    final completer = Completer<Uint8List?>();
+  Future<_ResolvedNovelBackgroundImage?> _imageFrameFromProvider(
+    ImageProvider provider,
+  ) async {
+    final completer = Completer<_ResolvedNovelBackgroundImage?>();
     final stream = provider.resolve(createLocalImageConfiguration(context));
     late final ImageStreamListener listener;
 
     listener = ImageStreamListener(
       (info, synchronousCall) async {
         stream.removeListener(listener);
+        final ownedImage = info.image.clone();
         try {
           final byteData = await info.image.toByteData(
             format: ImageByteFormat.png,
           );
-          if (!completer.isCompleted) {
-            completer.complete(byteData?.buffer.asUint8List());
+          final bytes = byteData?.buffer.asUint8List();
+          if (bytes == null || bytes.isEmpty) {
+            ownedImage.dispose();
+            if (!completer.isCompleted) completer.complete(null);
+            return;
           }
-        } catch (error) {
-          if (!completer.isCompleted) completer.completeError(error);
+          if (!completer.isCompleted) {
+            completer.complete(
+              _ResolvedNovelBackgroundImage(
+                bytes: bytes,
+                image: ownedImage,
+              ),
+            );
+          } else {
+            ownedImage.dispose();
+          }
+        } catch (error, stack) {
+          ownedImage.dispose();
+          if (!completer.isCompleted) completer.completeError(error, stack);
         }
       },
       onError: (Object error, StackTrace? stackTrace) {
         stream.removeListener(listener);
-        if (!completer.isCompleted) completer.completeError(error, stackTrace);
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace ?? StackTrace.current);
+        }
       },
     );
 
@@ -937,25 +1249,48 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     );
   }
 
+  Future<ui.Image> _decodeUiImage(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    try {
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  void _clearParallaxImages() {
+    _parallaxSourceImage?.dispose();
+    _parallaxDepthImage?.dispose();
+    _parallaxSourceImage = null;
+    _parallaxDepthImage = null;
+    _debugDepthPng = null;
+    _depthSourceKey = '';
+  }
+
   Future<void> _prepareDepthForDisplayedImage() async {
-    if (!_depthTestSupported || !mounted) return;
+    if (!_depthParallaxSupported || !mounted) return;
 
     final sourceKey = _displayedUrl.trim();
     final provider = _providerFor(sourceKey);
     if (provider == null || sourceKey.isEmpty) {
       if (mounted) {
         setState(() {
-          _debugDepthPng = null;
-          _depthSourceKey = '';
+          _clearParallaxImages();
           _depthGenerating = false;
           _depthError = '';
         });
+        _syncLegacyBackgroundMotion();
       }
       return;
     }
 
-    // 同一张已经算过的背景不重复推理。
-    if (_depthSourceKey == sourceKey && _debugDepthPng != null) return;
+    // 当前画面已经拥有 source + depth 两张 GPU 图片时不做任何工作。
+    if (_depthSourceKey == sourceKey &&
+        _parallaxSourceImage != null &&
+        _parallaxDepthImage != null) {
+      return;
+    }
 
     final token = ++_depthToken;
     setState(() {
@@ -964,38 +1299,64 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       _debugDepthPng = null;
     });
 
+    _ResolvedNovelBackgroundImage? resolved;
+    ui.Image? depthImage;
     try {
-      // 背景在 _preloadThenSwap 里已经 precache，通常这里直接从 Flutter
-      // image cache 拿到解码后的 ui.Image，不会再次向服务器请求原图。
-      final imageBytes = await _imageBytesFromProvider(provider);
-      if (imageBytes == null || imageBytes.isEmpty) {
+      // 背景已经在 _preloadThenSwap 中 precache；这里通常直接从 Flutter
+      // ImageCache 取得解码图，不再次请求网络原图。
+      resolved = await _imageFrameFromProvider(provider);
+      if (resolved == null || resolved.bytes.isEmpty) {
         throw StateError('无法取得背景图片像素');
       }
 
-      final depthPng = await DepthService.instance.generatePng(imageBytes);
-      if (!mounted || token != _depthToken || sourceKey != _displayedUrl.trim()) {
+      // 全局 DepthService 缓存以 URL/asset key 去重：同一张背景只跑一次 ONNX。
+      final depthPng = await DepthService.instance.generatePngCached(
+        sourceKey,
+        resolved.bytes,
+      );
+      depthImage = await _decodeUiImage(depthPng);
+
+      if (!mounted ||
+          token != _depthToken ||
+          sourceKey != _displayedUrl.trim()) {
+        resolved.dispose();
+        depthImage.dispose();
         return;
       }
 
+      final nextSourceImage = resolved.image;
+      resolved = null; // ownership moves to _parallaxSourceImage
+      final nextDepthImage = depthImage;
+      depthImage = null; // ownership moves to _parallaxDepthImage
+
       setState(() {
+        _parallaxSourceImage?.dispose();
+        _parallaxDepthImage?.dispose();
+        _parallaxSourceImage = nextSourceImage;
+        _parallaxDepthImage = nextDepthImage;
         _debugDepthPng = depthPng;
         _depthSourceKey = sourceKey;
         _depthGenerating = false;
         _depthError = '';
       });
-    } catch (error) {
+      _syncLegacyBackgroundMotion();
+    } catch (error, stack) {
+      resolved?.dispose();
+      depthImage?.dispose();
       if (!mounted || token != _depthToken) return;
       setState(() {
         _debugDepthPng = null;
         _depthGenerating = false;
         _depthError = error.toString();
       });
-      debugPrint('Depth Anything iOS test failed: $error');
+      debugPrint('Depth Anything background inference failed: $error');
+      debugPrint('$stack');
+      _syncLegacyBackgroundMotion();
     }
   }
 
   Widget _depthDebugPreview() {
-    if (!_depthTestSupported || !kDebugMode) {
+    if (!_depthParallaxSupported || !kDebugMode) {
       return const SizedBox.shrink();
     }
 
@@ -1015,9 +1376,10 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         ),
       );
     } else {
+      final failed = _depthError.isNotEmpty || _shaderError.isNotEmpty;
       content = Center(
         child: Text(
-          _depthError.isEmpty ? '等待 Depth' : 'Depth 失败',
+          failed ? '2.5D 失败' : '等待 Depth',
           textAlign: TextAlign.center,
           style: const TextStyle(
             color: Colors.white70,
@@ -1047,11 +1409,12 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
               Align(
                 alignment: Alignment.topLeft,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
                   color: const Color(0xB8000000),
-                  child: const Text(
-                    'iOS DEPTH',
-                    style: TextStyle(
+                  child: Text(
+                    _parallaxReady ? '2.5D  1.0' : 'DEPTH',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 8.5,
                       fontWeight: FontWeight.w800,
@@ -1085,9 +1448,6 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       );
     }
 
-    // 兜底图只负责避免“背景为空 = 黑屏”。
-    // 旧版本这里保留了一层 sigma=0 的 BackdropFilter，实际没有任何模糊效果，
-    // 反而增加额外合成层；直接绘制兜底图即可。
     return Transform.scale(
       scale: 1.06,
       child: Image.asset(
@@ -1113,8 +1473,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   }
 
   Widget _image() {
-    // 注意：这里读的是 _displayedUrl（已经确认解码完成的图），
-    // 不是 widget.url（可能还在飞行中的新值）。
+    // 这里读的是已经确认解码完成的 _displayedUrl，而不是仍可能在加载的 widget.url。
     final value = _displayedUrl;
     final provider = _providerFor(value);
     if (provider == null) return _fallback();
@@ -1123,37 +1482,18 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       fit: BoxFit.cover,
       gaplessPlayback: true,
       filterQuality: FilterQuality.medium,
-      // 正常情况下走到这里时图片已经被 precacheImage 解码过、在缓存里，
-      // errorBuilder 只兜底“缓存被回收 / 解码失败”这种极端情况。
       errorBuilder: (_, __, ___) => _fallback(),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final weatherDim = switch (widget.weatherEffect) {
-      NovelWeatherEffect.thunderstorm => .30,
-      NovelWeatherEffect.heavyRain => .16,
-      NovelWeatherEffect.blizzard => .14,
-      NovelWeatherEffect.cloudy => .08,
-      _ => .0,
-    };
-    final dim = math.max(
-      weatherDim,
-      widget.characterPresent ? .12 : .08,
-    );
-    final blur = widget.characterPresent ? 2.2 : 0.0;
-
-    final imageLayer = AnimatedSwitcher(
-      // 保持较长的呼吸感，1500ms 适合剧情氛围
+  Widget _buildFlatImageLayer() {
+    return AnimatedSwitcher(
       duration: Duration(milliseconds: _lowPowerEffects ? 800 : 1500),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeOutCubic,
       transitionBuilder: (child, animation) {
         final isIncoming = child.key == ValueKey<String>(_displayedUrl);
-
         if (isIncoming) {
-          // 【新图出场】：透明度 0 -> 1 渐显，同时尺寸 1.05 -> 1.0 微距拉近
           return FadeTransition(
             opacity: animation,
             child: ScaleTransition(
@@ -1161,21 +1501,20 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
               child: child,
             ),
           );
-        } else {
-          // 【老图退场 - 核心修复】：直接 return child，不做任何透明度衰减！
-          // AnimatedSwitcher 默认会将新图盖在老图上方。
-          // 这样老图会在整个 1.5 秒内保持 100% 可见，直到新图完全覆盖并结束动画，
-          // 完美吃掉网络图片加载的延迟白屏，实现真正的无缝溶解。
-          return child; 
         }
+        // 老图保持 100% 可见，直到新图完整盖住，避免网络切图白屏。
+        return child;
       },
       child: SizedBox.expand(
         key: ValueKey<String>(_displayedUrl),
         child: _image(),
       ),
     );
+  }
 
-    final backgroundLayer = AnimatedBuilder(
+  Widget _buildLegacyBackgroundLayer(double blur) {
+    final imageLayer = _buildFlatImageLayer();
+    return AnimatedBuilder(
       animation: _motionController,
       child: imageLayer,
       builder: (context, child) {
@@ -1207,6 +1546,96 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         );
       },
     );
+  }
+
+  Widget _buildParallaxSurface(double blur) {
+    final source = _parallaxSourceImage;
+    final depth = _parallaxDepthImage;
+    final shader = _parallaxShader;
+    if (source == null || depth == null || shader == null) {
+      return _buildLegacyBackgroundLayer(blur);
+    }
+
+    Widget surface = LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final height = constraints.maxHeight;
+        if (!width.isFinite || !height.isFinite || width <= 0 || height <= 0) {
+          return _image();
+        }
+
+        // Shader 的画布保持原图宽高比，再用 cover 逻辑让它溢出并居中裁切。
+        // 这样 2.5D 不会把 16:9 / 3:2 背景硬拉伸到手机屏幕比例。
+        final sourceAspect = source.width / source.height;
+        final targetAspect = width / height;
+        late final double paintWidth;
+        late final double paintHeight;
+        if (targetAspect > sourceAspect) {
+          paintWidth = width;
+          paintHeight = width / sourceAspect;
+        } else {
+          paintHeight = height;
+          paintWidth = height * sourceAspect;
+        }
+
+        return ClipRect(
+          child: OverflowBox(
+            alignment: Alignment.center,
+            minWidth: paintWidth,
+            maxWidth: paintWidth,
+            minHeight: paintHeight,
+            maxHeight: paintHeight,
+            child: SizedBox(
+              width: paintWidth,
+              height: paintHeight,
+              child: CustomPaint(
+                painter: _NovelBackgroundParallaxPainter(
+                  shader: shader,
+                  source: source,
+                  depth: depth,
+                  viewX: _animationsDisabled ? 0 : _viewX,
+                  viewY: _animationsDisabled ? 0 : _viewY,
+                  strength: _parallaxStrength,
+                ),
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    if (!_lowPowerEffects && blur > 0) {
+      surface = ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: surface,
+      );
+    }
+    return surface;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final weatherDim = switch (widget.weatherEffect) {
+      NovelWeatherEffect.thunderstorm => .30,
+      NovelWeatherEffect.heavyRain => .16,
+      NovelWeatherEffect.blizzard => .14,
+      NovelWeatherEffect.cloudy => .08,
+      _ => .0,
+    };
+    final dim = math.max(
+      weatherDim,
+      widget.characterPresent ? .12 : .08,
+    );
+    final blur = widget.characterPresent ? 2.2 : 0.0;
+
+    // Do not keep the previous parallax painter alive during scene changes.
+    // Its ui.Image handles belong to this State and are disposed/replaced when
+    // the next Depth result arrives; a direct swap avoids an outgoing painter
+    // trying to sample an already released GPU image.
+    final backgroundLayer = _parallaxReady
+        ? _buildParallaxSurface(blur)
+        : _buildLegacyBackgroundLayer(blur);
 
     return Stack(
       fit: StackFit.expand,
@@ -1230,8 +1659,6 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              // 深蓝灰阅读遮罩：保留场景层次，同时让中下部正文在
-              // 明亮或细节复杂的背景上也有稳定对比度。
               stops: const <double>[0, .45, 1],
               colors: <Color>[
                 const Color(0xFF0F172A).withOpacity(.12),
@@ -1280,3 +1707,47 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   }
 }
 
+class _NovelBackgroundParallaxPainter extends CustomPainter {
+  const _NovelBackgroundParallaxPainter({
+    required this.shader,
+    required this.source,
+    required this.depth,
+    required this.viewX,
+    required this.viewY,
+    required this.strength,
+  });
+
+  final ui.FragmentShader shader;
+  final ui.Image source;
+  final ui.Image depth;
+  final double viewX;
+  final double viewY;
+  final double strength;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    shader.setFloat(0, size.width);
+    shader.setFloat(1, size.height);
+    shader.setFloat(2, viewX);
+    shader.setFloat(3, viewY);
+    shader.setFloat(4, strength);
+    shader.setFloat(5, 1.045 + strength * .035);
+    shader.setImageSampler(0, source);
+    shader.setImageSampler(1, depth);
+
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..shader = shader,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _NovelBackgroundParallaxPainter oldDelegate) {
+    return oldDelegate.source != source ||
+        oldDelegate.depth != depth ||
+        oldDelegate.viewX != viewX ||
+        oldDelegate.viewY != viewY ||
+        oldDelegate.strength != strength ||
+        oldDelegate.shader != shader;
+  }
+}

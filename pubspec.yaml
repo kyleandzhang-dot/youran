@@ -27,6 +27,9 @@ dependencies:
   lottie: ^3.3.1
   record: 6.2.1
 
+  # Motion sensors for 2.5D background parallax
+  sensors_plus: ^6.1.2
+
   # Local Depth Anything V2 inference
   flutter_onnxruntime: ^1.8.4
   image: ^4.9.2

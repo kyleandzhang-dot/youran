@@ -1203,19 +1203,19 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    SizedBox(
-                      width: 272,
+                    Expanded(
+                      flex: 4,
                       child: _buildGlassPanel(
-                        quiet: true,
+                        quiet: false, // 恢复跑团风格的外围线条与玻璃质感
                         child: ListView(
                           physics: const BouncingScrollPhysics(),
-                          padding: const EdgeInsets.only(top: 1, bottom: 8),
+                          padding: const EdgeInsets.only(top: 8, bottom: 12),
                           children: <Widget>[
                             _hero(
                               host,
                               equipped,
                               skills,
-                              landscape: true,
+                              landscape: false,
                             ),
                           ],
                         ),
@@ -1223,12 +1223,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                     ),
                     const SizedBox(width: 16),
                     Expanded(
+                      flex: 6,
                       child: Column(
                         children: <Widget>[
-                          // 将原先在顶部的 ListView 移到上方自动撑开
                           Expanded(
                             child: _buildGlassPanel(
-                              quiet: true,
+                              quiet: false, // 恢复跑团风格的外围线条与玻璃质感
                               child: RefreshIndicator(
                                 onRefresh: _refresh,
                                 color: _inventoryGold,
@@ -1239,7 +1239,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                     _inventoryList(
                                       filteredItems,
                                       isDesktop: true,
-                                      dense: true,
+                                      dense: false,
                                     ),
                                   ],
                                 ),
@@ -1247,11 +1247,10 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                             ),
                           ),
                           const SizedBox(height: 8),
-                          // 将筛选按钮下放到底部
                           _inventoryFilterBar(
                             isDesktop: true,
                             dense: true,
-                            quiet: true,
+                            quiet: false, // 恢复底部三个按钮的边框线条
                           ),
                         ],
                       ),

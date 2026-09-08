@@ -34,6 +34,12 @@ class DepthService {
   OrtSession? _session;
   Future<void>? _initializing;
 
+  // Keep the completed/in-flight Future itself for the process lifetime.
+  // The same scene key therefore runs Depth Anything at most once until the
+  // service is explicitly disposed or clearDepthCache() is called.
+  final Map<String, Future<Uint8List>> _depthPngCache =
+      <String, Future<Uint8List>>{};
+
   bool get isReady => _session != null;
 
   /// Loads the ONNX model once. Safe to call repeatedly.
@@ -235,9 +241,44 @@ class DepthService {
     return (await generate(imageBytes)).depthPng;
   }
 
+  /// Generates a depth PNG once per stable [cacheKey].
+  ///
+  /// The cached value is the Future itself, so two widgets requesting the same
+  /// background at the same time also share one ONNX inference instead of
+  /// racing and calculating it twice. Failed calculations are removed so a
+  /// later request can retry.
+  Future<Uint8List> generatePngCached(
+    String cacheKey,
+    Uint8List imageBytes,
+  ) {
+    final key = cacheKey.trim();
+    if (key.isEmpty) return generatePng(imageBytes);
+
+    final existing = _depthPngCache[key];
+    if (existing != null) return existing;
+
+    late final Future<Uint8List> future;
+    future = generatePng(imageBytes).then(
+      (value) => value,
+      onError: (Object error, StackTrace stack) {
+        if (identical(_depthPngCache[key], future)) {
+          _depthPngCache.remove(key);
+        }
+        Error.throwWithStackTrace(error, stack);
+      },
+    );
+    _depthPngCache[key] = future;
+
+    return future;
+  }
+
+  /// Drops cached depth PNGs without tearing down the ONNX model session.
+  void clearDepthCache() => _depthPngCache.clear();
+
   /// Releases the model session. Normally only needed when the app/service is
   /// being torn down permanently.
   Future<void> dispose() async {
+    _depthPngCache.clear();
     final session = _session;
     _session = null;
     if (session != null) {

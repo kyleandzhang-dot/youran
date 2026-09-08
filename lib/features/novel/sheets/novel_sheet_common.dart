@@ -232,10 +232,12 @@ Future<T?> _showNovelEndDrawer<T>(
           media.size.width > media.size.height && media.size.height < 520;
 
       // 竖屏沿用原来的 82% / 最大 300。
-      // 横屏优先可读性：面板放宽到约 40% 画面，限制在 286~320px。
-      // 这样设置项和值更容易完整显示，但仍保留过半剧情画面可见。
+      // 手机横屏时右侧抽屉占约 74% 画面，避免原来 40% / 320px 上限
+      // 导致左侧留下过厚的空白。仍保留约四分之一场景，让用户感知这是抽屉而非全屏页。
       final width = compactLandscape
-          ? (media.size.width * .40).clamp(286.0, 320.0).toDouble()
+          ? (media.size.width * .74)
+              .clamp(440.0, 660.0)
+              .toDouble()
           : math.min(media.size.width * .82, 300.0);
 
       return Align(
