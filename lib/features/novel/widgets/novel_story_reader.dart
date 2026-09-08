@@ -723,7 +723,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   shortViewport: shortViewport,
                   choicesVisible: canShowChoices,
                 ) +
-                (surroundingsActionVisible ? (compact ? 22.0 : 24.0) : 0.0)
+                (surroundingsActionVisible && !shortWide
+                    ? (compact ? 22.0 : 24.0)
+                    : 0.0)
             : 0.0;
         final footerHeight = navigationHeight +
             (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
@@ -814,17 +816,18 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                       sinkRatio = 0.45;
                       edgePush = 0.08;
                     } else if (shortWide) {
-                      // 手机横屏：宽度很多、高度很少。人物按“可见高度”反推尺寸，
-                      // 不再使用 PC 的 550px 起步，也不沿用竖屏 400px 的最小宽度。
-                      final widthBased = stageSize.width * .44;
-                      final heightBased = stageSize.height * .92;
+                      // 手机横屏也使用接近 PC 的“大半身”镜头：
+                      // 先按横向舞台放大人物，再把下半身明显沉到屏幕下方。
+                      // 不直接复用 PC 的 550px 最小宽度，避免矮屏设备头部被顶出画面。
+                      final widthBased = stageSize.width * .55;
+                      final heightBased = stageSize.height * 1.22;
                       portraitWidth = math
                           .min(widthBased, heightBased)
-                          .clamp(260.0, 420.0)
+                          .clamp(330.0, 520.0)
                           .toDouble();
-                      portraitHeightRatio = 1.22;
-                      sinkRatio = .18;
-                      edgePush = .04;
+                      portraitHeightRatio = 1.25;
+                      sinkRatio = .45;
+                      edgePush = .06;
                     } else {
                       // 手机竖屏保持近景感，但降低固定最小宽度，避免小屏上人物
                       // 与对白/HUD 互相挤压。
@@ -1146,7 +1149,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         constraints: BoxConstraints(
                           maxWidth: wideDialogueLayout
                               ? 920.0
-                              : screen.width,
+                              : (shortWide
+                                  ? math.min(720.0, screen.width)
+                                  : screen.width),
                         ),
                         child: NovelChoiceDock(
                           choices: controller.choices,
@@ -1244,8 +1249,10 @@ class _NovelNarrationSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 600;
-    
+    final viewport = NovelViewportMetrics.of(context);
+    final compact = viewport.compactContent;
+    final shortWide = viewport.shortWide;
+
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: onTap,
@@ -1253,7 +1260,9 @@ class _NovelNarrationSurface extends StatelessWidget {
         physics: const BouncingScrollPhysics(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: shortWide
+              ? CrossAxisAlignment.stretch
+              : CrossAxisAlignment.start,
           children: <Widget>[
             ValueListenableBuilder<String>(
               valueListenable: displayTextListenable,
@@ -1277,7 +1286,8 @@ class _NovelNarrationSurface extends StatelessWidget {
                   return _NovelNarrationParagraphText(
                     value: value.isEmpty ? emptyTextFallback : value,
                     style: style,
-                    textAlign: TextAlign.left,
+                    textAlign:
+                        shortWide ? TextAlign.center : TextAlign.left,
                     paragraphSpacing: compact ? 9 : 11,
                   );
                 },
@@ -1389,6 +1399,8 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final shortWide = NovelViewportMetrics.of(context).shortWide;
+
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: onTap,
@@ -1433,14 +1445,14 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
                       _NovelNarrationParagraphText(
                         value: parts.leadingNarration,
                         style: style,
-                        textAlign: TextAlign.left,
+                        textAlign: shortWide ? TextAlign.center : TextAlign.left,
                       ),
                     if (hasLeading && hasTrailing) const SizedBox(height: 12),
                     if (hasTrailing)
                       _NovelNarrationParagraphText(
                         value: parts.trailingNarration,
                         style: style,
-                        textAlign: TextAlign.left,
+                        textAlign: shortWide ? TextAlign.center : TextAlign.left,
                       ),
                   ],
                 );
@@ -1674,9 +1686,11 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                       ? emptyTextFallback
                       : value;
                   final parts = _visibleReaderParts(sentence, display);
-                  final alignment = wideDialogueLayout
-                      ? TextAlign.left
-                      : (isHost ? TextAlign.right : TextAlign.left);
+                  final alignment = shortWide
+                      ? TextAlign.center
+                      : (wideDialogueLayout
+                          ? TextAlign.left
+                          : (isHost ? TextAlign.right : TextAlign.left));
                       
                   return TweenAnimationBuilder<double>(
                     tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),

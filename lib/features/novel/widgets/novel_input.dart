@@ -831,6 +831,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
       desktopMode: widget.gameController?.desktopMode ?? false,
     );
     final shortViewport = viewport.shortViewport;
+    final shortWide = viewport.shortWide;
 
     return AnimatedOpacity(
         opacity: widget.enabled ? 1 : .50,
@@ -933,9 +934,15 @@ class _NovelInputBarState extends State<NovelInputBar> {
                             color: speechBusy
                                 ? NovelPalette.accent.withOpacity(.72)
                                 : Colors.white.withOpacity(
-                                    focused ? .26 : (glassActive ? .18 : .10),
+                                    shortWide
+                                        ? (focused
+                                            ? .36
+                                            : (glassActive ? .28 : .20))
+                                        : (focused
+                                            ? .26
+                                            : (glassActive ? .18 : .10)),
                                   ),
-                            width: speechBusy ? .9 : .7,
+                            width: speechBusy ? .9 : (shortWide ? .85 : .7),
                           ),
                         ),
                         child: Row(

@@ -228,9 +228,15 @@ Future<T?> _showNovelEndDrawer<T>(
     transitionDuration: const Duration(milliseconds: 260),
     pageBuilder: (dialogContext, _, __) {
       final media = MediaQuery.of(dialogContext);
+      final compactLandscape =
+          media.size.width > media.size.height && media.size.height < 520;
 
-      // 与左侧 GameDrawer 完全一致：屏幕宽度 82%，最大 300。
-      final width = math.min(media.size.width * .82, 300.0);
+      // 竖屏沿用原来的 82% / 最大 300。
+      // 手机横屏（以及桌面宽而矮的预览窗口）改用紧凑右栏，
+      // 与左侧横屏抽屉保持同一密度，避免设置面板盖住大半个剧情画面。
+      final width = compactLandscape
+          ? math.min(media.size.width * .42, 252.0)
+          : math.min(media.size.width * .82, 300.0);
 
       return Align(
         alignment: Alignment.centerRight,

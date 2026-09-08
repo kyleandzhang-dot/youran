@@ -18,6 +18,13 @@ import 'mine_dialogs.dart';
 // 抽屉与 Novel 页面统一使用当前全局主绿色。
 const Color _drawerAccent = Color(0xFF6FD35F);
 
+/// 横屏手机 / 矮窗口使用统一紧凑密度。
+/// 只收紧尺寸与间距，不改变模块顺序，避免横屏预览时内容被挤乱。
+bool _drawerCompactLandscape(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  return size.width > size.height && size.height < 520;
+}
+
 /// 抽屉顶部的三个功能模块
 enum DrawerModule { world, discover, mine }
 
@@ -118,9 +125,14 @@ class GameDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final mediaSize = MediaQuery.sizeOf(context);
+    final compactLandscape = _drawerCompactLandscape(context);
     final width = _isSidebar
-        ? 300.0
-        : math.min(MediaQuery.sizeOf(context).width * 0.82, 300.0);
+        ? (compactLandscape ? 244.0 : 300.0)
+        : math.min(
+            mediaSize.width * (compactLandscape ? 0.42 : 0.82),
+            compactLandscape ? 252.0 : 300.0,
+          );
 
     final content = Container(
       width: width,
@@ -128,7 +140,7 @@ class GameDrawer extends StatelessWidget {
       child: SafeArea(
         child: Column(
           children: [
-                const SizedBox(height: 12),
+                SizedBox(height: compactLandscape ? 6 : 12),
                 _DrawerHeader(
                   isLoggedIn: isLoggedIn,
                   isMine: selectedModule == DrawerModule.mine,
@@ -143,12 +155,12 @@ class GameDrawer extends StatelessWidget {
                   checkedInToday: checkedInToday,
                   onCheckin: onCheckin,
                 ),
-                const SizedBox(height: 14),
+                SizedBox(height: compactLandscape ? 7 : 14),
                 _ModuleTabs(
                   selected: selectedModule,
                   onSelected: onModuleSelected ?? (_) {},
                 ),
-                const SizedBox(height: 6),
+                SizedBox(height: compactLandscape ? 3 : 6),
                 Expanded(
                   child: _buildMainContent(),
                 ),
@@ -156,7 +168,12 @@ class GameDrawer extends StatelessWidget {
                 // 根据状态切换底部按钮或进度面板（加入原地过渡动画）
                 if (selectedModule == DrawerModule.world)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
+                    padding: EdgeInsets.fromLTRB(
+                      compactLandscape ? 10 : 14,
+                      compactLandscape ? 4 : 8,
+                      compactLandscape ? 10 : 14,
+                      compactLandscape ? 8 : 16,
+                    ),
                     child: _CreationProgressSlot(
                       isCreatingWorld: isCreatingWorld,
                       progress: createWorldProgress,
@@ -170,7 +187,12 @@ class GameDrawer extends StatelessWidget {
                   )
                 else if (selectedModule == DrawerModule.discover)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
+                    padding: EdgeInsets.fromLTRB(
+                      compactLandscape ? 10 : 14,
+                      compactLandscape ? 4 : 8,
+                      compactLandscape ? 10 : 14,
+                      compactLandscape ? 8 : 16,
+                    ),
                     child: _BottomActionButton(
                       icon: LucideIcons.share,
                       label: '分享世界',
@@ -340,7 +362,9 @@ class _WorldPanelState extends State<_WorldPanel> {
             onRefresh: _refresh,
             color: _drawerAccent,
             child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 28),
+              padding: EdgeInsets.symmetric(
+                horizontal: _drawerCompactLandscape(context) ? 18 : 28,
+              ),
               physics: const AlwaysScrollableScrollPhysics(
                 parent: BouncingScrollPhysics(),
               ),
@@ -355,7 +379,7 @@ class _WorldPanelState extends State<_WorldPanel> {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: AppColors.textOnDarkMuted,
-                        fontSize: 13,
+                        fontSize: _drawerCompactLandscape(context) ? 11.5 : 13,
                         fontWeight: FontWeight.w500,
                         height: 1.7,
                       ),
@@ -375,12 +399,19 @@ class _WorldPanelState extends State<_WorldPanel> {
           onRefresh: _refresh,
           color: _drawerAccent,
           child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+            padding: EdgeInsets.fromLTRB(
+              _drawerCompactLandscape(context) ? 10 : 14,
+              _drawerCompactLandscape(context) ? 4 : 8,
+              _drawerCompactLandscape(context) ? 10 : 14,
+              4,
+            ),
             physics: const AlwaysScrollableScrollPhysics(
               parent: BouncingScrollPhysics(),
             ),
             itemCount: widget.games.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            separatorBuilder: (_, __) => SizedBox(
+              height: _drawerCompactLandscape(context) ? 4 : 8,
+            ),
             itemBuilder: (context, index) {
               return _WorldItem(
                 game: widget.games[index],
@@ -811,6 +842,8 @@ class _DrawerHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
+    final avatarSize = compactLandscape ? 36.0 : 44.0;
     // 手机端顶部头像行为统一：
     // 已登录时无论当前在“世界 / 发现 / 我的”哪个模块，都直接编辑头像；
     // 未登录时才走登录/资料入口。
@@ -818,7 +851,12 @@ class _DrawerHeader extends StatelessWidget {
         isLoggedIn ? (onEditAvatar ?? onProfileTap) : onProfileTap;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      padding: EdgeInsets.fromLTRB(
+        compactLandscape ? 11 : 16,
+        0,
+        compactLandscape ? 11 : 16,
+        0,
+      ),
       child: Row(
         children: [
           GestureDetector(
@@ -833,12 +871,12 @@ class _DrawerHeader extends StatelessWidget {
                           avatarUrl!.isNotEmpty)
                       ? Image.network(
                           CdnUtil.resize(avatarUrl!, width: 128),
-                          width: 44,
-                          height: 44,
+                          width: avatarSize,
+                          height: avatarSize,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _fallbackAvatar(),
+                          errorBuilder: (_, __, ___) => _fallbackAvatar(compactLandscape),
                         )
-                      : _fallbackAvatar(),
+                      : _fallbackAvatar(compactLandscape),
                 ),
                 if (!isLoggedIn)
                   Positioned(
@@ -866,7 +904,7 @@ class _DrawerHeader extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: compactLandscape ? 8 : 12),
           Expanded(
             child: GestureDetector(
               onTap: !isLoggedIn
@@ -889,9 +927,9 @@ class _DrawerHeader extends StatelessWidget {
                             isLoggedIn ? name : '登录 / 注册',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: AppColors.textOnDark,
-                              fontSize: 15,
+                              fontSize: compactLandscape ? 13 : 15,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -899,7 +937,7 @@ class _DrawerHeader extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: compactLandscape ? 2 : 4),
                   if (isLoggedIn)
                     Row(
                       children: [
@@ -907,7 +945,7 @@ class _DrawerHeader extends StatelessWidget {
                           'UID: ${uid?.isNotEmpty == true ? uid : '--'}',
                           style: TextStyle(
                             color: AppColors.textOnDarkMuted,
-                            fontSize: 11,
+                            fontSize: compactLandscape ? 9.5 : 11,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -922,7 +960,7 @@ class _DrawerHeader extends StatelessWidget {
                           '$points',
                           style: TextStyle(
                             color: AppColors.textOnDarkMuted,
-                            fontSize: 11,
+                            fontSize: compactLandscape ? 9.5 : 11,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -933,7 +971,7 @@ class _DrawerHeader extends StatelessWidget {
                       '登录解锁存档与积分',
                       style: TextStyle(
                         color: AppColors.textOnDarkMuted,
-                        fontSize: 11.5,
+                        fontSize: compactLandscape ? 10 : 11.5,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -944,7 +982,7 @@ class _DrawerHeader extends StatelessWidget {
           
           // 修改点：去掉了 `&& isMine`，只要登录了就全局显示签到按钮
           if (isLoggedIn) ...[
-            const SizedBox(width: 8),
+            SizedBox(width: compactLandscape ? 5 : 8),
             _HeaderCheckinButton(
               loaded: checkinStatusLoaded,
               checked: checkedInToday,
@@ -956,15 +994,15 @@ class _DrawerHeader extends StatelessWidget {
     );
   }
 
-  Widget _fallbackAvatar() {
+  Widget _fallbackAvatar(bool compactLandscape) {
     return Container(
-      width: 44,
-      height: 44,
+      width: compactLandscape ? 36 : 44,
+      height: compactLandscape ? 36 : 44,
       color: Colors.white.withOpacity(0.08),
       child: Icon(
         Icons.person_rounded,
         color: AppColors.textOnDarkMuted,
-        size: 22,
+        size: compactLandscape ? 18 : 22,
       ),
     );
   }
@@ -984,6 +1022,7 @@ class _HeaderCheckinButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     final canTap = loaded && !checked && onTap != null;
 
     return Material(
@@ -995,9 +1034,9 @@ class _HeaderCheckinButton extends StatelessWidget {
       child: InkWell(
         onTap: canTap ? onTap : null,
         child: Container(
-          height: 31,
-          constraints: const BoxConstraints(minWidth: 50),
-          padding: const EdgeInsets.symmetric(horizontal: 9),
+          height: compactLandscape ? 27 : 31,
+          constraints: BoxConstraints(minWidth: compactLandscape ? 44 : 50),
+          padding: EdgeInsets.symmetric(horizontal: compactLandscape ? 7 : 9),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             border: Border.all(
@@ -1017,7 +1056,7 @@ class _HeaderCheckinButton extends StatelessWidget {
               color: checked
                   ? AppColors.textOnDarkMuted
                   : _drawerAccent,
-              fontSize: 10.5,
+              fontSize: compactLandscape ? 9.5 : 10.5,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1038,14 +1077,15 @@ class _ModuleTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: EdgeInsets.symmetric(horizontal: compactLandscape ? 10 : 14),
       child: Row(
         children: [
           Expanded(child: _tab(context, '世界', LucideIcons.layoutGrid, DrawerModule.world)),
-          const SizedBox(width: 8),
+          SizedBox(width: compactLandscape ? 5 : 8),
           Expanded(child: _tab(context, '发现', LucideIcons.compass, DrawerModule.discover)),
-          const SizedBox(width: 8),
+          SizedBox(width: compactLandscape ? 5 : 8),
           Expanded(child: _tab(context, '我的', LucideIcons.user, DrawerModule.mine)),
         ],
       ),
@@ -1059,7 +1099,9 @@ class _ModuleTabs extends StatelessWidget {
       child: InkWell(
         onTap: () => onSelected(module),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: EdgeInsets.symmetric(
+            vertical: _drawerCompactLandscape(context) ? 5 : 8,
+          ),
           decoration: BoxDecoration(
             border: Border.all(
               color: isSelected
@@ -1074,14 +1116,14 @@ class _ModuleTabs extends StatelessWidget {
             children: [
               Icon(
                 icon,
-                size: 16,
+                size: _drawerCompactLandscape(context) ? 14 : 16,
                 color: isSelected ? Colors.white : AppColors.textOnDarkMuted,
               ),
-              const SizedBox(height: 3),
+              SizedBox(height: _drawerCompactLandscape(context) ? 2 : 3),
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: _drawerCompactLandscape(context) ? 10 : 11,
                   fontWeight: FontWeight.w600,
                   color: isSelected ? Colors.white : AppColors.textOnDarkMuted,
                 ),
@@ -1590,13 +1632,18 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
       onRefresh: _load,
       color: _drawerAccent,
       child: GridView.builder(
-        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+        padding: EdgeInsets.fromLTRB(
+          _drawerCompactLandscape(context) ? 10 : 14,
+          _drawerCompactLandscape(context) ? 4 : 8,
+          _drawerCompactLandscape(context) ? 10 : 14,
+          4,
+        ),
         physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 0.68,
+          mainAxisSpacing: _drawerCompactLandscape(context) ? 6 : 10,
+          crossAxisSpacing: _drawerCompactLandscape(context) ? 6 : 10,
+          childAspectRatio: _drawerCompactLandscape(context) ? 0.74 : 0.68,
         ),
         itemCount: filtered.length,
         itemBuilder: (context, index) {
@@ -3204,24 +3251,32 @@ class _MineListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 13),
+          padding: EdgeInsets.symmetric(
+            horizontal: compactLandscape ? 6 : 8,
+            vertical: compactLandscape ? 8 : 13,
+          ),
           color: expanded ? Colors.white.withOpacity(0.025) : Colors.transparent,
           child: Row(
             children: [
-              Icon(icon, size: 18, color: iconColor ?? AppColors.textOnDarkMuted),
-              const SizedBox(width: 12),
+              Icon(
+                icon,
+                size: compactLandscape ? 16 : 18,
+                color: iconColor ?? AppColors.textOnDarkMuted,
+              ),
+              SizedBox(width: compactLandscape ? 8 : 12),
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: 13.5,
+                    fontSize: compactLandscape ? 12 : 13.5,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -3292,6 +3347,7 @@ class _MineQuickAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Material(
       color: Colors.white.withOpacity(0.018),
       borderRadius: BorderRadius.circular(8),
@@ -3299,8 +3355,8 @@ class _MineQuickAction extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Container(
-          height: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          height: compactLandscape ? 38 : 48,
+          padding: EdgeInsets.symmetric(horizontal: compactLandscape ? 7 : 10),
           decoration: BoxDecoration(
             border: Border.all(
               color: highlighted
@@ -3313,12 +3369,12 @@ class _MineQuickAction extends StatelessWidget {
             children: [
               Icon(
                 icon,
-                size: 16,
+                size: compactLandscape ? 14 : 16,
                 color: highlighted
                     ? _drawerAccent
                     : AppColors.textOnDarkMuted,
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: compactLandscape ? 6 : 8),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -3328,9 +3384,9 @@ class _MineQuickAction extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.textOnDark,
-                        fontSize: 11.5,
+                        fontSize: compactLandscape ? 10.5 : 11.5,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -3365,27 +3421,28 @@ class _MineLogoutButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
         child: SizedBox(
-          height: 42,
+          height: compactLandscape ? 34 : 42,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
                 LucideIcons.logOut,
-                size: 15,
+                size: compactLandscape ? 13.5 : 15,
                 color: const Color(0xFFE7685E).withOpacity(0.86),
               ),
-              const SizedBox(width: 7),
+              SizedBox(width: compactLandscape ? 5 : 7),
               Text(
                 '退出登录',
                 style: TextStyle(
                   color: const Color(0xFFE7685E).withOpacity(0.90),
-                  fontSize: 12,
+                  fontSize: compactLandscape ? 10.8 : 12,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -3412,39 +3469,46 @@ class _WorldItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          padding: EdgeInsets.symmetric(
+            vertical: compactLandscape ? 2 : 4,
+            horizontal: 2,
+          ),
           child: Row(
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(2),
                 child: Image.network(
                   CdnUtil.resize(game.imageUrl, width: 150), 
-                  width: 52,
-                  height: 52,
+                  width: compactLandscape ? 42 : 52,
+                  height: compactLandscape ? 42 : 52,
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => Container(
-                    width: 52,
-                    height: 52,
+                    width: compactLandscape ? 42 : 52,
+                    height: compactLandscape ? 42 : 52,
                     color: Colors.white.withOpacity(0.06),
                     child: Icon(
                       Icons.image_outlined,
-                      size: 20,
+                      size: compactLandscape ? 17 : 20,
                       color: AppColors.textOnDarkMuted,
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 5),
+              SizedBox(width: compactLandscape ? 4 : 5),
               Expanded(
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: compactLandscape ? 7 : 10,
+                    vertical: compactLandscape ? 4 : 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.transparent,
                     border: Border.all(
@@ -3463,20 +3527,20 @@ class _WorldItem extends StatelessWidget {
                               game.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: AppColors.textOnDark,
-                                fontSize: 14.5,
+                                fontSize: compactLandscape ? 12.5 : 14.5,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            const SizedBox(height: 3),
+                            SizedBox(height: compactLandscape ? 2 : 3),
                             Text(
                               game.category,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: AppColors.textOnDarkMuted,
-                                fontSize: 11.5,
+                                fontSize: compactLandscape ? 10 : 11.5,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -3490,7 +3554,7 @@ class _WorldItem extends StatelessWidget {
                           padding: const EdgeInsets.only(left: 10, right: 4, top: 4, bottom: 4),
                           child: Icon(
                             LucideIcons.moreHorizontal,
-                            size: 16,
+                            size: compactLandscape ? 14 : 16,
                             color: AppColors.textOnDarkMuted.withOpacity(0.6),
                           ),
                         ),
@@ -3552,27 +3616,28 @@ class _BottomActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Material(
       color: _drawerAccent,
       child: InkWell(
         onTap: onTap,
         child: Container(
-          height: 52,
+          height: compactLandscape ? 40 : 52,
           alignment: Alignment.center,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
                 icon,
-                size: 18,
+                size: compactLandscape ? 15.5 : 18,
                 color: const Color.fromARGB(255, 6, 6, 6),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: compactLandscape ? 6 : 8),
               Text(
                 label,
-                style: const TextStyle(
-                  color: Color.fromARGB(255, 12, 12, 12),
-                  fontSize: 14,
+                style: TextStyle(
+                  color: const Color.fromARGB(255, 12, 12, 12),
+                  fontSize: compactLandscape ? 12.5 : 14,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.3,
                 ),

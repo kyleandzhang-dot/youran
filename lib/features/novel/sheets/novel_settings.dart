@@ -38,10 +38,18 @@ class _SettingsDrawerScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+    final buttonSize = compactLandscape ? 28.0 : 32.0;
+
     return Column(
       children: <Widget>[
         Padding(
-          padding: EdgeInsets.fromLTRB(onBack == null ? 18 : 12, 14, 12, 12),
+          padding: EdgeInsets.fromLTRB(
+            onBack == null ? (compactLandscape ? 12 : 18) : (compactLandscape ? 8 : 12),
+            compactLandscape ? 7 : 14,
+            compactLandscape ? 8 : 12,
+            compactLandscape ? 7 : 12,
+          ),
           child: Row(
             children: <Widget>[
               if (onBack != null) ...<Widget>[
@@ -50,25 +58,25 @@ class _SettingsDrawerScaffold extends StatelessWidget {
                   child: InkWell(
                     onTap: onBack,
                     borderRadius: BorderRadius.circular(8),
-                    child: const SizedBox(
-                      width: 32,
-                      height: 32,
+                    child: SizedBox(
+                      width: buttonSize,
+                      height: buttonSize,
                       child: Icon(
                         Icons.arrow_back_ios_new_rounded,
-                        size: 13,
+                        size: compactLandscape ? 11 : 13,
                         color: AppColors.textOnDarkMuted,
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 4),
+                SizedBox(width: compactLandscape ? 2 : 4),
               ],
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: 16,
+                    fontSize: compactLandscape ? 13.5 : 16,
                     fontWeight: FontWeight.w700,
                     letterSpacing: .2,
                   ),
@@ -79,12 +87,12 @@ class _SettingsDrawerScaffold extends StatelessWidget {
                 child: InkWell(
                   onTap: () => Navigator.of(context).pop(),
                   borderRadius: BorderRadius.circular(8),
-                  child: const SizedBox(
-                    width: 32,
-                    height: 32,
+                  child: SizedBox(
+                    width: buttonSize,
+                    height: buttonSize,
                     child: Icon(
                       Icons.close_rounded,
-                      size: 18,
+                      size: compactLandscape ? 15 : 18,
                       color: AppColors.textOnDarkMuted,
                     ),
                   ),
@@ -138,6 +146,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
       builder: (context, _) {
         final settings = controller.settings;
         final developerPreview = widget.developerPreview;
+        final compactLandscape = NovelViewportMetrics.of(context).shortWide;
         if (_showDeveloperTools &&
             widget.isAdmin &&
             developerPreview != null) {
@@ -156,16 +165,21 @@ class _SettingsPanelState extends State<_SettingsPanel> {
         return _SettingsDrawerScaffold(
           title: '偏好设置',
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
+            padding: EdgeInsets.fromLTRB(
+              compactLandscape ? 12 : 18,
+              compactLandscape ? 2 : 6,
+              compactLandscape ? 12 : 18,
+              compactLandscape ? 14 : 28,
+            ),
             children: <Widget>[
               const _CleanSettingsHeader(
                 icon: Icons.palette_outlined,
                 title: '画面风格',
                 subtitle: '当前暂时锁定为动漫风格，其他画风稍后开放',
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: compactLandscape ? 6 : 12),
               SizedBox(
-                height: 88,
+                height: compactLandscape ? 62 : 88,
                 child: ListView(
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
@@ -176,7 +190,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       selected: true,
                       onTap: () => settings.setArtStyle('anime'),
                     ),
-                    const SizedBox(width: 10),
+                    SizedBox(width: compactLandscape ? 6 : 10),
                     _ArtStyleCard(
                       label: '3D',
                       asset: 'assets/images/bg-3d.webp',
@@ -184,7 +198,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       onTap: null,
                       lockedLabel: '暂未开放',
                     ),
-                    const SizedBox(width: 10),
+                    SizedBox(width: compactLandscape ? 6 : 10),
                     _ArtStyleCard(
                       label: '写实',
                       asset: 'assets/images/bg-realistic.webp',
@@ -192,7 +206,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       onTap: null,
                       lockedLabel: '暂未开放',
                     ),
-                    const SizedBox(width: 10),
+                    SizedBox(width: compactLandscape ? 6 : 10),
                     _ArtStyleCard(
                       label: '梦幻',
                       asset: 'assets/images/bg-painterly.webp',
@@ -203,32 +217,33 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   ],
                 ),
               ),
-              const SizedBox(height: 24),
+              SizedBox(height: compactLandscape ? 12 : 24),
               const _CleanSettingsHeader(
                 icon: Icons.text_fields_rounded,
                 title: '文字',
                 subtitle: '只调整阅读本身，不再混入背景主题设置',
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: compactLandscape ? 6 : 10),
               _CleanSettingsCard(
+                padding: EdgeInsets.symmetric(vertical: compactLandscape ? 8 : 13),
                 child: Column(
                   children: <Widget>[
                     Row(
                       children: <Widget>[
-                        const Text(
+                        Text(
                           '字体大小',
                           style: TextStyle(
                             color: AppColors.textOnDark,
-                            fontSize: 13,
+                            fontSize: compactLandscape ? 11 : 13,
                             fontWeight: FontWeight.w700,
-            ),
+                          ),
                         ),
                         const Spacer(),
                         Text(
                           '${settings.fontSize.round()}',
                           style: TextStyle(
                             color: AppColors.textOnDark.withOpacity(.88),
-                            fontSize: 11.5,
+                            fontSize: compactLandscape ? 9.8 : 11.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -236,7 +251,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                     ),
                     Row(
                       children: <Widget>[
-                        const Text('A', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 11)),
+                        Text('A', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: compactLandscape ? 9.5 : 11)),
                         Expanded(
                           child: SliderTheme(
                             data: SliderTheme.of(context).copyWith(
@@ -245,7 +260,9 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                               thumbColor: _novelDrawerAccent,
                               overlayColor: _novelDrawerAccent.withOpacity(.08),
                               trackHeight: 2,
-                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5.5),
+                              thumbShape: RoundSliderThumbShape(
+                                enabledThumbRadius: compactLandscape ? 4.5 : 5.5,
+                              ),
                             ),
                             child: Slider(
                               value: settings.fontSize,
@@ -256,10 +273,10 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                             ),
                           ),
                         ),
-                        const Text('A', style: TextStyle(color: AppColors.textOnDark, fontSize: 18)),
+                        Text('A', style: TextStyle(color: AppColors.textOnDark, fontSize: compactLandscape ? 15 : 18)),
                       ],
                     ),
-                    Divider(height: 18, color: Colors.white.withOpacity(.14)),
+                    Divider(height: compactLandscape ? 12 : 18, color: Colors.white.withOpacity(.14)),
                     // 四种字体属于同一级别的单选项，一行四等分展示，
                     // 避免字体设置占两行把整个设置页纵向拉长。
                     Row(
@@ -300,14 +317,14 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                         ),
                       ],
                     ),
-                    Divider(height: 18, color: Colors.white.withOpacity(.14)),
+                    Divider(height: compactLandscape ? 12 : 18, color: Colors.white.withOpacity(.14)),
                     Row(
                       children: <Widget>[
-                        const Text(
+                        Text(
                           '文字速度',
                           style: TextStyle(
                             color: AppColors.textOnDark,
-                            fontSize: 13,
+                            fontSize: compactLandscape ? 11 : 13,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -316,13 +333,13 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           settings.textSpeedLabel,
                           style: TextStyle(
                             color: AppColors.textOnDark.withOpacity(.88),
-                            fontSize: 11.5,
+                            fontSize: compactLandscape ? 9.8 : 11.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: compactLandscape ? 3 : 6),
                     Row(
                       children: <Widget>[
                         for (final option in const <(String, String)>[
@@ -345,13 +362,13 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   ],
                 ),
               ),
-              const SizedBox(height: 24),
+              SizedBox(height: compactLandscape ? 12 : 24),
               const _CleanSettingsHeader(
                 icon: Icons.tune_rounded,
                 title: '声音与引擎',
                 subtitle: '游戏过程中真正需要调整的选项',
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: compactLandscape ? 6 : 10),
               _CleanSettingsCard(
                 padding: EdgeInsets.zero,
                 child: Column(
@@ -412,39 +429,52 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       itemBuilder: (context) => controller.availableModels
                           .map((model) => PopupMenuItem<String>(
                                 value: model.id,
-                                child: Text(model.name, style: const TextStyle(color: AppColors.textOnDark, fontSize: 12.5)),
+                                child: Text(
+                                  model.name,
+                                  style: TextStyle(
+                                    color: AppColors.textOnDark,
+                                    fontSize: compactLandscape ? 10.5 : 12.5,
+                                  ),
+                                ),
                               ))
                           .toList(),
                       child: _CleanSettingsRow(
                         icon: Icons.hub_outlined,
                         title: '生成引擎模型',
                         subtitle: _modelLabel(),
-                        trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.textOnDarkMuted, size: 18),
+                        trailing: Icon(
+                          Icons.chevron_right_rounded,
+                          color: AppColors.textOnDarkMuted,
+                          size: compactLandscape ? 15 : 18,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
               if (widget.isAdmin && developerPreview != null) ...<Widget>[
-                const SizedBox(height: 26),
+                SizedBox(height: compactLandscape ? 12 : 26),
                 Divider(height: 1, color: Colors.white.withOpacity(.10)),
-                const SizedBox(height: 12),
+                SizedBox(height: compactLandscape ? 6 : 12),
                 Material(
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: () => setState(() => _showDeveloperTools = true),
                     borderRadius: BorderRadius.circular(8),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 2,
+                        vertical: compactLandscape ? 6 : 10,
+                      ),
                       child: Row(
                         children: <Widget>[
-                          const Icon(
+                          Icon(
                             Icons.science_outlined,
-                            size: 17,
+                            size: compactLandscape ? 14 : 17,
                             color: AppColors.textOnDarkMuted,
                           ),
-                          const SizedBox(width: 10),
-                          const Expanded(
+                          SizedBox(width: compactLandscape ? 7 : 10),
+                          Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: <Widget>[
@@ -452,16 +482,16 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                                   '开发者测试',
                                   style: TextStyle(
                                     color: AppColors.textOnDark,
-                                    fontSize: 12.5,
+                                    fontSize: compactLandscape ? 10.5 : 12.5,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
-                                SizedBox(height: 3),
+                                SizedBox(height: compactLandscape ? 2 : 3),
                                 Text(
                                   '天气、时间与关键页面美术预览',
                                   style: TextStyle(
                                     color: AppColors.textOnDarkMuted,
-                                    fontSize: 10,
+                                    fontSize: compactLandscape ? 8.5 : 10,
                                   ),
                                 ),
                               ],
@@ -470,7 +500,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           Icon(
                             Icons.chevron_right_rounded,
                             color: AppColors.textOnDarkMuted,
-                            size: 18,
+                            size: compactLandscape ? 15 : 18,
                           ),
                         ],
                       ),
@@ -502,6 +532,7 @@ class _ArtStyleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
     final disabled = onTap == null && !selected;
     return Material(
       color: Colors.transparent,
@@ -510,8 +541,8 @@ class _ArtStyleCard extends StatelessWidget {
         borderRadius: BorderRadius.zero,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          width: 108,
-          height: 82,
+          width: compactLandscape ? 82 : 108,
+          height: compactLandscape ? 58 : 82,
           decoration: BoxDecoration(
             color: Colors.transparent,
             border: Border.all(
@@ -546,13 +577,13 @@ class _ArtStyleCard extends StatelessWidget {
                 ),
               ),
               Positioned(
-                left: 8,
-                bottom: 7,
+                left: compactLandscape ? 6 : 8,
+                bottom: compactLandscape ? 4 : 7,
                 child: Text(
                   label,
                   style: TextStyle(
                     color: disabled ? Colors.white.withOpacity(.72) : Colors.white,
-                    fontSize: 11.5,
+                    fontSize: compactLandscape ? 9.6 : 11.5,
                     fontWeight: FontWeight.w700,
                     shadows: const <Shadow>[
                       Shadow(color: Colors.black, blurRadius: 4),
@@ -569,8 +600,14 @@ class _ArtStyleCard extends StatelessWidget {
                     child: Align(
                       alignment: Alignment.topRight,
                       child: Container(
-                        margin: const EdgeInsets.only(top: 7, right: 7),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        margin: EdgeInsets.only(
+                          top: compactLandscape ? 4 : 7,
+                          right: compactLandscape ? 4 : 7,
+                        ),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compactLandscape ? 5 : 6,
+                          vertical: compactLandscape ? 2 : 3,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.black.withOpacity(.42),
                           borderRadius: BorderRadius.circular(99),
@@ -580,7 +617,7 @@ class _ArtStyleCard extends StatelessWidget {
                           lockedLabel ?? '已锁定',
                           style: TextStyle(
                             color: Colors.white.withOpacity(.80),
-                            fontSize: 9,
+                            fontSize: compactLandscape ? 7.8 : 9,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -590,11 +627,11 @@ class _ArtStyleCard extends StatelessWidget {
                 ),
               if (selected)
                 Positioned(
-                  right: 7,
-                  top: 7,
+                  right: compactLandscape ? 4 : 7,
+                  top: compactLandscape ? 4 : 7,
                   child: Icon(
                     Icons.check_rounded,
-                    size: 13,
+                    size: compactLandscape ? 11 : 13,
                     color: Colors.white.withOpacity(.92),
                   ),
                 ),
@@ -619,37 +656,38 @@ class _CleanSettingsHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Padding(
-          padding: const EdgeInsets.only(top: 1),
+          padding: EdgeInsets.only(top: compactLandscape ? 0 : 1),
           child: Icon(
             icon,
-            size: 16,
+            size: compactLandscape ? 13.5 : 16,
             color: AppColors.textOnDarkMuted.withOpacity(.88),
           ),
         ),
-        const SizedBox(width: 10),
+        SizedBox(width: compactLandscape ? 7 : 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
                 title,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.textOnDark,
-                  fontSize: 13.5,
+                  fontSize: compactLandscape ? 11.5 : 13.5,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 3),
+              SizedBox(height: compactLandscape ? 2 : 3),
               Text(
                 subtitle,
                 style: TextStyle(
                   color: AppColors.textOnDarkMuted.withOpacity(.86),
-                  fontSize: 10.5,
-                  height: 1.35,
+                  fontSize: compactLandscape ? 9 : 10.5,
+                  height: compactLandscape ? 1.25 : 1.35,
                 ),
               ),
             ],
@@ -706,6 +744,7 @@ class _CleanSettingChoice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -713,7 +752,7 @@ class _CleanSettingChoice extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          height: 36,
+          height: compactLandscape ? 30 : 36,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: Colors.transparent,
@@ -734,7 +773,7 @@ class _CleanSettingChoice extends StatelessWidget {
                   ? AppColors.textOnDark
                   : AppColors.textOnDarkMuted,
               fontFamily: fontFamily,
-              fontSize: 11.3,
+              fontSize: compactLandscape ? 9.8 : 11.3,
               fontWeight:
                   selected ? FontWeight.w700 : FontWeight.w600,
             ),
@@ -760,18 +799,24 @@ class _CleanSettingsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
     return SizedBox(
-      height: 60,
+      height: compactLandscape ? 48 : 60,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(13, 0, 10, 0),
+        padding: EdgeInsets.fromLTRB(
+          compactLandscape ? 9 : 13,
+          0,
+          compactLandscape ? 7 : 10,
+          0,
+        ),
         child: Row(
           children: <Widget>[
             Icon(
               icon,
-              size: 17,
+              size: compactLandscape ? 14 : 17,
               color: AppColors.textOnDarkMuted.withOpacity(.82),
             ),
-            const SizedBox(width: 13),
+            SizedBox(width: compactLandscape ? 8 : 13),
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -779,26 +824,26 @@ class _CleanSettingsRow extends StatelessWidget {
                 children: <Widget>[
                   Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textOnDark,
-                      fontSize: 12.5,
+                      fontSize: compactLandscape ? 10.5 : 12.5,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(height: 3),
+                  SizedBox(height: compactLandscape ? 2 : 3),
                   Text(
                     subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textOnDarkMuted,
-                      fontSize: 10.5,
+                      fontSize: compactLandscape ? 8.8 : 10.5,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: compactLandscape ? 5 : 8),
             trailing,
           ],
         ),

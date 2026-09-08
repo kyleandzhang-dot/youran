@@ -308,7 +308,10 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     return quality.clamp(0, 10).toInt();
   }
 
-  Widget _equipmentBonusPanel(List<NovelInventoryItem> equipped) {
+  Widget _equipmentBonusPanel(
+    List<NovelInventoryItem> equipped, {
+    bool dense = false,
+  }) {
     final hp = (_qualityForSlot(equipped, 'upper') * 10 +
             _affixTotal(equipped, 'max_hp_percent', cap: 40))
         .clamp(0, 140)
@@ -351,16 +354,16 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     ];
 
     return Padding(
-      padding: const EdgeInsets.only(top: 14),
+      padding: EdgeInsets.only(top: dense ? 8 : 14),
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         padding: EdgeInsets.zero,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2, 
-          mainAxisSpacing: 8, 
-          crossAxisSpacing: 16, 
-          mainAxisExtent: 16, 
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: dense ? 5 : 8,
+          crossAxisSpacing: dense ? 10 : 16,
+          mainAxisExtent: dense ? 14 : 16,
         ),
         itemCount: bonuses.length,
         itemBuilder: (context, index) {
@@ -643,7 +646,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  Widget _hero(NovelCharacter? host, List<NovelInventoryItem> equipped, List<_GameStyleSkillView> skills) {
+  Widget _hero(
+    NovelCharacter? host,
+    List<NovelInventoryItem> equipped,
+    List<_GameStyleSkillView> skills, {
+    bool landscape = false,
+  }) {
     final name = host?.name.trim().isNotEmpty == true
         ? host!.name
         : widget.controller.protagonistName;
@@ -661,7 +669,9 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         .join('  ·  ');
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 24, 4),
+      padding: landscape
+          ? const EdgeInsets.fromLTRB(14, 6, 18, 8)
+          : const EdgeInsets.fromLTRB(16, 8, 24, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -669,15 +679,18 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
               Container(
-                width: 56, 
-                height: 56, 
+                width: landscape ? 46 : 56,
+                height: landscape ? 46 : 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: _inventoryGold.withOpacity(.42), width: 1),
+                  border: Border.all(
+                    color: _inventoryGold.withOpacity(landscape ? .24 : .42),
+                    width: landscape ? .7 : 1,
+                  ),
                   boxShadow: <BoxShadow>[
                     BoxShadow(
-                      color: _inventoryBlue.withOpacity(.22),
-                      blurRadius: 16, 
+                      color: _inventoryBlue.withOpacity(landscape ? .10 : .22),
+                      blurRadius: landscape ? 9 : 16,
                     ),
                   ],
                 ),
@@ -689,7 +702,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   fallbackText: name,
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: landscape ? 10 : 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -698,21 +711,21 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                       name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: _inventoryText,
-                        fontSize: 18, 
+                        fontSize: landscape ? 15.5 : 18,
                         height: 1.1,
                         fontWeight: FontWeight.w900,
-                        letterSpacing: .5,
+                        letterSpacing: landscape ? .35 : .5,
                       ),
                     ),
                     if (metaTags.isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                      SizedBox(height: landscape ? 3 : 4),
                       Text(
                         metaTags,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: _inventoryTextSoft,
-                          fontSize: 10.5,
+                          fontSize: landscape ? 9.4 : 10.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -723,14 +736,27 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
             ],
           ),
           
-          _equipmentBonusPanel(equipped),
+          _equipmentBonusPanel(equipped, dense: landscape),
           
           if (skills.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 16), 
+            SizedBox(height: landscape ? 10 : 16),
             Row(
               children: <Widget>[
                 Expanded(
-                  child: _GameStyleSectionTitle(title: '技能', count: skills.length),
+                  child: landscape
+                      ? Text(
+                          '技能  ${skills.length}',
+                          style: const TextStyle(
+                            color: _inventoryTextSoft,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .5,
+                          ),
+                        )
+                      : _GameStyleSectionTitle(
+                          title: '技能',
+                          count: skills.length,
+                        ),
                 ),
                 if (skills.length > 3)
                   Material(
@@ -753,26 +779,31 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   ),
               ],
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: landscape ? 5 : 8),
             Wrap(
-              spacing: 6, 
-              runSpacing: 6,
+              spacing: landscape ? 5 : 6,
+              runSpacing: landscape ? 5 : 6,
               children: skills.take(_skillsExpanded ? skills.length : 3).map((skill) {
                 final meta = skill.isAbility
                     ? '能力'
                     : (skill.mastery.isEmpty ? '' : skill.mastery);
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), 
+                  padding: EdgeInsets.symmetric(
+                    horizontal: landscape ? 7 : 8,
+                    vertical: landscape ? 3 : 4,
+                  ),
                   decoration: BoxDecoration(
-                    color: _inventoryInkSoft.withOpacity(.72),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white.withOpacity(.06)),
+                    color: _inventoryInkSoft.withOpacity(landscape ? .32 : .72),
+                    borderRadius: BorderRadius.circular(landscape ? 2 : 4),
+                    border: landscape
+                        ? null
+                        : Border.all(color: Colors.white.withOpacity(.06)),
                   ),
                   child: Text(
                     meta.isEmpty ? skill.name : '${skill.name} · $meta',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: _inventoryTextSoft,
-                      fontSize: 10,
+                      fontSize: landscape ? 9.2 : 10,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -782,14 +813,24 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
           ],
           
           if (equipped.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 16), 
+            SizedBox(height: landscape ? 10 : 16),
             Row(
               children: <Widget>[
                 Expanded(
-                  child: _GameStyleSectionTitle(
-                    title: '当前穿戴',
-                    count: equipped.length,
-                  ),
+                  child: landscape
+                      ? Text(
+                          '当前穿戴  ${equipped.length}',
+                          style: const TextStyle(
+                            color: _inventoryTextSoft,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .5,
+                          ),
+                        )
+                      : _GameStyleSectionTitle(
+                          title: '当前穿戴',
+                          count: equipped.length,
+                        ),
                 ),
                 if (equipped.length > 3)
                   Material(
@@ -812,10 +853,10 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   ),
               ],
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: landscape ? 5 : 8),
             Wrap(
-              spacing: 8, 
-              runSpacing: 8,
+              spacing: landscape ? 6 : 8,
+              runSpacing: landscape ? 6 : 8,
               children: equipped
                   .take(_equippedExpanded ? equipped.length : 3)
                   .map((item) {
@@ -829,11 +870,18 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                     borderRadius: BorderRadius.circular(4),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 160),
-                      padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
+                      padding: EdgeInsets.fromLTRB(
+                        landscape ? 7 : 8,
+                        landscape ? 4 : 6,
+                        landscape ? 6 : 6,
+                        landscape ? 4 : 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: _inventoryInkSoft.withOpacity(.74),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: qualityColor.withOpacity(.22)),
+                        color: _inventoryInkSoft.withOpacity(landscape ? .34 : .74),
+                        borderRadius: BorderRadius.circular(landscape ? 2 : 4),
+                        border: landscape
+                            ? null
+                            : Border.all(color: qualityColor.withOpacity(.22)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -845,7 +893,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: qualityColor,
-                                fontSize: 10.5,
+                                fontSize: landscape ? 9.6 : 10.5,
                                 fontWeight: FontWeight.w800,
                               ),
                             ),
@@ -881,27 +929,38 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  // 桌面端微圆角磨砂玻璃容器，有效分离背景光效和文字信息，使文字清晰可读
-  Widget _buildGlassPanel({required Widget child}) {
+  // 桌面端保留原玻璃层；手机横屏用 quiet 模式弱化“大框套小框”的线条感。
+  Widget _buildGlassPanel({
+    required Widget child,
+    bool quiet = false,
+  }) {
+    final radius = BorderRadius.circular(quiet ? 2 : 6);
     return ClipRRect(
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: radius,
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        filter: ImageFilter.blur(
+          sigmaX: quiet ? 8 : 18,
+          sigmaY: quiet ? 8 : 18,
+        ),
         child: Container(
           decoration: BoxDecoration(
-            color: _inventoryInkSoft.withOpacity(0.55),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.08),
-              width: 0.8,
-            ),
-            boxShadow: <BoxShadow>[
-              BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
+            color: _inventoryInkSoft.withOpacity(quiet ? .20 : .55),
+            borderRadius: radius,
+            border: quiet
+                ? null
+                : Border.all(
+                    color: Colors.white.withOpacity(.08),
+                    width: .8,
+                  ),
+            boxShadow: quiet
+                ? const <BoxShadow>[]
+                : <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withOpacity(.15),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
           ),
           child: child,
         ),
@@ -953,7 +1012,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                         children: List.generate(items.length, (index) {
                           return SizedBox(
                             width: itemWidth,
-                            child: _buildAnimatedRow(items[index], index),
+                            child: _buildAnimatedRow(
+                              items[index],
+                              index,
+                              dense: dense,
+                            ),
                           );
                         }),
                       );
@@ -962,7 +1025,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                 : Column(
                     children: <Widget>[
                       for (var index = 0; index < items.length; index++) ...<Widget>[
-                        _buildAnimatedRow(items[index], index),
+                        _buildAnimatedRow(
+                          items[index],
+                          index,
+                          dense: dense,
+                        ),
                         if (index != items.length - 1)
                           const SizedBox(height: 6),
                       ],
@@ -974,7 +1041,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
   }
 
   // 提取公用的带动画的列表行组件
-  Widget _buildAnimatedRow(NovelInventoryItem item, int index) {
+  Widget _buildAnimatedRow(
+    NovelInventoryItem item,
+    int index, {
+    bool dense = false,
+  }) {
     return TweenAnimationBuilder<double>(
       key: ValueKey<String>('$_filterIndex-${item.id}-${item.name}'),
       tween: Tween<double>(begin: 0, end: 1),
@@ -994,6 +1065,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         busy: busy == item.id,
         onTap: () => _showItemDetail(item),
         onWear: () => _toggleWear(item),
+        dense: dense,
       ),
     );
   }
@@ -1120,11 +1192,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         }
 
         Widget landscapeLayout() {
-          // 手机横屏是真正的左右两栏，而不是把竖屏页面压扁。
+          // 手机横屏：弱化框线，用留白和明暗层级组织左右信息。
           return Column(
             children: <Widget>[
               _InventoryHeader(
                 dense: true,
+                showTitle: false,
                 horizontalPadding: EdgeInsets.zero,
                 onClose: widget.embedded
                     ? null
@@ -1135,21 +1208,30 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     SizedBox(
-                      width: 286,
+                      width: 272,
                       child: _buildGlassPanel(
+                        quiet: true,
                         child: ListView(
                           physics: const BouncingScrollPhysics(),
-                          padding: const EdgeInsets.only(top: 2, bottom: 10),
-                          children: <Widget>[_hero(host, equipped, skills)],
+                          padding: const EdgeInsets.only(top: 1, bottom: 8),
+                          children: <Widget>[
+                            _hero(
+                              host,
+                              equipped,
+                              skills,
+                              landscape: true,
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         children: <Widget>[
                           Expanded(
                             child: _buildGlassPanel(
+                              quiet: true,
                               child: RefreshIndicator(
                                 onRefresh: _refresh,
                                 color: _inventoryGold,
@@ -1167,10 +1249,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                               ),
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 5),
                           _inventoryFilterBar(
                             isDesktop: true,
                             dense: true,
+                            quiet: true,
                           ),
                         ],
                       ),
@@ -1242,29 +1325,37 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
   Widget _inventoryFilterBar({
     bool isDesktop = false,
     bool dense = false,
+    bool quiet = false,
   }) {
     final child = Center(
       child: Container(
         height: dense ? 34 : 44,
-        constraints: BoxConstraints(maxWidth: dense ? 300 : 360), 
+        constraints: BoxConstraints(maxWidth: dense ? 300 : 360),
         decoration: BoxDecoration(
-          color: _inventoryInkSoft.withOpacity(0.65), 
-          borderRadius: BorderRadius.circular(6), // 强化微圆角特征
-          border: Border.all(color: Colors.white.withOpacity(0.08), width: 0.8),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          color: _inventoryInkSoft.withOpacity(quiet ? .28 : .65),
+          borderRadius: BorderRadius.circular(quiet ? 2 : 6),
+          border: quiet
+              ? null
+              : Border.all(
+                  color: Colors.white.withOpacity(.08),
+                  width: .8,
+                ),
+          boxShadow: quiet
+              ? const <BoxShadow>[]
+              : <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withOpacity(.2),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Expanded(child: _buildFilterBtn('全部', 0)),
-            Expanded(child: _buildFilterBtn('穿戴', 1)),
-            Expanded(child: _buildFilterBtn('道具', 2)),
+            Expanded(child: _buildFilterBtn('全部', 0, quiet: quiet)),
+            Expanded(child: _buildFilterBtn('穿戴', 1, quiet: quiet)),
+            Expanded(child: _buildFilterBtn('道具', 2, quiet: quiet)),
           ],
         ),
       ),
@@ -1290,7 +1381,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  Widget _buildFilterBtn(String label, int index) {
+  Widget _buildFilterBtn(
+    String label,
+    int index, {
+    bool quiet = false,
+  }) {
     final selected = _filterIndex == index;
     return Material(
       color: Colors.transparent,
@@ -1303,14 +1398,20 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
           decoration: selected
               ? BoxDecoration(
                   color: _inventoryBlue.withOpacity(0.2), 
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: _inventoryGold.withOpacity(0.3)), 
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: _inventoryBlue.withOpacity(0.12),
-                      blurRadius: 8,
-                    )
-                  ],
+                  borderRadius: BorderRadius.circular(quiet ? 2 : 6),
+                  border: quiet
+                      ? null
+                      : Border.all(
+                          color: _inventoryGold.withOpacity(.3),
+                        ),
+                  boxShadow: quiet
+                      ? const <BoxShadow>[]
+                      : <BoxShadow>[
+                          BoxShadow(
+                            color: _inventoryBlue.withOpacity(.12),
+                            blurRadius: 8,
+                          ),
+                        ],
                 )
               : const BoxDecoration(),
           child: Text(
@@ -1392,32 +1493,37 @@ class _InventoryHeader extends StatelessWidget {
     this.onClose,
     this.horizontalPadding = const EdgeInsets.symmetric(horizontal: 20),
     this.dense = false,
+    this.showTitle = true,
   });
 
   final VoidCallback? onClose;
   final EdgeInsetsGeometry horizontalPadding;
   final bool dense;
+  final bool showTitle;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: dense ? 42 : 64,
+      height: showTitle ? (dense ? 42 : 64) : (onClose != null ? 40 : 4),
       child: Padding(
         padding: horizontalPadding,
         child: Row(
           children: <Widget>[
-            Expanded(
-              child: Text(
-                '背包',
-                style: TextStyle(
-                  color: _inventoryText,
-                  fontSize: dense ? 16 : 20,
-                  height: 1,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 2.2,
+            if (showTitle)
+              Expanded(
+                child: Text(
+                  '背包',
+                  style: TextStyle(
+                    color: _inventoryText,
+                    fontSize: dense ? 16 : 20,
+                    height: 1,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2.2,
+                  ),
                 ),
-              ),
-            ),
+              )
+            else
+              const Spacer(),
             if (onClose != null)
               Material(
                 color: Colors.transparent,
@@ -1607,6 +1713,7 @@ class _GameStyleInventoryRow extends StatelessWidget {
     required this.busy,
     required this.onTap,
     required this.onWear,
+    this.dense = false,
   });
 
   final NovelInventoryItem item;
@@ -1615,6 +1722,7 @@ class _GameStyleInventoryRow extends StatelessWidget {
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onWear;
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
@@ -1631,12 +1739,16 @@ class _GameStyleInventoryRow extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOutCubic,
-          // 极致压缩列表项的上下边距
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          padding: EdgeInsets.symmetric(
+            horizontal: dense ? 12 : 14,
+            vertical: dense ? 7 : 9,
+          ),
           decoration: BoxDecoration(
-            color: _inventoryInkSoft.withOpacity(.68),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: qualityColor.withOpacity(.18)),
+            color: _inventoryInkSoft.withOpacity(dense ? .34 : .68),
+            borderRadius: BorderRadius.circular(dense ? 2 : 4),
+            border: dense
+                ? null
+                : Border.all(color: qualityColor.withOpacity(.18)),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,

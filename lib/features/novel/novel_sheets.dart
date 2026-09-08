@@ -32,6 +32,7 @@ part 'sheets/novel_scene_map.dart';
 part 'sheets/novel_inventory.dart';
 part 'sheets/novel_store.dart';
 part 'sheets/novel_character.dart';
+part 'sheets/novel_characters.dart';
 part 'sheets/novel_host_profile.dart';
 part 'sheets/novel_journey.dart';
 part 'sheets/novel_surroundings.dart';

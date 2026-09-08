@@ -36,9 +36,13 @@ class NovelChoiceDockActionScope extends InheritedWidget {
 }
 
 class _NovelChoiceDockSurroundingsAction extends StatefulWidget {
-  const _NovelChoiceDockSurroundingsAction({required this.scope});
+  const _NovelChoiceDockSurroundingsAction({
+    required this.scope,
+    this.compact = false,
+  });
 
   final NovelChoiceDockActionScope scope;
+  final bool compact;
 
   @override
   State<_NovelChoiceDockSurroundingsAction> createState() =>
@@ -101,14 +105,19 @@ class _NovelChoiceDockSurroundingsActionState
           splashColor: Colors.white.withOpacity(.05),
           highlightColor: Colors.white.withOpacity(.025),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(6, 3, 1, 3),
+            padding: EdgeInsets.fromLTRB(
+              widget.compact ? 4 : 6,
+              widget.compact ? 2 : 3,
+              1,
+              widget.compact ? 2 : 3,
+            ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 if (scope.loading)
                   SizedBox(
-                    width: 9,
-                    height: 9,
+                    width: widget.compact ? 8 : 9,
+                    height: widget.compact ? 8 : 9,
                     child: CircularProgressIndicator(
                       strokeWidth: 1.2,
                       color: Colors.white.withOpacity(.52),
@@ -120,8 +129,8 @@ class _NovelChoiceDockSurroundingsActionState
                     builder: (context, _) {
                       final value = scope.attention ? _pulse.value : 0.0;
                       return Container(
-                        width: 5,
-                        height: 5,
+                        width: widget.compact ? 4 : 5,
+                        height: widget.compact ? 4 : 5,
                         decoration: BoxDecoration(
                           color: const Color(0xFF6FD35F).withOpacity(
                             scope.attention ? .72 + value * .28 : .58,
@@ -141,12 +150,12 @@ class _NovelChoiceDockSurroundingsActionState
                       );
                     },
                   ),
-                const SizedBox(width: 6),
+                SizedBox(width: widget.compact ? 4 : 6),
                 Text(
                   scope.label,
                   style: TextStyle(
                     color: const Color(0xFFF7F2EA).withOpacity(.72),
-                    fontSize: 11.5,
+                    fontSize: widget.compact ? 10.2 : 11.5,
                     height: 1,
                     fontWeight: FontWeight.w600,
                     letterSpacing: .28,
@@ -155,7 +164,7 @@ class _NovelChoiceDockSurroundingsActionState
                 const SizedBox(width: 1),
                 Icon(
                   Icons.chevron_right_rounded,
-                  size: 14,
+                  size: widget.compact ? 12 : 14,
                   color: Colors.white.withOpacity(.28),
                 ),
               ],
@@ -277,6 +286,7 @@ class _InlineNovelChoices extends StatelessWidget {
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.narrowWidth;
     final shortViewport = viewport.shortViewport;
+    final shortWide = viewport.shortWide;
     final cardHeight = shortViewport ? 38.0 : (compact ? 42.0 : 44.0);
     final gap = shortViewport ? 5.0 : (compact ? 6.0 : 7.0);
     final rightPadding = shortViewport ? 6.0 : (compact ? 7.0 : 9.0);
@@ -322,8 +332,10 @@ class _InlineNovelChoices extends StatelessWidget {
                               color: _ChoiceColors.card,
                               borderRadius: BorderRadius.zero,
                               border: Border.all(
-                                color: _ChoiceColors.border,
-                                width: .65,
+                                color: shortWide
+                                    ? Colors.white.withOpacity(.24)
+                                    : _ChoiceColors.border,
+                                width: shortWide ? .85 : .65,
                               ),
                             ),
                             child: Row(
@@ -336,8 +348,10 @@ class _InlineNovelChoices extends StatelessWidget {
                                     color: _ChoiceColors.numberBg,
                                     borderRadius: BorderRadius.circular(2),
                                     border: Border.all(
-                                      color: _ChoiceColors.numberBorder,
-                                      width: .65,
+                                      color: shortWide
+                                          ? Colors.white.withOpacity(.34)
+                                          : _ChoiceColors.numberBorder,
+                                      width: shortWide ? .8 : .65,
                                     ),
                                   ),
                                   child: Text(
@@ -434,6 +448,7 @@ class _NovelDialogFooter extends StatelessWidget {
     );
     final compact = viewport.compactContent;
     final shortViewport = viewport.shortViewport;
+    final shortWide = viewport.shortWide;
     final wideDialogueLayout = viewport.useDesktopDialogue;
     final keyboardVisible = media.viewInsets.bottom > 0;
     final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
@@ -479,7 +494,7 @@ class _NovelDialogFooter extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               if (showComposer) ...<Widget>[
-            if (showSurroundingsAction) ...<Widget>[
+            if (showSurroundingsAction && !shortWide) ...<Widget>[
               Align(
                 alignment: Alignment.centerLeft,
                 child: _NovelChoiceDockSurroundingsAction(
@@ -491,6 +506,13 @@ class _NovelDialogFooter extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
+                if (showSurroundingsAction && shortWide) ...<Widget>[
+                  _NovelChoiceDockSurroundingsAction(
+                    scope: surroundingsAction!,
+                    compact: true,
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 if (!choicesAvailable) ...<Widget>[
                   _GameContinueButton(onTap: onContinue),
                   const SizedBox(width: 9),

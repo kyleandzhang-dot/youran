@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'depth_service.dart';
 
@@ -69,12 +70,17 @@ class _DepthParallaxPreviewPageState extends State<DepthParallaxPreviewPage> {
         _status = '模型已就绪 · 上传一张剧情背景图开始测试';
         _statusIsError = false;
       });
-    } catch (error) {
+    } catch (error, stack) {
       if (!mounted || _sourceImage != null) return;
       setState(() {
-        _status = kIsWeb
-            ? '模型预热失败：$error\n请先给 web/index.html 加 ONNX Runtime Web 脚本。'
-            : '模型预热失败：$error';
+        _status = _formatErrorDetails(
+          '模型预热失败',
+          error,
+          stack,
+          hint: kIsWeb
+              ? '请先给 web/index.html 加 ONNX Runtime Web 脚本。'
+              : null,
+        );
         _statusIsError = true;
       });
     } finally {
@@ -91,10 +97,10 @@ class _DepthParallaxPreviewPageState extends State<DepthParallaxPreviewPage> {
       _shader?.dispose();
       _shader = program.fragmentShader();
       setState(() {});
-    } catch (error) {
+    } catch (error, stack) {
       if (!mounted) return;
       setState(() {
-        _status = '3D Shader 加载失败：$error';
+        _status = _formatErrorDetails('3D Shader 加载失败', error, stack);
         _statusIsError = true;
       });
     }
@@ -150,10 +156,10 @@ class _DepthParallaxPreviewPageState extends State<DepthParallaxPreviewPage> {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       if (!mounted) return;
       await _generateDepth(bytes);
-    } catch (error) {
+    } catch (error, stack) {
       if (!mounted) return;
       setState(() {
-        _status = '选择图片失败：$error';
+        _status = _formatErrorDetails('选择图片失败', error, stack);
         _statusIsError = true;
       });
     } finally {
@@ -187,14 +193,17 @@ class _DepthParallaxPreviewPageState extends State<DepthParallaxPreviewPage> {
       _status =
           'Depth 完成 ${watch.elapsedMilliseconds}ms · 移动鼠标 / 手指看 2.5D';
       _statusIsError = false;
-    } catch (error) {
+    } catch (error, stack) {
       watch.stop();
       if (!mounted) return;
-      _status = kIsWeb
-          ? 'Chrome 深度推理失败：$error\n'
-              '先确认 web/index.html 已加载 onnxruntime-web 1.23.0；'
-              'Chrome 建议开启 WebGPU。'
-          : 'Depth 推理失败：$error';
+      _status = _formatErrorDetails(
+        kIsWeb ? 'Chrome 深度推理失败' : 'Depth 推理失败',
+        error,
+        stack,
+        hint: kIsWeb
+            ? '先确认 web/index.html 已加载 onnxruntime-web 1.23.0；Chrome 建议开启 WebGPU。'
+            : null,
+      );
       _statusIsError = true;
       _mode = _DepthPreviewMode.original;
     } finally {
@@ -231,6 +240,94 @@ class _DepthParallaxPreviewPageState extends State<DepthParallaxPreviewPage> {
       _viewX = 0;
       _viewY = 0;
     });
+  }
+
+  String _formatErrorDetails(
+    String title,
+    Object error,
+    StackTrace stack, {
+    String? hint,
+  }) {
+    final buffer = StringBuffer()..writeln('$title：$error');
+    if (hint != null && hint.trim().isNotEmpty) {
+      buffer
+        ..writeln()
+        ..writeln(hint.trim());
+    }
+
+    final stackText = stack.toString().trim();
+    if (stackText.isNotEmpty) {
+      buffer
+        ..writeln()
+        ..writeln('Stack trace:')
+        ..write(stackText);
+    }
+    return buffer.toString();
+  }
+
+  Future<void> _copyStatus() async {
+    await Clipboard.setData(ClipboardData(text: _status));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('完整报错已复制'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+  }
+
+  Widget _buildStatusMessage() {
+    final style = TextStyle(
+      color: _statusIsError
+          ? const Color(0xFFFF9A9A)
+          : Colors.white.withOpacity(.60),
+      fontSize: 9.8,
+      height: 1.45,
+    );
+
+    if (!_statusIsError) {
+      return Text(
+        _status,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(maxHeight: 150),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF9A9A).withOpacity(.055),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: const Color(0xFFFF9A9A).withOpacity(.20)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Expanded(
+            child: Scrollbar(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(10, 9, 6, 9),
+                child: SelectableText(
+                  _status,
+                  style: style,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '复制完整报错',
+            onPressed: _copyStatus,
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            color: const Color(0xFFFFB0B0),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -510,18 +607,7 @@ class _DepthParallaxPreviewPageState extends State<DepthParallaxPreviewPage> {
                     ],
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    _status,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _statusIsError
-                          ? const Color(0xFFFF9A9A)
-                          : Colors.white.withOpacity(.60),
-                      fontSize: 9.8,
-                      height: 1.45,
-                    ),
-                  ),
+                  _buildStatusMessage(),
                   if (_fileName.isNotEmpty || _lastInferenceMs != null) ...<Widget>[
                     const SizedBox(height: 3),
                     Text(
