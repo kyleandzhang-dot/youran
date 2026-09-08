@@ -31,3 +31,65 @@ part 'widgets/novel_input.dart';
 part 'widgets/novel_feedback_overlays.dart';
 part 'widgets/novel_choice_panel.dart';
 part 'widgets/novel_widget_previews.dart';
+
+
+/// Shared responsive metrics for the whole novel UI.
+///
+/// The important distinction is between a genuinely spacious desktop window and
+/// a very wide-but-short phone landscape viewport. A modern iPhone in landscape
+/// can be wider than 800 logical pixels while still being under 430 pixels tall;
+/// width-only breakpoints therefore misclassify it as desktop.
+class NovelViewportMetrics {
+  const NovelViewportMetrics._({
+    required this.size,
+    required this.desktopMode,
+  });
+
+  factory NovelViewportMetrics.of(
+    BuildContext context, {
+    bool desktopMode = false,
+  }) {
+    return NovelViewportMetrics.fromMediaQuery(
+      MediaQuery.of(context),
+      desktopMode: desktopMode,
+    );
+  }
+
+  factory NovelViewportMetrics.fromMediaQuery(
+    MediaQueryData media, {
+    bool desktopMode = false,
+  }) {
+    return NovelViewportMetrics._(
+      size: media.size,
+      desktopMode: desktopMode,
+    );
+  }
+
+  final Size size;
+  final bool desktopMode;
+
+  bool get isLandscape => size.width > size.height;
+  bool get narrowWidth => size.width <= 600;
+  bool get phoneWidth => size.width <= 430;
+  bool get shortViewport => size.height < 520;
+  bool get ultraShortViewport => size.height < 400;
+
+  /// Phones in landscape (and similarly short browser windows) need a dedicated
+  /// composition instead of the full desktop camera language.
+  bool get shortWide => isLandscape && shortViewport;
+
+  /// Compact chrome is used for HUD/nav/input controls. Content width can remain
+  /// generous in landscape while the vertical chrome becomes denser.
+  bool get compactChrome => phoneWidth || shortViewport;
+  bool get compactContent => narrowWidth || shortViewport;
+
+  /// Full desktop dialogue/portrait composition is only enabled when there is
+  /// enough vertical room. This keeps PC behavior intact while preventing a
+  /// landscape iPhone from inheriting desktop-sized portraits and text panels.
+  bool get useDesktopDialogue =>
+      desktopMode && !shortWide && size.width >= 700 && size.height >= 520;
+
+  double get topHudHeight => shortWide ? 56.0 : (compactChrome ? 64.0 : 72.0);
+  double get topContentReserve =>
+      shortWide ? 58.0 : (compactChrome ? 74.0 : 86.0);
+}

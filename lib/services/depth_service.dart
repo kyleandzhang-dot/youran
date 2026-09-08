@@ -44,15 +44,19 @@ class DepthService {
 
   Future<void> _initialize() async {
     try {
-      if (kIsWeb) {
-        _session = await _createWebSession();
-        return;
-      }
-
+      // Prefer hardware acceleration when the plugin reports it as available,
+      // while keeping CPU as a fallback.
       final available = await _runtime.getAvailableProviders();
       final preferredOrder = <OrtProvider>[
+        // Chrome/Edge on Windows: prefer WebGPU so the FP16-weight model can
+        // stay on the GPU. If unavailable, fall back to WASM/default.
+        OrtProvider.WEB_GPU,
+        OrtProvider.WEB_ASSEMBLY,
+        // Shipping mobile targets.
         OrtProvider.CORE_ML,
         OrtProvider.NNAPI,
+        // Native desktop fallbacks are harmless even though desktop is not a
+        // shipping target for this app.
         OrtProvider.DIRECT_ML,
         OrtProvider.XNNPACK,
         OrtProvider.CPU,
@@ -60,6 +64,9 @@ class DepthService {
       final providers = preferredOrder
           .where(available.contains)
           .toList(growable: false);
+
+      debugPrint('[Depth] available providers: $available');
+      debugPrint('[Depth] selected providers: $providers');
 
       try {
         _session = await _runtime.createSessionFromAsset(
@@ -72,48 +79,34 @@ class DepthService {
                   interOpNumThreads: 1,
                 ),
         );
-      } catch (_) {
-        _session = await _runtime.createSessionFromAsset(modelAsset);
+        debugPrint('[Depth] provider-configured session ready.');
+      } catch (providerError, providerStack) {
+        // Keep the first failure visible. Previously this error was swallowed,
+        // which made it impossible to tell whether CoreML or the fallback was
+        // actually failing on iOS.
+        debugPrint('[Depth] provider-configured session failed: $providerError');
+        debugPrint('$providerStack');
+        debugPrint('[Depth] retrying default session without explicit providers...');
+
+        try {
+          _session = await _runtime.createSessionFromAsset(modelAsset);
+          debugPrint('[Depth] default session ready after provider failure.');
+        } catch (fallbackError, fallbackStack) {
+          debugPrint('[Depth] default session failed: $fallbackError');
+          debugPrint('$fallbackStack');
+          Error.throwWithStackTrace(
+            StateError(
+              'Depth session creation failed twice. '
+              'Provider session: $providerError | '
+              'Default session: $fallbackError',
+            ),
+            fallbackStack,
+          );
+        }
       }
     } finally {
       _initializing = null;
     }
-  }
-
-  Future<OrtSession> _createWebSession() async {
-    final available = await _runtime.getAvailableProviders();
-    if (!available.contains(OrtProvider.WEB_GPU)) {
-      throw UnsupportedError(
-        '当前 Chrome 没有可用 WebGPU。请确认使用较新的 Chrome/Edge，并检查 chrome://gpu。',
-      );
-    }
-
-    // flutter_onnxruntime 1.8.4 的 Web 实现会把传入路径直接交给
-    // ort.InferenceSession.create()，不会经过 Flutter rootBundle。
-    // Flutter Web 的项目资源在不同运行/构建模式下可能表现为这两种 URL，
-    // 因此开发预览依次尝试，避免 asset key 与浏览器 URL 不一致。
-    const candidates = <String>[
-      'assets/assets/models/model_fp16.onnx',
-      'assets/models/model_fp16.onnx',
-    ];
-
-    Object? lastError;
-    for (final path in candidates) {
-      try {
-        return await _runtime.createSession(
-          path,
-          options: OrtSessionOptions(
-            providers: const <OrtProvider>[OrtProvider.WEB_GPU],
-          ),
-        );
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw StateError(
-      'WebGPU 模型会话创建失败。已尝试：${candidates.join(', ')}。最后错误：$lastError',
-    );
   }
 
   /// Generates a depth map from [imageBytes].

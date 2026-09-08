@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../game_shell.dart';
+import '../../api/user_api.dart';
 import 'novel_ending_page.dart';
 import 'novel_backend.dart';
 import 'novel_game_controller.dart';
@@ -80,6 +81,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _balanceOpen = false;
   bool _battleOpen = false;
   bool _loadFailureHandled = false;
+  bool _isAdmin = false;
   NovelWeatherEffect? _weatherPreviewOverride;
   String? _backgroundPreviewOverride;
   Uint8List? _backgroundPreviewBytes;
@@ -114,7 +116,20 @@ class _NovelGamePageState extends State<NovelGamePage>
         DeviceOrientation.portraitUp,
       ]));
     }
+    unawaited(_loadAdminStatus());
     unawaited(_initializeGame());
+  }
+
+  Future<void> _loadAdminStatus() async {
+    try {
+      final profile = await UserApi.getProfile();
+      if (!mounted) return;
+      setState(() => _isAdmin = profile.isAdmin);
+    } catch (_) {
+      // 权限状态无法确认时按普通用户处理，绝不默认开放开发者入口。
+      if (!mounted) return;
+      setState(() => _isAdmin = false);
+    }
   }
 
   Future<void> _initializeGame() async {
@@ -1570,7 +1585,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   @override
-  @override
   Widget build(BuildContext context) {
     return GameShell(
       activeScenarioId: controller.scenarioId,
@@ -1611,15 +1625,42 @@ class _NovelGamePageState extends State<NovelGamePage>
               nativeMobile: _isNativeMobilePlatform,
             );
             final desktopMode = controller.desktopMode;
-            // 在宽屏浏览器里切到“手机模式”时，用真实的窄画布预览手机 UI；
-            // 电脑模式则始终占满当前窗口。
-            final mobilePreviewWidth = !desktopMode && rootMedia.size.width > 600
-                ? math.min(430.0, rootMedia.size.width)
+
+            // PC/Web 的“手机模式”不再只把宽度硬压到 430，而是按现代 iPhone
+            // 的长屏比例模拟完整画布，并补上接近真机的顶部/底部安全区。
+            // 这样在电脑上调出的手机版，与真机的纵向空间分配会非常接近。
+            final previewingPhoneOnDesktop = !desktopMode &&
+                !_isNativeMobilePlatform &&
+                rootMedia.size.width > 600;
+            const referencePhoneSize = Size(430, 932);
+            final previewHeight = previewingPhoneOnDesktop
+                ? math.min(referencePhoneSize.height, rootMedia.size.height)
+                : rootMedia.size.height;
+            final previewWidth = previewingPhoneOnDesktop
+                ? math.min(
+                    referencePhoneSize.width,
+                    previewHeight *
+                        referencePhoneSize.width /
+                        referencePhoneSize.height,
+                  )
                 : rootMedia.size.width;
-            final effectiveMedia = rootMedia.copyWith(
-              size: Size(mobilePreviewWidth, rootMedia.size.height),
+            final mobilePreviewSize = Size(previewWidth, previewHeight);
+            final previewScale = previewingPhoneOnDesktop
+                ? previewHeight / referencePhoneSize.height
+                : 1.0;
+            final simulatedPhoneSafeArea = EdgeInsets.only(
+              top: 47.0 * previewScale,
+              bottom: 34.0 * previewScale,
             );
-            final isCompactWidth = mobilePreviewWidth <= 600;
+            final effectiveMedia = previewingPhoneOnDesktop
+                ? rootMedia.copyWith(
+                    size: mobilePreviewSize,
+                    padding: simulatedPhoneSafeArea,
+                    viewPadding: simulatedPhoneSafeArea,
+                    viewInsets: EdgeInsets.zero,
+                  )
+                : rootMedia.copyWith(size: mobilePreviewSize);
+            final isCompactWidth = mobilePreviewSize.width <= 600;
             final keyboardInset = rootMedia.viewInsets.bottom;
             final keyboardActive = isCompactWidth && keyboardInset > 0;
             
@@ -1676,7 +1717,12 @@ class _NovelGamePageState extends State<NovelGamePage>
                     minimum: const EdgeInsets.fromLTRB(14, 10, 14, 0),
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        final compact = !desktopMode && constraints.maxWidth < 430;
+                        final viewport = NovelViewportMetrics.of(
+                          context,
+                          desktopMode: desktopMode,
+                        );
+                        final compact = viewport.compactChrome;
+                        final shortWide = viewport.shortWide;
                         // 当前 Stack 位于 SafeArea(minimum: 左右14) 内。
                         // 底部探索需要视觉上横向铺满整个屏幕，所以单独向两侧越过这层 inset。
                         final screenPadding = MediaQuery.paddingOf(context);
@@ -1767,7 +1813,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 onOpenSettings: () => showNovelSettingsSheet(
                                   context,
                                   controller,
-                                  developerPreview: _developerPreviewActions,
+                                  isAdmin: _isAdmin,
+                                  developerPreview:
+                                      _isAdmin ? _developerPreviewActions : null,
                                 ),
                               ),
                             ),
@@ -1781,7 +1829,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 !_endingOpen)
                               Positioned(
                                 right: compact ? 0 : 2,
-                                top: 52,
+                                top: shortWide ? 44 : 52,
                                 child: _NovelDisplayModeToggle(
                                   desktop: desktopMode,
                                   onTap: () => _toggleDisplayMode(desktopMode),
@@ -1792,7 +1840,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                             if (!_immersiveInputMode && controller.storyStarted && !keyboardActive)
                               Positioned(
                                 left: 0,
-                                top: 56, // 统一锁定在顶部起点
+                                top: shortWide ? 48 : 56, // 横屏矮屏进一步压缩顶部占用
                                 child: AnimatedSlide(
                                   duration: sceneHudTransitionDuration,
                                   curve: Curves.easeOutCubic,
@@ -1834,7 +1882,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 right: compact
                                     ? 50
                                     : constraints.maxWidth * .28,
-                                top: 56,
+                                top: shortWide ? 48 : 56,
                                 child: IgnorePointer(
                                   child: Align(
                                     alignment: Alignment.centerLeft,
@@ -2095,15 +2143,14 @@ class _NovelGamePageState extends State<NovelGamePage>
               child: gameScaffold,
             );
 
-            // PC/Web 上的“手机模式”是真正的窄版画布，而不是仅改几个字号。
-            // 电脑模式则使用完整浏览器 / 桌面窗口尺寸。
-            if (!desktopMode && rootMedia.size.width > mobilePreviewWidth) {
+            // PC/Web 手机预览保持真实长屏比例；桌面模式继续使用完整窗口。
+            if (previewingPhoneOnDesktop) {
               return ColoredBox(
                 color: controller.settings.backgroundColor,
                 child: Center(
                   child: SizedBox(
-                    width: mobilePreviewWidth,
-                    height: rootMedia.size.height,
+                    width: mobilePreviewSize.width,
+                    height: mobilePreviewSize.height,
                     child: ClipRect(child: sizedGame),
                   ),
                 ),
@@ -2290,8 +2337,17 @@ class _NovelDisplayModeToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final viewport = NovelViewportMetrics.of(context, desktopMode: desktop);
+    final shortWide = viewport.shortWide;
+    final label = desktop && shortWide ? '横屏' : (desktop ? '电脑' : '手机');
+    final tooltip = desktop && shortWide
+        ? '当前：手机横屏适配 · 点击切回手机竖屏'
+        : (desktop
+            ? '当前：电脑模式 · 点击切换手机模式'
+            : '当前：手机模式 · 点击切换电脑模式');
+
     return Tooltip(
-      message: desktop ? '当前：电脑模式 · 点击切换手机模式' : '当前：手机模式 · 点击切换电脑模式',
+      message: tooltip,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -2300,8 +2356,8 @@ class _NovelDisplayModeToggle extends StatelessWidget {
           splashColor: Colors.white.withOpacity(.08),
           highlightColor: Colors.white.withOpacity(.035),
           child: Container(
-            height: 34,
-            padding: const EdgeInsets.symmetric(horizontal: 9),
+            height: shortWide ? 30 : 34,
+            padding: EdgeInsets.symmetric(horizontal: shortWide ? 7 : 9),
             decoration: BoxDecoration(
               color: Colors.black.withOpacity(.22),
               borderRadius: BorderRadius.circular(18),
@@ -2323,15 +2379,15 @@ class _NovelDisplayModeToggle extends StatelessWidget {
                   desktop
                       ? Icons.desktop_windows_outlined
                       : Icons.phone_android_rounded,
-                  size: 17,
+                  size: shortWide ? 15.5 : 17,
                   color: Colors.white.withOpacity(.88),
                 ),
-                const SizedBox(width: 5),
+                SizedBox(width: shortWide ? 4 : 5),
                 Text(
-                  desktop ? '电脑' : '手机',
+                  label,
                   style: TextStyle(
                     color: Colors.white.withOpacity(.88),
-                    fontSize: 10.5,
+                    fontSize: shortWide ? 9.6 : 10.5,
                     fontWeight: FontWeight.w700,
                     letterSpacing: .2,
                   ),

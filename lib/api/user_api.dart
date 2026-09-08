@@ -75,6 +75,7 @@ class UserProfile {
     required this.name,
     required this.avatarUrl,
     required this.tokenBalance,
+    required this.isAdmin,
     required this.scenarios,
   });
 
@@ -83,6 +84,7 @@ class UserProfile {
   final String name;
   final String avatarUrl;
   final double tokenBalance;
+  final bool isAdmin;
   final List<ScenarioSummary> scenarios;
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
@@ -96,6 +98,7 @@ class UserProfile {
       name: data['name'] as String? ?? '',
       avatarUrl: data['avatar_url'] as String? ?? '',
       tokenBalance: (data['token_balance'] as num?)?.toDouble() ?? 0,
+      isAdmin: data['is_admin'] == true,
       scenarios: scenariosJson
           .map((e) => ScenarioSummary.fromJson(e as Map<String, dynamic>))
           .toList(),

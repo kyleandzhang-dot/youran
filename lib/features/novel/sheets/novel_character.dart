@@ -78,6 +78,31 @@ const Color _characterText = Color(0xFFF2F0E8);
 const Color _characterTextSoft = Color(0xFFB9C0D0);
 const Color _characterTextMuted = Color(0xFF737C91);
 
+
+enum _CharacterViewportMode { portrait, landscape, desktop }
+
+_CharacterViewportMode _characterViewportMode(
+  BoxConstraints constraints,
+  bool desktopMode,
+) {
+  final width = constraints.maxWidth;
+  final height = constraints.maxHeight;
+
+  // 真正的手机横屏优先于 desktopMode。这样 iPhone 横过来时不会误套 PC。
+  final phoneLandscape =
+      width > height && height <= 540 && width <= 1100;
+  if (phoneLandscape) return _CharacterViewportMode.landscape;
+
+  // 竖屏手机也直接按实际画布识别，保证旋转回来后恢复竖屏布局。
+  final phonePortrait = height >= width && width <= 640;
+  if (phonePortrait) return _CharacterViewportMode.portrait;
+
+  if (desktopMode) return _CharacterViewportMode.desktop;
+  return width > height
+      ? _CharacterViewportMode.landscape
+      : _CharacterViewportMode.portrait;
+}
+
 class _CharacterGameBackdrop extends StatelessWidget {
   const _CharacterGameBackdrop({required this.child});
 
@@ -398,7 +423,6 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
                 <NovelCharacter>[];
         final npcs = source.where((character) => !character.isMain).toList()
           ..sort((a, b) => b.affection.compareTo(a.affection));
-        // 角色页只展示可招募/已招募 NPC，主角不进入列表、详情或切换栏。
         final allCharacters = npcs;
 
         final ownedCharacters = allCharacters.where(_isOwned).toList();
@@ -428,98 +452,115 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
             ? selected
             : firstOwnedNpc;
 
+        Widget buildBody(_CharacterViewportMode mode) {
+          final desktop = mode == _CharacterViewportMode.desktop;
+          final landscape = mode == _CharacterViewportMode.landscape;
+
+          return Column(
+            children: <Widget>[
+              _CharacterGameHeader(
+                flowers: widget.controller.novelCharacterFlowers,
+                showingSubpage: subpageVisible,
+                subpageTitle: archiveVisible
+                    ? '图鉴'
+                    : showingSummon
+                        ? '鲜花结缘'
+                        : '',
+                dense: landscape,
+                onBack: subpageVisible
+                    ? () => setState(() {
+                          tab = 0;
+                          showingSummon = false;
+                        })
+                    : null,
+                onSummon: null,
+                onClose: widget.embedded
+                    ? null
+                    : () => Navigator.of(context).pop(),
+              ),
+              Expanded(
+                child: showingSummon
+                    ? _CharacterSummonView(
+                        characters: allCharacters,
+                        desktopMode: desktop,
+                        landscapeMode: landscape,
+                        flowers: widget.controller.novelCharacterFlowers,
+                        results: lastDrawResults,
+                        isDrawing: isDrawing,
+                        isOwned: _isOwned,
+                        fragmentsOf: _fragmentsOf,
+                        onDrawOne: () => _draw(allCharacters, 1),
+                        onDrawFive: () => _draw(allCharacters, 5),
+                      )
+                    : tab == 0 && hero != null
+                        ? _CharacterHeroStage(
+                            controller: widget.controller,
+                            character: hero,
+                            characters: ownedCharacters,
+                            star: _starOf(hero),
+                            fragments: _fragmentsOf(hero),
+                            onSelect: _selectHero,
+                            onSummon: _openSummon,
+                            onOpenArchive: () => setState(() => tab = 1),
+                          )
+                        : tab == 0
+                            ? _CharacterEmptyTeamState(
+                                loading: loading,
+                                onSummon: _openSummon,
+                                onOpenArchive: () => setState(() => tab = 1),
+                              )
+                            : _CharacterGridPage(
+                                desktopMode: desktop,
+                                landscapeMode: landscape,
+                                characters: allCharacters,
+                                loading: loading,
+                                starOf: _starOf,
+                              ),
+              ),
+            ],
+          );
+        }
+
         return _CharacterGameBackdrop(
           child: SafeArea(
             bottom: false,
             child: LayoutBuilder(
-            builder: (context, constraints) {
-              // 角色中心严格跟随全局手机 / 电脑模式，不再靠当前宽度猜。
-              final desktopMode = widget.controller.desktopMode;
-              final compact = !desktopMode;
-              final leftInset = desktopMode ? 46.0 : 10.0;
-              final rightInset = desktopMode ? 54.0 : 12.0;
-              final contentMaxWidth = desktopMode ? 1440.0 : 560.0;
-              
-              return Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      leftInset,
-                      compact ? 4 : 14,
-                      rightInset,
-                      compact ? 4 : 12,
-                    ),
-                    child: Column(
-                      children: <Widget>[
-                        _CharacterGameHeader(
-                          flowers: widget.controller.novelCharacterFlowers,
-                          showingSubpage: subpageVisible,
-                          subpageTitle: archiveVisible
-                              ? '图鉴'
-                              : showingSummon
-                                  ? '鲜花结缘'
-                                  : '',
-                          onBack: subpageVisible
-                              ? () => setState(() {
-                                    tab = 0;
-                                    showingSummon = false;
-                                  })
-                              : null,
-                          onSummon: null,
-                          onClose: widget.embedded
-                              ? null
-                              : () => Navigator.of(context).pop(),
+              builder: (context, constraints) {
+                final mode = _characterViewportMode(
+                  constraints,
+                  widget.controller.desktopMode,
+                );
+
+                switch (mode) {
+                  case _CharacterViewportMode.desktop:
+                    return Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1440),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(46, 14, 54, 12),
+                          child: buildBody(mode),
                         ),
-                        Expanded(
-                          child: showingSummon
-                                  ? _CharacterSummonView(
-                                      characters: allCharacters,
-                                      desktopMode: desktopMode,
-                                      flowers: widget.controller.novelCharacterFlowers,
-                                      results: lastDrawResults,
-                                      isDrawing: isDrawing,
-                                      isOwned: _isOwned,
-                                      fragmentsOf: _fragmentsOf,
-                                      onDrawOne: () => _draw(allCharacters, 1),
-                                      onDrawFive: () => _draw(allCharacters, 5), // 统一改为5连
-                                    )
-                              : tab == 0 && hero != null
-                                      ? _CharacterHeroStage(
-                                          controller: widget.controller,
-                                          character: hero,
-                                          characters: ownedCharacters,
-                                          star: _starOf(hero),
-                                          fragments: _fragmentsOf(hero),
-                                          onSelect: _selectHero,
-                                          onSummon: _openSummon,
-                                          onOpenArchive: () => setState(() {
-                                            tab = 1;
-                                          }),
-                                        )
-                              : tab == 0
-                                  ? _CharacterEmptyTeamState(
-                                      loading: loading,
-                                      onSummon: _openSummon,
-                                      onOpenArchive: () => setState(() {
-                                        tab = 1;
-                                      }),
-                                    )
-                                  : _CharacterGridPage(
-                                          desktopMode: desktopMode,
-                                          // 图鉴展示全部 NPC，仅排除主角；是否拥有只影响
-                                          // 队伍首页、上阵和养成，不应把未拥有角色从图鉴隐藏。
-                                          characters: allCharacters,
-                                          loading: loading,
-                                          starOf: _starOf,
-                                        ),
+                      ),
+                    );
+                  case _CharacterViewportMode.landscape:
+                    // 手机横屏：独立画布。横向空间全部使用，纵向间距单独收紧。
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 2, 10, 2),
+                      child: buildBody(mode),
+                    );
+                  case _CharacterViewportMode.portrait:
+                    // 手机竖屏：保留原来的窄屏结构，不被横屏布局影响。
+                    return Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 560),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 4, 12, 4),
+                          child: buildBody(mode),
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
+                      ),
+                    );
+                }
+              },
             ),
           ),
         );
@@ -588,6 +629,7 @@ class _CharacterGameHeader extends StatelessWidget {
     this.onBack,
     this.onSummon,
     this.onClose,
+    this.dense = false,
   });
 
   final int flowers;
@@ -596,6 +638,7 @@ class _CharacterGameHeader extends StatelessWidget {
   final VoidCallback? onBack;
   final VoidCallback? onSummon;
   final VoidCallback? onClose;
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
@@ -608,7 +651,7 @@ class _CharacterGameHeader extends StatelessWidget {
     }
 
     return SizedBox(
-      height: 68,
+      height: dense ? 44 : 68,
       child: Row(
         children: <Widget>[
           if (onBack != null) ...<Widget>[
@@ -618,7 +661,7 @@ class _CharacterGameHeader extends StatelessWidget {
               padding: EdgeInsets.zero,
               splashRadius: 20,
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: dense ? 3 : 8),
           ],
           Expanded(
             child: displayText.isEmpty 
@@ -631,9 +674,9 @@ class _CharacterGameHeader extends StatelessWidget {
                         displayText,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: _characterText,
-                          fontSize: 20,
+                          fontSize: dense ? 16 : 20,
                           height: 1,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 2.2,
@@ -643,8 +686,8 @@ class _CharacterGameHeader extends StatelessWidget {
                   ),
           ),
           Container(
-            height: 30,
-            padding: const EdgeInsets.only(left: 5, right: 11),
+            height: dense ? 26 : 30,
+            padding: EdgeInsets.only(left: dense ? 3 : 5, right: dense ? 8 : 11),
             decoration: BoxDecoration(
               color: Colors.black.withOpacity(.18),
               borderRadius: BorderRadius.circular(2),
@@ -652,8 +695,8 @@ class _CharacterGameHeader extends StatelessWidget {
             child: Row(
               children: <Widget>[
                 SizedBox(
-                  width: 23,
-                  height: 23,
+                  width: dense ? 19 : 23,
+                  height: dense ? 19 : 23,
                   child: Image.asset(
                     'assets/images/gift.webp',
                     fit: BoxFit.contain,
@@ -664,12 +707,12 @@ class _CharacterGameHeader extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: dense ? 5 : 8),
                 Text(
                   '$flowers',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: _characterText,
-                    fontSize: 11.5,
+                    fontSize: dense ? 10.5 : 11.5,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -725,12 +768,14 @@ class _CharacterGridPage extends StatelessWidget {
     required this.loading,
     required this.starOf,
     required this.desktopMode,
+    this.landscapeMode = false,
   });
 
   final List<NovelCharacter> characters;
   final bool loading;
   final int Function(NovelCharacter) starOf;
   final bool desktopMode;
+  final bool landscapeMode;
 
   @override
   Widget build(BuildContext context) {
@@ -757,7 +802,13 @@ class _CharacterGridPage extends StatelessWidget {
                 : constraints.maxWidth >= 980
                     ? 6
                     : 5)
-            : (constraints.maxWidth >= 420 ? 4 : 3);
+            : landscapeMode
+                ? (constraints.maxWidth >= 820
+                    ? 7
+                    : constraints.maxWidth >= 680
+                        ? 6
+                        : 5)
+                : (constraints.maxWidth >= 420 ? 4 : 3);
         return GridView.builder(
           padding: EdgeInsets.fromLTRB(
             desktopMode ? 6 : 2,
@@ -768,9 +819,9 @@ class _CharacterGridPage extends StatelessWidget {
           physics: const BouncingScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: count,
-            crossAxisSpacing: desktopMode ? 14 : 8,
-            mainAxisSpacing: desktopMode ? 14 : 9,
-            childAspectRatio: desktopMode ? .69 : .65, 
+            crossAxisSpacing: desktopMode ? 14 : (landscapeMode ? 10 : 8),
+            mainAxisSpacing: desktopMode ? 14 : (landscapeMode ? 10 : 9),
+            childAspectRatio: desktopMode ? .69 : (landscapeMode ? .76 : .65), 
           ),
           itemCount: characters.length,
           itemBuilder: (context, index) {
@@ -935,6 +986,7 @@ class _CharacterSummonView extends StatelessWidget {
   const _CharacterSummonView({
     required this.characters,
     required this.desktopMode,
+    this.landscapeMode = false,
     required this.flowers,
     required this.results,
     required this.isDrawing,
@@ -946,6 +998,7 @@ class _CharacterSummonView extends StatelessWidget {
 
   final List<NovelCharacter> characters;
   final bool desktopMode;
+  final bool landscapeMode;
   final int flowers;
   final List<_CharacterDrawResult> results;
   final bool isDrawing;
@@ -1015,10 +1068,13 @@ class _CharacterSummonView extends StatelessWidget {
     final candidates = characters.where((character) => !character.isMain).toList();
     final topCharacters = candidates.take(3).toList();
     final screen = MediaQuery.sizeOf(context);
-    final bannerHeight = screen.height * (desktopMode ? .64 : .49);
-    final sidePortraitWidth = desktopMode ? 300.0 : 185.0;
-    final heroPortraitWidth = desktopMode ? 420.0 : 270.0;
-    final actionBottom = screen.height * (desktopMode ? .09 : .08);
+    final bannerHeight = screen.height *
+        (desktopMode ? .64 : (landscapeMode ? .82 : .49));
+    final sidePortraitWidth = desktopMode ? 300.0 : (landscapeMode ? 150.0 : 185.0);
+    final heroPortraitWidth = desktopMode ? 420.0 : (landscapeMode ? 235.0 : 270.0);
+    final actionBottom = desktopMode
+        ? screen.height * .09
+        : (landscapeMode ? 6.0 : screen.height * .08);
 
     return Stack(
       fit: StackFit.expand,
@@ -1047,19 +1103,19 @@ class _CharacterSummonView extends StatelessWidget {
                 '寻 访 角 色',
                 style: TextStyle(
                   color: _characterText,
-                  fontSize: desktopMode ? 30 : 21,
+                  fontSize: desktopMode ? 30 : (landscapeMode ? 17 : 21),
                   fontWeight: FontWeight.w900,
-                  letterSpacing: desktopMode ? 7 : 4.5,
+                  letterSpacing: desktopMode ? 7 : (landscapeMode ? 3.2 : 4.5),
                   shadows: const [Shadow(color: Colors.black87, blurRadius: 10)],
                 ),
               ),
-              SizedBox(height: desktopMode ? 14 : 9),
+              SizedBox(height: desktopMode ? 14 : (landscapeMode ? 4 : 9)),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 decoration: BoxDecoration(color: Colors.black.withOpacity(0.4), borderRadius: BorderRadius.circular(99), border: Border.all(color: Colors.white.withOpacity(0.05))),
                 child: const Text('消耗鲜花寻访，获取完整角色或角色碎片', style: TextStyle(color: _characterTextSoft, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 1.0)),
               ),
-              SizedBox(height: desktopMode ? 32 : 20),
+              SizedBox(height: desktopMode ? 32 : (landscapeMode ? 8 : 20)),
               Wrap(
                 spacing: desktopMode ? 20 : 10,
                 runSpacing: 12,
@@ -1641,9 +1697,18 @@ class _CharacterPortraitModalContentState
         ? 'assets/images/portrait_female.webp'
         : 'assets/images/portrait_male.png';
 
+    final media = MediaQuery.sizeOf(context);
+    final landscape = media.width > media.height;
+    final modalWidth = landscape
+        ? math.min(520.0, media.width * .72)
+        : math.min(320.0, media.width - 28);
+    final modalHeight = landscape
+        ? math.min(media.height * .90, 390.0)
+        : math.min(560.0, media.height * .90);
+
     return Container(
-      width: 320,
-      height: 560, 
+      width: modalWidth,
+      height: modalHeight,
       decoration: BoxDecoration(
         color: _characterInk,
         borderRadius: BorderRadius.circular(6),
@@ -2039,6 +2104,37 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
     }
   }
 
+  Future<void> _upgradeStar() async {
+    if (_upgrading || _localStar >= 10 || widget.fragments < 20) return;
+    final id = widget.character.id.trim();
+    if (id.isEmpty) return;
+    setState(() => _upgrading = true);
+    try {
+      final payload = await widget.controller.upgradeNovelCharacter(id);
+      if (!mounted) return;
+      final nextStar = intValue(
+        payload['star'],
+        _localStar + 1,
+      ).clamp(0, 10).toInt();
+      setState(() {
+        _localStar = nextStar;
+        _showUpgradeFlash = true;
+      });
+      Future<void>.delayed(const Duration(milliseconds: 2250), () {
+        if (mounted) setState(() => _showUpgradeFlash = false);
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is NovelBackendException
+          ? error.message
+          : '升星失败：$error';
+      ScaffoldMessenger.maybeOf(context)?..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) setState(() => _upgrading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final fallbackAsset = widget.character.gender.trim() == '男'
@@ -2065,239 +2161,308 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
     final cooperating = !widget.character.isMain &&
         widget.controller.isNovelCompanionDeployed(widget.character.id);
 
+    void openPortraitEditor() {
+      showNovelPortraitModal(context, widget.controller, widget.character);
+    }
+
+    Widget infoPanel({required bool compact}) {
+      final panel = compact
+          ? _CharacterCompactMeta(
+              character: widget.character,
+              identity: identity,
+              appearance: appearance,
+              stars: _stars(),
+              stats: stats,
+              onChangePortrait: openPortraitEditor,
+              star: _localStar,
+              fragments: widget.fragments,
+              onUpgrade: _upgradeStar,
+              companionSkills: companionSkills,
+              cooperating: cooperating,
+              companionBusy: _companionBusy,
+              onToggleCooperation:
+                  widget.character.isMain ? null : _toggleCooperation,
+              onLearn: widget.character.isMain ? null : _learnCompanionSkill,
+              onRename: _openCompanionSkill,
+            )
+          : _CharacterStageInfo(
+              character: widget.character,
+              identity: identity,
+              appearance: appearance,
+              stars: _stars(),
+              stats: stats,
+              onChangePortrait: openPortraitEditor,
+              star: _localStar,
+              fragments: widget.fragments,
+              onUpgrade: _upgradeStar,
+              companionSkills: companionSkills,
+              cooperating: cooperating,
+              companionBusy: _companionBusy,
+              onToggleCooperation:
+                  widget.character.isMain ? null : _toggleCooperation,
+              onLearn: widget.character.isMain ? null : _learnCompanionSkill,
+              onRename: _openCompanionSkill,
+            );
+      return _buildAnimatedInfoPanel(panel);
+    }
+
+    Widget artwork(Alignment alignment) {
+      return Hero(
+        tag: 'character-stage-${widget.character.id}-${widget.character.name}',
+        child: NovelArtwork(
+          url: CdnUtil.resize(imageUrl, width: 1280),
+          assetCandidates: <String>[
+            fallbackAsset,
+            'assets/images/portrait_female.webp',
+            'assets/images/portrait_male.png',
+          ],
+          fit: BoxFit.contain,
+          alignment: alignment,
+          fallbackText: '',
+          fallbackIcon: Icons.person_outline_rounded,
+        ),
+      );
+    }
+
+    Widget portraitRail() => _CharacterPortraitRail(
+          characters: widget.characters,
+          selected: widget.character,
+          onSelect: widget.onSelect,
+          isCooperating: (character) =>
+              widget.controller.isNovelCompanionDeployed(character.id),
+        );
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final desktopMode = widget.controller.desktopMode;
-        final compact = !desktopMode;
-        final shortViewport = constraints.maxHeight < 520;
-        final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-        final keyboardVisible = compact && keyboardInset > 0;
-        final chatHeight = desktopMode
-            ? (shortViewport ? 164.0 : 218.0)
-            : 250.0;
-        // 手机版右侧始终有全局悬浮导航；人物页底部交互区必须主动避让，
-        // 不能让聊天记录 / 输入框被右侧全局按钮盖住。
-        final mobileGlobalNavInset = desktopMode ? 0.0 : 64.0;
-        
-        void openPortraitEditor() {
-          showNovelPortraitModal(
-            context,
-            widget.controller,
-            widget.character,
-          );
-        }
-        
-        Future<void> upgradeStar() async {
-          if (_upgrading || _localStar >= 10 || widget.fragments < 20) return;
-          final id = widget.character.id.trim();
-          if (id.isEmpty) return;
-          setState(() => _upgrading = true);
-          try {
-            final payload =
-                await widget.controller.upgradeNovelCharacter(id);
-            if (!mounted) return;
-            final nextStar = intValue(
-              payload['star'],
-              _localStar + 1,
-            ).clamp(0, 10).toInt();
-            setState(() {
-              _localStar = nextStar;
-              _showUpgradeFlash = true;
-            });
-            Future<void>.delayed(const Duration(milliseconds: 2250), () {
-              if (mounted) setState(() => _showUpgradeFlash = false);
-            });
-          } catch (error) {
-            if (!mounted) return;
-            final message = error is NovelBackendException
-                ? error.message
-                : '升星失败：$error';
-            ScaffoldMessenger.maybeOf(context)?..hideCurrentSnackBar()
-              ..showSnackBar(SnackBar(content: Text(message)));
-          } finally {
-            if (mounted) setState(() => _upgrading = false);
-          }
-        }
-        
-        return ClipRect(
-          child: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              const Positioned.fill(
-                child: CustomPaint(painter: _CharacterOrbitPainter()),
-              ),
-              Positioned(
-                left: desktopMode ? 68 : -52,
-                right: desktopMode ? 318 : 52,
-                top: 0,
-                bottom: 0,
-                child: Hero(
-                  tag: 'character-stage-${widget.character.id}-${widget.character.name}',
-                  child: NovelArtwork(
-                    url: CdnUtil.resize(imageUrl, width: 1280),
-                    assetCandidates: <String>[
-                      fallbackAsset,
-                      'assets/images/portrait_female.webp',
-                      'assets/images/portrait_male.png',
-                    ],
-                    fit: BoxFit.contain,
-                    alignment: desktopMode
-                        ? const Alignment(-0.35, 0)
-                        : const Alignment(-0.15, 0),
-                    fallbackText: '',
-                    fallbackIcon: Icons.person_outline_rounded,
-                  ),
-                ),
-              ),
-              if (desktopMode)
-                Positioned(
-                  left: 0,
-                  top: 14,
-                  bottom: 138,
-                  width: 60,
-                  child: _CharacterPortraitRail(
-                    characters: widget.characters,
-                    selected: widget.character,
-                    onSelect: widget.onSelect,
-                    isCooperating: (character) => widget.controller
-                        .isNovelCompanionDeployed(character.id),
-                  ),
-                ),
-              if (!desktopMode && !keyboardVisible)
-                Positioned(
-                  // 手机版恢复左上头像竖列。头像过多时在这个区域内上下滚动，
-                  // 底部给固定的“结缘 / 图鉴”和聊天区留出空间。
-                  left: 0,
-                  top: 8,
-                  bottom: chatHeight + 128,
-                  width: 52,
-                  child: _CharacterPortraitRail(
-                    characters: widget.characters,
-                    selected: widget.character,
-                    onSelect: widget.onSelect,
-                    isCooperating: (character) => widget.controller
-                        .isNovelCompanionDeployed(character.id),
-                  ),
-                ),
-              if (compact)
-                Positioned(
-                  right: 7,
-                  top: 10,
-                  width: 158,
-                  child: _buildAnimatedInfoPanel(
-                    _CharacterCompactMeta(
-                      character: widget.character,
-                      identity: identity,
-                      appearance: appearance,
-                      stars: _stars(),
-                      stats: stats,
-                      onChangePortrait: openPortraitEditor,
-                      star: _localStar, 
-                      fragments: widget.fragments,
-                      onUpgrade: upgradeStar,
-                      companionSkills: companionSkills,
-                      cooperating: cooperating,
-                      companionBusy: _companionBusy,
-                      onToggleCooperation:
-                          widget.character.isMain ? null : _toggleCooperation,
-                      onLearn:
-                          widget.character.isMain ? null : _learnCompanionSkill,
-                      onRename: _openCompanionSkill,
-                    ),
-                  ),
-                ),
-              if (desktopMode)
-                Positioned(
-                  right: 26,
-                  top: 24,
-                  bottom: shortViewport ? 170 : 226,
-                  width: 336,
-                  child: _buildAnimatedInfoPanel(
-                    _CharacterStageInfo(
-                      character: widget.character,
-                      identity: identity,
-                      appearance: appearance,
-                      stars: _stars(),
-                      stats: stats,
-                      onChangePortrait: openPortraitEditor,
-                      star: _localStar, 
-                      fragments: widget.fragments,
-                      onUpgrade: upgradeStar,
-                      companionSkills: companionSkills,
-                      cooperating: cooperating,
-                      companionBusy: _companionBusy,
-                      onToggleCooperation:
-                          widget.character.isMain ? null : _toggleCooperation,
-                      onLearn:
-                          widget.character.isMain ? null : _learnCompanionSkill,
-                      onRename: _openCompanionSkill,
-                    ),
-                  ),
-                ),
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOutCubic,
-                // 手机版左侧可以延伸，但右侧必须为全局悬浮导航留安全区。
-                // 电脑模式仍给左侧角色栏和右侧资料栏留出空间。
-                left: desktopMode ? 140 : 8,
-                right: desktopMode ? 382 : mobileGlobalNavInset,
-                bottom: keyboardVisible ? keyboardInset + 8 : 8,
-                height: chatHeight,
-                child: _CharacterInlineChat(
-                  controller: widget.controller,
-                  character: widget.character,
-                ),
-              ),
-              if (!keyboardVisible && desktopMode)
-                Positioned(
-                  left: 0,
-                  bottom: 8,
-                  child: Column(
-                    children: <Widget>[
-                      _CharacterCornerCard(
-                        icon: Icons.local_florist_outlined,
-                        assetPath: 'assets/images/character_bond.png',
-                        label: '结缘',
-                        onTap: widget.onSummon,
-                      ),
-                      const SizedBox(height: 6),
-                      _CharacterCornerCard(
-                        icon: Icons.auto_stories_outlined,
-                        assetPath: 'assets/images/character_archive.png',
-                        label: '图鉴',
-                        onTap: widget.onOpenArchive,
-                      ),
-                    ],
-                  ),
-                ),
-              if (!keyboardVisible && !desktopMode)
-                Positioned(
-                  // 手机版把两个固定入口收回左侧竖向控制区，和头像列形成一体，
-                  // 不再横向悬在聊天框上方。
-                  left: 0,
-                  bottom: chatHeight + 14,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      _CharacterCornerCard(
-                        icon: Icons.local_florist_outlined,
-                        assetPath: 'assets/images/character_bond.png',
-                        label: '结缘',
-                        onTap: widget.onSummon,
-                      ),
-                      const SizedBox(height: 6),
-                      _CharacterCornerCard(
-                        icon: Icons.auto_stories_outlined,
-                        assetPath: 'assets/images/character_archive.png',
-                        label: '图鉴',
-                        onTap: widget.onOpenArchive,
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
+        final mode = _characterViewportMode(
+          constraints,
+          widget.controller.desktopMode,
         );
+        final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+        final keyboardVisible = keyboardInset > 0;
+
+        switch (mode) {
+          case _CharacterViewportMode.desktop:
+            final shortViewport = constraints.maxHeight < 620;
+            final chatHeight = shortViewport ? 164.0 : 218.0;
+            return ClipRect(
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  const Positioned.fill(
+                    child: CustomPaint(painter: _CharacterOrbitPainter()),
+                  ),
+                  Positioned(
+                    left: 68,
+                    right: 318,
+                    top: 0,
+                    bottom: 0,
+                    child: artwork(const Alignment(-0.35, 0)),
+                  ),
+                  Positioned(
+                    left: 0,
+                    top: 14,
+                    bottom: 138,
+                    width: 60,
+                    child: portraitRail(),
+                  ),
+                  Positioned(
+                    right: 26,
+                    top: 24,
+                    bottom: shortViewport ? 170 : 226,
+                    width: 336,
+                    child: infoPanel(compact: false),
+                  ),
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    left: 140,
+                    right: 382,
+                    bottom: keyboardVisible ? keyboardInset + 8 : 8,
+                    height: chatHeight,
+                    child: _CharacterInlineChat(
+                      controller: widget.controller,
+                      character: widget.character,
+                    ),
+                  ),
+                  if (!keyboardVisible)
+                    Positioned(
+                      left: 0,
+                      bottom: 8,
+                      child: Column(
+                        children: <Widget>[
+                          _CharacterCornerCard(
+                            icon: Icons.local_florist_outlined,
+                            assetPath: 'assets/images/character_bond.png',
+                            label: '结缘',
+                            onTap: widget.onSummon,
+                          ),
+                          const SizedBox(height: 6),
+                          _CharacterCornerCard(
+                            icon: Icons.auto_stories_outlined,
+                            assetPath: 'assets/images/character_archive.png',
+                            label: '图鉴',
+                            onTap: widget.onOpenArchive,
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            );
+
+          case _CharacterViewportMode.landscape:
+            // 手机横屏：三栏舞台 + 底部聊天。与竖屏是独立 Widget 树。
+            const globalNavInset = 64.0;
+            final chatHeight = constraints.maxHeight < 390 ? 96.0 : 108.0;
+            final infoWidth = constraints.maxWidth < 760 ? 210.0 : 238.0;
+            return ClipRect(
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  const Positioned.fill(
+                    child: CustomPaint(painter: _CharacterOrbitPainter()),
+                  ),
+                  if (!keyboardVisible)
+                    Positioned(
+                      left: 0,
+                      top: 44,
+                      bottom: chatHeight + 8,
+                      width: 48,
+                      child: portraitRail(),
+                    ),
+                  Positioned(
+                    left: 48,
+                    right: infoWidth + globalNavInset + 4,
+                    top: 0,
+                    bottom: chatHeight + 4,
+                    child: artwork(const Alignment(-0.08, 0.12)),
+                  ),
+                  if (!keyboardVisible)
+                    Positioned(
+                      left: 54,
+                      top: 4,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          _CharacterCornerCard(
+                            compact: true,
+                            icon: Icons.local_florist_outlined,
+                            assetPath: 'assets/images/character_bond.png',
+                            label: '结缘',
+                            onTap: widget.onSummon,
+                          ),
+                          const SizedBox(width: 6),
+                          _CharacterCornerCard(
+                            compact: true,
+                            icon: Icons.auto_stories_outlined,
+                            assetPath: 'assets/images/character_archive.png',
+                            label: '图鉴',
+                            onTap: widget.onOpenArchive,
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (!keyboardVisible)
+                    Positioned(
+                      right: globalNavInset + 6,
+                      top: 6,
+                      bottom: chatHeight + 8,
+                      width: infoWidth,
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        child: infoPanel(compact: true),
+                      ),
+                    ),
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    left: 8,
+                    right: globalNavInset,
+                    bottom: keyboardVisible ? keyboardInset + 4 : 4,
+                    height: chatHeight,
+                    child: _CharacterInlineChat(
+                      controller: widget.controller,
+                      character: widget.character,
+                      dense: true,
+                    ),
+                  ),
+                ],
+              ),
+            );
+
+          case _CharacterViewportMode.portrait:
+            // 手机竖屏：保持原本的竖向构图和交互尺寸。
+            const globalNavInset = 64.0;
+            const chatHeight = 250.0;
+            return ClipRect(
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  const Positioned.fill(
+                    child: CustomPaint(painter: _CharacterOrbitPainter()),
+                  ),
+                  Positioned(
+                    left: -52,
+                    right: 52,
+                    top: 0,
+                    bottom: 0,
+                    child: artwork(const Alignment(-0.15, 0)),
+                  ),
+                  if (!keyboardVisible)
+                    Positioned(
+                      left: 0,
+                      top: 8,
+                      bottom: chatHeight + 128,
+                      width: 52,
+                      child: portraitRail(),
+                    ),
+                  if (!keyboardVisible)
+                    Positioned(
+                      right: 7,
+                      top: 10,
+                      width: 158,
+                      child: infoPanel(compact: true),
+                    ),
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    left: 8,
+                    right: globalNavInset,
+                    bottom: keyboardVisible ? keyboardInset + 8 : 8,
+                    height: chatHeight,
+                    child: _CharacterInlineChat(
+                      controller: widget.controller,
+                      character: widget.character,
+                    ),
+                  ),
+                  if (!keyboardVisible)
+                    Positioned(
+                      left: 0,
+                      bottom: chatHeight + 14,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          _CharacterCornerCard(
+                            icon: Icons.local_florist_outlined,
+                            assetPath: 'assets/images/character_bond.png',
+                            label: '结缘',
+                            onTap: widget.onSummon,
+                          ),
+                          const SizedBox(height: 6),
+                          _CharacterCornerCard(
+                            icon: Icons.auto_stories_outlined,
+                            assetPath: 'assets/images/character_archive.png',
+                            label: '图鉴',
+                            onTap: widget.onOpenArchive,
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            );
+        }
       },
     );
   }
@@ -3385,10 +3550,12 @@ class _CharacterInlineChat extends StatefulWidget {
   const _CharacterInlineChat({
     required this.controller,
     required this.character,
+    this.dense = false,
   });
 
   final NovelGameController controller;
   final NovelCharacter character;
+  final bool dense;
 
   @override
   State<_CharacterInlineChat> createState() => _CharacterInlineChatState();
@@ -3663,7 +3830,7 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
 
   @override
   Widget build(BuildContext context) {
-    final desktopMode = widget.controller.desktopMode;
+    final desktopMode = widget.controller.desktopMode && !widget.dense;
     return Column(
       children: <Widget>[
         Expanded(
@@ -3704,9 +3871,9 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                   ).createShader(bounds),
                   child: ListView.separated(
                     controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(6, 14, 6, 18),
+                    padding: EdgeInsets.fromLTRB(6, widget.dense ? 6 : 14, 6, widget.dense ? 8 : 18),
                     itemCount: _messages.isEmpty ? 1 : _messages.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 9),
+                    separatorBuilder: (_, __) => SizedBox(height: widget.dense ? 5 : 9),
                     itemBuilder: (context, index) {
                     if (_messages.isEmpty) {
                       return Padding(
@@ -3792,7 +3959,7 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
           ),
 
         Container(
-          height: desktopMode ? 38 : 46,
+          height: widget.dense ? 34 : (desktopMode ? 38 : 46),
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(0.06), 
@@ -3811,9 +3978,9 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                   onSubmitted: (_) => _send(),
                   textInputAction: TextInputAction.send,
                   cursorColor: _characterGold,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: _characterText,
-                    fontSize: 13,
+                    fontSize: widget.dense ? 11.5 : 13,
                   ),
                   decoration: InputDecoration(
                     isDense: true,
@@ -3827,7 +3994,7 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                       fontSize: 12.5,
                     ),
                     border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    contentPadding: EdgeInsets.symmetric(vertical: widget.dense ? 6 : 10),
                   ),
                 ),
               ),
@@ -4488,49 +4655,77 @@ class _CharactersPanelState extends State<_CharactersPanel> {
         final normalCount = npcs.length - closeCount;
         final filtered = _applyFilter(characters);
 
+        Widget filterBar(_CharacterViewportMode mode) => _CharacterFilterBar(
+              filter: filter,
+              total: characters.length,
+              closeCount: closeCount,
+              normalCount: normalCount,
+              dense: mode == _CharacterViewportMode.landscape,
+              onChanged: _changeFilter,
+            );
+
+        Widget header(_CharacterViewportMode mode) => _CharacterArchiveHeader(
+              dense: mode == _CharacterViewportMode.landscape,
+              onClose: widget.embedded
+                  ? null
+                  : () => Navigator.of(context).pop(),
+            );
+
+        Widget shell(
+          _CharacterViewportMode mode,
+          Widget content,
+        ) {
+          switch (mode) {
+            case _CharacterViewportMode.desktop:
+              return Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1280),
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: content,
+                  ),
+                ),
+              );
+            case _CharacterViewportMode.landscape:
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
+                child: content,
+              );
+            case _CharacterViewportMode.portrait:
+              return Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 3, 10, 3),
+                    child: content,
+                  ),
+                ),
+              );
+          }
+        }
+
         if (filtered.isEmpty) {
           return _CharacterArchiveBackground(
             controller: widget.controller,
             embedded: widget.embedded,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final desktopMode = widget.controller.desktopMode;
-                final compact = !desktopMode;
-                final horizontalInset = desktopMode ? 36.0 : 10.0;
-                final verticalInset = desktopMode ? 10.0 : 3.0;
-                final contentMaxWidth = desktopMode ? 1280.0 : 560.0;
-
-                return Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalInset,
-                        verticalInset,
-                        horizontalInset,
-                        verticalInset,
+                final mode = _characterViewportMode(
+                  constraints,
+                  widget.controller.desktopMode,
+                );
+                return shell(
+                  mode,
+                  Column(
+                    children: <Widget>[
+                      header(mode),
+                      const Expanded(
+                        child: _ArchiveEmptyState(text: '当前筛选下暂无角色'),
                       ),
-                      child: Column(
-                        children: <Widget>[
-                          _CharacterArchiveHeader(
-                            onClose: widget.embedded
-                                ? null
-                                : () => Navigator.of(context).pop(),
-                          ),
-                          const Expanded(
-                            child: _ArchiveEmptyState(text: '当前筛选下暂无角色'),
-                          ),
-                          _CharacterFilterBar(
-                            filter: filter,
-                            total: characters.length,
-                            closeCount: closeCount,
-                            normalCount: normalCount,
-                            onChanged: _changeFilter,
-                          ),
-                          const SizedBox(height: 106),
-                        ],
-                      ),
-                    ),
+                      filterBar(mode),
+                      if (mode != _CharacterViewportMode.landscape)
+                        const SizedBox(height: 106),
+                    ],
                   ),
                 );
               },
@@ -4545,58 +4740,87 @@ class _CharactersPanelState extends State<_CharactersPanel> {
           embedded: widget.embedded,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final desktopMode = widget.controller.desktopMode;
-              final compact = !desktopMode;
-              final horizontalInset = desktopMode ? 36.0 : 10.0;
-              final verticalInset = desktopMode ? 10.0 : 3.0;
-              final contentMaxWidth = desktopMode ? 1280.0 : 560.0;
+              final mode = _characterViewportMode(
+                constraints,
+                widget.controller.desktopMode,
+              );
 
-              return Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalInset,
-                      verticalInset,
-                      horizontalInset,
-                      verticalInset,
-                    ),
-                    child: Column(
+              final stage = _CharacterShowcaseStage(
+                controller: widget.controller,
+                character: selected,
+                summary: _summaryOf(selected),
+                identity: _identityOf(selected),
+                mode: mode,
+              );
+
+              void selectCharacter(NovelCharacter character) {
+                setState(() => selectedCharacterKey = _characterKey(character));
+              }
+
+              switch (mode) {
+                case _CharacterViewportMode.landscape:
+                  // 横屏使用左侧人物轨道 + 中间舞台 + 右侧人物信息。
+                  // 与竖屏底部缩略图结构彻底分离。
+                  return shell(
+                    mode,
+                    Column(
                       children: <Widget>[
-                        _CharacterArchiveHeader(
-                          onClose: widget.embedded
-                              ? null
-                              : () => Navigator.of(context).pop(),
-                        ),
+                        header(mode),
                         Expanded(
-                          child: _CharacterShowcaseStage(
-                            controller: widget.controller,
-                            character: selected,
-                            summary: _summaryOf(selected),
-                            identity: _identityOf(selected),
-                            compact: compact,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              _CharacterThumbStrip(
+                                vertical: true,
+                                dense: true,
+                                characters: filtered,
+                                selectedKey: _characterKey(selected),
+                                onSelected: selectCharacter,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(child: stage),
+                            ],
                           ),
                         ),
-                        _CharacterFilterBar(
-                          filter: filter,
-                          total: characters.length,
-                          closeCount: closeCount,
-                          normalCount: normalCount,
-                          onChanged: _changeFilter,
-                        ),
+                        filterBar(mode),
+                      ],
+                    ),
+                  );
+
+                case _CharacterViewportMode.portrait:
+                  return shell(
+                    mode,
+                    Column(
+                      children: <Widget>[
+                        header(mode),
+                        Expanded(child: stage),
+                        filterBar(mode),
                         _CharacterThumbStrip(
                           characters: filtered,
                           selectedKey: _characterKey(selected),
-                          onSelected: (character) {
-                            setState(() => selectedCharacterKey =
-                                _characterKey(character));
-                          },
+                          onSelected: selectCharacter,
                         ),
                       ],
                     ),
-                  ),
-                ),
-              );
+                  );
+
+                case _CharacterViewportMode.desktop:
+                  return shell(
+                    mode,
+                    Column(
+                      children: <Widget>[
+                        header(mode),
+                        Expanded(child: stage),
+                        filterBar(mode),
+                        _CharacterThumbStrip(
+                          characters: filtered,
+                          selectedKey: _characterKey(selected),
+                          onSelected: selectCharacter,
+                        ),
+                      ],
+                    ),
+                  );
+              }
             },
           ),
         );
@@ -4651,25 +4875,32 @@ class _CharacterArchiveBackground extends StatelessWidget {
 class _CharacterArchiveHeader extends StatelessWidget {
   const _CharacterArchiveHeader({
     this.onClose,
+    this.dense = false,
   });
 
   final VoidCallback? onClose;
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 13, 12, 6),
+      padding: EdgeInsets.fromLTRB(
+        dense ? 10 : 20,
+        dense ? 3 : 13,
+        dense ? 8 : 12,
+        dense ? 2 : 6,
+      ),
       child: Row(
         children: <Widget>[
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
                   '人物',
                   style: TextStyle(
-                    color: Color(0xFF272824),
-                    fontSize: 23,
+                    color: const Color(0xFF272824),
+                    fontSize: dense ? 18 : 23,
                     height: 1,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 1.2,
@@ -4735,6 +4966,7 @@ class _CharacterFilterBar extends StatelessWidget {
     required this.closeCount,
     required this.normalCount,
     required this.onChanged,
+    this.dense = false,
   });
 
   final int filter;
@@ -4742,11 +4974,17 @@ class _CharacterFilterBar extends StatelessWidget {
   final int closeCount;
   final int normalCount;
   final ValueChanged<int> onChanged;
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 4, 18, 3),
+      padding: EdgeInsets.fromLTRB(
+        dense ? 8 : 18,
+        dense ? 1 : 4,
+        dense ? 8 : 18,
+        dense ? 1 : 3,
+      ),
       child: Row(
         children: <Widget>[
           _CharacterFilterText(
@@ -4755,14 +4993,14 @@ class _CharacterFilterBar extends StatelessWidget {
             selected: filter == 0,
             onTap: () => onChanged(0),
           ),
-          const SizedBox(width: 18),
+          SizedBox(width: dense ? 10 : 18),
           _CharacterFilterText(
             label: '亲密',
             count: closeCount,
             selected: filter == 1,
             onTap: () => onChanged(1),
           ),
-          const SizedBox(width: 18),
+          SizedBox(width: dense ? 10 : 18),
           _CharacterFilterText(
             label: '普通',
             count: normalCount,
@@ -4837,14 +5075,18 @@ class _CharacterShowcaseStage extends StatefulWidget {
     required this.character,
     required this.summary,
     required this.identity,
-    required this.compact,
-  });
+    _CharacterViewportMode? mode,
+    bool? compact,
+  }) : mode = mode ??
+            (compact == false
+                ? _CharacterViewportMode.desktop
+                : _CharacterViewportMode.portrait);
 
   final NovelGameController controller;
   final NovelCharacter character;
   final String summary;
   final String identity;
-  final bool compact;
+  final _CharacterViewportMode mode;
 
   @override
   State<_CharacterShowcaseStage> createState() =>
@@ -4887,24 +5129,48 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final h = constraints.maxHeight;
-        final portraitWidth = widget.compact
-            ? math.min(constraints.maxWidth * .78, 430.0)
-            : math.min(constraints.maxWidth * .55, 620.0);
-        final infoWidth = widget.compact
-            ? math.min(constraints.maxWidth * .43, 210.0)
-            : math.min(constraints.maxWidth * .36, 390.0);
+        final desktop = widget.mode == _CharacterViewportMode.desktop;
+        final landscape = widget.mode == _CharacterViewportMode.landscape;
+        final compact = !desktop;
+
+        final portraitWidth = desktop
+            ? math.min(constraints.maxWidth * .55, 620.0)
+            : landscape
+                ? math.min(constraints.maxWidth * .54, 470.0)
+                : math.min(constraints.maxWidth * .78, 430.0);
+        final infoWidth = desktop
+            ? math.min(constraints.maxWidth * .36, 390.0)
+            : landscape
+                ? math.min(constraints.maxWidth * .36, 270.0)
+                : math.min(constraints.maxWidth * .43, 210.0);
+
+        final portraitLeft = desktop
+            ? 28.0
+            : landscape
+                ? 2.0
+                : -portraitWidth * .14;
+        final portraitBottom = desktop
+            ? -h * .055
+            : landscape
+                ? -h * .08
+                : -h * .025;
+        final portraitHeight = desktop
+            ? h * 1.02
+            : landscape
+                ? h * 1.10
+                : h * .96;
 
         return Stack(
           fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: <Widget>[
             Positioned(
-              left: widget.compact ? -portraitWidth * .14 : 28,
-              bottom: widget.compact ? -h * .025 : -h * .055,
+              left: portraitLeft,
+              bottom: portraitBottom,
               child: IgnorePointer(
                 child: SizedBox(
                   width: portraitWidth,
-                  height: h * (widget.compact ? .96 : 1.02),
+                  height: portraitHeight,
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 260),
                     switchInCurve: Curves.easeOutCubic,
@@ -4915,10 +5181,10 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                       ),
                       url: CdnUtil.resize(_portraitUrl, width: 800),
                       assetCandidates: <String>[
-                    fallbackAsset,
-                    'assets/images/portrait_female.webp',
-                    'assets/images/portrait_male.png',
-                  ],
+                        fallbackAsset,
+                        'assets/images/portrait_female.webp',
+                        'assets/images/portrait_male.png',
+                      ],
                       fit: BoxFit.contain,
                       alignment: Alignment.bottomCenter,
                       fallbackText: '',
@@ -4929,9 +5195,9 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
               ),
             ),
             Positioned(
-              right: widget.compact ? 7 : 38,
-              top: widget.compact ? 13 : 30,
-              bottom: widget.compact ? 8 : 22,
+              right: desktop ? 38 : (landscape ? 6 : 7),
+              top: desktop ? 30 : (landscape ? 3 : 13),
+              bottom: desktop ? 22 : (landscape ? 3 : 8),
               width: infoWidth,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -4940,22 +5206,22 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                     child: SingleChildScrollView(
                       physics: const BouncingScrollPhysics(),
                       padding: EdgeInsets.only(
-                        bottom: widget.compact ? 8 : 12,
+                        bottom: landscape ? 4 : (compact ? 8 : 12),
                       ),
                       child: _CharacterShowcaseInfo(
                         character: widget.character,
                         summary: widget.summary,
                         identity: widget.identity,
                         relationLabel: _relationLabel,
-                        compact: widget.compact,
+                        compact: compact,
                       ),
                     ),
                   ),
-                  SizedBox(height: widget.compact ? 8 : 12),
+                  SizedBox(height: landscape ? 4 : (compact ? 8 : 12)),
                   _CharacterQuickPortraitEditor(
                     controller: widget.controller,
                     character: widget.character,
-                    compact: widget.compact,
+                    compact: compact,
                     onPortraitChanged: (portraitUrl) {
                       if (!mounted) return;
                       setState(() => _previewPortraitUrl = portraitUrl);
@@ -5751,16 +6017,113 @@ class _CharacterThumbStrip extends StatelessWidget {
     required this.characters,
     required this.selectedKey,
     required this.onSelected,
+    this.vertical = false,
+    this.dense = false,
   });
 
   final List<NovelCharacter> characters;
   final String selectedKey;
   final ValueChanged<NovelCharacter> onSelected;
+  final bool vertical;
+  final bool dense;
 
   String _keyOf(NovelCharacter c) => c.id.trim().isNotEmpty ? c.id.trim() : c.name.trim();
 
   @override
   Widget build(BuildContext context) {
+    Widget buildThumb(NovelCharacter character) {
+      final selected = _keyOf(character) == selectedKey;
+      final fallbackAsset = character.gender.trim() == '女'
+          ? 'assets/images/portrait_female.webp'
+          : 'assets/images/portrait_male.png';
+      final image = character.avatarUrl.trim();
+      final cardWidth = vertical ? (dense ? 48.0 : 56.0) : 66.0;
+      final imageHeight = vertical ? (dense ? 55.0 : 66.0) : 82.0;
+
+      return GestureDetector(
+        onTap: () => onSelected(character),
+        child: SizedBox(
+          width: cardWidth,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: cardWidth,
+                height: imageHeight,
+                decoration: BoxDecoration(
+                  color: _archiveSurfaceSoft,
+                  borderRadius: BorderRadius.zero,
+                  border: Border.all(
+                    color: selected ? _archiveThemeGreen : _archiveLine,
+                    width: selected ? 1.35 : 1,
+                  ),
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    NovelArtwork(
+                      url: CdnUtil.resize(image, width: 150),
+                      assetCandidates: <String>[
+                        fallbackAsset,
+                        'assets/images/portrait_female.webp',
+                        'assets/images/portrait_male.png',
+                      ],
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topCenter,
+                      fallbackText: '',
+                      fallbackIcon: Icons.person_outline_rounded,
+                    ),
+                    if (selected)
+                      const Positioned(
+                        right: 3,
+                        top: 3,
+                        child: Icon(
+                          Icons.check_circle_rounded,
+                          size: 13,
+                          color: _archiveThemeGreen,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              SizedBox(height: vertical ? 3 : 6),
+              SizedBox(
+                width: cardWidth,
+                child: Text(
+                  character.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: selected ? _archiveText : _archiveTextSoft,
+                    fontSize: vertical ? 8.2 : 9.2,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+                    letterSpacing: .1,
+                    height: 1.05,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (vertical) {
+      return SizedBox(
+        width: dense ? 56 : 64,
+        child: ListView.separated(
+          scrollDirection: Axis.vertical,
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(2, 2, 4, 4),
+          itemCount: characters.length,
+          separatorBuilder: (_, __) => SizedBox(height: dense ? 5 : 7),
+          itemBuilder: (context, index) => buildThumb(characters[index]),
+        ),
+      );
+    }
+
     return SizedBox(
       height: 106,
       child: ListView.separated(
@@ -5769,84 +6132,7 @@ class _CharacterThumbStrip extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(14, 3, 18, 2),
         itemCount: characters.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final character = characters[index];
-          final selected = _keyOf(character) == selectedKey;
-          final fallbackAsset = character.gender.trim() == '女'
-              ? 'assets/images/portrait_female.webp'
-              : 'assets/images/portrait_male.png';
-          final image = character.avatarUrl.trim();
-          return GestureDetector(
-            onTap: () => onSelected(character),
-            child: SizedBox(
-              width: 66,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    width: 66,
-                    height: 82,
-                    decoration: BoxDecoration(
-                      color: _archiveSurfaceSoft,
-                      borderRadius: BorderRadius.zero,
-                      border: Border.all(
-                        color: selected
-                            ? _archiveThemeGreen
-                            : _archiveLine,
-                        width: selected ? 1.35 : 1,
-                      ),
-                    ),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: <Widget>[
-                        NovelArtwork(
-                          url: CdnUtil.resize(image, width: 150), 
-                          assetCandidates: <String>[
-                    fallbackAsset,
-                    'assets/images/portrait_female.webp',
-                    'assets/images/portrait_male.png',
-                  ],
-                          fit: BoxFit.cover,
-                          alignment: Alignment.topCenter,
-                          fallbackText: '',
-                          fallbackIcon: Icons.person_outline_rounded,
-                        ),
-                        if (selected)
-                          const Positioned(
-                            right: 3,
-                            top: 3,
-                            child: Icon(
-                              Icons.check_circle_rounded,
-                              size: 13,
-                              color: _archiveThemeGreen,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  SizedBox(
-                    width: 66,
-                    child: Text(
-                      character.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: selected ? _archiveText : _archiveTextSoft,
-                        fontSize: 9.2,
-                        fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
-                        letterSpacing: .1,
-                        height: 1.05,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
+        itemBuilder: (context, index) => buildThumb(characters[index]),
       ),
     );
   }

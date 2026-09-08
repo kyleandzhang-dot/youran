@@ -826,6 +826,11 @@ class _NovelInputBarState extends State<NovelInputBar> {
     // 正在连接时也必须继续接收 pointerUp，否则用户松手会丢失结束事件。
     final micEnabled = widget.enabled && !_speechFinishing;
     final inventoryPickerOpen = _inventoryOverlay != null;
+    final viewport = NovelViewportMetrics.of(
+      context,
+      desktopMode: widget.gameController?.desktopMode ?? false,
+    );
+    final shortViewport = viewport.shortViewport;
 
     return AnimatedOpacity(
         opacity: widget.enabled ? 1 : .50,
@@ -845,8 +850,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                       child: InkWell(
                         onTap: widget.enabled ? widget.onToggleLuckyCard : null,
                         child: Container(
-                          width: 44,
-                          height: 50,
+                          width: shortViewport ? 40 : 44,
+                          height: shortViewport ? 44 : 50,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.zero,
                             border: Border.all(
@@ -889,7 +894,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                 children: <Widget>[
                   if (referencedItems.isNotEmpty) ...<Widget>[
                     SizedBox(
-                      height: 26,
+                      height: shortViewport ? 23 : 26,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         physics: const BouncingScrollPhysics(),
@@ -907,8 +912,16 @@ class _NovelInputBarState extends State<NovelInputBar> {
                       sigma: glassActive ? 10 : 16,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 170),
-                        constraints: const BoxConstraints(minHeight: 50, maxHeight: 158),
-                        padding: const EdgeInsets.fromLTRB(10, 6, 5, 6),
+                        constraints: BoxConstraints(
+                          minHeight: shortViewport ? 44 : 50,
+                          maxHeight: shortViewport ? 118 : 158,
+                        ),
+                        padding: EdgeInsets.fromLTRB(
+                          shortViewport ? 8 : 10,
+                          shortViewport ? 4 : 6,
+                          5,
+                          shortViewport ? 4 : 6,
+                        ),
                         decoration: BoxDecoration(
                           color: glassActive
                               ? Colors.black.withOpacity(
@@ -937,8 +950,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                     message: '引用物品',
                                     child: AnimatedContainer(
                                       duration: const Duration(milliseconds: 140),
-                                      width: 32,
-                                      height: 34,
+                                      width: shortViewport ? 29 : 32,
+                                      height: shortViewport ? 30 : 34,
                                       alignment: Alignment.center,
                                       decoration: BoxDecoration(
                                         color: inventoryPickerOpen
@@ -970,7 +983,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                                     : Colors.white.withOpacity(
                                                         widget.enabled && !speechBusy ? .60 : .26,
                                                       ),
-                                                fontSize: 20,
+                                                fontSize: shortViewport ? 18 : 20,
                                                 height: 1,
                                                 fontWeight: FontWeight.w300,
                                               ),
@@ -1005,8 +1018,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                     scale: speaking ? 1.08 : 1,
                                     duration: const Duration(milliseconds: 120),
                                     child: SizedBox(
-                                      width: 36,
-                                      height: 36,
+                                      width: shortViewport ? 32 : 36,
+                                      height: shortViewport ? 32 : 36,
                                       child: CustomPaint(
                                         painter: _CutoutVoiceWavePainter(
                                           speaking: speaking,
@@ -1031,10 +1044,10 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                   textInputAction: TextInputAction.send,
                                   onSubmitted: (_) => _submit(),
                                   cursorColor: NovelPalette.accent,
-                                  style: const TextStyle(
-                                    color: Color(0xFFF4F3EE),
-                                    fontSize: 14,
-                                    height: 1.35,
+                                  style: TextStyle(
+                                    color: const Color(0xFFF4F3EE),
+                                    fontSize: shortViewport ? 13.4 : 14,
+                                    height: shortViewport ? 1.28 : 1.35,
                                     fontWeight: FontWeight.w400,
                                   ),
                                   decoration: InputDecoration(
@@ -1049,11 +1062,14 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                       color: speechBusy
                                           ? NovelPalette.accent.withOpacity(.76)
                                           : Colors.white.withOpacity(focused ? .48 : .32),
-                                      fontSize: 13.2,
+                                      fontSize: shortViewport ? 12.5 : 13.2,
                                       fontWeight: FontWeight.w400,
                                     ),
                                     isDense: true,
-                                    contentPadding: const EdgeInsets.only(top: 8, bottom: 12),
+                                    contentPadding: EdgeInsets.only(
+                                      top: shortViewport ? 6 : 8,
+                                      bottom: shortViewport ? 9 : 12,
+                                    ),
                                     border: InputBorder.none,
                                     enabledBorder: InputBorder.none,
                                     focusedBorder: InputBorder.none,
@@ -1071,8 +1087,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                 child: AnimatedContainer(
                                   duration: const Duration(milliseconds: 180),
                                   curve: Curves.easeOutCubic,
-                                  width: 34,
-                                  height: 34,
+                                  width: shortViewport ? 31 : 34,
+                                  height: shortViewport ? 31 : 34,
                                   decoration: BoxDecoration(
                                     // 发送按钮使用纯白强调色，不再沿用全局绿色 accent。
                                     color: canSend
@@ -1097,7 +1113,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                       child: Center(
                                         child: Icon(
                                           Icons.arrow_upward_rounded,
-                                          size: 17,
+                                          size: shortViewport ? 16 : 17,
                                           color: canSend
                                               ? const Color(0xFF111512)
                                               : Colors.white.withOpacity(.52),

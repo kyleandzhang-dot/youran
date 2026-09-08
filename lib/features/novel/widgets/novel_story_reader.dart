@@ -157,9 +157,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   double _adaptiveFooterHeight({
     required double availableWidth,
     required bool compact,
+    required bool shortViewport,
     required bool choicesVisible,
   }) {
-    final base = compact ? 52.0 : 54.0;
+    final base = shortViewport ? 46.0 : (compact ? 52.0 : 54.0);
     final text = widget.textController.text;
     if (text.isEmpty) return base;
 
@@ -179,7 +180,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     )..layout(maxWidth: textWidth);
 
     final lines = painter.computeLineMetrics().length.clamp(1, 5);
-    return base + (lines - 1) * (compact ? 19.0 : 20.0);
+    return base +
+        (lines - 1) * (shortViewport ? 17.0 : (compact ? 19.0 : 20.0));
   }
 
   // _syncReveal 会在句子变化 / SSE 补长时一次性更新 Unicode rune 缓存。
@@ -675,14 +677,21 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     return LayoutBuilder(
       builder: (context, constraints) {
         final screen = MediaQuery.sizeOf(context);
-        final compact = screen.width <= 600;
+        final viewport = NovelViewportMetrics.of(
+          context,
+          desktopMode: controller.desktopMode,
+        );
+        final compact = viewport.compactContent;
+        final shortViewport = viewport.shortViewport;
+        final shortWide = viewport.shortWide;
         // 正文始终保持左右对称，不为右侧悬浮按钮预留宽度。
-        // 1. 把高度和宽屏的判断提前
         final availableHeight = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : screen.height - MediaQuery.paddingOf(context).vertical;
-            
-        final wideDialogueLayout = controller.desktopMode;
+
+        // 手机横屏即使由“电脑模式”触发旋转，也不能套用完整 PC 镜头。
+        // 它使用独立的宽而矮布局，PC 正常窗口仍保持完整桌面构图。
+        final wideDialogueLayout = viewport.useDesktopDialogue;
 
         const narrationRightSafeWidth = 0.0;
         
@@ -693,7 +702,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         final dialogueRightSafeWidth = wideDialogueLayout
             ? 0.0 
             : ((controller.hasNext || controller.isGenerating)
-                ? (compact ? 58.0 : 70.0)
+                ? (shortWide ? 52.0 : (compact ? 58.0 : 70.0))
                 : 0.0);
         final browsingStory = controller.hasNext;
 
@@ -704,11 +713,14 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
         final surroundingsActionVisible =
             composerVisible && surroundingsAction?.visible == true;
-        final navigationHeight = MediaQuery.viewPaddingOf(context).bottom;
+        // 外层 NovelGamePage 已经用 SafeArea 消化系统底部安全区。
+        // 此处再加 viewPadding.bottom 会在 iPhone 上重复占位。
+        const navigationHeight = 0.0;
         final composerHeight = composerVisible
             ? _adaptiveFooterHeight(
                   availableWidth: constraints.maxWidth,
                   compact: compact,
+                  shortViewport: shortViewport,
                   choicesVisible: canShowChoices,
                 ) +
                 (surroundingsActionVisible ? (compact ? 22.0 : 24.0) : 0.0)
@@ -728,18 +740,18 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         // 选择区已经改成输入框上方的单行横向滑动条。
         // 无论有几个选项都只占一行，不能再按“选项数量 × 卡片高度”把正文往上顶。
         final choiceDockHeight = canShowChoices
-            ? (compact ? 42.0 : 44.0)
+            ? (shortViewport ? 38.0 : (compact ? 42.0 : 44.0))
             : 0.0;
 
         // 最后一条选择与自由输入框之间只保留轻微呼吸距离。
-        final choiceBottomGap = compact ? 4.0 : 5.0;
+        final choiceBottomGap = shortViewport ? 3.0 : (compact ? 4.0 : 5.0);
 
         // 正文与选择区之间只留一条很小的安全距离。
-        final contentChoiceGap = compact ? 5.0 : 6.0;
+        final contentChoiceGap = shortViewport ? 4.0 : (compact ? 5.0 : 6.0);
 
         // 剧情文字统一向屏幕底部收：只给输入栏 / 系统安全区留少量呼吸距离。
         // 底部大探索舞台暂时隐藏；正文只需避开输入框、轻量探索入口和选项条。
-        final dialogGap = compact ? 18.0 : 24.0;
+        final dialogGap = shortViewport ? 10.0 : (compact ? 18.0 : 24.0);
         final panelBottom = footerBottom + footerHeight + dialogGap;
 
         // 最后一句出现选项时，不再把正文整体按选项数量不断往上推。
@@ -754,7 +766,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         // 上边界只避开顶部 HUD，其余整块屏幕空间都交给正文使用。
         // 正文从选择框上方向上自然生长；只有真正占满剩余屏幕后才滚动。
         final choiceContentTop =
-            MediaQuery.paddingOf(context).top + (compact ? 74.0 : 86.0);
+            MediaQuery.paddingOf(context).top + viewport.topContentReserve;
         final choiceAvailableContentHeight =
             (availableHeight - choiceContentTop - choiceContentBottom)
                 .clamp(0.0, availableHeight)
@@ -784,11 +796,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     // “算的是整屏宽度，实际却被父级约束成 720px”的错位。
                     final stageSize = Size(constraints.maxWidth, availableHeight);
 
-                    // 手机竖屏与电脑/横向宽屏使用两套真正不同的镜头语言。
-                    // PC 不是“把手机版缩小”：说话角色固定成为左侧的大半身近景，
-                    // 右侧留给较长对白，形成更接近视觉小说的面对面代入感。
-                    final wideDialogueLayout = controller.desktopMode;
-
+                    // 手机竖屏、手机横屏与真正桌面使用不同镜头语言。
+                    // wideDialogueLayout 已由统一 viewport metrics 决定；手机横屏
+                    // 即使 controller.desktopMode=true，也不会误套用 PC 立绘尺寸。
                     late final double portraitWidth;
                     late final double portraitHeightRatio;
                     late final double sinkRatio;
@@ -800,33 +810,38 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                       final heightBased =
                           (stageSize.height * 1.05).clamp(500.0, 1000.0).toDouble();
                       portraitWidth = math.min(widthBased, heightBased);
-                      
-                      portraitHeightRatio = 1.25; 
-                      
-                      // 【核心修改】：大幅度增加下沉比例！
-                      // 从 0.18 直接拉高到 0.35（甚至 0.40）。
-                      // 这意味着立绘高度的 35% 都会被硬生生拖进屏幕底部边界之外。
-                      // 这下屏幕绝对能把腰部以下全部“一口吞掉”，只给你留下标准的胸像！
-                      sinkRatio = 0.45; 
-                      
-                      edgePush = 0.08; 
+                      portraitHeightRatio = 1.25;
+                      sinkRatio = 0.45;
+                      edgePush = 0.08;
+                    } else if (shortWide) {
+                      // 手机横屏：宽度很多、高度很少。人物按“可见高度”反推尺寸，
+                      // 不再使用 PC 的 550px 起步，也不沿用竖屏 400px 的最小宽度。
+                      final widthBased = stageSize.width * .44;
+                      final heightBased = stageSize.height * .92;
+                      portraitWidth = math
+                          .min(widthBased, heightBased)
+                          .clamp(260.0, 420.0)
+                          .toDouble();
+                      portraitHeightRatio = 1.22;
+                      sinkRatio = .18;
+                      edgePush = .04;
                     } else {
-                      // 手机竖屏保持原样...
-                      // 手机竖屏继续保留原来的近景人物感与主角/NPC 左右关系。
-                      const double minStage = 360.0;
-                      const double maxStage = 700.0;
+                      // 手机竖屏保持近景感，但降低固定最小宽度，避免小屏上人物
+                      // 与对白/HUD 互相挤压。
+                      const double minStage = 320.0;
+                      const double maxStage = 600.0;
                       final double t = ((stageSize.width - minStage) /
                               (maxStage - minStage))
                           .clamp(0.0, 1.0);
-                      final widthRatio = lerpDouble(.98, .76, t)!;
-                      final minPortraitWidth = lerpDouble(400.0, 470.0, t)!;
-                      final maxPortraitWidth = lerpDouble(600.0, 650.0, t)!;
+                      final widthRatio = lerpDouble(1.00, .82, t)!;
+                      final minPortraitWidth = lerpDouble(350.0, 420.0, t)!;
+                      final maxPortraitWidth = lerpDouble(500.0, 600.0, t)!;
                       portraitWidth = (stageSize.width * widthRatio)
                           .clamp(minPortraitWidth, maxPortraitWidth)
                           .toDouble();
                       portraitHeightRatio = 1.22;
-                      sinkRatio = lerpDouble(.25, .16, t)!;
-                      edgePush = lerpDouble(.35, .18, t)!;
+                      sinkRatio = lerpDouble(.24, .16, t)!;
+                      edgePush = lerpDouble(.28, .16, t)!;
                     }
 
                     final fullPortraitHeight = portraitWidth * portraitHeightRatio;
@@ -1075,7 +1090,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                                   '${mode.name}-${controller.currentSentenceIndex}-$speaker',
                                 ),
                                 mode: mode,
-                                desktopMode: controller.desktopMode,
+                                desktopMode: wideDialogueLayout,
                                 sentence: sentence,
                                 speakerName: speaker.isEmpty
                                     ? (mode == _NovelLineMode.protagonist
@@ -1103,7 +1118,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                                 maxPanelHeight: canShowChoices
                                     ? choiceAvailableContentHeight
                                     : availableHeight *
-                                        (compact ? .38 : .31),
+                                        (shortWide ? .52 : (compact ? .38 : .31)),
                                 onSelected: controller.selectChoice,
                                 onCustomInput: () =>
                                     widget.focusNode.requestFocus(),
@@ -1495,8 +1510,13 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
-    final compact = screen.width <= 600;
-    final wideDialogueLayout = desktopMode;
+    final viewport = NovelViewportMetrics.of(
+      context,
+      desktopMode: desktopMode,
+    );
+    final compact = viewport.compactContent;
+    final shortWide = viewport.shortWide;
+    final wideDialogueLayout = viewport.useDesktopDialogue;
 
     // 手机仍保持 NPC 左 / 主角右。
     // PC 镜头固定：角色永远在左，整个对白阅读区稳定放在右侧，
@@ -1510,25 +1530,35 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
 
     // PC 对白仍然比手机长，但不再无限铺满：
     // 左侧大半身人物约占 46%，右侧文字约占一半，二者共同构成画面。
-    final dialogueWidth = compact
-        ? (screen.width * .60).clamp(208.0, 350.0).toDouble()
-        : wideDialogueLayout
-            ? (screen.width * .52).clamp(500.0, 960.0).toDouble()
-            : (screen.width * .50).clamp(360.0, 680.0).toDouble();
+    final dialogueWidth = shortWide
+        ? (screen.width * .44).clamp(280.0, 420.0).toDouble()
+        : compact
+            ? (screen.width * .60).clamp(208.0, 350.0).toDouble()
+            : wideDialogueLayout
+                ? (screen.width * .52).clamp(500.0, 960.0).toDouble()
+                : (screen.width * .50).clamp(360.0, 680.0).toDouble();
 
-    final outerHorizontal = compact ? 9.0 : (wideDialogueLayout ? 120.0 : 20.0);
+    final outerHorizontal = shortWide
+        ? 26.0
+        : (compact ? 9.0 : (wideDialogueLayout ? 120.0 : 20.0));
 
-    final portraitFacingGap =
-        compact ? 7.0 : (wideDialogueLayout ? 16.0 : 12.0);
+    final portraitFacingGap = shortWide
+        ? 10.0
+        : (compact ? 7.0 : (wideDialogueLayout ? 16.0 : 12.0));
 
     // 角色名直接嵌在线条中间：不再使用中央星星，也不再把名字放在线条下方。
-    final shortNameLine = compact ? 28.0 : (wideDialogueLayout ? 46.0 : 38.0);
-    final longNameLine = compact ? 48.0 : (wideDialogueLayout ? 86.0 : 70.0);
+    final shortNameLine = shortWide
+        ? 26.0
+        : (compact ? 28.0 : (wideDialogueLayout ? 46.0 : 38.0));
+    final longNameLine = shortWide
+        ? 42.0
+        : (compact ? 48.0 : (wideDialogueLayout ? 86.0 : 70.0));
     final leftNameLine = isHost ? longNameLine : shortNameLine;
     final rightNameLine = isHost ? shortNameLine : longNameLine;
 
-    final speakerHeaderWidth =
-        compact ? 188.0 : (wideDialogueLayout ? 320.0 : 244.0);
+    final speakerHeaderWidth = shortWide
+        ? 220.0
+        : (compact ? 188.0 : (wideDialogueLayout ? 320.0 : 244.0));
 
     final dialogueContent = SizedBox(
       width: dialogueWidth,
@@ -1562,7 +1592,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                                 : CrossAxisAlignment.start),
                         children: <Widget>[
                           SizedBox(
-                            height: compact ? 26 : 29,
+                            height: shortWide ? 23 : (compact ? 26 : 29),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -1634,7 +1664,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                     ),
                 ],
               ),
-              SizedBox(height: compact ? 7 : 10),
+              SizedBox(height: shortWide ? 5 : (compact ? 7 : 10)),
 
               ValueListenableBuilder<String>(
                 valueListenable: displayTextListenable,
@@ -1656,8 +1686,8 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                       final style = TextStyle(
                         color: const Color(0xFFF4F1EA),
                         fontFamily: fontFamily,
-                        fontSize: fontSize + (compact ? 0 : .4),
-                        height: 1.82,
+                        fontSize: fontSize + (shortWide ? -.2 : (compact ? 0 : .4)),
+                        height: shortWide ? 1.55 : 1.82,
                         fontWeight: FontWeight.w500,
                         letterSpacing: .15,
                         shadows: <Shadow>[
@@ -1703,7 +1733,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
     final readingZone = Padding(
       padding: EdgeInsets.symmetric(
         horizontal: compact ? 2 : 5,
-        vertical: compact ? 2 : 4,
+        vertical: shortWide ? 1 : (compact ? 2 : 4),
       ),
       child: dialogueContent,
     );

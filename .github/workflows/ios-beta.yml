@@ -54,6 +54,82 @@ jobs:
       - name: Install Flutter dependencies
         run: flutter pub get
 
+
+      # Temporary diagnostic patch for flutter_onnxruntime iOS:
+      # force CoreML EP to use MLProgram instead of its default model format.
+      # This only changes the GitHub macOS runner's pub-cache for this build.
+      - name: Patch ONNX Runtime CoreML to MLProgram
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_PATCH'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          from urllib.parse import unquote, urlparse
+
+          config_path = Path('.dart_tool/package_config.json').resolve()
+          config = json.loads(config_path.read_text(encoding='utf-8'))
+          package = next(
+              (p for p in config['packages'] if p['name'] == 'flutter_onnxruntime'),
+              None,
+          )
+          if package is None:
+              raise SystemExit('flutter_onnxruntime not found in .dart_tool/package_config.json')
+
+          root_uri = package['rootUri']
+          parsed = urlparse(root_uri)
+          if parsed.scheme == 'file':
+              plugin_root = Path(unquote(parsed.path))
+          elif parsed.scheme:
+              raise SystemExit(f'Unsupported flutter_onnxruntime rootUri: {root_uri}')
+          else:
+              plugin_root = (config_path.parent / unquote(root_uri)).resolve()
+
+          swift_file = plugin_root / 'ios' / 'Classes' / 'FlutterOnnxruntimePlugin.swift'
+          if not swift_file.is_file():
+              raise SystemExit(f'iOS plugin source not found: {swift_file}')
+
+          source = swift_file.read_text(encoding='utf-8')
+          if '"ModelFormat": "MLProgram"' in source:
+              print(f'Already patched: {swift_file}')
+              sys.exit(0)
+
+          pattern = re.compile(
+              r'(?m)^(?P<indent>[ \t]*)try sessionOptions\.appendCoreMLExecutionProvider\(\)[ \t]*$'
+          )
+          match = pattern.search(source)
+          if match is None:
+              raise SystemExit(
+                  'Could not find appendCoreMLExecutionProvider() in '
+                  f'{swift_file}. Plugin source may have changed.'
+              )
+
+          indent = match.group('indent')
+          replacement = (
+              f'{indent}try sessionOptions.appendCoreMLExecutionProvider(\n'
+              f'{indent}    withOptionsV2: [\n'
+              f'{indent}        "ModelFormat": "MLProgram"\n'
+              f'{indent}    ]\n'
+              f'{indent})'
+          )
+          patched = source[:match.start()] + replacement + source[match.end():]
+          swift_file.write_text(patched, encoding='utf-8')
+
+          print(f'Patched CoreML ModelFormat=MLProgram: {swift_file}')
+          for line_no, line in enumerate(patched.splitlines(), 1):
+              if 'ModelFormat' in line:
+                  start = max(1, line_no - 3)
+                  end = min(len(patched.splitlines()), line_no + 3)
+                  lines = patched.splitlines()
+                  print('--- patched CoreML snippet ---')
+                  for n in range(start, end + 1):
+                      print(f'{n}: {lines[n - 1]}')
+                  print('------------------------------')
+                  break
+          PY_PATCH
+
       - name: Set build number
         # 每次上传 TestFlight 的 CFBundleVersion(build number)必须严格递增,
         # 用 GitHub Actions 的 run_number 保证每次 run 都不重复

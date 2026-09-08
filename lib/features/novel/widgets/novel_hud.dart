@@ -23,97 +23,100 @@ class NovelTopHud extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final generating = controller.isGenerating;
+    final viewport = NovelViewportMetrics.of(
+      context,
+      desktopMode: controller.desktopMode,
+    );
+    final compact = viewport.compactChrome;
+    final shortWide = viewport.shortWide;
+    final avatarSize = shortWide ? 32.0 : (compact ? 35.0 : 38.0);
+    final buttonDimension = shortWide ? 34.0 : (compact ? 36.0 : 38.0);
 
     return AnimatedOpacity(
       opacity: generating ? .42 : 1,
       duration: const Duration(milliseconds: 420),
       child: SizedBox(
-        height: 72,
-        child: Stack(
-          fit: StackFit.expand,
+        height: viewport.topHudHeight,
+        child: Row(
           children: <Widget>[
-            Align(
-              alignment: Alignment.centerLeft,
+            Expanded(
               child: Row(
-                mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
                   _TopIconButton(
                     tooltip: '菜单',
                     icon: Icons.menu_rounded,
                     onTap: onMenu,
-                    size: 21,
-              ),
-                  const SizedBox(width: 4),
-                  InkWell(
-                    onTap: onOpenProfile,
-                    borderRadius: BorderRadius.circular(6),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          _ConditionAvatar(
-                            gender: controller.protagonist?.gender ?? '',
-                          ),
-                          const SizedBox(width: 8),
-                          Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 156),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: <Widget>[
-                                    Flexible(
-                                      child: Text(
-                                        controller.protagonistName,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: NovelPalette.text,
-                                          // 顶部主角名使用 App 默认黑体 / MiSans，不再强制明朝体。
-                                          fontSize: 12.8,
-                                          height: 1,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: .45,
-                                        ),
-                                      ),
+                    size: shortWide ? 19 : 21,
+                    dimension: buttonDimension,
+                  ),
+                  SizedBox(width: shortWide ? 1 : 4),
+                  Flexible(
+                    child: InkWell(
+                      onTap: onOpenProfile,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: shortWide ? 1 : 2,
+                          vertical: 4,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            _ConditionAvatar(
+                              gender: controller.protagonist?.gender ?? '',
+                              size: avatarSize,
+                            ),
+                            SizedBox(width: shortWide ? 6 : 8),
+                            Flexible(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    controller.protagonistName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: NovelPalette.text,
+                                      fontSize: shortWide ? 11.5 : (compact ? 12.2 : 12.8),
+                                      height: 1,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: .35,
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                  SizedBox(height: shortWide ? 4 : 5),
+                                  _HealthBar(
+                                    progress: controller.protagonistHp / 100,
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 5),
-                              _HealthBar(
-                                progress: controller.protagonistHp / 100,
-                              ),
-                            ],
-                          ),
-                        ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  NovelScoreChip(
-                    score: controller.score,
-                    onTap: onOpenStore,
-                  ),
-                  const SizedBox(width: 2),
-                  _TopIconButton(
-                    tooltip: '设置',
-                    icon: Icons.settings_outlined,
-                    onTap: onOpenSettings,
-                    size: 20,
-                  ),
-                ],
-              ),
+            SizedBox(width: shortWide ? 2 : 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                NovelScoreChip(
+                  score: controller.score,
+                  onTap: onOpenStore,
+                  compact: compact,
+                ),
+                SizedBox(width: shortWide ? 0 : 2),
+                _TopIconButton(
+                  tooltip: '设置',
+                  icon: Icons.settings_outlined,
+                  onTap: onOpenSettings,
+                  size: shortWide ? 18 : 20,
+                  dimension: buttonDimension,
+                ),
+              ],
             ),
           ],
         ),
@@ -235,7 +238,7 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 430;
+    final compact = NovelViewportMetrics.of(context).compactChrome;
     final completed = _status == 'completed';
     final failed = _status == 'failed';
 
@@ -340,7 +343,7 @@ class NovelLocationHud extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final compact = MediaQuery.sizeOf(context).width < 430;
+    final compact = NovelViewportMetrics.of(context).compactChrome;
     final hasSubtitle = subtitle.trim().isNotEmpty;
     final maxWidth = compact ? 286.0 : 372.0;
 
@@ -566,12 +569,14 @@ class _TopIconButton extends StatelessWidget {
     required this.icon,
     required this.onTap,
     this.size = 20,
+    this.dimension = 38,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback onTap;
   final double size;
+  final double dimension;
 
   @override
   Widget build(BuildContext context) {
@@ -583,8 +588,8 @@ class _TopIconButton extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(20),
           child: SizedBox(
-            width: 38,
-            height: 38,
+            width: dimension,
+            height: dimension,
             child: Center(
               child: Icon(
                 icon,
@@ -607,9 +612,11 @@ class _TopIconButton extends StatelessWidget {
 class _ConditionAvatar extends StatelessWidget {
   const _ConditionAvatar({
     required this.gender,
+    this.size = 38,
   });
 
   final String gender;
+  final double size;
 
   bool get _isFemale {
     final value = gender.trim().toLowerCase();
@@ -628,8 +635,8 @@ class _ConditionAvatar extends StatelessWidget {
 
     // 左上角固定使用项目内置头像，不读取用户或主角上传的头像地址。
     return SizedBox(
-      width: 38,
-      height: 38,
+      width: size,
+      height: size,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(9),
         child: NovelArtwork(
@@ -756,10 +763,12 @@ class NovelScoreChip extends StatefulWidget {
     super.key,
     required this.score,
     this.onTap,
+    this.compact = false,
   });
 
   final NovelScore score;
   final VoidCallback? onTap;
+  final bool compact;
 
   @override
   State<NovelScoreChip> createState() => _NovelScoreChipState();
@@ -834,8 +843,16 @@ class _NovelScoreChipState extends State<NovelScoreChip>
                   highlightColor: Colors.white.withOpacity(.02),
                   child: Container(
                     // 极简风的微透玻璃底，不再死黑
-                    margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-                    padding: const EdgeInsets.fromLTRB(4, 3, 10, 3), 
+                    margin: EdgeInsets.symmetric(
+                      horizontal: widget.compact ? 2 : 4,
+                      vertical: widget.compact ? 4 : 5,
+                    ),
+                    padding: EdgeInsets.fromLTRB(
+                      widget.compact ? 3 : 4,
+                      3,
+                      widget.compact ? 7 : 10,
+                      3,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(.18), // 非常清透的底色，若隐若现
                       borderRadius: BorderRadius.circular(20),
@@ -850,8 +867,12 @@ class _NovelScoreChipState extends State<NovelScoreChip>
                         // 1. 星块图标（尺寸收敛一点，显得更精致）
                         AnimatedContainer(
                           duration: const Duration(milliseconds: 180),
-                          width: animating ? 21.0 : 19.0,
-                          height: animating ? 21.0 : 19.0,
+                          width: animating
+                              ? (widget.compact ? 18.5 : 21.0)
+                              : (widget.compact ? 17.0 : 19.0),
+                          height: animating
+                              ? (widget.compact ? 18.5 : 21.0)
+                              : (widget.compact ? 17.0 : 19.0),
                           child: Image.asset(
                             'assets/images/xing.webp',
                             fit: BoxFit.contain,
@@ -875,7 +896,9 @@ class _NovelScoreChipState extends State<NovelScoreChip>
                             key: ValueKey<int>(widget.score.total),
                             style: TextStyle(
                               color: Colors.white.withOpacity(.92), // 纯净的白色
-                              fontSize: animating ? 14.5 : 14, 
+                              fontSize: animating
+                                  ? (widget.compact ? 13.2 : 14.5)
+                                  : (widget.compact ? 12.6 : 14),
                               height: 1.1,
                               fontWeight: FontWeight.w600, // 字重调得秀气一点
                               letterSpacing: 0.3,

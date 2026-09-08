@@ -179,13 +179,15 @@ class NovelChoiceDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 600;
+    final viewport = NovelViewportMetrics.of(context);
+    final compact = viewport.narrowWidth;
+    final shortViewport = viewport.shortViewport;
 
     // 选择区改成输入框上方的一条轻量横向操作带：
     // 不再显示“请做出你的选择”标题、菱形和装饰线，避免抢剧情画面。
     return SizedBox(
       width: double.infinity,
-      height: compact ? 42 : 44,
+      height: shortViewport ? 38 : (compact ? 42 : 44),
       child: _InlineNovelChoices(
         choices: choices,
         onSelected: onSelected,
@@ -272,10 +274,12 @@ class _InlineNovelChoices extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 600;
-    final cardHeight = compact ? 42.0 : 44.0;
-    final gap = compact ? 6.0 : 7.0;
-    final rightPadding = compact ? 7.0 : 9.0;
+    final viewport = NovelViewportMetrics.of(context);
+    final compact = viewport.narrowWidth;
+    final shortViewport = viewport.shortViewport;
+    final cardHeight = shortViewport ? 38.0 : (compact ? 42.0 : 44.0);
+    final gap = shortViewport ? 5.0 : (compact ? 6.0 : 7.0);
+    final rightPadding = shortViewport ? 6.0 : (compact ? 7.0 : 9.0);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -424,15 +428,22 @@ class _NovelDialogFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
-    final compact = media.size.width <= 600;
-    final wideDialogueLayout = controller.desktopMode;
+    final viewport = NovelViewportMetrics.fromMediaQuery(
+      media,
+      desktopMode: controller.desktopMode,
+    );
+    final compact = viewport.compactContent;
+    final shortViewport = viewport.shortViewport;
+    final wideDialogueLayout = viewport.useDesktopDialogue;
     final keyboardVisible = media.viewInsets.bottom > 0;
     final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
     final showSurroundingsAction =
         showComposer && !keyboardVisible && surroundingsAction?.visible == true;
-    final safeBottom = keyboardVisible
-        ? 0.0
-        : media.viewPadding.bottom;
+
+    // NovelDialogPanel 本身已经位于 NovelGamePage 的 SafeArea 内。
+    // 这里不能再次叠加 viewPadding.bottom，否则 iPhone Home Indicator
+    // 会被重复预留两次甚至三次，真机可用高度会明显少于电脑预览。
+    const safeBottom = 0.0;
 
     // 核心逻辑：精准判断右侧导航栏是否显示
     final showBottomNav = controller.storyStarted && 
@@ -443,7 +454,7 @@ class _NovelDialogFooter extends StatelessWidget {
     // 计算右侧需要避让的宽度（导航图标宽度 + 间距）
     // PC 输入区本身已经居中并限制宽度，不需要再为了最右侧 HUD 整体左移。
     final navOffsetRight = showBottomNav && !wideDialogueLayout
-        ? (compact ? 56.0 : 64.0)
+        ? (shortViewport ? 52.0 : (compact ? 56.0 : 64.0))
         : 0.0;
 
     return AnimatedPadding(
@@ -451,14 +462,18 @@ class _NovelDialogFooter extends StatelessWidget {
       curve: Curves.easeOutCubic,
       // 底部永远贴底，通过 right 让出右侧导航栏的空间
       padding: EdgeInsets.only(
-        bottom: safeBottom + 8.0, 
+        bottom: safeBottom + (shortViewport ? 4.0 : 8.0),
         right: navOffsetRight, 
       ),
       child: Align(
         alignment: Alignment.bottomCenter,
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: wideDialogueLayout ? 920.0 : media.size.width,
+            maxWidth: wideDialogueLayout
+                ? 920.0
+                : (viewport.shortWide
+                    ? math.min(720.0, media.size.width)
+                    : media.size.width),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -552,10 +567,14 @@ class NovelBottomArchiveBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
-    final shortViewport = media.size.height < 520;
-    // 电脑模式不能因为“横屏”就被误判成手机紧凑布局。
-    // 只有窄屏，或手机横屏这类高度特别短的窗口才压缩导航。
-    final compact = (!desktopMode && media.size.width <= 600) || shortViewport;
+    final viewport = NovelViewportMetrics.fromMediaQuery(
+      media,
+      desktopMode: desktopMode,
+    );
+    final shortViewport = viewport.shortViewport;
+    final ultraShortViewport = viewport.ultraShortViewport;
+    // 导航的“紧凑”只描述 chrome 密度，不再把宽度等同于设备类型。
+    final compact = viewport.compactChrome;
     final activeIndex = selectedIndex.clamp(0, _labels.length - 1).toInt();
     
     if (_novelPrimaryTabIndex.value != activeIndex) {
@@ -572,10 +591,12 @@ class NovelBottomArchiveBar extends StatelessWidget {
       child: Padding(
         // 留出与屏幕右侧和底部的安全距离，避免阻挡文字或被手势误触
         padding: EdgeInsets.only(
-          right: desktopMode ? 20.0 : (compact ? 8.0 : 16.0),
+          right: desktopMode && !shortViewport
+              ? 20.0
+              : (compact ? 8.0 : 16.0),
           bottom: desktopMode && !shortViewport
               ? 48.0
-              : (compact ? 10.0 : 40.0),
+              : (ultraShortViewport ? 4.0 : (compact ? 8.0 : 40.0)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min, // 紧凑包裹
@@ -600,7 +621,7 @@ class NovelBottomArchiveBar extends StatelessWidget {
                 SizedBox(
                   height: desktopMode && !shortViewport
                       ? 20.0
-                      : (compact ? 6.0 : 18.0),
+                      : (ultraShortViewport ? 3.0 : (compact ? 6.0 : 18.0)),
                 ),
             ],
           ],
@@ -805,6 +826,7 @@ class _GameContinueButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final shortViewport = NovelViewportMetrics.of(context).shortViewport;
     return Tooltip(
       message: '继续剧情',
       child: Material(
@@ -816,7 +838,13 @@ class _GameContinueButton extends StatelessWidget {
           highlightColor: Colors.transparent,
           child: Opacity(
             opacity: onTap == null ? .25 : 1,
-            child: const SizedBox(width: 42, height: 44, child: Center(child: _GameContinueGlyph(size: 32))),
+            child: SizedBox(
+                width: shortViewport ? 38 : 42,
+                height: shortViewport ? 40 : 44,
+                child: Center(
+                  child: _GameContinueGlyph(size: shortViewport ? 28 : 32),
+                ),
+              ),
           ),
         ),
       ),

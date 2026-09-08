@@ -12,12 +12,14 @@ const Color _novelDrawerAccent = NovelPalette.accent;
 Future<void> showNovelSettingsSheet(
   BuildContext context,
   NovelGameController controller, {
+  bool isAdmin = false,
   NovelDeveloperPreviewActions? developerPreview,
 }) async {
   await _showNovelEndDrawer<void>(
     context,
     child: _SettingsPanel(
       controller: controller,
+      isAdmin: isAdmin,
       developerPreview: developerPreview,
     ),
   );
@@ -105,10 +107,12 @@ class _SettingsDrawerScaffold extends StatelessWidget {
 class _SettingsPanel extends StatefulWidget {
   const _SettingsPanel({
     required this.controller,
+    required this.isAdmin,
     this.developerPreview,
   });
 
   final NovelGameController controller;
+  final bool isAdmin;
   final NovelDeveloperPreviewActions? developerPreview;
 
   @override
@@ -134,7 +138,9 @@ class _SettingsPanelState extends State<_SettingsPanel> {
       builder: (context, _) {
         final settings = controller.settings;
         final developerPreview = widget.developerPreview;
-        if (_showDeveloperTools && developerPreview != null) {
+        if (_showDeveloperTools &&
+            widget.isAdmin &&
+            developerPreview != null) {
           return _DeveloperToolsPanel(
             actions: developerPreview,
             onBack: () => setState(() => _showDeveloperTools = false),
@@ -419,7 +425,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   ],
                 ),
               ),
-              if (developerPreview != null) ...<Widget>[
+              if (widget.isAdmin && developerPreview != null) ...<Widget>[
                 const SizedBox(height: 26),
                 Divider(height: 1, color: Colors.white.withOpacity(.10)),
                 const SizedBox(height: 12),
