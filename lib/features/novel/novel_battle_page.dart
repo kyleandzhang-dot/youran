@@ -4547,6 +4547,58 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compactHeight = constraints.maxHeight < 720;
+          final landscapePhone = constraints.maxWidth > constraints.maxHeight &&
+              constraints.maxHeight <= 560 &&
+              constraints.maxWidth <= 1100;
+
+          // 手机横屏使用独立布局：左边专注战斗舞台，右边集中战况与操作。
+          // 不再把“舞台 / 记录 / 指令”全部上下堆叠，避免横屏纵向空间被压扁。
+          if (landscapePhone) {
+            final veryShort = constraints.maxHeight < 360;
+            final sidePanelWidth = (constraints.maxWidth * .42)
+                .clamp(310.0, 410.0)
+                .toDouble();
+            return Column(
+              children: <Widget>[
+                SizedBox(
+                  height: veryShort ? 54 : 60,
+                  child: _buildStatusBars(landscape: true),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      8,
+                      0,
+                      8,
+                      veryShort ? 2 : 6,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        Expanded(
+                          child: _buildStage(landscape: true),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: sidePanelWidth,
+                          child: Column(
+                            children: <Widget>[
+                              Expanded(
+                                child: _buildHistory(compact: true),
+                              ),
+                              _buildControls(compact: true),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          // 竖屏 / PC 保持原来的纵向战斗布局。
           return Column(
             children: <Widget>[
               _buildStatusBars(),
@@ -4566,9 +4618,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
-  Widget _buildStatusBars() {
+  Widget _buildStatusBars({bool landscape = false}) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+      padding: landscape
+          ? const EdgeInsets.fromLTRB(10, 2, 10, 0)
+          : const EdgeInsets.fromLTRB(14, 10, 14, 4),
       child: Row( 
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
@@ -4589,7 +4643,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
+            padding: EdgeInsets.symmetric(horizontal: landscape ? 8 : 14),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
@@ -4679,12 +4733,22 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
-  Widget _buildStage() {
+  Widget _buildStage({bool landscape = false}) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // 恢复原本适合竖屏全身立绘的严谨尺寸约束，防止模型撑爆屏幕
-        final width = ((constraints.maxWidth - 30) / 2).clamp(105.0, 210.0).toDouble();
-        final height = (constraints.maxHeight - 4).clamp(0.0, 300.0).toDouble();
+        // 横屏和竖屏分别计算舞台尺寸，但双方始终共用同一组 width / height。
+        // 横屏优先按舞台高度放大，保证主角与对手视觉体量一致。
+        final height = landscape
+            ? (constraints.maxHeight - 2).clamp(150.0, 340.0).toDouble()
+            : (constraints.maxHeight - 4).clamp(0.0, 300.0).toDouble();
+        final width = landscape
+            ? math.min(
+                ((constraints.maxWidth - 24) / 2).clamp(105.0, 250.0),
+                height * .72,
+              ).toDouble()
+            : ((constraints.maxWidth - 30) / 2)
+                .clamp(105.0, 210.0)
+                .toDouble();
         
         return Stack(
           fit: StackFit.expand,
@@ -4710,7 +4774,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             ),
             // 恢复为 Row 左右平齐站位，底部对齐 (CrossAxisAlignment.end) 让立绘稳稳踩在地上
             Padding(
-              padding: const EdgeInsets.fromLTRB(6, 3, 6, 2),
+              padding: EdgeInsets.fromLTRB(
+                landscape ? 4 : 6,
+                landscape ? 1 : 3,
+                landscape ? 4 : 6,
+                landscape ? 0 : 2,
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.end,
@@ -4821,10 +4890,14 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
- Widget _buildHistory() {
+ Widget _buildHistory({bool compact = false}) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-      padding: const EdgeInsets.fromLTRB(10, 9, 10, 7),
+      margin: compact
+          ? const EdgeInsets.fromLTRB(2, 0, 2, 4)
+          : const EdgeInsets.fromLTRB(14, 0, 14, 8),
+      padding: compact
+          ? const EdgeInsets.fromLTRB(8, 5, 8, 5)
+          : const EdgeInsets.fromLTRB(10, 9, 10, 7),
       decoration: const BoxDecoration(
         // 去除生硬边框，改为轻微的渐变，避免文字看不清
         gradient: LinearGradient(
@@ -4851,14 +4924,14 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Padding(
-                padding: const EdgeInsets.fromLTRB(2, 0, 2, 7),
+                padding: EdgeInsets.fromLTRB(2, 0, 2, compact ? 4 : 7),
                 child: Row(
                   children: <Widget>[
                     Text(
                       '战况 · 第$_round回合',
                       style: TextStyle(
                         color: Colors.white.withOpacity(.48),
-                        fontSize: 9.6,
+                        fontSize: compact ? 8.9 : 9.6,
                         fontWeight: FontWeight.w600,
                         letterSpacing: .65,
                       ),
@@ -4871,7 +4944,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: _BattleColors.enemy.withOpacity(.72),
-                          fontSize: 9.4,
+                          fontSize: compact ? 8.8 : 9.4,
                           fontWeight: FontWeight.w600,
                           letterSpacing: .35,
                         ),
@@ -4881,7 +4954,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               ),
               _BattleCurrentStatus(entry: latest),
               if (history.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 5),
+                SizedBox(height: compact ? 3 : 5),
                 Expanded(
                   child: ScrollConfiguration(
                     behavior: ScrollConfiguration.of(context).copyWith(
@@ -4896,7 +4969,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                       padding: const EdgeInsets.fromLTRB(2, 3, 2, 5),
                       physics: const BouncingScrollPhysics(),
                       itemCount: history.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 5),
+                      separatorBuilder: (_, __) => SizedBox(height: compact ? 3 : 5),
                       itemBuilder: (_, index) {
                         final age = history.length <= 1
                             ? 1.0
@@ -5083,9 +5156,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         color: Colors.transparent, // 移除暗色背景和顶部分界线，彻底透明化
       ),
       padding: EdgeInsets.only(
-        top: 15,
+        top: compact ? 6 : 15,
         bottom: math.max(
-          12.0,
+          compact ? 4.0 : 12.0,
           MediaQuery.viewPaddingOf(context).bottom,
         ).toDouble(),
       ),
@@ -5093,7 +5166,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
+            padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
             child: Row(
               children: <Widget>[
                 Expanded(
@@ -5168,7 +5241,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               ],
             ),
           ),
-          const SizedBox(height: 13),
+          SizedBox(height: compact ? 6 : 13),
           SizedBox(
             height: 140,
             child: isSkills
@@ -6331,13 +6404,17 @@ class _BattlePortrait extends StatelessWidget {
       height: height,
     );
     if (portrait.trim().isEmpty) return fallback;
-    final image = _BattleImage(
-      source: portrait,
-      fallback: fallback,
-      logicalWidth: width,
-      maxCacheWidth: 900,
-      fit: BoxFit.contain,
-      alignment: Alignment.bottomCenter,
+    final image = ClipRect(
+      child: _BattleImage(
+        source: portrait,
+        fallback: fallback,
+        logicalWidth: width,
+        maxCacheWidth: 900,
+        // 双方立绘共用固定画布，并统一按高度适配。
+        // 相比 contain，可避免一张图因为原始宽高比不同而显得明显更矮。
+        fit: BoxFit.fitHeight,
+        alignment: Alignment.bottomCenter,
+      ),
     );
     final display = isPlayer
         ? image

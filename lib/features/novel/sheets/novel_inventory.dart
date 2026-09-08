@@ -929,7 +929,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  // 桌面端保留原玻璃层；手机横屏不再使用 quiet 模式弱化边框，而是保持一致的高级质感。
   Widget _buildGlassPanel({
     required Widget child,
     bool quiet = false,
@@ -1001,7 +1000,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
             isDesktop
                 ? LayoutBuilder(
                     builder: (context, constraints) {
-                      // 桌面端利用 Wrap 自动实现双列或多列排布
                       final crossAxisCount = constraints.maxWidth > 500 ? 2 : 1;
                       const spacing = 12.0;
                       final itemWidth = (constraints.maxWidth - (crossAxisCount - 1) * spacing) / crossAxisCount;
@@ -1040,7 +1038,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  // 提取公用的带动画的列表行组件
   Widget _buildAnimatedRow(
     NovelInventoryItem item,
     int index, {
@@ -1192,7 +1189,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         }
 
         Widget landscapeLayout() {
-          // 修改点：采用比例切分(Flex)，恢复磨砂玻璃边框，取消极度压缩
           return Column(
             children: <Widget>[
               _InventoryHeader(
@@ -1207,19 +1203,19 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    Expanded(
-                      flex: 4, // 动态比例宽度，替代写死的固定宽度
+                    SizedBox(
+                      width: 272,
                       child: _buildGlassPanel(
-                        quiet: false, // 恢复跑团风格的精美磨砂边框
+                        quiet: true,
                         child: ListView(
                           physics: const BouncingScrollPhysics(),
-                          padding: const EdgeInsets.only(top: 8, bottom: 12),
+                          padding: const EdgeInsets.only(top: 1, bottom: 8),
                           children: <Widget>[
                             _hero(
                               host,
                               equipped,
                               skills,
-                              landscape: false, // 空间充足，使用正常的阅读字号更舒服
+                              landscape: true,
                             ),
                           ],
                         ),
@@ -1227,19 +1223,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                     ),
                     const SizedBox(width: 16),
                     Expanded(
-                      flex: 6,
                       child: Column(
                         children: <Widget>[
-                          // 将筛选栏提上来充当类似现代化顶部 Tab 的角色
-                          _inventoryFilterBar(
-                            isDesktop: true,
-                            dense: true,
-                            quiet: false,
-                          ),
-                          const SizedBox(height: 8),
+                          // 将原先在顶部的 ListView 移到上方自动撑开
                           Expanded(
                             child: _buildGlassPanel(
-                              quiet: false, // 统一质感
+                              quiet: true,
                               child: RefreshIndicator(
                                 onRefresh: _refresh,
                                 color: _inventoryGold,
@@ -1250,12 +1239,19 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                     _inventoryList(
                                       filteredItems,
                                       isDesktop: true,
-                                      dense: false, // 取消物品卡片的极致压缩，恢复现代圆角卡片质感
+                                      dense: true,
                                     ),
                                   ],
                                 ),
                               ),
                             ),
+                          ),
+                          const SizedBox(height: 8),
+                          // 将筛选按钮下放到底部
+                          _inventoryFilterBar(
+                            isDesktop: true,
+                            dense: true,
+                            quiet: true,
                           ),
                         ],
                       ),
@@ -1367,7 +1363,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
       return SafeArea(
         top: false,
         child: Padding(
-          // 横屏模式下稍微离开底部安全区，保持呼吸感
           padding: EdgeInsets.only(bottom: dense ? 2 : 8),
           child: child,
         ),

@@ -2278,7 +2278,7 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
           case _CharacterViewportMode.landscape:
             // 手机横屏：聊天记录需要足够高度回看历史。
             // 默认占舞台高度约 70%，但仍保留合理上下限；
-            // 底部输入框尺寸与横向长度保持不变。
+            // 底部输入框高度保持不变，横向只增加少量呼吸边距。
             const globalNavInset = 64.0;
             final chatHeight = (constraints.maxHeight * .70)
                 .clamp(210.0, 340.0)
@@ -2351,19 +2351,20 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                   AnimatedPositioned(
                     duration: const Duration(milliseconds: 180),
                     curve: Curves.easeOutCubic,
-                    left: 8,
-                    right: globalNavInset,
+                    // 横屏聊天整体留出左右呼吸空间，避免输入框贴住头像轨 / 右侧导航。
+                    left: 18,
+                    right: globalNavInset + 12,
                     bottom: keyboardVisible ? keyboardInset + 4 : 4,
                     height: chatHeight,
                     child: _CharacterInlineChat(
                       controller: widget.controller,
                       character: widget.character,
                       dense: true,
-                      // 记录区严格落在横屏立绘栏内：父聊天区从 x=8 开始，
-                      // 立绘栏从 x=48 开始，所以左侧再缩进 40；右侧则避开
-                      // 角色信息栏。底部输入框不会使用这两个 inset，长度保持不变。
-                      messageLeftInset: 40,
-                      messageRightInset: infoWidth + 4,
+                      // 父聊天区现在从 x=18 开始；记录区再向内收一点，
+                      // 最终比立绘左右边缘各留约 8px，阅读时不会贴边。
+                      // 底部输入框不使用这两个 inset，只使用上面的整体左右留白。
+                      messageLeftInset: 38,
+                      messageRightInset: infoWidth,
                     ),
                   ),
                 ],
@@ -3831,24 +3832,27 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
               margin: EdgeInsets.only(bottom: widget.dense ? 5 : 8),
               child: Stack(
                 children: <Widget>[
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: <Color>[
-                            Colors.transparent,
-                            _characterInk.withOpacity(.18),
-                            _characterInk.withOpacity(.76),
-                          ],
-                          stops: const <double>[.18, .56, 1],
+                // 横屏直接把对话叠在立绘上，不再铺整块黑色渐变遮罩。
+                // 竖屏 / PC 仍保留原遮罩，避免改变原有视觉。
+                if (!widget.dense)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: <Color>[
+                              Colors.transparent,
+                              _characterInk.withOpacity(.18),
+                              _characterInk.withOpacity(.76),
+                            ],
+                            stops: const <double>[.18, .56, 1],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
                 ShaderMask(
                   blendMode: BlendMode.dstIn,
                   shaderCallback: (bounds) => const LinearGradient(
@@ -3885,8 +3889,19 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                                   : '和${widget.character.name}说点什么吧',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: _characterTextMuted,
+                            color: widget.dense
+                                ? _characterTextSoft
+                                : _characterTextMuted,
                             fontSize: widget.dense ? 9.2 : 10.5,
+                            shadows: widget.dense
+                                ? const <Shadow>[
+                                    Shadow(
+                                      color: Color(0xD9000000),
+                                      offset: Offset(0, 1),
+                                      blurRadius: 2.6,
+                                    ),
+                                  ]
+                                : null,
                           ),
                         ),
                       );
@@ -4098,9 +4113,19 @@ class _CharacterChatLineView extends StatelessWidget {
             fontSize: dense ? 10.6 : (desktopMode ? 11.8 : 13),
             height: dense ? 1.34 : 1.5,
             fontFamily: 'MiSans',
-            shadows: const <Shadow>[
-              Shadow(color: Colors.black45, blurRadius: 2),
-            ],
+            // 横屏没有大面积黑色遮罩后，用多方向黑影模拟细描边，
+            // 在浅色立绘上也保持清晰；其它模式维持原来的轻阴影。
+            shadows: dense
+                ? const <Shadow>[
+                    Shadow(color: Color(0xE6000000), offset: Offset(-.8, 0), blurRadius: 1.4),
+                    Shadow(color: Color(0xE6000000), offset: Offset(.8, 0), blurRadius: 1.4),
+                    Shadow(color: Color(0xE6000000), offset: Offset(0, -.8), blurRadius: 1.4),
+                    Shadow(color: Color(0xE6000000), offset: Offset(0, .8), blurRadius: 1.4),
+                    Shadow(color: Color(0xB3000000), offset: Offset(0, 1.4), blurRadius: 3.2),
+                  ]
+                : const <Shadow>[
+                    Shadow(color: Colors.black45, blurRadius: 2),
+                  ],
           ),
         ),
       ),

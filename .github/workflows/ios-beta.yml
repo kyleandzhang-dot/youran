@@ -164,6 +164,104 @@ jobs:
                   break
           PY_PATCH
 
+      # Second diagnostic patch for flutter_onnxruntime iOS:
+      # force graph optimization level down to "extended", skipping ORT_ENABLE_ALL's
+      # extra layout-optimization pass which trips over SimplifiedLayerNormFusion
+      # on this particular fp16 model (repro'd locally with onnxruntime==1.23.0:
+      # ORT_ENABLE_ALL fails, ORT_ENABLE_EXTENDED/BASIC/DISABLE_ALL all succeed).
+      - name: Patch ONNX Runtime graph optimization level
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_PATCH'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          from urllib.parse import unquote, urlparse
+
+          config_path = Path('.dart_tool/package_config.json').resolve()
+          config = json.loads(config_path.read_text(encoding='utf-8'))
+          package = next(
+              (p for p in config['packages'] if p['name'] == 'flutter_onnxruntime'),
+              None,
+          )
+          if package is None:
+              raise SystemExit('flutter_onnxruntime not found in .dart_tool/package_config.json')
+
+          root_uri = package['rootUri']
+          parsed = urlparse(root_uri)
+          if parsed.scheme == 'file':
+              plugin_root = Path(unquote(parsed.path))
+          elif parsed.scheme:
+              raise SystemExit(f'Unsupported flutter_onnxruntime rootUri: {root_uri}')
+          else:
+              plugin_root = (config_path.parent / unquote(root_uri)).resolve()
+
+          ios_dir = plugin_root / 'ios'
+          if not ios_dir.is_dir():
+              raise SystemExit(f'iOS plugin source dir not found: {ios_dir}')
+
+          swift_files = sorted(ios_dir.rglob('*.swift'))
+          if not swift_files:
+              raise SystemExit(f'No .swift files found under: {ios_dir}')
+
+          if any('setGraphOptimizationLevel' in f.read_text(encoding='utf-8') for f in swift_files):
+              print('Already patched, skipping.')
+              sys.exit(0)
+
+          # 匹配 "let sessionOptions = try ORTSessionOptions()" 这行，
+          # 变量名不写死，任意合法 Swift 标识符都行。
+          pattern = re.compile(
+              r'(?m)^(?P<indent>[ \t]*)let (?P<recv>[A-Za-z_][A-Za-z0-9_]*) = try ORTSessionOptions\(\)'
+          )
+
+          target_file = None
+          match = None
+          for f in swift_files:
+              text = f.read_text(encoding='utf-8')
+              m = pattern.search(text)
+              if m:
+                  target_file = f
+                  match = m
+                  source = text
+                  break
+
+          if match is None:
+              print('!!! Could not find "let x = try ORTSessionOptions()". '
+                    'Dumping all ORTSessionOptions-related lines: !!!')
+              for f in swift_files:
+                  text = f.read_text(encoding='utf-8')
+                  for line_no, line in enumerate(text.splitlines(), 1):
+                      if 'ORTSessionOptions' in line:
+                          print(f'{f}:{line_no}: {line}')
+              raise SystemExit('Patch failed: no matching ORTSessionOptions() init found.')
+
+          indent = match.group('indent')
+          recv = match.group('recv')
+          insertion = (
+              f'\n{indent}do {{\n'
+              f'{indent}    try {recv}.setGraphOptimizationLevel(.extended)\n'
+              f'{indent}}} catch {{\n'
+              f'{indent}    print("[Depth] failed to set graph optimization level: \\(error)")\n'
+              f'{indent}}}'
+          )
+          patched = source[:match.end()] + insertion + source[match.end():]
+          target_file.write_text(patched, encoding='utf-8')
+
+          print(f'Patched graph optimization level: {target_file}')
+          lines = patched.splitlines()
+          for line_no, line in enumerate(lines, 1):
+              if 'setGraphOptimizationLevel' in line:
+                  start = max(1, line_no - 2)
+                  end = min(len(lines), line_no + 3)
+                  print('--- patched snippet ---')
+                  for n in range(start, end + 1):
+                      print(f'{n}: {lines[n - 1]}')
+                  print('-----------------------')
+                  break
+          PY_PATCH
+
       - name: Set build number
         # 每次上传 TestFlight 的 CFBundleVersion(build number)必须严格递增,
         # 用 GitHub Actions 的 run_number 保证每次 run 都不重复

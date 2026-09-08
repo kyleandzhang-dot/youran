@@ -307,45 +307,25 @@ class _CharactersPanelState extends State<_CharactersPanel> {
 
               switch (mode) {
                 case _CharacterViewportMode.landscape:
-                  // 手机横屏：上方不再占用“人物”标题；主体改成
-                  // 左侧资料+立绘编辑 / 右侧大立绘，底部统一做角色切换。
                   return shell(
                     mode,
                     Column(
                       children: <Widget>[
                         header(mode),
                         Expanded(child: stage),
-                        _CharacterLandscapeBottomRail(
-                          filter: filter,
-                          total: characters.length,
-                          closeCount: closeCount,
-                          normalCount: normalCount,
+                        // 修改点：直接将筛选栏放在头像列表上方
+                        filterBar(mode),
+                        _CharacterThumbStrip(
                           characters: filtered,
                           selectedKey: _characterKey(selected),
-                          onFilterChanged: _changeFilter,
                           onSelected: selectCharacter,
+                          dense: true, 
                         ),
                       ],
                     ),
                   );
 
                 case _CharacterViewportMode.portrait:
-                  return shell(
-                    mode,
-                    Column(
-                      children: <Widget>[
-                        header(mode),
-                        Expanded(child: stage),
-                        filterBar(mode),
-                        _CharacterThumbStrip(
-                          characters: filtered,
-                          selectedKey: _characterKey(selected),
-                          onSelected: selectCharacter,
-                        ),
-                      ],
-                    ),
-                  );
-
                 case _CharacterViewportMode.desktop:
                   return shell(
                     mode,
@@ -425,8 +405,6 @@ class _CharacterArchiveHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 横屏本身已经是完整的人物档案舞台，不再重复显示“人物”标题。
-    // 内嵌 Tab 只留 2px 呼吸空间；独立页面仅保留关闭按钮。
     if (dense) {
       if (onClose == null) return const SizedBox(height: 2);
       return SizedBox(
@@ -622,84 +600,6 @@ class _CharacterFilterText extends StatelessWidget {
   }
 }
 
-class _CharacterLandscapeBottomRail extends StatelessWidget {
-  const _CharacterLandscapeBottomRail({
-    required this.filter,
-    required this.total,
-    required this.closeCount,
-    required this.normalCount,
-    required this.characters,
-    required this.selectedKey,
-    required this.onFilterChanged,
-    required this.onSelected,
-  });
-
-  final int filter;
-  final int total;
-  final int closeCount;
-  final int normalCount;
-  final List<NovelCharacter> characters;
-  final String selectedKey;
-  final ValueChanged<int> onFilterChanged;
-  final ValueChanged<NovelCharacter> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 64,
-      child: Row(
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.only(left: 6, right: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                _CharacterFilterText(
-                  label: '全部',
-                  count: total,
-                  selected: filter == 0,
-                  onTap: () => onFilterChanged(0),
-                  dense: true,
-                ),
-                const SizedBox(width: 8),
-                _CharacterFilterText(
-                  label: '亲密',
-                  count: closeCount,
-                  selected: filter == 1,
-                  onTap: () => onFilterChanged(1),
-                  dense: true,
-                ),
-                const SizedBox(width: 8),
-                _CharacterFilterText(
-                  label: '普通',
-                  count: normalCount,
-                  selected: filter == 2,
-                  onTap: () => onFilterChanged(2),
-                  dense: true,
-                ),
-              ],
-            ),
-          ),
-          Container(
-            width: .7,
-            height: 34,
-            color: _archiveLine.withOpacity(.72),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _CharacterThumbStrip(
-              dense: true,
-              characters: characters,
-              selectedKey: selectedKey,
-              onSelected: onSelected,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _CharacterShowcaseStage extends StatefulWidget {
   const _CharacterShowcaseStage({
     required this.controller,
@@ -765,8 +665,9 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
         final compact = !desktop;
 
         if (landscape) {
-          // 修改为双栏布局：左侧信息与编辑面板（合并为一个宽滚动区），右侧完整保留给立绘
-          final sideWidth = (constraints.maxWidth * .42).clamp(260.0, 380.0).toDouble();
+          // 修改点：三栏布局，左侧资料，中间立绘，右侧编辑器
+          final infoWidth = (constraints.maxWidth * .32).clamp(220.0, 320.0).toDouble();
+          final editorWidth = (constraints.maxWidth * .26).clamp(200.0, 280.0).toDouble();
 
           Widget portraitArtwork() => AnimatedSwitcher(
                 duration: const Duration(milliseconds: 260),
@@ -792,53 +693,52 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              // 左侧：角色信息 + 立绘编辑
+              // 左侧：人物资料阅读区
               SizedBox(
-                width: sideWidth,
+                width: infoWidth,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 6, 8, 4),
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _CharacterShowcaseInfo(
-                            character: widget.character,
-                            summary: widget.summary,
-                            identity: widget.identity,
-                            relationLabel: _relationLabel,
-                            compact: true,
-                            landscapeDense: false, // 取消极限压缩字号，因现在空间充足
-                          ),
-                          const SizedBox(height: 20),
-                          _CharacterQuickPortraitEditor(
-                            controller: widget.controller,
-                            character: widget.character,
-                            compact: true,
-                            landscapeDense: false, // 统一使用正常排版比例
-                            onPortraitChanged: (portraitUrl) {
-                              if (!mounted) return;
-                              setState(() => _previewPortraitUrl = portraitUrl);
-                            },
-                          ),
-                        ],
-                      ),
+                    child: _CharacterShowcaseInfo(
+                      character: widget.character,
+                      summary: widget.summary,
+                      identity: widget.identity,
+                      relationLabel: _relationLabel,
+                      compact: true,
+                      landscapeDense: false,
                     ),
                   ),
                 ),
               ),
-              // 右侧：宽阔的立绘展示区
+              // 中间：角色大立绘
               Expanded(
                 child: ClipRect(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 2, 16, 0),
+                    padding: const EdgeInsets.fromLTRB(4, 2, 4, 0),
                     child: Transform.scale(
                       scale: 1.04,
                       alignment: Alignment.bottomCenter,
                       child: portraitArtwork(),
                     ),
+                  ),
+                ),
+              ),
+              // 右侧：立绘生成编辑器区
+              SizedBox(
+                width: editorWidth,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 6, 16, 12),
+                  child: _CharacterQuickPortraitEditor(
+                    controller: widget.controller,
+                    character: widget.character,
+                    compact: true,
+                    landscapeDense: false, 
+                    fillHeight: true, // 核心修改：允许高度完全填充
+                    onPortraitChanged: (portraitUrl) {
+                      if (!mounted) return;
+                      setState(() => _previewPortraitUrl = portraitUrl);
+                    },
                   ),
                 ),
               ),
@@ -1189,12 +1089,14 @@ class _CharacterQuickPortraitEditor extends StatefulWidget {
     required this.compact,
     required this.onPortraitChanged,
     this.landscapeDense = false,
+    this.fillHeight = false, 
   });
 
   final NovelGameController controller;
   final NovelCharacter character;
   final bool compact;
   final bool landscapeDense;
+  final bool fillHeight;
   final ValueChanged<String> onPortraitChanged;
 
   @override
@@ -1542,192 +1444,202 @@ class _CharacterQuickPortraitEditorState
 
   @override
   Widget build(BuildContext context) {
+    // 提取输入框组件，方便根据 fillHeight 决定是否使用 Expanded 伸缩
+    Widget inputFieldContainer = Container(
+      decoration: BoxDecoration(
+        color: _archiveSurface,
+        borderRadius: BorderRadius.circular(widget.landscapeDense ? 7 : 10),
+        border: Border.all(
+          color: _archiveLine,
+          width: 1,
+        ),
+      ),
+      constraints: widget.fillHeight
+          ? null // 如果填充高度，则不写死限制
+          : BoxConstraints(
+              minHeight: widget.landscapeDense ? 72 : (widget.compact ? 104 : 112),
+            ),
+      padding: EdgeInsets.fromLTRB(
+        widget.landscapeDense ? 9 : 11,
+        widget.landscapeDense ? 8 : 11,
+        widget.landscapeDense ? 9 : 11,
+        widget.landscapeDense ? 7 : 10,
+      ),
+      child: TextField(
+        controller: _promptController,
+        focusNode: _promptFocusNode,
+        enabled: !_generating,
+        minLines: widget.fillHeight ? null : (widget.landscapeDense ? 2 : 4),
+        maxLines: widget.fillHeight ? null : (widget.landscapeDense ? 3 : (widget.compact ? 4 : 5)),
+        expands: widget.fillHeight, // 核心：允许 TextField 向下填满容器
+        textAlignVertical: widget.fillHeight ? TextAlignVertical.top : null, // 文本靠上
+        scrollPadding: EdgeInsets.zero,
+        cursorColor: NovelPalette.accent,
+        style: TextStyle(
+          color: _archiveText,
+          fontSize: widget.landscapeDense ? 10.0 : (widget.compact ? 10.6 : 11.2),
+          height: 1.45,
+        ),
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          isDense: true,
+          contentPadding: EdgeInsets.zero,
+          hintText: '可留空直接生成；也可写发型、服装、气质等调整…',
+          hintStyle: TextStyle(
+            color: Color(0x88727C75),
+            fontSize: 10.2,
+            height: 1.4,
+          ),
+        ),
+      ),
+    );
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-        const Text(
-          '更换立绘',
-          style: TextStyle(
-            color: Color(0xFF414A44),
-            fontSize: 10.5,
-            fontWeight: FontWeight.w700,
-            letterSpacing: .3,
-          ),
-        ),
-        SizedBox(height: widget.landscapeDense ? 4 : 6),
-        Container(
-          decoration: BoxDecoration(
-            color: _archiveSurface,
-            borderRadius: BorderRadius.circular(widget.landscapeDense ? 7 : 10),
-            border: Border.all(
-              color: _archiveLine,
-              width: 1,
-            ),
-          ),
-          constraints: BoxConstraints(
-            minHeight: widget.landscapeDense ? 72 : (widget.compact ? 104 : 112),
-          ),
-          padding: EdgeInsets.fromLTRB(
-            widget.landscapeDense ? 9 : 11,
-            widget.landscapeDense ? 8 : 11,
-            widget.landscapeDense ? 9 : 11,
-            widget.landscapeDense ? 7 : 10,
-          ),
-          child: TextField(
-            controller: _promptController,
-            focusNode: _promptFocusNode,
-            enabled: !_generating,
-            minLines: widget.landscapeDense ? 2 : 4,
-            maxLines: widget.landscapeDense ? 3 : (widget.compact ? 4 : 5),
-            scrollPadding: EdgeInsets.zero,
-            cursorColor: NovelPalette.accent,
+          const Text(
+            '更换立绘',
             style: TextStyle(
-              color: _archiveText,
-              fontSize: widget.landscapeDense ? 10.0 : (widget.compact ? 10.6 : 11.2),
-              height: 1.45,
+              color: Color(0xFF414A44),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: .3,
             ),
-            decoration: const InputDecoration(
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              isDense: true,
-              contentPadding: EdgeInsets.zero,
-              hintText: '可留空直接生成；也可写发型、服装、气质等调整…',
-              hintStyle: TextStyle(
-                color: Color(0x88727C75),
-                fontSize: 10.2,
-                height: 1.4,
+          ),
+          SizedBox(height: widget.landscapeDense ? 4 : 6),
+          if (widget.fillHeight) 
+            Expanded(child: inputFieldContainer) 
+          else 
+            inputFieldContainer,
+          if (_errorText.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              _errorText,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFD98A83),
+                fontSize: 9.5,
+                height: 1.35,
               ),
             ),
-          ),
-        ),
-        if (_errorText.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 5),
-          Text(
-            _errorText,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFFD98A83),
-              fontSize: 9.5,
-              height: 1.35,
-            ),
-          ),
-        ],
-        SizedBox(height: widget.landscapeDense ? 5 : 7),
-        SizedBox(
-          width: double.infinity,
-          height: widget.landscapeDense ? 34 : 40,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: (_generating || _uploading) ? null : _generatePortrait,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: _generating
-                      ? _archiveSurfaceSoft
-                      : _archiveThemeGreen,
-                  border: Border.all(
+          ],
+          SizedBox(height: widget.landscapeDense ? 5 : 7),
+          SizedBox(
+            width: double.infinity,
+            height: widget.landscapeDense ? 34 : 40,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: (_generating || _uploading) ? null : _generatePortrait,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
                     color: _generating
-                        ? _archiveLine
+                        ? _archiveSurfaceSoft
                         : _archiveThemeGreen,
-                    width: .9,
-                  ),
-                ),
-                child: _generating
-                    ? const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          SizedBox.square(
-                            dimension: 12,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.5,
-                              color: NovelPalette.accent,
-                            ),
-                          ),
-                          SizedBox(width: 7),
-                          Text(
-                            '生成中…',
-                            style: TextStyle(
-                              color: Color(0xFF4E514C),
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      )
-                    : const Text(
-                        '生成立绘',
-                        style: TextStyle(
-                          color: NovelPalette.accentDark,
-                          fontSize: 11.4,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: .6,
-                        ),
-                      ),
-              ),
-            ),
-          ),
-        ),
-        SizedBox(height: widget.landscapeDense ? 5 : 7),
-        SizedBox(
-          width: double.infinity,
-          height: widget.landscapeDense ? 34 : 38,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: (_generating || _uploading)
-                  ? null
-                  : _pickAndApplyLocalPortrait,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: _uploading
-                      ? _archiveSurfaceSoft
-                      : Colors.transparent,
-                  border: Border.all(
-                    color: _uploading
-                        ? _archiveLine
-                        : _archiveAccent.withOpacity(.55),
-                    width: .9,
-                  ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (_uploading) ...<Widget>[
-                      const SizedBox.square(
-                        dimension: 11,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.4,
-                          color: NovelPalette.accentDeep,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    Text(
-                      _uploading ? '上传中…' : '本地上传',
-                      style: const TextStyle(
-                        color: _archiveAccent,
-                        fontSize: 10.4,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: .35,
-                      ),
+                    border: Border.all(
+                      color: _generating
+                          ? _archiveLine
+                          : _archiveThemeGreen,
+                      width: .9,
                     ),
-                  ],
+                  ),
+                  child: _generating
+                      ? const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            SizedBox.square(
+                              dimension: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: NovelPalette.accent,
+                              ),
+                            ),
+                            SizedBox(width: 7),
+                            Text(
+                              '生成中…',
+                              style: TextStyle(
+                                color: Color(0xFF4E514C),
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        )
+                      : const Text(
+                          '生成立绘',
+                          style: TextStyle(
+                            color: NovelPalette.accentDark,
+                            fontSize: 11.4,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: .6,
+                          ),
+                        ),
                 ),
               ),
             ),
           ),
-        ),
+          SizedBox(height: widget.landscapeDense ? 5 : 7),
+          SizedBox(
+            width: double.infinity,
+            height: widget.landscapeDense ? 34 : 38,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: (_generating || _uploading)
+                    ? null
+                    : _pickAndApplyLocalPortrait,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _uploading
+                        ? _archiveSurfaceSoft
+                        : Colors.transparent,
+                    border: Border.all(
+                      color: _uploading
+                          ? _archiveLine
+                          : _archiveAccent.withOpacity(.55),
+                      width: .9,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      if (_uploading) ...<Widget>[
+                        const SizedBox.square(
+                          dimension: 11,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.4,
+                            color: NovelPalette.accentDeep,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Text(
+                        _uploading ? '上传中…' : '本地上传',
+                        style: const TextStyle(
+                          color: _archiveAccent,
+                          fontSize: 10.4,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
