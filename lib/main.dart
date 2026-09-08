@@ -1,5 +1,7 @@
 // lib/main.dart
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'api/api_client.dart';
@@ -7,6 +9,7 @@ import 'api/user_api.dart';
 import 'features/novel/novel.dart';
 import 'game_shell.dart';
 import 'services/session_manager.dart';
+import 'services/depth_service.dart';
 import 'login_sheet.dart'; // 引入登录面板组件
 
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -79,6 +82,26 @@ Future<void> main() async {
   debugPrint('WebSocket：${ApiClient.webSocketBaseUrl}');
 
   runApp(const MyApp());
+
+  // 首帧先正常显示，再在后台预热 Depth Anything V2。
+  // 不阻塞 App 启动；后续进入剧情或开发者 2.5D 预览时可直接复用 session。
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(_warmUpDepthModel());
+  });
+}
+
+Future<void> _warmUpDepthModel() async {
+  final watch = Stopwatch()..start();
+  try {
+    await DepthService.instance.warmUp();
+    watch.stop();
+    debugPrint('[Depth] warm-up ready in ${watch.elapsedMilliseconds}ms');
+  } catch (error, stackTrace) {
+    watch.stop();
+    // Depth 是增强效果，预热失败不能影响登录、首页或剧情主流程。
+    debugPrint('[Depth] warm-up failed after ${watch.elapsedMilliseconds}ms: $error');
+    debugPrintStack(stackTrace: stackTrace);
+  }
 }
 
 class MyApp extends StatelessWidget {

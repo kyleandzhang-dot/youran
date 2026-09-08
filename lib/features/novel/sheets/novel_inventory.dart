@@ -859,16 +859,46 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  Widget _inventoryList(List<NovelInventoryItem> items) {
+  // 桌面端微圆角磨砂玻璃容器，有效分离背景光效和文字信息，使文字清晰可读
+  Widget _buildGlassPanel({required Widget child}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _inventoryInkSoft.withOpacity(0.55),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.08),
+              width: 0.8,
+            ),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _inventoryList(List<NovelInventoryItem> items, {bool isDesktop = false}) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 24, 24),
+      padding: isDesktop
+          ? const EdgeInsets.symmetric(horizontal: 24, vertical: 24)
+          : const EdgeInsets.fromLTRB(16, 12, 24, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           if (items.isEmpty)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 32),
+              padding: EdgeInsets.symmetric(vertical: isDesktop ? 64 : 32),
               alignment: Alignment.center,
               child: Text(
                 loading ? '正在整理…' : '空空如也',
@@ -880,36 +910,61 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
               ),
             )
           else
-            Column(
-              children: <Widget>[
-                for (var index = 0; index < items.length; index++) ...<Widget>[
-                  TweenAnimationBuilder<double>(
-                    key: ValueKey<String>('$_filterIndex-${items[index].id}-${items[index].name}'),
-                    tween: Tween<double>(begin: 0, end: 1),
-                    duration: Duration(milliseconds: 220 + math.min(index, 6) * 35),
-                    curve: Curves.easeOutCubic,
-                    builder: (context, value, child) => Opacity(
-                      opacity: value,
-                      child: Transform.translate(
-                        offset: Offset(10 * (1 - value), 0),
-                        child: child,
-                      ),
-                    ),
-                    child: _GameStyleInventoryRow(
-                      item: items[index],
-                      typeLabel: _displayTypeLabel(items[index]),
-                      wearable: _isWearable(items[index]),
-                      busy: busy == items[index].id,
-                      onTap: () => _showItemDetail(items[index]),
-                      onWear: () => _toggleWear(items[index]),
-                    ),
+            isDesktop
+                ? LayoutBuilder(
+                    builder: (context, constraints) {
+                      // 桌面端利用 Wrap 自动实现双列或多列排布
+                      final crossAxisCount = constraints.maxWidth > 500 ? 2 : 1;
+                      const spacing = 12.0;
+                      final itemWidth = (constraints.maxWidth - (crossAxisCount - 1) * spacing) / crossAxisCount;
+
+                      return Wrap(
+                        spacing: spacing,
+                        runSpacing: spacing,
+                        children: List.generate(items.length, (index) {
+                          return SizedBox(
+                            width: itemWidth,
+                            child: _buildAnimatedRow(items[index], index),
+                          );
+                        }),
+                      );
+                    },
+                  )
+                : Column(
+                    children: <Widget>[
+                      for (var index = 0; index < items.length; index++) ...<Widget>[
+                        _buildAnimatedRow(items[index], index),
+                        if (index != items.length - 1)
+                          const SizedBox(height: 6),
+                      ],
+                    ],
                   ),
-                  if (index != items.length - 1)
-                    const SizedBox(height: 6),
-                ],
-              ],
-            ),
         ],
+      ),
+    );
+  }
+
+  // 提取公用的带动画的列表行组件
+  Widget _buildAnimatedRow(NovelInventoryItem item, int index) {
+    return TweenAnimationBuilder<double>(
+      key: ValueKey<String>('$_filterIndex-${item.id}-${item.name}'),
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: Duration(milliseconds: 220 + math.min(index, 6) * 35),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(10 * (1 - value), 0),
+          child: child,
+        ),
+      ),
+      child: _GameStyleInventoryRow(
+        item: item,
+        typeLabel: _displayTypeLabel(item),
+        wearable: _isWearable(item),
+        busy: busy == item.id,
+        onTap: () => _showItemDetail(item),
+        onWear: () => _toggleWear(item),
       ),
     );
   }
@@ -923,7 +978,8 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         final data = widget.controller.inventory;
         final items = _allItems(data)
           ..sort((a, b) {
-            final qualityCompare = _inventoryItemQuality(b).compareTo(_inventoryItemQuality(a));
+            final qualityCompare =
+                _inventoryItemQuality(b).compareTo(_inventoryItemQuality(a));
             if (qualityCompare != 0) return qualityCompare;
             return a.name.compareTo(b.name);
           });
@@ -934,9 +990,9 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
 
         final backpackItems = items.where((item) => !item.isEquipped).toList();
         final filteredItems = backpackItems.where((item) {
-          if (_filterIndex == 1) return _isWearable(item); 
-          if (_filterIndex == 2) return !_isWearable(item); 
-          return true; 
+          if (_filterIndex == 1) return _isWearable(item);
+          if (_filterIndex == 2) return !_isWearable(item);
+          return true;
         }).toList();
 
         return _InventoryBackdrop(
@@ -953,96 +1009,199 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   child: child,
                 ),
               ),
-              child: Column(
-              children: <Widget>[
-              _InventoryHeader(
-                onClose: widget.embedded
-                    ? null
-                    : () => Navigator.of(context).pop(),
-              ),
-              Expanded(
-                child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 620;
-                      return Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          compact ? 8 : 24,
-                          compact ? 2 : 8,
-                          compact ? 16 : 40,
-                          compact ? 2 : 6,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // 模式只认共享的手机 / 电脑状态。
+                  final isDesktop = widget.controller.desktopMode;
+
+                  // 这里对齐人物页真正的“页面主体”边距，
+                  // 不再误用人物聊天框为了避让 HUD 设置的专用边距。
+                  final pageLeftInset = isDesktop ? 46.0 : 10.0;
+                  final pageRightInset = isDesktop ? 54.0 : 12.0;
+                  final contentMaxWidth = isDesktop ? 1440.0 : 560.0;
+                  final pageTopInset = isDesktop ? 14.0 : 4.0;
+                  final pageBottomInset = isDesktop ? 12.0 : 4.0;
+
+                  Widget pageContent;
+
+                  if (isDesktop) {
+                    pageContent = Column(
+                      children: <Widget>[
+                        _InventoryHeader(
+                          horizontalPadding: EdgeInsets.zero,
+                          onClose: widget.embedded
+                              ? null
+                              : () => Navigator.of(context).pop(),
                         ),
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 820),
-                            child: RefreshIndicator(
-                              onRefresh: _refresh,
-                              color: _inventoryGold,
-                              backgroundColor: _inventoryInkSoft,
-                              child: CustomScrollView(
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                slivers: <Widget>[
-                                  SliverToBoxAdapter(
-                                    child: _hero(host, equipped, skills),
-                                  ),
-                                  if (filteredItems.isEmpty)
-                                    SliverFillRemaining(
-                                      hasScrollBody: false,
-                                      child: _inventoryList(filteredItems),
-                                    )
-                                  else
-                                    SliverToBoxAdapter(
-                                      child: _inventoryList(filteredItems),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                // 左侧：人物、穿戴与技能。
+                                Expanded(
+                                  flex: 4,
+                                  child: _buildGlassPanel(
+                                    child: ListView(
+                                      padding: const EdgeInsets.only(
+                                        top: 12,
+                                        bottom: 24,
+                                      ),
+                                      children: <Widget>[
+                                        _hero(host, equipped, skills),
+                                      ],
                                     ),
-                                ],
-                              ),
+                                  ),
+                                ),
+                                const SizedBox(width: 24),
+                                // 右侧：物品区与分类栏。
+                                Expanded(
+                                  flex: 7,
+                                  child: Column(
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: _buildGlassPanel(
+                                          child: RefreshIndicator(
+                                            onRefresh: _refresh,
+                                            color: _inventoryGold,
+                                            backgroundColor: _inventoryInkSoft,
+                                            child: ListView(
+                                              padding: EdgeInsets.zero,
+                                              children: <Widget>[
+                                                _inventoryList(
+                                                  filteredItems,
+                                                  isDesktop: true,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      _inventoryFilterBar(isDesktop: true),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
-                      );
-                    },
-                ),
+                      ],
+                    );
+                  } else {
+                    pageContent = Column(
+                      children: <Widget>[
+                        _InventoryHeader(
+                          horizontalPadding: EdgeInsets.zero,
+                          onClose: widget.embedded
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                        ),
+                        Expanded(
+                          child: RefreshIndicator(
+                            onRefresh: _refresh,
+                            color: _inventoryGold,
+                            backgroundColor: _inventoryInkSoft,
+                            child: CustomScrollView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              slivers: <Widget>[
+                                SliverToBoxAdapter(
+                                  child: _hero(host, equipped, skills),
+                                ),
+                                if (filteredItems.isEmpty)
+                                  SliverFillRemaining(
+                                    hasScrollBody: false,
+                                    child: _inventoryList(
+                                      filteredItems,
+                                      isDesktop: false,
+                                    ),
+                                  )
+                                else
+                                  SliverToBoxAdapter(
+                                    child: _inventoryList(
+                                      filteredItems,
+                                      isDesktop: false,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        _inventoryFilterBar(isDesktop: false),
+                      ],
+                    );
+                  }
+
+                  return Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          pageLeftInset,
+                          pageTopInset,
+                          pageRightInset,
+                          pageBottomInset,
+                        ),
+                        child: pageContent,
+                      ),
+                    ),
+                  );
+                },
               ),
-                _inventoryFilterBar(),
-              ],
             ),
           ),
-        ),
-      );
+        );
       },
     );
   }
 
-  Widget _inventoryFilterBar() {
+  Widget _inventoryFilterBar({
+    bool isDesktop = false,
+  }) {
+    final child = Center(
+      child: Container(
+        height: 44,
+        constraints: const BoxConstraints(maxWidth: 360), 
+        decoration: BoxDecoration(
+          color: _inventoryInkSoft.withOpacity(0.65), 
+          borderRadius: BorderRadius.circular(6), // 强化微圆角特征
+          border: Border.all(color: Colors.white.withOpacity(0.08), width: 0.8),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Expanded(child: _buildFilterBtn('全部', 0)),
+            Expanded(child: _buildFilterBtn('穿戴', 1)),
+            Expanded(child: _buildFilterBtn('道具', 2)),
+          ],
+        ),
+      ),
+    );
+
+    if (isDesktop) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          // 横屏模式下稍微离开底部安全区，保持呼吸感
+          padding: const EdgeInsets.only(bottom: 8),
+          child: child,
+        ),
+      );
+    }
+
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 24, 16), 
-        child: Center(
-          child: Container(
-            height: 44,
-            constraints: const BoxConstraints(maxWidth: 360), 
-            decoration: BoxDecoration(
-              color: _inventoryInkSoft.withOpacity(0.65), 
-              borderRadius: BorderRadius.circular(6), 
-              border: Border.all(color: Colors.white.withOpacity(0.08), width: 0.8),
-              boxShadow: <BoxShadow>[
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Expanded(child: _buildFilterBtn('全部', 0)),
-                Expanded(child: _buildFilterBtn('穿戴', 1)),
-                Expanded(child: _buildFilterBtn('道具', 2)),
-              ],
-            ),
-          ),
-        ),
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 16),
+        child: child,
       ),
     );
   }
@@ -1145,16 +1304,20 @@ class _InventoryBackdrop extends StatelessWidget {
 }
 
 class _InventoryHeader extends StatelessWidget {
-  const _InventoryHeader({this.onClose});
+  const _InventoryHeader({
+    this.onClose,
+    this.horizontalPadding = const EdgeInsets.symmetric(horizontal: 20),
+  });
 
   final VoidCallback? onClose;
+  final EdgeInsetsGeometry horizontalPadding;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       height: 64, 
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
+        padding: horizontalPadding,
         child: Row(
           children: <Widget>[
             const Expanded(

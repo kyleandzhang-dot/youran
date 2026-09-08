@@ -1074,13 +1074,14 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                   width: 34,
                                   height: 34,
                                   decoration: BoxDecoration(
+                                    // 发送按钮使用纯白强调色，不再沿用全局绿色 accent。
                                     color: canSend
-                                        ? NovelPalette.accent
+                                        ? Colors.white
                                         : Colors.white.withOpacity(.055),
                                     borderRadius: BorderRadius.zero,
                                     border: Border.all(
                                       color: canSend
-                                          ? NovelPalette.accent.withOpacity(.92)
+                                          ? Colors.white.withOpacity(.96)
                                           : Colors.white.withOpacity(.10),
                                       width: .65,
                                     ),
@@ -1090,12 +1091,15 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                     child: InkWell(
                                       borderRadius: BorderRadius.zero,
                                       onTap: canSend ? _submit : null,
+                                      splashColor: Colors.black.withOpacity(.08),
+                                      highlightColor: Colors.black.withOpacity(.055),
+                                      hoverColor: Colors.black.withOpacity(.035),
                                       child: Center(
                                         child: Icon(
                                           Icons.arrow_upward_rounded,
                                           size: 17,
                                           color: canSend
-                                              ? Colors.white
+                                              ? const Color(0xFF111512)
                                               : Colors.white.withOpacity(.52),
                                         ),
                                       ),

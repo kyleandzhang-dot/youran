@@ -20,42 +20,46 @@ class NovelChoicePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Container(
-              width: 3,
-              height: 14,
-              decoration: BoxDecoration(
-                color: NovelPalette.accent,
-                borderRadius: BorderRadius.circular(2),
+    // 明确吃满父级可用宽度，让剧情选项区与底部输入区保持一致的横向尺度。
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 3,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: NovelPalette.accent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(
-                color: NovelPalette.text,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                letterSpacing: .5,
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: NovelPalette.text,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: .5,
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (int i = 0; i < options.length; i++) ...<Widget>[
+            if (i > 0) const SizedBox(height: 10),
+            _NovelChoiceCard(
+              label: options[i],
+              enabled: enabled,
+              onTap: () => onSelect(options[i]),
             ),
           ],
-        ),
-        const SizedBox(height: 12),
-        for (int i = 0; i < options.length; i++) ...<Widget>[
-          if (i > 0) const SizedBox(height: 10),
-          _NovelChoiceCard(
-            label: options[i],
-            enabled: enabled,
-            onTap: () => onSelect(options[i]),
-          ),
         ],
-      ],
+      ),
     );
   }
 }

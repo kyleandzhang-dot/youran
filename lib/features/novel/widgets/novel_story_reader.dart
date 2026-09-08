@@ -677,49 +677,58 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         final screen = MediaQuery.sizeOf(context);
         final compact = screen.width <= 600;
         // 正文始终保持左右对称，不为右侧悬浮按钮预留宽度。
+        // 1. 把高度和宽屏的判断提前
+        final availableHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : screen.height - MediaQuery.paddingOf(context).vertical;
+            
+        final wideDialogueLayout = controller.desktopMode;
+
         const narrationRightSafeWidth = 0.0;
-        // 角色对话框位于底部：非最后一页避开右侧剧情按钮；
-        // 最后一页按钮隐藏后取消避让，恢复完整宽度。
-        final dialogueRightSafeWidth =
-            (controller.hasNext || controller.isGenerating)
+        
+        // 2. 角色对话框右侧避让逻辑重构：
+        // 手机端保持原样（动态避让）；
+        // 电脑端直接锁死 0.0！我们完全依靠上一步加大的 outerHorizontal 来留白，
+        // 这样可以彻底避免“剧情说完一瞬间，对话框突然往右跳一下”的视觉 Bug。
+        final dialogueRightSafeWidth = wideDialogueLayout
+            ? 0.0 
+            : ((controller.hasNext || controller.isGenerating)
                 ? (compact ? 58.0 : 70.0)
-                : 0.0;
-        final availableHeight = constraints.maxHeight.isFinite ? constraints.maxHeight : screen.height - MediaQuery.paddingOf(context).vertical;
+                : 0.0);
         final browsingStory = controller.hasNext;
 
         // 一级导航已移回右侧 HUD，不再占据底部。
         // 回看历史 / 逐字显示 / 生成中只影响输入区；底部只保留系统安全区。
         final composerVisible =
             !browsingStory && !controller.isGenerating && !_revealing;
+        final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
+        final surroundingsActionVisible =
+            composerVisible && surroundingsAction?.visible == true;
         final navigationHeight = MediaQuery.viewPaddingOf(context).bottom;
         final composerHeight = composerVisible
             ? _adaptiveFooterHeight(
-                availableWidth: constraints.maxWidth,
-                compact: compact,
-                choicesVisible: canShowChoices,
-              )
+                  availableWidth: constraints.maxWidth,
+                  compact: compact,
+                  choicesVisible: canShowChoices,
+                ) +
+                (surroundingsActionVisible ? (compact ? 22.0 : 24.0) : 0.0)
             : 0.0;
         final footerHeight = navigationHeight +
             (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
         final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
         final keyboardActive = compact && keyboardInset > 0;
-        // 主页可在底部常驻一块探索舞台。键盘出现时探索区由外层隐藏，
-        // 因此这里不再保留探索高度，只把输入栏抬到键盘上沿。
+        // 底部整块调查舞台当前隐藏，bottomReservedHeight 通常为 0。
+        // “探索周围”恢复成输入框上方的轻量入口，其高度已计入 composerHeight。
         final reservedBottom = keyboardActive
             ? 0.0
             : math.max(0.0, widget.bottomReservedHeight);
         final composerBottom = keyboardActive ? keyboardInset : reservedBottom;
         final footerBottom = reservedBottom;
 
-        // 按真实视觉高度预留，不再给选择区留过多空白。
-        final choiceCount = controller.choices.length;
-        final choiceHeaderExtent = compact ? 42.0 : 44.0;
-        final choiceItemHeight = 48.0;
-        final choiceItemGap = compact ? 5.0 : 6.0;
+        // 选择区已经改成输入框上方的单行横向滑动条。
+        // 无论有几个选项都只占一行，不能再按“选项数量 × 卡片高度”把正文往上顶。
         final choiceDockHeight = canShowChoices
-            ? choiceHeaderExtent +
-                choiceCount * choiceItemHeight +
-                (choiceCount > 1 ? (choiceCount - 1) * choiceItemGap : 0)
+            ? (compact ? 42.0 : 44.0)
             : 0.0;
 
         // 最后一条选择与自由输入框之间只保留轻微呼吸距离。
@@ -728,10 +737,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         // 正文与选择区之间只留一条很小的安全距离。
         final contentChoiceGap = compact ? 5.0 : 6.0;
 
-        // 右侧 HUD 不占底部空间；对白只保留必要的呼吸距离。
-        // 底部一级导航已撤走，角色对白不再贴着输入区/屏幕底边。
-        // 底部导航撤走后继续把角色对白上提，避免对白视觉重心压在屏幕底边。
-        final dialogGap = compact ? 92.0 : 106.0;
+        // 剧情文字统一向屏幕底部收：只给输入栏 / 系统安全区留少量呼吸距离。
+        // 底部大探索舞台暂时隐藏；正文只需避开输入框、轻量探索入口和选项条。
+        final dialogGap = compact ? 18.0 : 24.0;
         final panelBottom = footerBottom + footerHeight + dialogGap;
 
         // 最后一句出现选项时，不再把正文整体按选项数量不断往上推。
@@ -771,45 +779,68 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
               if (mode != _NovelLineMode.narration && portraitUrl.isNotEmpty)
                 Builder(
                   builder: (context) {
-                    final stageSize = MediaQuery.sizeOf(context);
+                    // 使用当前剧情舞台的真实尺寸，而不是全局 MediaQuery。
+                    // 这样 PC 全宽舞台 / Web 手机预览 / 未来桌面窗口都不会出现
+                    // “算的是整屏宽度，实际却被父级约束成 720px”的错位。
+                    final stageSize = Size(constraints.maxWidth, availableHeight);
 
-                    // 真正的自适应：不再用 <1000 这种一刀切断点，
-                    // 而是在“窄屏基准 360”与“宽屏基准 1400”之间按实际宽度连续插值，
-                    // 数值会随屏幕宽度平滑变化，不会在临界宽度处突然跳一下。
-                    const double minStage = 360.0;
-                    const double maxStage = 1400.0;
-                    final double t = ((stageSize.width - minStage) /
-                            (maxStage - minStage))
-                        .clamp(0.0, 1.0);
+                    // 手机竖屏与电脑/横向宽屏使用两套真正不同的镜头语言。
+                    // PC 不是“把手机版缩小”：说话角色固定成为左侧的大半身近景，
+                    // 右侧留给较长对白，形成更接近视觉小说的面对面代入感。
+                    final wideDialogueLayout = controller.desktopMode;
 
-                    // 对话构图改为真正的左右分区：
-                    // NPC 占左侧，主角占右侧，中央与另一侧留给对应对白。
-                    // 不再把立绘放大到几乎铺满整个屏幕，否则文字即使移动也仍像“浮在人物身上”。
-                    final widthRatio = lerpDouble(.98, .68, t)!;
-                    final minPortraitWidth = lerpDouble(400.0, 700.0, t)!;
-                    final maxPortraitWidth = lerpDouble(600.0, 1020.0, t)!;
-                    final portraitWidth = (stageSize.width * widthRatio)
-                        .clamp(minPortraitWidth, maxPortraitWidth)
-                        .toDouble();
+                    late final double portraitWidth;
+                    late final double portraitHeightRatio;
+                    late final double sinkRatio;
+                    late final double edgePush;
 
-                    final fullPortraitHeight = portraitWidth * 1.22;
-                    final showOnRight = mode == _NovelLineMode.protagonist;
+                    if (wideDialogueLayout) {
+                      final widthBased =
+                          (stageSize.width * .55).clamp(550.0, 960.0).toDouble();
+                      final heightBased =
+                          (stageSize.height * 1.05).clamp(500.0, 1000.0).toDouble();
+                      portraitWidth = math.min(widthBased, heightBased);
+                      
+                      portraitHeightRatio = 1.25; 
+                      
+                      // 【核心修改】：大幅度增加下沉比例！
+                      // 从 0.18 直接拉高到 0.35（甚至 0.40）。
+                      // 这意味着立绘高度的 35% 都会被硬生生拖进屏幕底部边界之外。
+                      // 这下屏幕绝对能把腰部以下全部“一口吞掉”，只给你留下标准的胸像！
+                      sinkRatio = 0.45; 
+                      
+                      edgePush = 0.08; 
+                    } else {
+                      // 手机竖屏保持原样...
+                      // 手机竖屏继续保留原来的近景人物感与主角/NPC 左右关系。
+                      const double minStage = 360.0;
+                      const double maxStage = 700.0;
+                      final double t = ((stageSize.width - minStage) /
+                              (maxStage - minStage))
+                          .clamp(0.0, 1.0);
+                      final widthRatio = lerpDouble(.98, .76, t)!;
+                      final minPortraitWidth = lerpDouble(400.0, 470.0, t)!;
+                      final maxPortraitWidth = lerpDouble(600.0, 650.0, t)!;
+                      portraitWidth = (stageSize.width * widthRatio)
+                          .clamp(minPortraitWidth, maxPortraitWidth)
+                          .toDouble();
+                      portraitHeightRatio = 1.22;
+                      sinkRatio = lerpDouble(.25, .16, t)!;
+                      edgePush = lerpDouble(.35, .18, t)!;
+                    }
 
-                    // 对话立绘采用偏半身构图：人物整体向屏幕底部沉，
-                    // 让腿部自然超出画面，只保留约 7–8 成上半身。
-                    // 手机更窄，额外多下沉一点；宽屏则稍微克制，避免人物显得过低。
-                    final sinkRatio = lerpDouble(.25, .09, t)!;
+                    final fullPortraitHeight = portraitWidth * portraitHeightRatio;
+                    // PC 镜头固定：所有正在说话的角色都从左侧入镜。
+                    // 手机仍保留 NPC 左 / 主角右的原有构图。
+                    final showOnRight = !wideDialogueLayout &&
+                        mode == _NovelLineMode.protagonist;
                     final sinkOffset = -(fullPortraitHeight * sinkRatio);
-
-                    // NPC 真正贴向最左；主角镜像贴向最右。
-                    // 窄屏把人物再向外推出一点，给另一侧文字腾出可读空间。
-                    final edgePush = lerpDouble(.35, .055, t)!;
                     final npcLeftOffset = -(portraitWidth * edgePush);
                     final protagonistRightOffset = -(portraitWidth * edgePush);
 
                     return Positioned(
-                      // 底部探索区常驻时，人物立绘也以探索区上沿作为新的
-                      // “屏幕底部”，避免腿部和底部探索角色互相压在一起。
+                      // 最后一页展开底部调查区时，人物立绘以调查区上沿作为新的
+                      // “屏幕底部”，避免腿部和底部调查角色互相压在一起。
                       bottom: reservedBottom + sinkOffset,
                       left: showOnRight ? null : npcLeftOffset,
                       right: showOnRight ? protagonistRightOffset : null,
@@ -969,10 +1000,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     left: 0,
                     right: narrationRightSafeWidth,
                     top: 0,
-                    bottom: footerHeight + footerBottom + 8,
+                    bottom: footerHeight + footerBottom +
+                        (compact ? 18.0 : 24.0),
                     child: _withSwipeMotion(
                       Align(
-                        alignment: const Alignment(0, -.02),
+                        // 普通剧情不再悬在屏幕中央，统一从底部向上生长。
+                        // 这里本身没有灰色/半透明背景，只保留文字与轻量阴影。
+                        alignment: Alignment.bottomCenter,
                       child: Padding(
                         // 右侧 HUD 保持轻量，不额外挤压旁白主体。
                         padding: EdgeInsets.symmetric(
@@ -1041,6 +1075,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                                   '${mode.name}-${controller.currentSentenceIndex}-$speaker',
                                 ),
                                 mode: mode,
+                                desktopMode: controller.desktopMode,
                                 sentence: sentence,
                                 speakerName: speaker.isEmpty
                                     ? (mode == _NovelLineMode.protagonist
@@ -1090,9 +1125,19 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   right: 0,
                   bottom: footerBottom + footerHeight + choiceBottomGap,
                   child: _withSwipeMotion(
-                    NovelChoiceDock(
-                      choices: controller.choices,
-                      onSelected: controller.selectChoice,
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: wideDialogueLayout
+                              ? 920.0
+                              : screen.width,
+                        ),
+                        child: NovelChoiceDock(
+                          choices: controller.choices,
+                          onSelected: controller.selectChoice,
+                        ),
+                      ),
                     ),
                     screen.width,
                   ),
@@ -1397,6 +1442,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
   const _NovelCharacterDialogueSurface({
     super.key,
     required this.mode,
+    required this.desktopMode,
     required this.sentence,
     required this.speakerName,
     required this.affection,
@@ -1421,6 +1467,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
   });
 
   final _NovelLineMode mode;
+  final bool desktopMode;
   final NovelSentence? sentence;
   final String speakerName;
   final int? affection;
@@ -1449,33 +1496,39 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
     final compact = screen.width <= 600;
+    final wideDialogueLayout = desktopMode;
 
-    // NPC 在左 -> 对白固定到右侧。
-    // 主角在右 -> 对白固定到左侧。
-    final sideAlignment = isHost ? Alignment.centerLeft : Alignment.centerRight;
-    final bottomSideAlignment =
-        isHost ? Alignment.bottomLeft : Alignment.bottomRight;
+    // 手机仍保持 NPC 左 / 主角右。
+    // PC 镜头固定：角色永远在左，整个对白阅读区稳定放在右侧，
+    // 避免主角/NPC 一开口界面就左右跳，画面会更像真正的视觉小说舞台。
+    final sideAlignment = wideDialogueLayout
+        ? Alignment.centerRight
+        : (isHost ? Alignment.centerLeft : Alignment.centerRight);
+    final bottomSideAlignment = wideDialogueLayout
+        ? Alignment.bottomRight
+        : (isHost ? Alignment.bottomLeft : Alignment.bottomRight);
 
-    // 手机也坚持左右关系，但不能把正文压成极窄的一列。
-    // 对话仍然属于左右两侧，而不是往屏幕中央收。
-    // NPC 右侧文字 / 主角左侧文字都保留足够宽度，只和立绘拉开一点点距离。
+    // PC 对白仍然比手机长，但不再无限铺满：
+    // 左侧大半身人物约占 46%，右侧文字约占一半，二者共同构成画面。
     final dialogueWidth = compact
         ? (screen.width * .60).clamp(208.0, 350.0).toDouble()
-        : (screen.width * .46).clamp(348.0, 610.0).toDouble();
+        : wideDialogueLayout
+            ? (screen.width * .52).clamp(500.0, 960.0).toDouble()
+            : (screen.width * .50).clamp(360.0, 680.0).toDouble();
 
-    final outerHorizontal = compact ? 9.0 : 20.0;
+    final outerHorizontal = compact ? 9.0 : (wideDialogueLayout ? 120.0 : 20.0);
 
-    // 只和立绘拉开一点，不把整个对白推向屏幕中央。
-    final portraitFacingGap = compact ? 7.0 : 12.0;
+    final portraitFacingGap =
+        compact ? 7.0 : (wideDialogueLayout ? 16.0 : 12.0);
 
     // 角色名直接嵌在线条中间：不再使用中央星星，也不再把名字放在线条下方。
-    // 左右线条保持轻微方向感，但提高亮度与厚度，复杂背景下也能看清。
-    final shortNameLine = compact ? 28.0 : 38.0;
-    final longNameLine = compact ? 48.0 : 70.0;
+    final shortNameLine = compact ? 28.0 : (wideDialogueLayout ? 46.0 : 38.0);
+    final longNameLine = compact ? 48.0 : (wideDialogueLayout ? 86.0 : 70.0);
     final leftNameLine = isHost ? longNameLine : shortNameLine;
     final rightNameLine = isHost ? shortNameLine : longNameLine;
 
-    final speakerHeaderWidth = compact ? 188.0 : 244.0;
+    final speakerHeaderWidth =
+        compact ? 188.0 : (wideDialogueLayout ? 320.0 : 244.0);
 
     final dialogueContent = SizedBox(
       width: dialogueWidth,
@@ -1495,15 +1548,18 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                   // NPC 立绘在左 -> 名字贴在右侧对白区的左端；
                   // 主角立绘在右 -> 名字贴在左侧对白区的右端。
                   Align(
-                    alignment:
-                        isHost ? Alignment.centerRight : Alignment.centerLeft,
+                    alignment: wideDialogueLayout
+                        ? Alignment.centerLeft
+                        : (isHost ? Alignment.centerRight : Alignment.centerLeft),
                     child: SizedBox(
                       width: speakerHeaderWidth,
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: isHost
-                            ? CrossAxisAlignment.end
-                            : CrossAxisAlignment.start,
+                        crossAxisAlignment: wideDialogueLayout
+                            ? CrossAxisAlignment.start
+                            : (isHost
+                                ? CrossAxisAlignment.end
+                                : CrossAxisAlignment.start),
                         children: <Widget>[
                           SizedBox(
                             height: compact ? 26 : 29,
@@ -1569,9 +1625,11 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                   ),
                   if (onOpenPortrait != null)
                     Align(
-                      alignment: isHost
-                          ? Alignment.centerLeft
-                          : Alignment.centerRight,
+                      alignment: wideDialogueLayout
+                          ? Alignment.centerRight
+                          : (isHost
+                              ? Alignment.centerLeft
+                              : Alignment.centerRight),
                       child: _PortraitSwitchButton(onTap: onOpenPortrait!),
                     ),
                 ],
@@ -1586,8 +1644,9 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                       ? emptyTextFallback
                       : value;
                   final parts = _visibleReaderParts(sentence, display);
-                  final alignment =
-                      isHost ? TextAlign.right : TextAlign.left;
+                  final alignment = wideDialogueLayout
+                      ? TextAlign.left
+                      : (isHost ? TextAlign.right : TextAlign.left);
                       
                   return TweenAnimationBuilder<double>(
                     tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
@@ -1659,8 +1718,12 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
               choices.isNotEmpty ? bottomSideAlignment : sideAlignment,
           child: Padding(
             padding: EdgeInsets.only(
-              right: isHost ? portraitFacingGap : 0,
-              left: isHost ? 0 : portraitFacingGap,
+              right: wideDialogueLayout
+                  ? 0
+                  : (isHost ? portraitFacingGap : 0),
+              left: wideDialogueLayout
+                  ? portraitFacingGap
+                  : (isHost ? 0 : portraitFacingGap),
             ),
             child: readingZone,
           ),

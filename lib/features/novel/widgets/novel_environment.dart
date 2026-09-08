@@ -786,6 +786,17 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   late String _displayedUrl;
   int _loadToken = 0;
 
+  // iOS 首阶段：先验证 Depth Anything 本地推理链路。
+  // 这里只生成并预览 depth map，还没有接 3D Shader / 陀螺仪。
+  Uint8List? _debugDepthPng;
+  bool _depthGenerating = false;
+  String _depthSourceKey = '';
+  String _depthError = '';
+  int _depthToken = 0;
+
+  bool get _depthTestSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
   @override
   void initState() {
     super.initState();
@@ -794,6 +805,12 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       duration: const Duration(seconds: 22),
     );
     _displayedUrl = widget.url.trim();
+
+    // context / ImageConfiguration 在首帧后才稳定；此时再从已经显示的
+    // ImageProvider 取像素并交给 Depth Anything。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_prepareDepthForDisplayedImage());
+    });
   }
 
   @override
@@ -830,6 +847,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   void dispose() {
     _motionController.dispose();
     _loadToken++; // 让所有还在飞行中的 precache 回调失效
+    _depthToken++; // 丢弃仍在执行中的 depth 结果
     super.dispose();
   }
 
@@ -881,6 +899,172 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     // 这次已经过期的加载结果直接丢弃，只认最新的那次。
     if (!mounted || token != _loadToken) return;
     setState(() => _displayedUrl = value);
+    unawaited(_prepareDepthForDisplayedImage());
+  }
+
+  Future<Uint8List?> _imageBytesFromProvider(ImageProvider provider) async {
+    final completer = Completer<Uint8List?>();
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    late final ImageStreamListener listener;
+
+    listener = ImageStreamListener(
+      (info, synchronousCall) async {
+        stream.removeListener(listener);
+        try {
+          final byteData = await info.image.toByteData(
+            format: ImageByteFormat.png,
+          );
+          if (!completer.isCompleted) {
+            completer.complete(byteData?.buffer.asUint8List());
+          }
+        } catch (error) {
+          if (!completer.isCompleted) completer.completeError(error);
+        }
+      },
+      onError: (Object error, StackTrace? stackTrace) {
+        stream.removeListener(listener);
+        if (!completer.isCompleted) completer.completeError(error, stackTrace);
+      },
+    );
+
+    stream.addListener(listener);
+    return completer.future.timeout(
+      const Duration(seconds: 8),
+      onTimeout: () {
+        stream.removeListener(listener);
+        return null;
+      },
+    );
+  }
+
+  Future<void> _prepareDepthForDisplayedImage() async {
+    if (!_depthTestSupported || !mounted) return;
+
+    final sourceKey = _displayedUrl.trim();
+    final provider = _providerFor(sourceKey);
+    if (provider == null || sourceKey.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _debugDepthPng = null;
+          _depthSourceKey = '';
+          _depthGenerating = false;
+          _depthError = '';
+        });
+      }
+      return;
+    }
+
+    // 同一张已经算过的背景不重复推理。
+    if (_depthSourceKey == sourceKey && _debugDepthPng != null) return;
+
+    final token = ++_depthToken;
+    setState(() {
+      _depthGenerating = true;
+      _depthError = '';
+      _debugDepthPng = null;
+    });
+
+    try {
+      // 背景在 _preloadThenSwap 里已经 precache，通常这里直接从 Flutter
+      // image cache 拿到解码后的 ui.Image，不会再次向服务器请求原图。
+      final imageBytes = await _imageBytesFromProvider(provider);
+      if (imageBytes == null || imageBytes.isEmpty) {
+        throw StateError('无法取得背景图片像素');
+      }
+
+      final depthPng = await DepthService.instance.generatePng(imageBytes);
+      if (!mounted || token != _depthToken || sourceKey != _displayedUrl.trim()) {
+        return;
+      }
+
+      setState(() {
+        _debugDepthPng = depthPng;
+        _depthSourceKey = sourceKey;
+        _depthGenerating = false;
+        _depthError = '';
+      });
+    } catch (error) {
+      if (!mounted || token != _depthToken) return;
+      setState(() {
+        _debugDepthPng = null;
+        _depthGenerating = false;
+        _depthError = error.toString();
+      });
+      debugPrint('Depth Anything iOS test failed: $error');
+    }
+  }
+
+  Widget _depthDebugPreview() {
+    if (!_depthTestSupported || !kDebugMode) {
+      return const SizedBox.shrink();
+    }
+
+    Widget content;
+    if (_debugDepthPng != null) {
+      content = Image.memory(
+        _debugDepthPng!,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.low,
+      );
+    } else if (_depthGenerating) {
+      content = const Center(
+        child: SizedBox.square(
+          dimension: 18,
+          child: CircularProgressIndicator(strokeWidth: 1.5),
+        ),
+      );
+    } else {
+      content = Center(
+        child: Text(
+          _depthError.isEmpty ? '等待 Depth' : 'Depth 失败',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    return Positioned(
+      top: 92,
+      right: 10,
+      child: IgnorePointer(
+        child: Container(
+          width: 112,
+          height: 168,
+          clipBehavior: Clip.hardEdge,
+          decoration: BoxDecoration(
+            color: const Color(0xCC090B0D),
+            border: Border.all(color: Colors.white24, width: .7),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              content,
+              Align(
+                alignment: Alignment.topLeft,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                  color: const Color(0xB8000000),
+                  child: const Text(
+                    'iOS DEPTH',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: .4,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _fallback() {
@@ -1090,6 +1274,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
             ),
           ),
         ),
+        _depthDebugPreview(),
       ],
     );
   }

@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../game_shell.dart';
 import 'novel_ending_page.dart';
 import 'novel_backend.dart';
 import 'novel_game_controller.dart';
+import 'novel_display_mode.dart';
 import 'http_novel_backend.dart';
 import 'novel_models.dart';
 import 'novel_sheets.dart';
@@ -78,6 +82,8 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _loadFailureHandled = false;
   NovelWeatherEffect? _weatherPreviewOverride;
   String? _backgroundPreviewOverride;
+  Uint8List? _backgroundPreviewBytes;
+  String? _backgroundPreviewFileName;
   NovelTimePeriod? _timePreviewOverride;
   String _lastWeatherSyncToken = '';
   Timer? _sceneArrivalTimer;
@@ -92,11 +98,22 @@ class _NovelGamePageState extends State<NovelGamePage>
   // 角色输入/创建阶段进入沉浸输入模式，减少同时显示的信息。
   bool get _immersiveInputMode => _characterSetupOpen;
 
+  bool get _isNativeMobilePlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     controller.addListener(_onControllerChanged);
+    // 手机默认使用手机布局并锁定竖屏；Web / Desktop 不做屏幕方向控制。
+    if (_isNativeMobilePlatform) {
+      unawaited(SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
+        DeviceOrientation.portraitUp,
+      ]));
+    }
     unawaited(_initializeGame());
   }
 
@@ -378,6 +395,12 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   @override
   void dispose() {
+    // 离开小说游戏页时恢复默认竖屏，避免横屏锁定影响 App 其他页面。
+    if (_isNativeMobilePlatform) {
+      unawaited(SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
+        DeviceOrientation.portraitUp,
+      ]));
+    }
     WidgetsBinding.instance.removeObserver(this);
     controller.removeListener(_onControllerChanged);
     _sceneArrivalTimer?.cancel();
@@ -459,8 +482,11 @@ class _NovelGamePageState extends State<NovelGamePage>
       NovelDeveloperPreviewActions(
         weatherOverride: () => _weatherPreviewOverride,
         timeOverride: () => _timePreviewOverride,
+        backgroundPreviewName: () => _backgroundPreviewFileName,
         setWeatherOverride: _setWeatherPreviewOverride,
         setTimeOverride: _setTimePreviewOverride,
+        setBackgroundPreview: _setBackgroundPreview,
+        clearBackgroundPreview: _clearBackgroundPreview,
         previewCharacterSetup: _previewCharacterSetup,
         previewOpening: _previewOpening,
         previewSceneArrival: _previewSceneArrival,
@@ -506,6 +532,58 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _setTimePreviewOverride(NovelTimePeriod? period) {
     if (!mounted) return;
     setState(() => _timePreviewOverride = period);
+  }
+
+  void _setBackgroundPreview(Uint8List bytes, String fileName) {
+    if (!mounted || bytes.isEmpty) return;
+    setState(() {
+      _backgroundPreviewBytes = bytes;
+      _backgroundPreviewFileName =
+          fileName.trim().isEmpty ? '本地背景' : fileName.trim();
+      // 本地预览优先；同时清掉“背景过渡”测试 URL，避免恢复时跳回随机图。
+      _backgroundPreviewOverride = null;
+    });
+  }
+
+  void _clearBackgroundPreview() {
+    if (!mounted) return;
+    setState(() {
+      _backgroundPreviewBytes = null;
+      _backgroundPreviewFileName = null;
+      _backgroundPreviewOverride = null;
+    });
+  }
+
+  Future<void> _toggleDisplayMode(bool currentlyDesktop) async {
+    _inputFocusNode.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final nextDesktop = !currentlyDesktop;
+
+    // “电脑模式”是布局模式，不等同于屏幕旋转。
+    // 只有在原生手机上，为了给宽屏布局足够空间，顺便切到横屏；
+    // Flutter Web / Windows / macOS 等桌面环境只切换布局，不操作方向。
+    if (_isNativeMobilePlatform) {
+      try {
+        await SystemChrome.setPreferredOrientations(
+          nextDesktop
+              ? const <DeviceOrientation>[
+                  DeviceOrientation.landscapeLeft,
+                  DeviceOrientation.landscapeRight,
+                ]
+              : const <DeviceOrientation>[
+                  DeviceOrientation.portraitUp,
+                ],
+        );
+      } catch (_) {
+        // 某些平台可能忽略方向锁定；布局切换仍然继续。
+      }
+    }
+
+    if (!mounted) return;
+    controller.setDisplayMode(
+      nextDesktop ? NovelDisplayMode.desktop : NovelDisplayMode.mobile,
+    );
   }
 
   Future<void> _previewCharacterSetup() async {
@@ -1376,7 +1454,9 @@ class _NovelGamePageState extends State<NovelGamePage>
     final testUrl = 'https://picsum.photos/1080/1920?random=$randomTimestamp';
 
     setState(() {
-      _backgroundPreviewOverride = testUrl; 
+      _backgroundPreviewBytes = null;
+      _backgroundPreviewFileName = null;
+      _backgroundPreviewOverride = testUrl;
     });
   }
 
@@ -1498,7 +1578,11 @@ class _NovelGamePageState extends State<NovelGamePage>
       backgroundColor: controller.settings.backgroundColor,
       builder: (context, openDrawer) {
         return AnimatedBuilder(
-          animation: Listenable.merge(<Listenable>[controller, controller.settings]),
+          animation: Listenable.merge(<Listenable>[
+            controller,
+            controller.settings,
+            novelDisplayMode,
+          ]),
           builder: (context, _) {
             final rawBackground = _backgroundPreviewOverride ?? controller.world.backgroundUrl.trim();
             final normalizedBackground = rawBackground.replaceAll('\\', '/').toLowerCase();
@@ -1520,8 +1604,23 @@ class _NovelGamePageState extends State<NovelGamePage>
               _handleLoadFailure(openDrawer);
             }
 
-            final isCompactWidth = MediaQuery.sizeOf(context).width <= 600;
-            final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+            final rootMedia = MediaQuery.of(context);
+            // 第一次进入时根据平台 / 窗口给默认值；之后完全以玩家手动选择为准。
+            novelDisplayMode.ensureInitialized(
+              viewportWidth: rootMedia.size.width,
+              nativeMobile: _isNativeMobilePlatform,
+            );
+            final desktopMode = controller.desktopMode;
+            // 在宽屏浏览器里切到“手机模式”时，用真实的窄画布预览手机 UI；
+            // 电脑模式则始终占满当前窗口。
+            final mobilePreviewWidth = !desktopMode && rootMedia.size.width > 600
+                ? math.min(430.0, rootMedia.size.width)
+                : rootMedia.size.width;
+            final effectiveMedia = rootMedia.copyWith(
+              size: Size(mobilePreviewWidth, rootMedia.size.height),
+            );
+            final isCompactWidth = mobilePreviewWidth <= 600;
+            final keyboardInset = rootMedia.viewInsets.bottom;
             final keyboardActive = isCompactWidth && keyboardInset > 0;
             
             final showBottomNav = !_immersiveInputMode &&
@@ -1533,33 +1632,51 @@ class _NovelGamePageState extends State<NovelGamePage>
                 (controller.hasNext || controller.isGenerating) &&
                 !keyboardActive;
 
-            return Scaffold(
+            final gameScaffold = Scaffold(
               resizeToAvoidBottomInset: false,
               backgroundColor: controller.settings.backgroundColor,
               body: Stack(
                 fit: StackFit.expand,
                 children: <Widget>[
                   RepaintBoundary(
-                    child: NovelWorldBackground(
-                      url: background,
-                      fallbackAsset: 'assets/images/background_home.png',
-                      characterPresent: controller.storyStarted &&
-                          controller.currentSpeakerName.isNotEmpty &&
-                          !controller.isCinematic,
-                      isGenerating: controller.isGenerating,
-                      weatherEffect: _weatherPreviewOverride != null
-                          ? activeWeather
-                          : (controller.settings.weatherEffectsEnabled
-                              ? activeWeather
-                              : NovelWeatherEffect.none),
-                      timePeriod: activeTime,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 360),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      child: _backgroundPreviewBytes != null
+                          ? SizedBox.expand(
+                              key: ValueKey<String>(
+                                'developer-background|${_backgroundPreviewFileName ?? ''}|${_backgroundPreviewBytes!.lengthInBytes}',
+                              ),
+                              child: Image.memory(
+                                _backgroundPreviewBytes!,
+                                fit: BoxFit.cover,
+                                alignment: Alignment.center,
+                                gaplessPlayback: true,
+                                filterQuality: FilterQuality.high,
+                              ),
+                            )
+                          : NovelWorldBackground(
+                              url: background,
+                              fallbackAsset: 'assets/images/background_home.png',
+                              characterPresent: controller.storyStarted &&
+                                  controller.currentSpeakerName.isNotEmpty &&
+                                  !controller.isCinematic,
+                              isGenerating: controller.isGenerating,
+                              weatherEffect: _weatherPreviewOverride != null
+                                  ? activeWeather
+                                  : (controller.settings.weatherEffectsEnabled
+                                      ? activeWeather
+                                      : NovelWeatherEffect.none),
+                              timePeriod: activeTime,
+                            ),
                     ),
                   ),
                   SafeArea(
                     minimum: const EdgeInsets.fromLTRB(14, 10, 14, 0),
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        final compact = constraints.maxWidth < 430;
+                        final compact = !desktopMode && constraints.maxWidth < 430;
                         // 当前 Stack 位于 SafeArea(minimum: 左右14) 内。
                         // 底部探索需要视觉上横向铺满整个屏幕，所以单独向两侧越过这层 inset。
                         final screenPadding = MediaQuery.paddingOf(context);
@@ -1586,15 +1703,20 @@ class _NovelGamePageState extends State<NovelGamePage>
                             ? const Duration(milliseconds: 180)
                             : const Duration(milliseconds: 620);
 
-                        // “周围”不再切成独立页：正文页始终保留底部探索舞台。
-                        // 是否可调查只控制交互，不再决定探索舞台是否显示。
-                        // 底部高度不再按屏高硬切 30%，而是优先跟随横版场景的宽高比。
-                        // 这样 16:9 左右的背景能更完整地展示，也不会把正文切得过重。
+                        // 底部整块探索舞台先隐藏，但保留实现，后续需要时可直接重新开启。
+                        // 当前只恢复输入框上方的轻量“探索周围”入口，避免场景底部被大块 UI 占满。
+                        const showInlineSurroundingsDock = false;
                         final inlineSurroundingsVisible =
+                            showInlineSurroundingsDock &&
                             _primaryTab == _NovelPrimaryTab.story &&
                             controller.storyStarted &&
                             !controller.isCinematic &&
-                            !keyboardActive;
+                            !keyboardActive &&
+                            !controller.hasNext &&
+                            !controller.isGenerating &&
+                            !_sceneArrivalActive &&
+                            !_battleOpen &&
+                            !_endingOpen;
                         final inlineFullWidth = constraints.maxWidth +
                             inlineEdgeLeft +
                             inlineEdgeRight;
@@ -1608,11 +1730,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                             : 0.0;
                         final inlineSurroundingsEnabled =
                             inlineSurroundingsVisible &&
-                            !controller.isGenerating &&
-                            !controller.hasNext &&
-                            !_sceneArrivalActive &&
-                            !_battleOpen &&
-                            !_endingOpen;
+                            !controller.isSurroundingsLoading;
 
                         return Stack(
                           // 允许底部探索区单独越过 SafeArea 的左右 14px，
@@ -1653,6 +1771,22 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 ),
                               ),
                             ),
+
+                            // 手机 / 电脑是两套布局模式，不再把“横屏”当成电脑模式。
+                            // Web / Desktop 只改变布局；原生手机进入电脑模式时才辅助切到横屏。
+                            if (!_immersiveInputMode &&
+                                controller.storyStarted &&
+                                !keyboardActive &&
+                                !_battleOpen &&
+                                !_endingOpen)
+                              Positioned(
+                                right: compact ? 0 : 2,
+                                top: 52,
+                                child: _NovelDisplayModeToggle(
+                                  desktop: desktopMode,
+                                  onTap: () => _toggleDisplayMode(desktopMode),
+                                ),
+                              ),
                             
                             // 完美左对齐 + 高度紧凑优化：把位置和目标包在一个 Column 里
                             if (!_immersiveInputMode && controller.storyStarted && !keyboardActive)
@@ -1723,13 +1857,29 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 child: Padding(
                                   // 剧情区域始终保持左右对称，不为右侧悬浮按钮预留宽度。
                                   padding: EdgeInsets.zero,
-                                  child: ConstrainedBox(
-                                    constraints:
-                                        const BoxConstraints(maxWidth: 720),
+                                  // 手机仍保持原来的 720px 阅读舞台；电脑模式则把
+                                  // 整个角色/对白舞台真正放开到当前窗口宽度。否则 reader
+                                  // 里的 left: 0 只会贴到“居中的 720px 小舞台”左边。
+                                  child: SizedBox(
+                                    width: desktopMode
+                                        ? constraints.maxWidth
+                                        : math.min(720.0, constraints.maxWidth),
                                     child: NovelChoiceDockActionScope(
-                                      // 探索已经常驻在正文底部，不再额外显示“周围/探索”
-                                      // 跳页按钮，避免同一功能出现两个入口。
-                                      visible: false,
+                                      // 底部大探索舞台已隐藏，恢复原来的轻量“探索周围”入口。
+                                      // 只在最新剧情、生成结束且没有其他覆盖层时出现。
+                                      visible: !showInlineSurroundingsDock &&
+                                          _primaryTab == _NovelPrimaryTab.story &&
+                                          controller.storyStarted &&
+                                          !controller.isCinematic &&
+                                          !keyboardActive &&
+                                          !controller.hasNext &&
+                                          !controller.isGenerating &&
+                                          !_sceneArrivalActive &&
+                                          !_battleOpen &&
+                                          !_endingOpen &&
+                                          controller.surroundingsActionLabel
+                                              .trim()
+                                              .isNotEmpty,
                                       label: controller.surroundingsActionLabel,
                                       attention: controller.surroundingsNeedsAttention,
                                       loading: controller.isSurroundingsLoading,
@@ -1835,6 +1985,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                       child: SafeArea(
                         top: false,
                         child: NovelBottomArchiveBar(
+                          desktopMode: desktopMode,
                           // 因为加入了 surroundings，索引不再是一一对应，需要精准映射
                           selectedIndex: switch (_primaryTab) {
                             _NovelPrimaryTab.characters => 1,
@@ -1938,6 +2089,27 @@ class _NovelGamePageState extends State<NovelGamePage>
                 ],
               ),
             );
+
+            final sizedGame = MediaQuery(
+              data: effectiveMedia,
+              child: gameScaffold,
+            );
+
+            // PC/Web 上的“手机模式”是真正的窄版画布，而不是仅改几个字号。
+            // 电脑模式则使用完整浏览器 / 桌面窗口尺寸。
+            if (!desktopMode && rootMedia.size.width > mobilePreviewWidth) {
+              return ColoredBox(
+                color: controller.settings.backgroundColor,
+                child: Center(
+                  child: SizedBox(
+                    width: mobilePreviewWidth,
+                    height: rootMedia.size.height,
+                    child: ClipRect(child: sizedGame),
+                  ),
+                ),
+              );
+            }
+            return sizedGame;
           },
         );
       },
@@ -2105,3 +2277,71 @@ class _NovelPreviewButton extends StatelessWidget {
     );
   }
 }
+
+
+class _NovelDisplayModeToggle extends StatelessWidget {
+  const _NovelDisplayModeToggle({
+    required this.desktop,
+    required this.onTap,
+  });
+
+  final bool desktop;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: desktop ? '当前：电脑模式 · 点击切换手机模式' : '当前：手机模式 · 点击切换电脑模式',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          splashColor: Colors.white.withOpacity(.08),
+          highlightColor: Colors.white.withOpacity(.035),
+          child: Container(
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 9),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(.22),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: Colors.white.withOpacity(.14),
+                width: .7,
+              ),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black.withOpacity(.14),
+                  blurRadius: 10,
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  desktop
+                      ? Icons.desktop_windows_outlined
+                      : Icons.phone_android_rounded,
+                  size: 17,
+                  color: Colors.white.withOpacity(.88),
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  desktop ? '电脑' : '手机',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.88),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+

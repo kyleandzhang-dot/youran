@@ -31,6 +31,13 @@
 
   <title>youran_ai</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- ONNX Runtime Web: used only by Flutter Web depth preview -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.0/dist/ort.webgpu.min.js"></script>
+  <script>
+    ort.env.wasm.wasmPaths =
+        'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.0/dist/';
+  </script>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

@@ -3,35 +3,13 @@ part of '../novel_sheets.dart';
 // ============================================================================
 
 const Color _characterHighStar = Color(0xFFE75B62);
-// 人物 / 主角资料 / 角色立绘页
+// 人物 / NPC资料 / 角色立绘页
 // 页面入口 / 对外入口：
-//   - showNovelHostProfileSheet(...)
 //   - showNovelCharactersSheet(...)
 //   - NovelCharactersTab
 //   - showNovelNpcProfileSheet(...)
 //   - showNovelPortraitSheet(...)
 // ============================================================================
-
-Future<void> showNovelHostProfileSheet(
-  BuildContext context,
-  NovelGameController controller,
-) async {
-  await _runNovelPageOnce('host-profile', () async {
-    final host = controller.protagonist;
-    final hostKey = host != null && host.id.trim().isNotEmpty
-        ? host.id.trim()
-        : (host?.name.trim() ?? controller.protagonistName);
-
-    await _showNovelArchivePage<void>(
-      context,
-      child: _CharactersPanel(
-        controller: controller,
-        focusCharacterKey: hostKey,
-        focusRequestId: DateTime.now().millisecondsSinceEpoch,
-      ),
-    );
-  });
-}
 
 Future<void> showNovelCharactersSheet(
   BuildContext context,
@@ -455,13 +433,16 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
             bottom: false,
             child: LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxWidth < 620;
-              final leftInset = compact ? 10.0 : 50.0;
-              final rightInset = compact ? 24.0 : 50.0;
+              // 角色中心严格跟随全局手机 / 电脑模式，不再靠当前宽度猜。
+              final desktopMode = widget.controller.desktopMode;
+              final compact = !desktopMode;
+              final leftInset = desktopMode ? 46.0 : 10.0;
+              final rightInset = desktopMode ? 54.0 : 12.0;
+              final contentMaxWidth = desktopMode ? 1440.0 : 560.0;
               
               return Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1180),
+                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
                       leftInset,
@@ -494,6 +475,7 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
                           child: showingSummon
                                   ? _CharacterSummonView(
                                       characters: allCharacters,
+                                      desktopMode: desktopMode,
                                       flowers: widget.controller.novelCharacterFlowers,
                                       results: lastDrawResults,
                                       isDrawing: isDrawing,
@@ -524,6 +506,7 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
                                       }),
                                     )
                                   : _CharacterGridPage(
+                                          desktopMode: desktopMode,
                                           // 图鉴展示全部 NPC，仅排除主角；是否拥有只影响
                                           // 队伍首页、上阵和养成，不应把未拥有角色从图鉴隐藏。
                                           characters: allCharacters,
@@ -741,11 +724,13 @@ class _CharacterGridPage extends StatelessWidget {
     required this.characters,
     required this.loading,
     required this.starOf,
+    required this.desktopMode,
   });
 
   final List<NovelCharacter> characters;
   final bool loading;
   final int Function(NovelCharacter) starOf;
+  final bool desktopMode;
 
   @override
   Widget build(BuildContext context) {
@@ -765,21 +750,27 @@ class _CharacterGridPage extends StatelessWidget {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        final count = constraints.maxWidth >= 860
-            ? 6
-            : constraints.maxWidth >= 620
-                ? 5
-                : constraints.maxWidth >= 420
-                    ? 4
-                    : 3;
+        // 模式决定密度；尺寸只在当前模式内部决定具体列数。
+        final count = desktopMode
+            ? (constraints.maxWidth >= 1260
+                ? 7
+                : constraints.maxWidth >= 980
+                    ? 6
+                    : 5)
+            : (constraints.maxWidth >= 420 ? 4 : 3);
         return GridView.builder(
-          padding: const EdgeInsets.fromLTRB(2, 2, 2, 28),
+          padding: EdgeInsets.fromLTRB(
+            desktopMode ? 6 : 2,
+            2,
+            desktopMode ? 6 : 2,
+            desktopMode ? 34 : 28,
+          ),
           physics: const BouncingScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: count,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            childAspectRatio: .65, 
+            crossAxisSpacing: desktopMode ? 14 : 8,
+            mainAxisSpacing: desktopMode ? 14 : 9,
+            childAspectRatio: desktopMode ? .69 : .65, 
           ),
           itemCount: characters.length,
           itemBuilder: (context, index) {
@@ -943,6 +934,7 @@ class _CharacterDrawResult {
 class _CharacterSummonView extends StatelessWidget {
   const _CharacterSummonView({
     required this.characters,
+    required this.desktopMode,
     required this.flowers,
     required this.results,
     required this.isDrawing,
@@ -953,6 +945,7 @@ class _CharacterSummonView extends StatelessWidget {
   });
 
   final List<NovelCharacter> characters;
+  final bool desktopMode;
   final int flowers;
   final List<_CharacterDrawResult> results;
   final bool isDrawing;
@@ -1021,40 +1014,56 @@ class _CharacterSummonView extends StatelessWidget {
   Widget build(BuildContext context) {
     final candidates = characters.where((character) => !character.isMain).toList();
     final topCharacters = candidates.take(3).toList();
+    final screen = MediaQuery.sizeOf(context);
+    final bannerHeight = screen.height * (desktopMode ? .64 : .49);
+    final sidePortraitWidth = desktopMode ? 300.0 : 185.0;
+    final heroPortraitWidth = desktopMode ? 420.0 : 270.0;
+    final actionBottom = screen.height * (desktopMode ? .09 : .08);
 
     return Stack(
       fit: StackFit.expand,
       children: [
         if (topCharacters.isNotEmpty)
           Positioned(
-            top: 0, left: 0, right: 0, height: MediaQuery.sizeOf(context).height * 0.55,
+            top: 0, left: 0, right: 0, height: bannerHeight,
             child: Stack(
               children: [
-                if (topCharacters.length >= 2) _buildBannerPortrait(topCharacters[1], 230, 0.45, const Alignment(-0.9, 1.0)),
-                if (topCharacters.length >= 3) _buildBannerPortrait(topCharacters[2], 230, 0.45, const Alignment(0.9, 1.0)),
-                _buildBannerPortrait(topCharacters[0], 320, 1.0, const Alignment(0.0, 1.0)),
+                if (topCharacters.length >= 2) _buildBannerPortrait(topCharacters[1], sidePortraitWidth, desktopMode ? .52 : .38, const Alignment(-0.9, 1.0)),
+                if (topCharacters.length >= 3) _buildBannerPortrait(topCharacters[2], sidePortraitWidth, desktopMode ? .52 : .38, const Alignment(0.9, 1.0)),
+                _buildBannerPortrait(topCharacters[0], heroPortraitWidth, 1.0, const Alignment(0.0, 1.0)),
                 Positioned(
-                  left: 0, right: 0, bottom: 0, height: 160,
+                  left: 0, right: 0, bottom: 0, height: desktopMode ? 180 : 120,
                   child: DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.transparent, _characterInkSoft.withOpacity(0.8), _characterInkSoft]))),
                 ),
               ],
             ),
           ),
         Positioned(
-          left: 0, right: 0, bottom: MediaQuery.sizeOf(context).height * 0.12,
+          left: 0, right: 0, bottom: actionBottom,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('寻 访 角 色', style: TextStyle(color: _characterText, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 6, shadows: [Shadow(color: Colors.black87, blurRadius: 10)])),
-              const SizedBox(height: 12),
+              Text(
+                '寻 访 角 色',
+                style: TextStyle(
+                  color: _characterText,
+                  fontSize: desktopMode ? 30 : 21,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: desktopMode ? 7 : 4.5,
+                  shadows: const [Shadow(color: Colors.black87, blurRadius: 10)],
+                ),
+              ),
+              SizedBox(height: desktopMode ? 14 : 9),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 decoration: BoxDecoration(color: Colors.black.withOpacity(0.4), borderRadius: BorderRadius.circular(99), border: Border.all(color: Colors.white.withOpacity(0.05))),
                 child: const Text('消耗鲜花寻访，获取完整角色或角色碎片', style: TextStyle(color: _characterTextSoft, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 1.0)),
               ),
-              const SizedBox(height: 32),
+              SizedBox(height: desktopMode ? 32 : 20),
               Wrap(
-                spacing: 20, runSpacing: 16, alignment: WrapAlignment.center,
+                spacing: desktopMode ? 20 : 10,
+                runSpacing: 12,
+                alignment: WrapAlignment.center,
                 children: [
                   _buildSummonButton(label: '寻访 1 次', cost: 1, enabled: flowers >= 1 && candidates.isNotEmpty, onTap: onDrawOne, primary: false),
                   _buildSummonButton(label: '寻访 5 次', cost: 5, enabled: flowers >= 5 && candidates.isNotEmpty, onTap: onDrawFive, primary: true),
@@ -1132,7 +1141,7 @@ class _SummonProcessModalState extends State<_SummonProcessModal> {
                   ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Text(_error, style: const TextStyle(color: _characterHighStar, fontSize: 13)), const SizedBox(height: 20), const _PulseContinueText()]))
                   : LayoutBuilder(
                       builder: (context, constraints) {
-                        final compact = constraints.maxWidth < 600;
+                        final compact = !widget.controller.desktopMode;
                         return Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -1141,7 +1150,7 @@ class _SummonProcessModalState extends State<_SummonProcessModal> {
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               child: Wrap(
                                 spacing: 16, runSpacing: 20, alignment: WrapAlignment.center,
-                                children: _results.asMap().entries.map((e) => SizedBox(width: compact ? 105 : 120, height: compact ? 155 : 175, child: _CharacterDrawResultCard(result: e.value, revealIndex: e.key))).toList(),
+                                children: _results.asMap().entries.map((e) => SizedBox(width: compact ? 102 : 132, height: compact ? 150 : 192, child: _CharacterDrawResultCard(result: e.value, revealIndex: e.key))).toList(),
                               ),
                             ),
                             const Spacer(flex: 2),
@@ -1345,6 +1354,8 @@ class _CharacterPortraitRail extends StatelessWidget {
     final visibleCharacters =
         characters.where((character) => !character.isMain).toList();
     return ListView.separated(
+      // 角色头像始终保持竖向列表；角色过多时从上往下滚动。
+      scrollDirection: Axis.vertical,
       padding: const EdgeInsets.symmetric(vertical: 4),
       physics: const BouncingScrollPhysics(),
       itemCount: visibleCharacters.length,
@@ -2056,9 +2067,17 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 700 || constraints.maxHeight < 460;
+        final desktopMode = widget.controller.desktopMode;
+        final compact = !desktopMode;
+        final shortViewport = constraints.maxHeight < 520;
         final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
         final keyboardVisible = compact && keyboardInset > 0;
+        final chatHeight = desktopMode
+            ? (shortViewport ? 164.0 : 218.0)
+            : 250.0;
+        // 手机版右侧始终有全局悬浮导航；人物页底部交互区必须主动避让，
+        // 不能让聊天记录 / 输入框被右侧全局按钮盖住。
+        final mobileGlobalNavInset = desktopMode ? 0.0 : 64.0;
         
         void openPortraitEditor() {
           showNovelPortraitModal(
@@ -2108,8 +2127,8 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                 child: CustomPaint(painter: _CharacterOrbitPainter()),
               ),
               Positioned(
-                left: compact ? -52 : 0,
-                right: compact ? 52 : 0,
+                left: desktopMode ? 68 : -52,
+                right: desktopMode ? 318 : 52,
                 top: 0,
                 bottom: 0,
                 child: Hero(
@@ -2122,25 +2141,44 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                       'assets/images/portrait_male.png',
                     ],
                     fit: BoxFit.contain,
-                    alignment: const Alignment(-0.15, 0),
+                    alignment: desktopMode
+                        ? const Alignment(-0.35, 0)
+                        : const Alignment(-0.15, 0),
                     fallbackText: '',
                     fallbackIcon: Icons.person_outline_rounded,
                   ),
                 ),
               ),
-              Positioned(
-                left: 0,
-                top: 8,
-                bottom: 122,
-                width: 52,
-                child: _CharacterPortraitRail(
-                  characters: widget.characters,
-                  selected: widget.character,
-                  onSelect: widget.onSelect,
-                  isCooperating: (character) => widget.controller
-                      .isNovelCompanionDeployed(character.id),
+              if (desktopMode)
+                Positioned(
+                  left: 0,
+                  top: 14,
+                  bottom: 138,
+                  width: 60,
+                  child: _CharacterPortraitRail(
+                    characters: widget.characters,
+                    selected: widget.character,
+                    onSelect: widget.onSelect,
+                    isCooperating: (character) => widget.controller
+                        .isNovelCompanionDeployed(character.id),
+                  ),
                 ),
-              ),
+              if (!desktopMode && !keyboardVisible)
+                Positioned(
+                  // 手机版恢复左上头像竖列。头像过多时在这个区域内上下滚动，
+                  // 底部给固定的“结缘 / 图鉴”和聊天区留出空间。
+                  left: 0,
+                  top: 8,
+                  bottom: chatHeight + 128,
+                  width: 52,
+                  child: _CharacterPortraitRail(
+                    characters: widget.characters,
+                    selected: widget.character,
+                    onSelect: widget.onSelect,
+                    isCooperating: (character) => widget.controller
+                        .isNovelCompanionDeployed(character.id),
+                  ),
+                ),
               if (compact)
                 Positioned(
                   right: 7,
@@ -2168,12 +2206,12 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                     ),
                   ),
                 ),
-              if (!compact)
+              if (desktopMode)
                 Positioned(
-                  right: 16,
-                  top: 19,
-                  bottom: 240,
-                  width: 304,
+                  right: 26,
+                  top: 24,
+                  bottom: shortViewport ? 170 : 226,
+                  width: 336,
                   child: _buildAnimatedInfoPanel(
                     _CharacterStageInfo(
                       character: widget.character,
@@ -2199,20 +2237,47 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOutCubic,
-                left: compact ? 54 : 120,
-                right: compact ? 24 : 120,
+                // 手机版左侧可以延伸，但右侧必须为全局悬浮导航留安全区。
+                // 电脑模式仍给左侧角色栏和右侧资料栏留出空间。
+                left: desktopMode ? 140 : 8,
+                right: desktopMode ? 382 : mobileGlobalNavInset,
                 bottom: keyboardVisible ? keyboardInset + 8 : 8,
-                height: compact ? 250 : 240,
+                height: chatHeight,
                 child: _CharacterInlineChat(
                   controller: widget.controller,
                   character: widget.character,
                 ),
               ),
-              if (!keyboardVisible)
+              if (!keyboardVisible && desktopMode)
                 Positioned(
                   left: 0,
                   bottom: 8,
                   child: Column(
+                    children: <Widget>[
+                      _CharacterCornerCard(
+                        icon: Icons.local_florist_outlined,
+                        assetPath: 'assets/images/character_bond.png',
+                        label: '结缘',
+                        onTap: widget.onSummon,
+                      ),
+                      const SizedBox(height: 6),
+                      _CharacterCornerCard(
+                        icon: Icons.auto_stories_outlined,
+                        assetPath: 'assets/images/character_archive.png',
+                        label: '图鉴',
+                        onTap: widget.onOpenArchive,
+                      ),
+                    ],
+                  ),
+                ),
+              if (!keyboardVisible && !desktopMode)
+                Positioned(
+                  // 手机版把两个固定入口收回左侧竖向控制区，和头像列形成一体，
+                  // 不再横向悬在聊天框上方。
+                  left: 0,
+                  bottom: chatHeight + 14,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       _CharacterCornerCard(
                         icon: Icons.local_florist_outlined,
@@ -3598,6 +3663,7 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
 
   @override
   Widget build(BuildContext context) {
+    final desktopMode = widget.controller.desktopMode;
     return Column(
       children: <Widget>[
         Expanded(
@@ -3662,6 +3728,7 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                     final message = _messages[index];
                     final line = _CharacterChatLineView(
                       message: message,
+                      desktopMode: desktopMode,
                     );
                     if (!message.animate) return line;
                     return TweenAnimationBuilder<double>(
@@ -3725,7 +3792,7 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
           ),
 
         Container(
-          height: MediaQuery.sizeOf(context).width < 620 ? 46 : 38,
+          height: desktopMode ? 38 : 46,
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(0.06), 
@@ -3821,9 +3888,11 @@ class _NovelCharacterChatLine {
 class _CharacterChatLineView extends StatelessWidget {
   const _CharacterChatLineView({
     required this.message,
+    required this.desktopMode,
   });
 
   final _NovelCharacterChatLine message;
+  final bool desktopMode;
 
   @override
   Widget build(BuildContext context) {
@@ -3831,9 +3900,9 @@ class _CharacterChatLineView extends StatelessWidget {
       alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width < 620
-              ? MediaQuery.sizeOf(context).width * .84
-              : 430,
+          maxWidth: desktopMode
+              ? 460
+              : MediaQuery.sizeOf(context).width * .84,
         ),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
@@ -3851,7 +3920,7 @@ class _CharacterChatLineView extends StatelessWidget {
           message.text,
           style: TextStyle(
             color: _characterText,
-            fontSize: MediaQuery.sizeOf(context).width < 620 ? 13 : 11.8,
+            fontSize: desktopMode ? 11.8 : 13,
             height: 1.5,
             fontFamily: 'MiSans',
             shadows: const <Shadow>[
@@ -4425,13 +4494,15 @@ class _CharactersPanelState extends State<_CharactersPanel> {
             embedded: widget.embedded,
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final compact = constraints.maxWidth < 620;
-                final horizontalInset = compact ? 10.0 : 28.0;
-                final verticalInset = compact ? 3.0 : 8.0;
+                final desktopMode = widget.controller.desktopMode;
+                final compact = !desktopMode;
+                final horizontalInset = desktopMode ? 36.0 : 10.0;
+                final verticalInset = desktopMode ? 10.0 : 3.0;
+                final contentMaxWidth = desktopMode ? 1280.0 : 560.0;
 
                 return Center(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 920),
+                    constraints: BoxConstraints(maxWidth: contentMaxWidth),
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
                         horizontalInset,
@@ -4474,13 +4545,15 @@ class _CharactersPanelState extends State<_CharactersPanel> {
           embedded: widget.embedded,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxWidth < 620;
-              final horizontalInset = compact ? 10.0 : 28.0;
-              final verticalInset = compact ? 3.0 : 8.0;
+              final desktopMode = widget.controller.desktopMode;
+              final compact = !desktopMode;
+              final horizontalInset = desktopMode ? 36.0 : 10.0;
+              final verticalInset = desktopMode ? 10.0 : 3.0;
+              final contentMaxWidth = desktopMode ? 1280.0 : 560.0;
 
               return Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 920),
+                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
                       horizontalInset,
@@ -4815,19 +4888,19 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
       builder: (context, constraints) {
         final h = constraints.maxHeight;
         final portraitWidth = widget.compact
-            ? math.min(constraints.maxWidth * .76, 430.0)
-            : math.min(constraints.maxWidth * .54, 490.0);
+            ? math.min(constraints.maxWidth * .78, 430.0)
+            : math.min(constraints.maxWidth * .55, 620.0);
         final infoWidth = widget.compact
             ? math.min(constraints.maxWidth * .43, 210.0)
-            : math.min(constraints.maxWidth * .41, 340.0);
+            : math.min(constraints.maxWidth * .36, 390.0);
 
         return Stack(
           fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: <Widget>[
             Positioned(
-              left: widget.compact ? -portraitWidth * .14 : 18,
-              bottom: widget.compact ? -h * .025 : -h * .05,
+              left: widget.compact ? -portraitWidth * .14 : 28,
+              bottom: widget.compact ? -h * .025 : -h * .055,
               child: IgnorePointer(
                 child: SizedBox(
                   width: portraitWidth,
@@ -4856,9 +4929,9 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
               ),
             ),
             Positioned(
-              right: widget.compact ? 7 : 26,
-              top: widget.compact ? 13 : 34,
-              bottom: widget.compact ? 8 : 20,
+              right: widget.compact ? 7 : 38,
+              top: widget.compact ? 13 : 30,
+              bottom: widget.compact ? 8 : 22,
               width: infoWidth,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -5202,14 +5275,14 @@ class _CharacterQuickPortraitEditorState
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (dialogContext, _, __) {
         final media = MediaQuery.of(dialogContext);
-        final compact = media.size.width < 600;
+        final compact = !widget.controller.desktopMode;
         final dialogWidth = math.min(
           media.size.width - 40,
-          compact ? 330.0 : 350.0,
+          compact ? 330.0 : 420.0,
         );
         final dialogHeight = math.min(
-          media.size.height * (compact ? .60 : .66),
-          520.0,
+          media.size.height * (compact ? .60 : .72),
+          compact ? 520.0 : 620.0,
         );
 
         return PopScope(
@@ -6643,8 +6716,8 @@ Future<void> showNovelPortraitSheet(
             title: '生成立绘',
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final compact = constraints.maxWidth < 620;
-                final previewHeight = compact ? 240.0 : 280.0;
+                final compact = !controller.desktopMode;
+                final previewHeight = compact ? 240.0 : 340.0;
 
                 return ListView(
                   padding: EdgeInsets.fromLTRB(

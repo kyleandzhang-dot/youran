@@ -8,8 +8,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../app_shared.dart';
+import '../../services/depth_parallax_preview.dart';
 import 'novel_backend.dart';
 import 'novel_game_controller.dart';
+import 'novel_display_mode.dart';
 import 'novel_models.dart';
 import 'novel_widgets.dart';
 
@@ -30,6 +32,7 @@ part 'sheets/novel_scene_map.dart';
 part 'sheets/novel_inventory.dart';
 part 'sheets/novel_store.dart';
 part 'sheets/novel_character.dart';
+part 'sheets/novel_host_profile.dart';
 part 'sheets/novel_journey.dart';
 part 'sheets/novel_surroundings.dart';
 part 'sheets/novel_settings.dart';

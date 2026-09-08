@@ -230,6 +230,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "5.0.0"
+  flutter_onnxruntime:
+    dependency: "direct main"
+    description:
+      name: flutter_onnxruntime
+      sha256: "2ecf8ffa8359f0ab5cc9288ee279e04bafc54c031f408dda745d040057884fb8"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.8.4"
   flutter_plugin_android_lifecycle:
     dependency: transitive
     description:
@@ -313,13 +321,13 @@ packages:
     source: hosted
     version: "4.1.2"
   image:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: image
-      sha256: f9881ff4998044947ec38d098bc7c8316ae1186fa786eddffdb867b9bc94dfce
+      sha256: "1976370a4df3091bb0f72409c187ad1f9132a818bc6b95ca59c0bae1c75c688e"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "4.8.0"
+    version: "4.9.2"
   js:
     dependency: transitive
     description:

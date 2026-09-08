@@ -9,14 +9,15 @@ part of '../novel_sheets.dart';
 // 其余以下划线 `_` 开头的类型/方法均为该页面内部实现或共享私有实现。
 // ============================================================================
 
-const Color _journeyBackground = Color(0xFF0A0F0D);
-const Color _journeySurface = Color(0xFF131A17);
-const Color _journeySurfaceSoft = Color(0xFF17201C);
-const Color _journeyText = Color(0xFFEEF2EF);
-const Color _journeyTextSoft = Color(0xFFC4CCC7);
-const Color _journeyMuted = Color(0xFF7F8B84);
-const Color _journeyMutedSoft = Color(0xFF55605A);
-const Color _journeyLine = Color(0xFF26312B);
+const Color _journeyInk = Color(0xFF090E1A);
+const Color _journeyInkSoft = Color(0xFF111A2C);
+const Color _journeyBlue = Color(0xFF506FEF);
+const Color _journeyGold = Color(0xFFC9B778);
+const Color _journeyGoldSoft = Color(0xFF86794D);
+const Color _journeyText = Color(0xFFF2F0E8);
+const Color _journeyTextSoft = Color(0xFFB9C0D0);
+const Color _journeyMuted = Color(0xFF737C91);
+const Color _journeyLine = Color(0x1FFFFFFF);
 
 Future<void> showNovelJourneySheet(
   BuildContext context,
@@ -67,7 +68,7 @@ Future<bool> showNovelRevertDialog(
             const Text(
               '确认返回到上一轮回合吗？',
               style: TextStyle(
-                color: NovelPalette.text,
+                color: _journeyText,
                 fontSize: 13,
                 height: 1.6,
               ),
@@ -78,8 +79,8 @@ Future<bool> showNovelRevertDialog(
                 Expanded(
                   child: OutlinedButton(
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: NovelPalette.muted,
-                      side: BorderSide(color: Colors.white.withOpacity(.08)),
+                      foregroundColor: _journeyTextSoft,
+                      side: BorderSide(color: Colors.white.withOpacity(.12)),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -92,14 +93,14 @@ Future<bool> showNovelRevertDialog(
                 Expanded(
                   child: FilledButton(
                     style: FilledButton.styleFrom(
-                      backgroundColor: NovelPalette.accent,
-                      foregroundColor: NovelPalette.accentDark,
+                      backgroundColor: _journeyBlue, // 统一使用主题蓝
+                      foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ),
                     onPressed: () => Navigator.of(context).pop(true),
-                    child: const Text('确认回溯'),
+                    child: const Text('确认回溯', style: TextStyle(fontWeight: FontWeight.w800)),
                   ),
                 ),
               ],
@@ -112,6 +113,7 @@ Future<bool> showNovelRevertDialog(
   if (result == true) await controller.revertPreviousTurn();
   return result ?? false;
 }
+
 class _GameStyleJourneyRecord {
   const _GameStyleJourneyRecord({
     required this.title,
@@ -237,10 +239,42 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
         .toList(growable: false);
   }
 
+  // 构建微圆角磨砂玻璃容器
+  Widget _buildGlassPanel({required Widget child, EdgeInsetsGeometry? padding}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: _journeyInkSoft.withOpacity(0.55),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.08),
+              width: 0.8,
+            ),
+            boxShadow: const <BoxShadow>[
+              BoxShadow(
+                color: Color(0x26000000),
+                blurRadius: 16,
+                offset: Offset(0, 6),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: widget.controller,
+      animation: Listenable.merge(<Listenable>[
+        widget.controller,
+        novelDisplayMode,
+      ]),
       builder: (context, _) {
         final source = _source(widget.controller.journey);
 
@@ -292,67 +326,211 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
             events.isNotEmpty ||
             milestones.isNotEmpty;
 
+        final emptyView = ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(28, 4, 28, 38),
+          children: <Widget>[
+            SizedBox(
+              height: MediaQuery.sizeOf(context).height * .56,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const Text(
+                      '“',
+                      style: TextStyle(
+                        color: _journeyBlue, // 空状态符号改为蓝色
+                        fontSize: 52,
+                        height: .8,
+                        fontWeight: FontWeight.w300,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      loading ? '正在整理你的故事…' : '故事刚刚开始',
+                      style: const TextStyle(
+                        color: _journeyText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: .4,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      loading
+                          ? '把散落的片段重新排成一条旅程。'
+                          : '当新的选择留下痕迹，它们会在这里成为你的旅程。',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: _journeyMuted,
+                        fontSize: 11.2,
+                        height: 1.65,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+
         return _GameStyleBackdrop(
           controller: widget.controller,
           embedded: widget.embedded,
           lightTheme: false,
-          child: Padding(
-            padding: EdgeInsets.zero,
+          child: DecoratedBox(
+            // 【关键修改点】将深邃蓝渐变背景移到最外层，包裹住 Header 和内容
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(-.45, -.35),
+                radius: 1.15,
+                colors: <Color>[
+                  Color(0xFF111A2C),
+                  _journeyInk,
+                  Color(0xFF070B15),
+                ],
+                stops: <double>[0, .58, 1],
+              ),
+            ),
             child: Column(
               children: <Widget>[
-              _GameStyleHeader(
-                title: '经历',
-                english: 'JOURNEY',
-                onClose: widget.embedded
-                    ? null
-                    : () => Navigator.of(context).pop(),
-                lightTheme: false,
-              ),
-              Expanded(
-                child: DecoratedBox(
-                  decoration: const BoxDecoration(
-                    gradient: RadialGradient(
-                      center: Alignment(-.45, -.35),
-                      radius: 1.15,
-                      colors: <Color>[
-                        Color(0xFF17201C),
-                        _journeyBackground,
-                        Color(0xFF070A09),
-                      ],
-                      stops: <double>[0, .58, 1],
-                    ),
-                  ),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final desktopMode = widget.controller.desktopMode;
+                    final leftInset = desktopMode ? 46.0 : 10.0;
+                    final rightInset = desktopMode ? 54.0 : 12.0;
+                    final contentMaxWidth = desktopMode ? 1440.0 : 560.0;
+                    final topInset = desktopMode ? 14.0 : 4.0;
+
+                    return Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            left: leftInset,
+                            right: rightInset,
+                          ),
+                          child: _JourneyPageHeader(
+                            topInset: topInset,
+                            onClose: widget.embedded
+                                ? null
+                                : () => Navigator.of(context).pop(),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                Expanded(
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 620;
-                      return Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          compact ? 10 : 30,
-                          compact ? 2 : 8,
-                          compact ? 10 : 30,
-                          compact ? 4 : 12,
-                        ),
-                        child: Center(
+                      // 与角色页使用同一套真正的页面主体边距。
+                      // 模式只认共享 desktopMode，不再根据当前窗口宽度偷偷切换。
+                      final desktopMode = widget.controller.desktopMode;
+                      final leftInset = desktopMode ? 46.0 : 10.0;
+                      final rightInset = desktopMode ? 54.0 : 12.0;
+                      final contentMaxWidth = desktopMode ? 1440.0 : 560.0;
+
+                      // 电脑端：双栏布局，宽屏真正利用空间，但仍和角色页主体对齐。
+                      if (desktopMode) {
+                        return Center(
                           child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 720),
+                            constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(
+                                leftInset,
+                                12,
+                                rightInset,
+                                24,
+                              ),
+                              child: RefreshIndicator(
+                                onRefresh: _refresh,
+                                color: _journeyGold,
+                                backgroundColor: _journeyInkSoft,
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // 左侧栏：故事梗概卡片
+                                    Expanded(
+                                      flex: 4,
+                                      child: _buildGlassPanel(
+                                        padding: const EdgeInsets.fromLTRB(26, 26, 26, 32),
+                                        child: _JourneyStoryOpening(
+                                          title: title.isEmpty ? '你的旅程' : title,
+                                          summary: summary,
+                                          achievements: achievements.length,
+                                          events: events.length,
+                                          milestones: milestones.length,
+                                          isDesktop: true,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 24),
+                                    // 右侧栏：经历与事件流水
+                                    Expanded(
+                                      flex: 7,
+                                      child: _buildGlassPanel(
+                                        child: hasContent
+                                            ? ListView(
+                                                physics: const AlwaysScrollableScrollPhysics(),
+                                                padding: const EdgeInsets.fromLTRB(32, 12, 32, 46),
+                                                children: <Widget>[
+                                                  if (achievements.isNotEmpty)
+                                                    _GameStyleJourneySection(
+                                                      eyebrow: 'MEMORIES',
+                                                      title: '重要经历',
+                                                      records: achievements,
+                                                    ),
+                                                  if (events.isNotEmpty)
+                                                    _GameStyleJourneySection(
+                                                      eyebrow: 'STORYLINE',
+                                                      title: '事件轨迹',
+                                                      records: events,
+                                                    ),
+                                                  if (milestones.isNotEmpty)
+                                                    _GameStyleJourneySection(
+                                                      eyebrow: 'MILESTONES',
+                                                      title: '关键节点',
+                                                      records: milestones,
+                                                    ),
+                                                ],
+                                              )
+                                            : emptyView,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      // 手机端：和角色页一致的 10 / 12 页面边距与 560 最大宽度。
+                      return Center(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                          child: Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              leftInset,
+                              2,
+                              rightInset,
+                              4,
+                            ),
                             child: RefreshIndicator(
                               onRefresh: _refresh,
-                              color: NovelPalette.accent,
-                              backgroundColor: _journeySurface,
+                              color: _journeyGold,
+                              backgroundColor: _journeyInkSoft,
                               child: hasContent
                                   ? ListView(
-                                      physics:
-                                          const AlwaysScrollableScrollPhysics(),
-                                      padding: const EdgeInsets.fromLTRB(
-                                          26, 14, 26, 46),
+                                      physics: const AlwaysScrollableScrollPhysics(),
+                                      // 外层已经控制左右页边距，这里不再重复吃掉横向空间。
+                                      padding: const EdgeInsets.fromLTRB(0, 14, 0, 46),
                                       children: <Widget>[
                                         _JourneyStoryOpening(
-                                          title: title.isEmpty
-                                              ? '你的旅程'
-                                              : title,
+                                          title: title.isEmpty ? '你的旅程' : title,
                                           summary: summary,
-                                          achievements:
-                                              achievements.length,
+                                          achievements: achievements.length,
                                           events: events.length,
                                           milestones: milestones.length,
                                         ),
@@ -376,62 +554,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                                           ),
                                       ],
                                     )
-                                  : ListView(
-                                      physics:
-                                          const AlwaysScrollableScrollPhysics(),
-                                      padding: const EdgeInsets.fromLTRB(
-                                          28, 4, 28, 38),
-                                      children: <Widget>[
-                                        SizedBox(
-                                          height:
-                                              MediaQuery.sizeOf(context).height *
-                                                  .56,
-                                          child: Center(
-                                            child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: <Widget>[
-                                                const Text(
-                                                  '“',
-                                                  style: TextStyle(
-                                                    color:
-                                                        Color(0xFF435048),
-                                                    fontSize: 52,
-                                                    height: .8,
-                                                    fontWeight:
-                                                        FontWeight.w300,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  loading
-                                                      ? '正在整理你的故事…'
-                                                      : '故事刚刚开始',
-                                                  style: const TextStyle(
-                                                    color: _journeyText,
-                                                    fontSize: 14,
-                                                    fontWeight:
-                                                        FontWeight.w700,
-                                                    letterSpacing: .4,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  loading
-                                                      ? '把散落的片段重新排成一条旅程。'
-                                                      : '当新的选择留下痕迹，它们会在这里成为你的旅程。',
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(
-                                                    color: _journeyMuted,
-                                                    fontSize: 11.2,
-                                                    height: 1.65,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                  : emptyView,
                             ),
                           ),
                         ),
@@ -439,12 +562,68 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                     },
                   ),
                 ),
-              ),
               ],
             ),
           ),
         );
       },
+    );
+  }
+}
+
+class _JourneyPageHeader extends StatelessWidget {
+  const _JourneyPageHeader({
+    required this.topInset,
+    this.onClose,
+  });
+
+  final double topInset;
+  final VoidCallback? onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: EdgeInsets.only(top: topInset),
+        child: SizedBox(
+          height: 64,
+          child: Row(
+            children: <Widget>[
+              const Expanded(
+                child: Text(
+                  '经历',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _journeyText,
+                    fontSize: 20,
+                    height: 1,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2.2,
+                  ),
+                ),
+              ),
+              if (onClose != null)
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: onClose,
+                    borderRadius: BorderRadius.circular(99),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 19,
+                        color: _journeyTextSoft,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -456,6 +635,7 @@ class _JourneyStoryOpening extends StatelessWidget {
     required this.achievements,
     required this.events,
     required this.milestones,
+    this.isDesktop = false,
   });
 
   final String title;
@@ -463,6 +643,7 @@ class _JourneyStoryOpening extends StatelessWidget {
   final int achievements;
   final int events;
   final int milestones;
+  final bool isDesktop;
 
   @override
   Widget build(BuildContext context) {
@@ -474,9 +655,9 @@ class _JourneyStoryOpening extends StatelessWidget {
           const Text(
             'STORY JOURNAL',
             style: TextStyle(
-              color: NovelPalette.accentSoft,
+              color: _journeyGold, // 使用点缀金
               fontSize: 8.5,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
               letterSpacing: 2.4,
             ),
           ),
@@ -487,22 +668,25 @@ class _JourneyStoryOpening extends StatelessWidget {
               color: _journeyText,
               fontSize: 27,
               height: 1.08,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
               letterSpacing: .5,
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
             decoration: BoxDecoration(
-              color: _journeySurfaceSoft,
-              border: const Border(
-                left: BorderSide(color: NovelPalette.accent, width: 2),
-                top: BorderSide(color: _journeyLine, width: .7),
-                right: BorderSide(color: _journeyLine, width: .7),
-                bottom: BorderSide(color: _journeyLine, width: .7),
-              ),
+              color: isDesktop ? Colors.transparent : _journeyInkSoft.withOpacity(.6),
+              borderRadius: isDesktop ? null : BorderRadius.circular(4),
+              border: isDesktop
+                  ? const Border(left: BorderSide(color: _journeyBlue, width: 2.5))
+                  : Border(
+                      left: const BorderSide(color: _journeyBlue, width: 2.5),
+                      top: BorderSide(color: Colors.white.withOpacity(.05), width: .8),
+                      right: BorderSide(color: Colors.white.withOpacity(.05), width: .8),
+                      bottom: BorderSide(color: Colors.white.withOpacity(.05), width: .8),
+                    ),
             ),
             child: Text(
               summary.isEmpty
@@ -511,12 +695,12 @@ class _JourneyStoryOpening extends StatelessWidget {
               style: const TextStyle(
                 color: _journeyTextSoft,
                 fontSize: 12.6,
-                height: 1.78,
+                height: 1.8,
                 fontWeight: FontWeight.w500,
               ),
             ),
           ),
-          const SizedBox(height: 15),
+          const SizedBox(height: 20),
           Wrap(
             spacing: 15,
             runSpacing: 6,
@@ -526,8 +710,10 @@ class _JourneyStoryOpening extends StatelessWidget {
               _JourneyCountText(label: '节点', value: milestones),
             ],
           ),
-          const SizedBox(height: 6),
-          Container(height: 1, color: _journeyLine),
+          if (!isDesktop) ...[
+            const SizedBox(height: 12),
+            Container(height: 1, color: _journeyLine),
+          ]
         ],
       ),
     );
@@ -545,13 +731,21 @@ class _JourneyCountText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      '$label  $value',
-      style: const TextStyle(
-        color: _journeyMuted,
-        fontSize: 9.8,
-        fontWeight: FontWeight.w600,
-        letterSpacing: .25,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: _journeyBlue.withOpacity(.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: _journeyBlue.withOpacity(.2)),
+      ),
+      child: Text(
+        '$label  $value',
+        style: const TextStyle(
+          color: _journeyText,
+          fontSize: 9.8,
+          fontWeight: FontWeight.w700,
+          letterSpacing: .25,
+        ),
       ),
     );
   }
@@ -571,16 +765,16 @@ class _GameStyleJourneySection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 26),
+      padding: const EdgeInsets.only(top: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
             eyebrow,
             style: const TextStyle(
-              color: NovelPalette.accentSoft,
-              fontSize: 8.2,
-              fontWeight: FontWeight.w700,
+              color: _journeyGold, // 小标题英文改用金色
+              fontSize: 8.5,
+              fontWeight: FontWeight.w800,
               letterSpacing: 2.0,
             ),
           ),
@@ -591,23 +785,30 @@ class _GameStyleJourneySection extends StatelessWidget {
                 title,
                 style: const TextStyle(
                   color: _journeyText,
-                  fontSize: 14.2,
+                  fontSize: 15.2,
                   fontWeight: FontWeight.w800,
                   letterSpacing: .2,
                 ),
               ),
-              const SizedBox(width: 7),
-              Text(
-                '${records.length}',
-                style: const TextStyle(
-                  color: _journeyMuted,
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w600,
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.08),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '${records.length}',
+                  style: const TextStyle(
+                    color: _journeyMuted,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 15),
+          const SizedBox(height: 18),
           for (var i = 0; i < records.length; i++)
             _GameStyleJourneyEntry(
               record: records[i],
@@ -639,23 +840,28 @@ class _GameStyleJourneyEntry extends StatelessWidget {
     final number = (index + 1).toString().padLeft(2, '0');
 
     return Padding(
-      padding: EdgeInsets.only(bottom: last ? 2 : 0),
+      padding: EdgeInsets.only(bottom: last ? 8 : 0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          // 左侧：序号与微型时间线设计
           SizedBox(
-            width: 31,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                number,
-                style: const TextStyle(
-                  color: _journeyMutedSoft,
-                  fontSize: 9.2,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: .7,
+            width: 36,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    number,
+                    style: const TextStyle(
+                      color: _journeyBlue, // 序号蓝调
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .7,
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
           Expanded(
@@ -666,10 +872,10 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                   Text(
                     record.time,
                     style: const TextStyle(
-                      color: _journeyMuted,
-                      fontSize: 9.3,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: .25,
+                      color: _journeyGoldSoft,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: .3,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -678,27 +884,27 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                   record.title,
                   style: const TextStyle(
                     color: _journeyText,
-                    fontSize: 12.7,
-                    height: 1.55,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 13.5,
+                    height: 1.5,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
                 if (record.hasDetail) ...<Widget>[
-                  const SizedBox(height: 5),
+                  const SizedBox(height: 6),
                   Text(
                     record.detail,
                     style: const TextStyle(
                       color: _journeyTextSoft,
-                      fontSize: 11.5,
-                      height: 1.72,
+                      fontSize: 12.0,
+                      height: 1.75,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
                 if (!last) ...<Widget>[
-                  const SizedBox(height: 17),
-                  Container(height: .8, color: _journeyLine),
-                  const SizedBox(height: 17),
+                  const SizedBox(height: 18),
+                  Container(height: 1, color: _journeyLine),
+                  const SizedBox(height: 18),
                 ],
               ],
             ),

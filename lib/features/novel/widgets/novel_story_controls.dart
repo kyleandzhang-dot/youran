@@ -180,94 +180,23 @@ class NovelChoiceDock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 600;
-    final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
 
-    // 移除了多余的 safeBottom 计算，避免与底层 DialogPanel 重复叠加导致留空过大
+    // 选择区改成输入框上方的一条轻量横向操作带：
+    // 不再显示“请做出你的选择”标题、菱形和装饰线，避免抢剧情画面。
     return SizedBox(
       width: double.infinity,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: <Widget>[
-                    const Text(
-                      '请做出你的选择',
-                      style: TextStyle(
-                        color: Color(0xFFF7F2EA),
-                        fontSize: 16.5,
-                        height: 1.15,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: .45,
-                        shadows: <Shadow>[
-                          Shadow(
-                            color: Color(0xCC000000),
-                            blurRadius: 8,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (surroundingsAction?.visible == true) ...<Widget>[
-                      const Spacer(),
-                      _NovelChoiceDockSurroundingsAction(
-                        scope: surroundingsAction!,
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Transform.rotate(
-                      angle: .7853981633974483,
-                      child: Container(
-                        width: 5,
-                        height: 5,
-                        color: _ChoiceColors.line.withOpacity(.58),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      width: compact ? 108 : 138,
-                      height: 1,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: <Color>[
-                            _ChoiceColors.line.withOpacity(.30),
-                            _ChoiceColors.line.withOpacity(0),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: compact ? 7 : 8),
-          _InlineNovelChoices(
-            choices: choices,
-            onSelected: onSelected,
-            onCustomInput: () {},
-            onContinue: () {},
-          ),
-        ],
+      height: compact ? 42 : 44,
+      child: _InlineNovelChoices(
+        choices: choices,
+        onSelected: onSelected,
+        onCustomInput: () {},
+        onContinue: () {},
       ),
     );
   }
 }
 
 class _ChoiceColors {
-  static const Color line = Color(0xE6F3EEE9);
   static const Color card = Color(0x0AFFFFFF);
   static const Color border = Color(0x1AFFFFFF);
   static const Color numberBg = Color(0x0AFFFFFF);
@@ -294,7 +223,7 @@ class _InlineNovelChoices extends StatelessWidget {
   }
 
   Widget _buildChoiceIcon(NovelChoice choice, {required bool compact}) {
-    final size = compact ? 30.0 : 32.0;
+    final size = compact ? 18.0 : 20.0;
     return SizedBox(
       width: size,
       height: size,
@@ -305,63 +234,99 @@ class _InlineNovelChoices extends StatelessWidget {
         gaplessPlayback: true,
         errorBuilder: (_, __, ___) => Icon(
           _fallbackIconFor(choice),
-          size: size - 1,
-          color: Colors.white.withOpacity(.68),
+          size: size,
+          color: Colors.white.withOpacity(.62),
         ),
       ),
     );
   }
 
+  double _choiceWidth({
+    required double availableWidth,
+    required int count,
+    required bool compact,
+  }) {
+    // 选择条与底部输入框共用同一条左边界，不再额外缩进。
+    // 右侧只留很小的滑动呼吸区，避免最后一张贴死屏幕边缘。
+    final rightPadding = compact ? 7.0 : 9.0;
+    final gap = compact ? 6.0 : 7.0;
+    final viewport = math.max(0.0, availableWidth - rightPadding);
+
+    // 1~2 个选择时尽量并排填满，但保持“轻量按钮”而不是大卡片。
+    if (count == 1) {
+      return (viewport * (compact ? .64 : .48))
+          .clamp(compact ? 172.0 : 190.0, compact ? 238.0 : 280.0)
+          .toDouble();
+    }
+    if (count == 2) {
+      return ((viewport - gap) / 2)
+          .clamp(compact ? 142.0 : 158.0, compact ? 210.0 : 250.0)
+          .toDouble();
+    }
+
+    // 3 个及以上固定为“一排横滑”，刻意露出下一张的一部分，提示用户可左右滑动。
+    return (viewport * (compact ? .46 : .31))
+        .clamp(compact ? 146.0 : 166.0, compact ? 188.0 : 210.0)
+        .toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 600;
+    final cardHeight = compact ? 42.0 : 44.0;
+    final gap = compact ? 6.0 : 7.0;
+    final rightPadding = compact ? 7.0 : 9.0;
 
-    return Column(
-      children: <Widget>[
-        ...choices.asMap().entries.map((entry) {
-          final choice = entry.value;
-          final isLast = entry.key == choices.length - 1;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cardWidth = _choiceWidth(
+          availableWidth: constraints.maxWidth,
+          count: choices.length,
+          compact: compact,
+        );
 
-          return Padding(
-            padding: EdgeInsets.only(
-              bottom: isLast ? 0 : (compact ? 5 : 6),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.zero,
-              child: _AdaptiveBackdropBlur(
-                sigma: 15,
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => onSelected(choice),
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          clipBehavior: Clip.none,
+          // 左侧 0：和下方输入框严格对齐。
+          padding: EdgeInsets.only(right: rightPadding),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              for (final entry in choices.asMap().entries) ...<Widget>[
+                if (entry.key > 0) SizedBox(width: gap),
+                SizedBox(
+                  width: cardWidth,
+                  height: cardHeight,
+                  child: ClipRRect(
                     borderRadius: BorderRadius.zero,
-                    splashColor: Colors.white.withOpacity(.075),
-                    highlightColor: Colors.white.withOpacity(.035),
-                    child: Container(
-                      width: double.infinity,
-                      constraints: const BoxConstraints(minHeight: 48),
-                      padding: const EdgeInsets.symmetric(vertical: 7),
-                      decoration: BoxDecoration(
-                        color: _ChoiceColors.card,
-                        borderRadius: BorderRadius.zero,
-                        border: Border.all(
-                          color: _ChoiceColors.border,
-                          width: .65,
-                        ),
-                      ),
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: <Widget>[
-                          Positioned(
-                            left: compact ? 10 : 12,
-                            top: 0,
-                            bottom: 0,
+                    child: _AdaptiveBackdropBlur(
+                      sigma: 12,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => onSelected(entry.value),
+                          borderRadius: BorderRadius.zero,
+                          splashColor: Colors.white.withOpacity(.07),
+                          highlightColor: Colors.white.withOpacity(.03),
+                          child: Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: compact ? 9 : 11,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _ChoiceColors.card,
+                              borderRadius: BorderRadius.zero,
+                              border: Border.all(
+                                color: _ChoiceColors.border,
+                                width: .65,
+                              ),
+                            ),
                             child: Row(
-                              mainAxisSize: MainAxisSize.min,
                               children: <Widget>[
                                 Container(
-                                  width: 23,
-                                  height: 23,
+                                  width: compact ? 20 : 21,
+                                  height: compact ? 20 : 21,
                                   alignment: Alignment.center,
                                   decoration: BoxDecoration(
                                     color: _ChoiceColors.numberBg,
@@ -374,62 +339,57 @@ class _InlineNovelChoices extends StatelessWidget {
                                   child: Text(
                                     '${entry.key + 1}',
                                     style: TextStyle(
-                                      color: Colors.white.withOpacity(.76),
-                                      fontSize: 11.5,
+                                      color: Colors.white.withOpacity(.72),
+                                      fontSize: compact ? 10.5 : 11,
                                       height: 1,
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
                                 ),
-                                SizedBox(width: compact ? 8 : 9),
+                                SizedBox(width: compact ? 6 : 7),
                                 Opacity(
-                                  opacity: .90,
+                                  opacity: .82,
                                   child: _buildChoiceIcon(
-                                    choice,
+                                    entry.value,
                                     compact: compact,
+                                  ),
+                                ),
+                                SizedBox(width: compact ? 6 : 7),
+                                Expanded(
+                                  child: Text(
+                                    entry.value.text,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.left,
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.80),
+                                      fontSize: compact ? 12.2 : 12.8,
+                                      height: 1.15,
+                                      fontWeight: FontWeight.w500,
+                                      letterSpacing: .02,
+                                      shadows: const <Shadow>[
+                                        Shadow(
+                                          color: Color(0x88000000),
+                                          blurRadius: 3,
+                                          offset: Offset(0, 1),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                          Padding(
-                            padding: EdgeInsets.only(
-                              left: compact ? 88 : 96,
-                              right: compact ? 18 : 22,
-                            ),
-                            child: Center(
-                              child: Text(
-                                choice.text,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(.80),
-                                  fontSize: compact ? 13.5 : 14,
-                                  height: 1.25,
-                                  fontWeight: FontWeight.w500,
-                                  letterSpacing: .08,
-                                  shadows: const <Shadow>[
-                                    Shadow(
-                                      color: Color(0x99000000),
-                                      blurRadius: 4,
-                                      offset: Offset(0, 1),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
-          );
-        }),
-      ],
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -463,11 +423,16 @@ class _NovelDialogFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 600;
-    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final media = MediaQuery.of(context);
+    final compact = media.size.width <= 600;
+    final wideDialogueLayout = controller.desktopMode;
+    final keyboardVisible = media.viewInsets.bottom > 0;
+    final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
+    final showSurroundingsAction =
+        showComposer && !keyboardVisible && surroundingsAction?.visible == true;
     final safeBottom = keyboardVisible
         ? 0.0
-        : MediaQuery.viewPaddingOf(context).bottom;
+        : media.viewPadding.bottom;
 
     // 核心逻辑：精准判断右侧导航栏是否显示
     final showBottomNav = controller.storyStarted && 
@@ -476,7 +441,10 @@ class _NovelDialogFooter extends StatelessWidget {
                           !keyboardVisible;
     
     // 计算右侧需要避让的宽度（导航图标宽度 + 间距）
-    final navOffsetRight = showBottomNav ? (compact ? 56.0 : 64.0) : 0.0;
+    // PC 输入区本身已经居中并限制宽度，不需要再为了最右侧 HUD 整体左移。
+    final navOffsetRight = showBottomNav && !wideDialogueLayout
+        ? (compact ? 56.0 : 64.0)
+        : 0.0;
 
     return AnimatedPadding(
       duration: const Duration(milliseconds: 320),
@@ -486,10 +454,25 @@ class _NovelDialogFooter extends StatelessWidget {
         bottom: safeBottom + 8.0, 
         right: navOffsetRight, 
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          if (showComposer) ...<Widget>[
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: wideDialogueLayout ? 920.0 : media.size.width,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              if (showComposer) ...<Widget>[
+            if (showSurroundingsAction) ...<Widget>[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: _NovelChoiceDockSurroundingsAction(
+                  scope: surroundingsAction!,
+                ),
+              ),
+              SizedBox(height: compact ? 2 : 3),
+            ],
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
@@ -512,8 +495,10 @@ class _NovelDialogFooter extends StatelessWidget {
                 ),
               ],
             ),
-          ],
-        ],
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -529,11 +514,13 @@ class NovelBottomArchiveBar extends StatelessWidget {
     required this.selectedIndex,
     required this.onSelected,
     this.onWorld,
+    this.desktopMode = false,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onSelected;
   final VoidCallback? onWorld;
+  final bool desktopMode;
 
   static const List<String> _labels = <String>[
     '剧情',
@@ -564,7 +551,11 @@ class NovelBottomArchiveBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 600;
+    final media = MediaQuery.of(context);
+    final shortViewport = media.size.height < 520;
+    // 电脑模式不能因为“横屏”就被误判成手机紧凑布局。
+    // 只有窄屏，或手机横屏这类高度特别短的窗口才压缩导航。
+    final compact = (!desktopMode && media.size.width <= 600) || shortViewport;
     final activeIndex = selectedIndex.clamp(0, _labels.length - 1).toInt();
     
     if (_novelPrimaryTabIndex.value != activeIndex) {
@@ -581,8 +572,10 @@ class NovelBottomArchiveBar extends StatelessWidget {
       child: Padding(
         // 留出与屏幕右侧和底部的安全距离，避免阻挡文字或被手势误触
         padding: EdgeInsets.only(
-          right: compact ? 12.0 : 16.0,
-          bottom: compact ? 40.0 : 56.0, // 距离底部稍微高一点，避开输入框
+          right: desktopMode ? 20.0 : (compact ? 8.0 : 16.0),
+          bottom: desktopMode && !shortViewport
+              ? 48.0
+              : (compact ? 10.0 : 40.0),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min, // 紧凑包裹
@@ -604,7 +597,11 @@ class NovelBottomArchiveBar extends StatelessWidget {
               ),
               // 添加竖向排列时的图标间距
               if (i < _labels.length - 1)
-                SizedBox(height: compact ? 18.0 : 22.0), 
+                SizedBox(
+                  height: desktopMode && !shortViewport
+                      ? 20.0
+                      : (compact ? 6.0 : 18.0),
+                ),
             ],
           ],
         ),

@@ -27,6 +27,10 @@ dependencies:
   lottie: ^3.3.1
   record: 6.2.1
 
+  # Local Depth Anything V2 inference
+  flutter_onnxruntime: ^1.8.4
+  image: ^4.9.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -44,6 +48,9 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
 
+  shaders:
+    - shaders/depth_parallax.frag
+
   assets:
     - assets/images/
     - assets/images/choices/
@@ -53,6 +60,7 @@ flutter:
     - assets/animations/meru_book_story_continuing.json
     - assets/images/world_map/
     - assets/images/companion_skill_icons/
+    - assets/models/
 
   fonts:
     - family: NovelMiSans

@@ -12,8 +12,11 @@ class NovelDeveloperPreviewActions {
   const NovelDeveloperPreviewActions({
     required this.weatherOverride,
     required this.timeOverride,
+    required this.backgroundPreviewName,
     required this.setWeatherOverride,
     required this.setTimeOverride,
+    required this.setBackgroundPreview,
+    required this.clearBackgroundPreview,
     required this.previewCharacterSetup,
     required this.previewOpening,
     required this.previewSceneArrival,
@@ -50,8 +53,11 @@ class NovelDeveloperPreviewActions {
 
   final NovelWeatherEffect? Function() weatherOverride;
   final NovelTimePeriod? Function() timeOverride;
+  final String? Function() backgroundPreviewName;
   final Future<void> Function(NovelWeatherEffect? value) setWeatherOverride;
   final void Function(NovelTimePeriod? value) setTimeOverride;
+  final void Function(Uint8List bytes, String fileName) setBackgroundPreview;
+  final VoidCallback clearBackgroundPreview;
 
   final Future<void> Function() previewCharacterSetup;
   final Future<void> Function() previewOpening;
@@ -117,9 +123,10 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
       TextEditingController();
   bool _recognizingContent = false;
   bool _startingOpponentBattle = false;
+  bool _pickingBackground = false;
   String _contentResult = '';
   bool _contentResultIsError = false;
-  String? _expandedDeveloperSection;
+  String? _expandedDeveloperSection = 'environment';
 
   NovelDeveloperPreviewActions get actions => widget.actions;
 
@@ -169,6 +176,15 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
     await preview();
   }
 
+  Future<void> _openDepthParallaxPreview() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const DepthParallaxPreviewPage(),
+      ),
+    );
+  }
+
   Future<void> _testGeneratedOpponent() async {
     final submit = actions.testGeneratedOpponent;
     final name = _opponentNameController.text.trim();
@@ -179,6 +195,54 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
     Navigator.of(context).pop();
     await Future<void>.delayed(const Duration(milliseconds: 280));
     await submit(name, description);
+  }
+
+  Future<void> _pickBackgroundPreview() async {
+    if (_pickingBackground) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _pickingBackground = true);
+
+    try {
+      // 与项目现有探索页的图片上传逻辑保持一致。
+      final result = await FilePicker.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: true,
+      );
+      final file = result?.files.single;
+      if (!mounted || file == null || file.bytes == null) return;
+
+      final bytes = file.bytes!;
+      if (bytes.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('无法读取这张图片，请换一张 JPG / PNG / WebP')),
+          );
+        return;
+      }
+
+      actions.setBackgroundPreview(bytes, file.name);
+      if (!mounted) return;
+      // 选完立即回到剧情页，方便直接比较手机 / 电脑布局构图。
+      Navigator.of(context).pop();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('选择背景失败，请重新选择图片')),
+        );
+    } finally {
+      if (mounted) setState(() => _pickingBackground = false);
+    }
+  }
+
+  void _restoreStoryBackground() {
+    actions.clearBackgroundPreview();
+    if (!mounted) return;
+    Navigator.of(context).pop();
   }
 
   void _toggleDeveloperSection(String section) {
@@ -193,6 +257,7 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
   Widget build(BuildContext context) {
     final currentWeather = actions.weatherOverride();
     final currentTime = actions.timeOverride();
+    final currentBackgroundName = actions.backgroundPreviewName();
     const weatherOptions = <NovelWeatherEffect?>[
       null,
       NovelWeatherEffect.none,
@@ -227,7 +292,94 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
               height: 1.55,
             ),
           ),
-          const SizedBox(height: 22),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 11, 10, 11),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.035),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: Colors.white.withOpacity(.10)),
+            ),
+            child: Row(
+              children: <Widget>[
+                Container(
+                  width: 34,
+                  height: 34,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _novelDrawerAccent.withOpacity(.10),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.wallpaper_rounded,
+                    size: 18,
+                    color: _novelDrawerAccent.withOpacity(.92),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Text(
+                        '背景图快速预览',
+                        style: TextStyle(
+                          color: AppColors.textOnDark,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        currentBackgroundName == null
+                            ? '上传本地图片，立即回到剧情页查看效果'
+                            : '当前：$currentBackgroundName',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppColors.textOnDarkMuted.withOpacity(.80),
+                          fontSize: 9.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 34,
+                  child: OutlinedButton.icon(
+                    onPressed: _pickingBackground ? null : _pickBackgroundPreview,
+                    icon: _pickingBackground
+                        ? const SizedBox(
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.4,
+                              color: AppColors.textOnDark,
+                            ),
+                          )
+                        : const Icon(Icons.upload_rounded, size: 15),
+                    label: Text(
+                      currentBackgroundName == null ? '上传背景图' : '重新上传',
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.textOnDark,
+                      side: BorderSide(color: Colors.white.withOpacity(.14)),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
           _DeveloperFoldHeader(
             title: '生成 / 数据',
             subtitle: '识别并获取 · 测试对手',
@@ -476,7 +628,7 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
           const SizedBox(height: 10),
           _DeveloperFoldHeader(
             title: '环境',
-            subtitle: '天气 · 时间',
+            subtitle: '背景 · 天气 · 时间',
             expanded: _expandedDeveloperSection == 'environment',
             onTap: () => _toggleDeveloperSection('environment'),
           ),
@@ -490,6 +642,88 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
+                const Text(
+                  '背景',
+                  style: TextStyle(
+                    color: AppColors.textOnDark,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: SizedBox(
+                        height: 38,
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              _pickingBackground ? null : _pickBackgroundPreview,
+                          icon: _pickingBackground
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    color: AppColors.textOnDark,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.image_outlined,
+                                  size: 17,
+                                ),
+                          label: Text(
+                            currentBackgroundName == null
+                                ? '更换背景'
+                                : '重新选择背景',
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.textOnDark,
+                            side: BorderSide(
+                              color: Colors.white.withOpacity(.14),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (currentBackgroundName != null) ...<Widget>[
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: _restoreStoryBackground,
+                        child: const Text(
+                          '恢复',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                if (currentBackgroundName != null) ...<Widget>[
+                  const SizedBox(height: 7),
+                  Text(
+                    '当前预览：$currentBackgroundName',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.textOnDarkMuted.withOpacity(.78),
+                      fontSize: 9.8,
+                    ),
+                  ),
+                ],
+                Divider(height: 22, color: Colors.white.withOpacity(.10)),
+                _DeveloperPreviewRow(
+                  title: '2.5D 深度预览',
+                  subtitle: '上传图片后自动生成 Depth；鼠标 / 触摸移动查看立体视差',
+                  onTap: _openDepthParallaxPreview,
+                ),
+                Divider(height: 22, color: Colors.white.withOpacity(.10)),
                 const Text(
                   '天气',
                   style: TextStyle(

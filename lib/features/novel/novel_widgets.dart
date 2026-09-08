@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -9,10 +10,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'novel_asr_stream_service.dart';
 import 'novel_game_controller.dart';
+import 'novel_display_mode.dart';
 import 'novel_socket_service.dart';
 import 'novel_models.dart';
 
 import '../../app_shared.dart';
+import '../../services/depth_service.dart';
 
 // Novel Widgets 总入口。
 // 具体实现按功能域放在 widgets/ 子目录；外部继续只需 import 'novel_widgets.dart'。

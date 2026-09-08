@@ -166,6 +166,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
   late final AnimationController _zoomAnimController;
   Animation<Matrix4>? _zoomAnimation;
   bool _isCameraInitialized = false;
+  bool? _lastDesktopMode;
   TapDownDetails? _doubleTapDetails;
 
   NovelGameController get controller => widget.controller;
@@ -333,48 +334,68 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: Listenable.merge(<Listenable>[
+        controller,
+        novelDisplayMode,
+      ]),
       builder: (context, _) {
         final entries = _entries(controller.sceneMap);
         final loading = !widget.developerPreview && controller.isSceneMapLoading;
 
         return Scaffold(
-          backgroundColor: const Color(0xFF0A0F0D),
+          // 适配深邃蓝主题底色
+          backgroundColor: const Color(0xFF070B15),
           body: Material(
-            color: const Color(0xFF0A0F0D),
+            color: const Color(0xFF070B15),
             child: ClipRect(
               child: Stack(
                 fit: StackFit.expand,
                 children: <Widget>[
+                  // 深蓝渐变背光
                   const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: RadialGradient(
                         center: Alignment(0, -.08),
                         radius: 1.1,
                         colors: <Color>[
-                          Color(0xFF17201C),
-                          Color(0xFF0E1512),
-                          Color(0xFF080C0B),
+                          Color(0xFF111A2C), // 对应背包页 Soft Ink
+                          Color(0xFF0B111F),
+                          Color(0xFF070B15), // 对应背包页 Base Ink
                         ],
                         stops: <double>[0, .58, 1],
                       ),
                     ),
                   ),
                  
-                  
-                  Positioned.fill(
+                  Positioned(
+                    left: controller.desktopMode ? 46.0 : 10.0,
+                    right: controller.desktopMode ? 54.0 : 12.0,
+                    top: 0,
+                    bottom: 0,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        final compact = constraints.maxWidth < 520;
+                        // 地图模式只认共享 desktopMode，不再根据窗口宽度自动切换。
+                        final isDesktop = controller.desktopMode;
+                        final compact = !isDesktop;
+
+                        // 玩家切换手机 / 电脑模式时，重新按新尺寸居中一次地图。
+                        if (_lastDesktopMode != isDesktop) {
+                          _lastDesktopMode = isDesktop;
+                          _isCameraInitialized = false;
+                        }
                         const columns = 5;
                         const rows = 4;
                         const slotCount = columns * rows;
-                        final tileWidth = compact ? 176.0 : 224.0;
+                        
+                        // 电脑端使用更大的瓦片尺寸，手机端保持紧凑
+                        final tileWidth = isDesktop ? 260.0 : 176.0;
                         final tileHeight = tileWidth * .58;
                         final seam = compact ? 3.0 : 4.0;
                         final stepX = (tileWidth + seam) * .5;
                         final stepY = (tileHeight + seam) * .5;
-                        final canvasPadding = compact ? 60.0 : 120.0;
+                        
+                        // 电脑端增加拖拽留白区域
+                        final canvasPadding = isDesktop ? 180.0 : 60.0;
                         final slots = _slotOrder(entries.length);
 
                         const centerSlot = 12;
@@ -406,14 +427,20 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                           _isCameraInitialized = true;
                           double initialScale;
                           final sceneCount = entries.length;
-                          if (sceneCount <= 1) {
-                            initialScale = 1.35;
-                          } else if (sceneCount <= 3) {
-                            initialScale = 1.1;
-                          } else if (sceneCount <= 6) {
-                            initialScale = 0.9;
+                          
+                          // 电脑端本身屏幕较大，不需要过分放大
+                          if (isDesktop) {
+                            initialScale = sceneCount <= 4 ? 1.15 : 0.85;
                           } else {
-                            initialScale = 0.75;
+                            if (sceneCount <= 1) {
+                              initialScale = 1.35;
+                            } else if (sceneCount <= 3) {
+                              initialScale = 1.1;
+                            } else if (sceneCount <= 6) {
+                              initialScale = 0.9;
+                            } else {
+                              initialScale = 0.75;
+                            }
                           }
                           
                           final dx = (constraints.maxWidth - canvasWidth * initialScale) / 2;
@@ -491,42 +518,45 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                     ),
                   ),
 
-                  // 如果不是内嵌模式（比如开发者预览单独弹出），才显示返回按钮
-                  // 统一的左上角标题与返回按钮（和背包页保持完全一致）
+                  // 标题和角色 / 背包使用同一套最大宽度、左右边距和字号；
+                  // 地图画布本身仍保持全屏可拖动，不被标题容器限制。
                   Positioned(
                     top: 0,
                     left: 0,
                     right: 0,
-                    child: _GameStyleHeader(
-                      title: '地图',
-                      english: 'WORLD MAP',
-                      // 如果是内嵌 Tab 模式则自动隐藏关闭按钮
-                      onClose: widget.embedded 
-                          ? null 
+                    child: _WorldMapPageHeader(
+                      desktopMode: controller.desktopMode,
+                      onClose: widget.embedded
+                          ? null
                           : () => Navigator.of(context).pop(),
-                      lightTheme: false,
                     ),
                   ),
                   
                   if (loading)
-                    const Positioned(
+                    Positioned(
                       top: 16,
-                      right: 20,
+                      right: controller.desktopMode ? 74.0 : 32.0,
                       child: SafeArea(
                         child: SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
                             strokeWidth: 2.0,
-                            color: Color(0xFF6FD35F),
+                            // 替换为深邃蓝强调色
+                            color: Color(0xFF506FEF),
                           ),
                         ),
                       ),
                     ),
 
                   SafeArea(
-                    // 核心修改：内嵌模式下抬高底部 88 像素，为底部导航栏腾出空间
-                    minimum: EdgeInsets.fromLTRB(13, 10, 13, widget.embedded ? 88 : 13),
+                    // 根据设备模式微调底部边距：电脑模式底栏若不同则保留适度边距，手机由于底栏占用固定提供 88px
+                    minimum: EdgeInsets.fromLTRB(
+                      controller.desktopMode ? 46.0 : 10.0,
+                      10,
+                      controller.desktopMode ? 54.0 : 12.0,
+                      widget.embedded ? (controller.desktopMode ? 72 : 88) : 13,
+                    ),
                     child: const Align(
                       alignment: Alignment.bottomCenter,
                       child: _WorldMapGestureHint(),
@@ -538,6 +568,79 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
           ),
         );
       },
+    );
+  }
+}
+
+class _WorldMapPageHeader extends StatelessWidget {
+  const _WorldMapPageHeader({
+    required this.desktopMode,
+    this.onClose,
+  });
+
+  final bool desktopMode;
+  final VoidCallback? onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final leftInset = desktopMode ? 46.0 : 10.0;
+    final rightInset = desktopMode ? 54.0 : 12.0;
+    final contentMaxWidth = desktopMode ? 1440.0 : 560.0;
+    final topInset = desktopMode ? 14.0 : 4.0;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: contentMaxWidth),
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: leftInset,
+            right: rightInset,
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: EdgeInsets.only(top: topInset),
+              child: SizedBox(
+                height: 64,
+                child: Row(
+                  children: <Widget>[
+                    const Expanded(
+                      child: Text(
+                        '地图',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Color(0xFFF2F0E8),
+                          fontSize: 20,
+                          height: 1,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2.2,
+                        ),
+                      ),
+                    ),
+                    if (onClose != null)
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: onClose,
+                          borderRadius: BorderRadius.circular(99),
+                          child: const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: Icon(
+                              Icons.close_rounded,
+                              size: 19,
+                              color: Color(0xFFB9C0D0),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -563,7 +666,7 @@ class _WorldMapGlassPanel extends StatelessWidget {
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: backgroundColor ?? const Color(0xD91A211E),
+            color: backgroundColor ?? const Color(0xD9090E1A),
             border: Border.all(
               color: borderColor ?? Colors.white.withOpacity(.12),
               width: .75,
@@ -678,9 +781,10 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                               colors: <Color>[
-                                Color(0x26070B09),
-                                Color(0x52070B09),
-                                Color(0xD9070B09),
+                                // 适配深蓝基调的阴影遮罩
+                                Color(0x26070B15),
+                                Color(0x52070B15),
+                                Color(0xD9070B15),
                               ],
                               stops: <double>[0, .60, 1],
                             ),
@@ -709,12 +813,14 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                           horizontal: 10,
                           vertical: 5,
                         ),
+                        // 边框蓝色
                         borderColor: entry.current
-                            ? const Color(0x996FD35F)
+                            ? const Color(0x99506FEF)
                             : Colors.white.withOpacity(.10),
+                        // 玻璃蓝底色
                         backgroundColor: entry.current
-                            ? const Color(0xE616241D)
-                            : const Color(0xD9151B18),
+                            ? const Color(0xE6111A2C)
+                            : const Color(0xD9090E1A),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
@@ -722,7 +828,8 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                               const Icon(
                                 Icons.my_location_rounded,
                                 size: 11,
-                                color: Color(0xFF82D779),
+                                // 当前位置图标使用点缀金
+                                color: Color(0xFFC9B778),
                               ),
                               const SizedBox(width: 5),
                             ],
@@ -732,9 +839,10 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
+                                  // 活跃文字偏亮白，普通文字用浅蓝灰
                                   color: entry.current
-                                      ? const Color(0xFFE8F7E7)
-                                      : const Color(0xFFD8DEDA),
+                                      ? const Color(0xFFF2F0E8)
+                                      : const Color(0xFFB9C0D0),
                                   fontSize: 10.5,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -819,7 +927,8 @@ class _GlowDiamondPainter extends CustomPainter {
     canvas.drawPath(
       path,
       Paint()
-        ..color = const Color(0xFF6FD35F).withOpacity(glowOpacity)
+        // 发光替换为主题蓝
+        ..color = const Color(0xFF506FEF).withOpacity(glowOpacity)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14),
     );
   }
@@ -843,8 +952,9 @@ class _WorldDiamondBorderPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = current ? 1.7 : .9
         ..strokeJoin = StrokeJoin.round
+        // 高亮边框替换为主题蓝
         ..color = current
-            ? const Color(0xB86FD35F)
+            ? const Color(0xB8506FEF)
             : const Color(0x2EFFFFFF),
     );
   }
@@ -882,7 +992,8 @@ class _WorldEmptyDiamondPainter extends CustomPainter {
       path,
       Paint()
         ..style = PaintingStyle.fill
-        ..color = const Color(0xFF111815).withOpacity(0.62 * opacity),
+        // 迷雾空白块配合蓝色系微调偏向深邃蓝紫
+        ..color = const Color(0xFF0F1524).withOpacity(0.62 * opacity),
     );
     canvas.drawPath(
       path,
