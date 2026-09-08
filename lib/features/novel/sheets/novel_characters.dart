@@ -308,7 +308,7 @@ class _CharactersPanelState extends State<_CharactersPanel> {
               switch (mode) {
                 case _CharacterViewportMode.landscape:
                   // 手机横屏：上方不再占用“人物”标题；主体改成
-                  // 左侧资料 / 中间立绘 / 右侧立绘编辑，底部统一做角色切换。
+                  // 左侧资料+立绘编辑 / 右侧大立绘，底部统一做角色切换。
                   return shell(
                     mode,
                     Column(
@@ -765,12 +765,8 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
         final compact = !desktop;
 
         if (landscape) {
-          final infoWidth = (constraints.maxWidth * .28)
-              .clamp(190.0, 250.0)
-              .toDouble();
-          final editorWidth = (constraints.maxWidth * .25)
-              .clamp(188.0, 232.0)
-              .toDouble();
+          // 修改为双栏布局：左侧信息与编辑面板（合并为一个宽滚动区），右侧完整保留给立绘
+          final sideWidth = (constraints.maxWidth * .42).clamp(260.0, 380.0).toDouble();
 
           Widget portraitArtwork() => AnimatedSwitcher(
                 duration: const Duration(milliseconds: 260),
@@ -796,52 +792,52 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
+              // 左侧：角色信息 + 立绘编辑
               SizedBox(
-                width: infoWidth,
+                width: sideWidth,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 7, 6, 4),
+                  padding: const EdgeInsets.fromLTRB(16, 6, 8, 4),
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
-                    child: _CharacterShowcaseInfo(
-                      character: widget.character,
-                      summary: widget.summary,
-                      identity: widget.identity,
-                      relationLabel: _relationLabel,
-                      compact: true,
-                      landscapeDense: true,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _CharacterShowcaseInfo(
+                            character: widget.character,
+                            summary: widget.summary,
+                            identity: widget.identity,
+                            relationLabel: _relationLabel,
+                            compact: true,
+                            landscapeDense: false, // 取消极限压缩字号，因现在空间充足
+                          ),
+                          const SizedBox(height: 20),
+                          _CharacterQuickPortraitEditor(
+                            controller: widget.controller,
+                            character: widget.character,
+                            compact: true,
+                            landscapeDense: false, // 统一使用正常排版比例
+                            onPortraitChanged: (portraitUrl) {
+                              if (!mounted) return;
+                              setState(() => _previewPortraitUrl = portraitUrl);
+                            },
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              // 右侧：宽阔的立绘展示区
               Expanded(
                 child: ClipRect(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(0, 2, 0, 0),
+                    padding: const EdgeInsets.fromLTRB(4, 2, 16, 0),
                     child: Transform.scale(
-                      scale: 1.06,
+                      scale: 1.04,
                       alignment: Alignment.bottomCenter,
                       child: portraitArtwork(),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: editorWidth,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(5, 7, 6, 4),
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: _CharacterQuickPortraitEditor(
-                      controller: widget.controller,
-                      character: widget.character,
-                      compact: true,
-                      landscapeDense: true,
-                      onPortraitChanged: (portraitUrl) {
-                        if (!mounted) return;
-                        setState(() => _previewPortraitUrl = portraitUrl);
-                      },
                     ),
                   ),
                 ),

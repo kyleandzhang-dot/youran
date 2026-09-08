@@ -239,35 +239,6 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
         .toList(growable: false);
   }
 
-  // 构建微圆角磨砂玻璃容器
-  Widget _buildGlassPanel({required Widget child, EdgeInsetsGeometry? padding}) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            color: _journeyInkSoft.withOpacity(0.55),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.08),
-              width: 0.8,
-            ),
-            boxShadow: const <BoxShadow>[
-              BoxShadow(
-                color: Color(0x26000000),
-                blurRadius: 16,
-                offset: Offset(0, 6),
-              ),
-            ],
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -396,11 +367,16 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
               children: <Widget>[
                 LayoutBuilder(
                   builder: (context, constraints) {
+                    // 横纵屏及桌面端统一的页头响应式处理
+                    final isLandscape = constraints.maxWidth > constraints.maxHeight;
                     final desktopMode = widget.controller.desktopMode;
-                    final leftInset = desktopMode ? 46.0 : 10.0;
-                    final rightInset = desktopMode ? 54.0 : 12.0;
-                    final contentMaxWidth = desktopMode ? 1440.0 : 560.0;
-                    final topInset = desktopMode ? 14.0 : 4.0;
+                    final leftInset = desktopMode ? 46.0 : (isLandscape ? 24.0 : 10.0);
+                    final rightInset = desktopMode ? 54.0 : (isLandscape ? 24.0 : 12.0);
+                    final contentMaxWidth = desktopMode ? 1440.0 : (isLandscape ? 900.0 : 560.0);
+                    final topInset = desktopMode ? 14.0 : (isLandscape ? 4.0 : 4.0);
+                    final hideHeader = isLandscape && !desktopMode; // 手机横屏为了阅读空间直接隐藏Header
+
+                    if (hideHeader) return SizedBox(height: topInset);
 
                     return Center(
                       child: ConstrainedBox(
@@ -424,22 +400,23 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                 Expanded(
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      // 与角色页使用同一套真正的页面主体边距。
-                      // 模式只认共享 desktopMode，不再根据当前窗口宽度偷偷切换。
                       final desktopMode = widget.controller.desktopMode;
-                      final leftInset = desktopMode ? 46.0 : 10.0;
-                      final rightInset = desktopMode ? 54.0 : 12.0;
-                      final contentMaxWidth = desktopMode ? 1440.0 : 560.0;
+                      // 用宽高比判断横屏 (也适用于移动设备横屏)
+                      final isLandscape = constraints.maxWidth > constraints.maxHeight;
+                      
+                      final leftInset = desktopMode ? 46.0 : (isLandscape ? 24.0 : 10.0);
+                      final rightInset = desktopMode ? 54.0 : (isLandscape ? 24.0 : 12.0);
+                      final contentMaxWidth = desktopMode ? 1440.0 : (isLandscape ? 900.0 : 560.0);
 
-                      // 电脑端：双栏布局，宽屏真正利用空间，但仍和角色页主体对齐。
-                      if (desktopMode) {
+                      // 电脑端或横屏：极简双栏布局，无冗余嵌套框，直接在渐变背景上铺设文字。
+                      if (desktopMode || isLandscape) {
                         return Center(
                           child: ConstrainedBox(
                             constraints: BoxConstraints(maxWidth: contentMaxWidth),
                             child: Padding(
                               padding: EdgeInsets.fromLTRB(
                                 leftInset,
-                                12,
+                                isLandscape && !desktopMode ? 12 : 12,
                                 rightInset,
                                 24,
                               ),
@@ -450,53 +427,52 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    // 左侧栏：故事梗概卡片
+                                    // 左侧栏：故事梗概 (宽35%)
                                     Expanded(
-                                      flex: 4,
-                                      child: _buildGlassPanel(
-                                        padding: const EdgeInsets.fromLTRB(26, 26, 26, 32),
+                                      flex: 35,
+                                      child: SingleChildScrollView(
+                                        physics: const BouncingScrollPhysics(),
+                                        padding: const EdgeInsets.only(bottom: 32),
                                         child: _JourneyStoryOpening(
                                           title: title.isEmpty ? '你的旅程' : title,
                                           summary: summary,
                                           achievements: achievements.length,
                                           events: events.length,
                                           milestones: milestones.length,
-                                          isDesktop: true,
+                                          isLandscape: true, // 横屏标识，隐藏底部分割线
                                         ),
                                       ),
                                     ),
-                                    const SizedBox(width: 24),
-                                    // 右侧栏：经历与事件流水
+                                    const SizedBox(width: 48), // 宽广的呼吸空间
+                                    // 右侧栏：经历与事件流水 (宽65%)
                                     Expanded(
-                                      flex: 7,
-                                      child: _buildGlassPanel(
-                                        child: hasContent
-                                            ? ListView(
-                                                physics: const AlwaysScrollableScrollPhysics(),
-                                                padding: const EdgeInsets.fromLTRB(32, 12, 32, 46),
-                                                children: <Widget>[
-                                                  if (achievements.isNotEmpty)
-                                                    _GameStyleJourneySection(
-                                                      eyebrow: 'MEMORIES',
-                                                      title: '重要经历',
-                                                      records: achievements,
-                                                    ),
-                                                  if (events.isNotEmpty)
-                                                    _GameStyleJourneySection(
-                                                      eyebrow: 'STORYLINE',
-                                                      title: '事件轨迹',
-                                                      records: events,
-                                                    ),
-                                                  if (milestones.isNotEmpty)
-                                                    _GameStyleJourneySection(
-                                                      eyebrow: 'MILESTONES',
-                                                      title: '关键节点',
-                                                      records: milestones,
-                                                    ),
-                                                ],
-                                              )
-                                            : emptyView,
-                                      ),
+                                      flex: 65,
+                                      child: hasContent
+                                          ? ListView(
+                                              physics: const AlwaysScrollableScrollPhysics(),
+                                              padding: const EdgeInsets.only(bottom: 46),
+                                              children: <Widget>[
+                                                if (achievements.isNotEmpty)
+                                                  _GameStyleJourneySection(
+                                                    eyebrow: 'MEMORIES',
+                                                    title: '重要经历',
+                                                    records: achievements,
+                                                  ),
+                                                if (events.isNotEmpty)
+                                                  _GameStyleJourneySection(
+                                                    eyebrow: 'STORYLINE',
+                                                    title: '事件轨迹',
+                                                    records: events,
+                                                  ),
+                                                if (milestones.isNotEmpty)
+                                                  _GameStyleJourneySection(
+                                                    eyebrow: 'MILESTONES',
+                                                    title: '关键节点',
+                                                    records: milestones,
+                                                  ),
+                                              ],
+                                            )
+                                          : emptyView,
                                     ),
                                   ],
                                 ),
@@ -506,7 +482,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                         );
                       }
 
-                      // 手机端：和角色页一致的 10 / 12 页面边距与 560 最大宽度。
+                      // 竖屏：保持原有的单栏流式布局。
                       return Center(
                         child: ConstrainedBox(
                           constraints: BoxConstraints(maxWidth: contentMaxWidth),
@@ -524,7 +500,6 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                               child: hasContent
                                   ? ListView(
                                       physics: const AlwaysScrollableScrollPhysics(),
-                                      // 外层已经控制左右页边距，这里不再重复吃掉横向空间。
                                       padding: const EdgeInsets.fromLTRB(0, 14, 0, 46),
                                       children: <Widget>[
                                         _JourneyStoryOpening(
@@ -635,7 +610,7 @@ class _JourneyStoryOpening extends StatelessWidget {
     required this.achievements,
     required this.events,
     required this.milestones,
-    this.isDesktop = false,
+    this.isLandscape = false,
   });
 
   final String title;
@@ -643,7 +618,7 @@ class _JourneyStoryOpening extends StatelessWidget {
   final int achievements;
   final int events;
   final int milestones;
-  final bool isDesktop;
+  final bool isLandscape;
 
   @override
   Widget build(BuildContext context) {
@@ -673,13 +648,14 @@ class _JourneyStoryOpening extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // 彻底去掉横屏左栏的框线和色块，仅用左侧的指示线作为视觉引导
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            padding: EdgeInsets.fromLTRB(isLandscape ? 12 : 16, 14, 16, 14),
             decoration: BoxDecoration(
-              color: isDesktop ? Colors.transparent : _journeyInkSoft.withOpacity(.6),
-              borderRadius: isDesktop ? null : BorderRadius.circular(4),
-              border: isDesktop
+              color: isLandscape ? Colors.transparent : _journeyInkSoft.withOpacity(.6),
+              borderRadius: isLandscape ? null : BorderRadius.circular(4),
+              border: isLandscape
                   ? const Border(left: BorderSide(color: _journeyBlue, width: 2.5))
                   : Border(
                       left: const BorderSide(color: _journeyBlue, width: 2.5),
@@ -710,7 +686,8 @@ class _JourneyStoryOpening extends StatelessWidget {
               _JourneyCountText(label: '节点', value: milestones),
             ],
           ),
-          if (!isDesktop) ...[
+          // 横屏模式去掉了底部分割线，让界面更连贯
+          if (!isLandscape) ...[
             const SizedBox(height: 12),
             Container(height: 1, color: _journeyLine),
           ]

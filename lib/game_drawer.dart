@@ -127,12 +127,17 @@ class GameDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     final mediaSize = MediaQuery.sizeOf(context);
     final compactLandscape = _drawerCompactLandscape(context);
-    final width = _isSidebar
-        ? (compactLandscape ? 244.0 : 300.0)
-        : math.min(
-            mediaSize.width * (compactLandscape ? 0.42 : 0.82),
-            compactLandscape ? 252.0 : 300.0,
-          );
+    // 横屏不要再把抽屉压到 250px 左右：横向空间本来就充足，
+    // 优先保证名称、状态和操作文字完整可读，同时最多占到 320px，
+    // 给剧情画面保留足够的可见区域。纵向仍沿用紧凑密度。
+    final landscapeWidth = (mediaSize.width * .40)
+        .clamp(286.0, 320.0)
+        .toDouble();
+    final width = compactLandscape
+        ? landscapeWidth
+        : (_isSidebar
+            ? 300.0
+            : math.min(mediaSize.width * .82, 300.0));
 
     final content = Container(
       width: width,
@@ -219,7 +224,9 @@ class GameDrawer extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xFF171717).withOpacity(.92),
             border: Border(
-              right: BorderSide(color: Colors.white.withOpacity(.07)),
+              right: BorderSide(
+                color: Colors.white.withOpacity(compactLandscape ? .045 : .07),
+              ),
             ),
           ),
           child: content,

@@ -76,7 +76,7 @@ class _SettingsDrawerScaffold extends StatelessWidget {
                   title,
                   style: TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: compactLandscape ? 13.5 : 16,
+                    fontSize: compactLandscape ? 14.5 : 16,
                     fontWeight: FontWeight.w700,
                     letterSpacing: .2,
                   ),
@@ -104,7 +104,7 @@ class _SettingsDrawerScaffold extends StatelessWidget {
         Divider(
           height: 1,
           thickness: 1,
-          color: Colors.white.withOpacity(.12),
+          color: Colors.white.withOpacity(compactLandscape ? .08 : .12),
         ),
         Expanded(child: child),
       ],
@@ -166,9 +166,9 @@ class _SettingsPanelState extends State<_SettingsPanel> {
           title: '偏好设置',
           child: ListView(
             padding: EdgeInsets.fromLTRB(
-              compactLandscape ? 12 : 18,
+              compactLandscape ? 14 : 18,
               compactLandscape ? 2 : 6,
-              compactLandscape ? 12 : 18,
+              compactLandscape ? 14 : 18,
               compactLandscape ? 14 : 28,
             ),
             children: <Widget>[

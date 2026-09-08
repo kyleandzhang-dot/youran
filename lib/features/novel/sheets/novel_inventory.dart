@@ -929,7 +929,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  // 桌面端保留原玻璃层；手机横屏用 quiet 模式弱化“大框套小框”的线条感。
+  // 桌面端保留原玻璃层；手机横屏不再使用 quiet 模式弱化边框，而是保持一致的高级质感。
   Widget _buildGlassPanel({
     required Widget child,
     bool quiet = false,
@@ -1192,7 +1192,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         }
 
         Widget landscapeLayout() {
-          // 手机横屏：弱化框线，用留白和明暗层级组织左右信息。
+          // 修改点：采用比例切分(Flex)，恢复磨砂玻璃边框，取消极度压缩
           return Column(
             children: <Widget>[
               _InventoryHeader(
@@ -1207,19 +1207,19 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    SizedBox(
-                      width: 272,
+                    Expanded(
+                      flex: 4, // 动态比例宽度，替代写死的固定宽度
                       child: _buildGlassPanel(
-                        quiet: true,
+                        quiet: false, // 恢复跑团风格的精美磨砂边框
                         child: ListView(
                           physics: const BouncingScrollPhysics(),
-                          padding: const EdgeInsets.only(top: 1, bottom: 8),
+                          padding: const EdgeInsets.only(top: 8, bottom: 12),
                           children: <Widget>[
                             _hero(
                               host,
                               equipped,
                               skills,
-                              landscape: true,
+                              landscape: false, // 空间充足，使用正常的阅读字号更舒服
                             ),
                           ],
                         ),
@@ -1227,11 +1227,19 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                     ),
                     const SizedBox(width: 16),
                     Expanded(
+                      flex: 6,
                       child: Column(
                         children: <Widget>[
+                          // 将筛选栏提上来充当类似现代化顶部 Tab 的角色
+                          _inventoryFilterBar(
+                            isDesktop: true,
+                            dense: true,
+                            quiet: false,
+                          ),
+                          const SizedBox(height: 8),
                           Expanded(
                             child: _buildGlassPanel(
-                              quiet: true,
+                              quiet: false, // 统一质感
                               child: RefreshIndicator(
                                 onRefresh: _refresh,
                                 color: _inventoryGold,
@@ -1242,18 +1250,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                     _inventoryList(
                                       filteredItems,
                                       isDesktop: true,
-                                      dense: true,
+                                      dense: false, // 取消物品卡片的极致压缩，恢复现代圆角卡片质感
                                     ),
                                   ],
                                 ),
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 5),
-                          _inventoryFilterBar(
-                            isDesktop: true,
-                            dense: true,
-                            quiet: true,
                           ),
                         ],
                       ),

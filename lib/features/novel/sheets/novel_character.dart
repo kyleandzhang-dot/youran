@@ -2276,9 +2276,13 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
             );
 
           case _CharacterViewportMode.landscape:
-            // 手机横屏：三栏舞台 + 底部聊天。与竖屏是独立 Widget 树。
+            // 手机横屏：聊天记录需要足够高度回看历史。
+            // 默认占舞台高度约 70%，但仍保留合理上下限；
+            // 底部输入框尺寸与横向长度保持不变。
             const globalNavInset = 64.0;
-            final chatHeight = constraints.maxHeight < 390 ? 96.0 : 108.0;
+            final chatHeight = (constraints.maxHeight * .70)
+                .clamp(210.0, 340.0)
+                .toDouble();
             final infoWidth = constraints.maxWidth < 760 ? 210.0 : 238.0;
             return ClipRect(
               child: Stack(
@@ -2291,7 +2295,9 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                     Positioned(
                       left: 0,
                       top: 44,
-                      bottom: chatHeight + 8,
+                      // 聊天记录只覆盖中间立绘区，不再把左侧头像轨向上挤。
+                      // 仅避开最底部 34px 输入框。
+                      bottom: 42,
                       width: 48,
                       child: portraitRail(),
                     ),
@@ -2333,7 +2339,9 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                     Positioned(
                       right: globalNavInset + 6,
                       top: 6,
-                      bottom: chatHeight + 8,
+                      // 记录区通过 messageRightInset 避开人物资料栏，
+                      // 所以资料栏无需再为 70% 高的聊天记录让出纵向空间。
+                      bottom: 42,
                       width: infoWidth,
                       child: SingleChildScrollView(
                         physics: const BouncingScrollPhysics(),
