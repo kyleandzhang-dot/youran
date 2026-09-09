@@ -242,19 +242,10 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
     final completed = _status == 'completed';
     final failed = _status == 'failed';
 
-    final label = completed
-        ? '目标完成'
-        : failed
-            ? '目标失败'
-            : '当前目标';
-
-    final accentColor = failed
-        ? NovelPalette.danger
-        : completed
-            ? NovelPalette.accent
-            : Colors.white.withOpacity(.72);
-
-    const goalIcon = Icons.adjust_rounded;
+    final feedbackLabel = completed ? '目标完成' : '目标失败';
+    final feedbackAccent = failed ? NovelPalette.danger : NovelPalette.accent;
+    final feedbackIcon = failed ? Icons.close_rounded : Icons.check_rounded;
+    const activeGoalGold = Color(0xFFF1C36A);
 
     return IgnorePointer(
       child: ConstrainedBox(
@@ -274,42 +265,86 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  if (completed || failed) ...<Widget>[
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Icon(
+                          feedbackIcon,
+                          size: compact ? 13 : 14,
+                          color: feedbackAccent,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          feedbackLabel,
+                          style: TextStyle(
+                            color: feedbackAccent,
+                            fontFamily: 'MiSans',
+                            fontSize: compact ? 9.2 : 9.6,
+                            height: 1,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.15,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                  ],
                   Row(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Icon(
-                        goalIcon,
-                        size: compact ? 13 : 14,
-                        color: accentColor,
-                      ),
-                      const SizedBox(width: 5),
-                      Text(
-                        label,
-                        style: TextStyle(
-                          color: accentColor,
-                          fontFamily: 'MiSans',
-                          fontSize: compact ? 9.2 : 9.6,
-                          height: 1,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 1.15,
+                      if (!completed && !failed) ...<Widget>[
+                        Padding(
+                          padding: const EdgeInsets.only(top: 1.2),
+                          child: Text(
+                            '✦',
+                            style: TextStyle(
+                              color: activeGoalGold,
+                              fontSize: compact ? 10.8 : 11.6,
+                              height: 1.25,
+                              fontWeight: FontWeight.w800,
+                              shadows: const <Shadow>[
+                                Shadow(
+                                  color: Color(0xB8F1C36A),
+                                  blurRadius: 7,
+                                ),
+                                Shadow(
+                                  color: Color(0x66FFE7A1),
+                                  blurRadius: 13,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: compact ? 6 : 7),
+                      ],
+                      Flexible(
+                        child: Text(
+                          _displayText,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.left,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(
+                              completed || failed ? .86 : .94,
+                            ),
+                            fontFamily: 'MiSans',
+                            fontSize: compact ? 11.4 : 12.0,
+                            height: 1.42,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: .12,
+                            shadows: const <Shadow>[
+                              Shadow(
+                                color: Color(0xB0000000),
+                                blurRadius: 5,
+                                offset: Offset(0, 1),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _displayText,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.left,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(.90),
-                      fontFamily: 'MiSans',
-                      fontSize: compact ? 11.4 : 12.0,
-                      height: 1.42,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: .12,
-                    ),
                   ),
                 ],
               ),

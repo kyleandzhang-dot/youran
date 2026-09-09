@@ -1562,8 +1562,14 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
   }
 
   Widget _buildFilterHeader() {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 6, 14, 4),
+      padding: EdgeInsets.fromLTRB(
+        compactLandscape ? 8 : 14,
+        compactLandscape ? 2 : 6,
+        compactLandscape ? 8 : 14,
+        compactLandscape ? 2 : 4,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1575,7 +1581,7 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
                   onChanged: _onGenderFilterChanged,
                 ),
               ),
-              const SizedBox(width: 6),
+              SizedBox(width: compactLandscape ? 4 : 6),
               _DiscoverIconButton(
                 icon: _searchExpanded ? LucideIcons.x : LucideIcons.search,
                 active: _searchExpanded,
@@ -1589,7 +1595,7 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
             alignment: Alignment.topCenter,
             child: _searchExpanded
                 ? Padding(
-                    padding: const EdgeInsets.only(top: 8),
+                    padding: EdgeInsets.only(top: compactLandscape ? 4 : 8),
                     child: _DiscoverSearchField(
                       controller: _searchController,
                       onChanged: _onSearchChanged,
@@ -1635,22 +1641,25 @@ class _DiscoverPanelState extends State<_DiscoverPanel> {
       );
     }
 
+    final compactLandscape = _drawerCompactLandscape(context);
     return RefreshIndicator(
       onRefresh: _load,
       color: _drawerAccent,
       child: GridView.builder(
         padding: EdgeInsets.fromLTRB(
-          _drawerCompactLandscape(context) ? 10 : 14,
-          _drawerCompactLandscape(context) ? 4 : 8,
-          _drawerCompactLandscape(context) ? 10 : 14,
-          4,
+          compactLandscape ? 8 : 14,
+          compactLandscape ? 2 : 8,
+          compactLandscape ? 8 : 14,
+          compactLandscape ? 2 : 4,
         ),
         physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: _drawerCompactLandscape(context) ? 6 : 10,
-          crossAxisSpacing: _drawerCompactLandscape(context) ? 6 : 10,
-          childAspectRatio: _drawerCompactLandscape(context) ? 0.74 : 0.68,
+          // 横屏手机高度非常有限：发现页改为 3 列紧凑卡片，
+          // 不再让两张大封面占满整屏，优先一次看到更多剧本。
+          crossAxisCount: compactLandscape ? 3 : 2,
+          mainAxisSpacing: compactLandscape ? 5 : 10,
+          crossAxisSpacing: compactLandscape ? 5 : 10,
+          childAspectRatio: compactLandscape ? 0.72 : 0.68,
         ),
         itemCount: filtered.length,
         itemBuilder: (context, index) {
@@ -1704,14 +1713,15 @@ class _DiscoverIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(999),
         child: Container(
-          width: 30,
-          height: 30,
+          width: compactLandscape ? 26 : 30,
+          height: compactLandscape ? 26 : 30,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: active
@@ -1726,7 +1736,7 @@ class _DiscoverIconButton extends StatelessWidget {
           ),
           child: Icon(
             icon,
-            size: 15,
+            size: compactLandscape ? 13 : 15,
             color: active ? _drawerAccent : AppColors.textOnDarkMuted,
           ),
         ),
@@ -1747,9 +1757,10 @@ class _DiscoverSearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     return Container(
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      height: compactLandscape ? 30 : 34,
+      padding: EdgeInsets.symmetric(horizontal: compactLandscape ? 8 : 10),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.06),
         borderRadius: BorderRadius.circular(10),
@@ -1757,15 +1768,22 @@ class _DiscoverSearchField extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(LucideIcons.search, size: 14, color: AppColors.textOnDarkMuted),
-          const SizedBox(width: 6),
+          Icon(
+            LucideIcons.search,
+            size: compactLandscape ? 12 : 14,
+            color: AppColors.textOnDarkMuted,
+          ),
+          SizedBox(width: compactLandscape ? 5 : 6),
           Expanded(
             child: TextField(
               controller: controller,
               autofocus: true,
               onChanged: onChanged,
               onSubmitted: onChanged,
-              style: const TextStyle(color: AppColors.textOnDark, fontSize: 12.5),
+              style: TextStyle(
+                color: AppColors.textOnDark,
+                fontSize: compactLandscape ? 10.8 : 12.5,
+              ),
               cursorColor: _drawerAccent,
               decoration: InputDecoration(
                 isDense: true,
@@ -1773,7 +1791,7 @@ class _DiscoverSearchField extends StatelessWidget {
                 hintText: '搜索标题、作者、标签',
                 hintStyle: TextStyle(
                   color: AppColors.textOnDarkMuted.withOpacity(0.7),
-                  fontSize: 12.5,
+                  fontSize: compactLandscape ? 10.8 : 12.5,
                 ),
               ),
             ),
@@ -1796,10 +1814,11 @@ class _DiscoverGenderFilterRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
     Widget chip(String label, _DiscoverGenderFilter target, Color accent) {
       final active = value == target;
       return Padding(
-        padding: const EdgeInsets.only(right: 6),
+        padding: EdgeInsets.only(right: compactLandscape ? 4 : 6),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
@@ -1808,8 +1827,10 @@ class _DiscoverGenderFilterRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(999),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 160),
-              height: 26,
-              padding: const EdgeInsets.symmetric(horizontal: 11),
+              height: compactLandscape ? 22 : 26,
+              padding: EdgeInsets.symmetric(
+                horizontal: compactLandscape ? 8 : 11,
+              ),
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: active
@@ -1826,7 +1847,7 @@ class _DiscoverGenderFilterRow extends StatelessWidget {
                 label,
                 style: TextStyle(
                   color: active ? accent : AppColors.textOnDarkMuted,
-                  fontSize: 11.5,
+                  fontSize: compactLandscape ? 9.5 : 11.5,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -1921,15 +1942,17 @@ class _DiscoverItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compactLandscape = _drawerCompactLandscape(context);
+    final radius = compactLandscape ? 6.0 : 8.0;
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(radius),
         onTap: () => _showDetail(context),
         child: Container(
           decoration: BoxDecoration(
             border: Border.all(color: Colors.white.withOpacity(0.08)),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(radius),
             color: Colors.white.withOpacity(0.02),
           ),
           child: Column(
@@ -1941,10 +1964,11 @@ class _DiscoverItem extends StatelessWidget {
                   fit: StackFit.expand,
                   children: [
                     ClipRRect(
-                      borderRadius:
-                          const BorderRadius.vertical(top: Radius.circular(8)),
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(radius),
+                      ),
                       child: Image.network(
-                        CdnUtil.resize(imageUrl, width: 300),
+                        CdnUtil.resize(imageUrl, width: compactLandscape ? 220 : 300),
                         width: double.infinity,
                         height: double.infinity,
                         fit: BoxFit.cover,
@@ -1961,8 +1985,8 @@ class _DiscoverItem extends StatelessWidget {
                     // 👇 把这段加回来
                     if (gender == '男' || gender == '女')
                       Positioned(
-                        right: 6, // 稍微往边上靠一点点
-                        bottom: 6,
+                        right: compactLandscape ? 4 : 6,
+                        bottom: compactLandscape ? 4 : 6,
                         child: _DiscoverGenderBadge(gender: gender),
                       ),
                     // 👆 恢复结束
@@ -1970,7 +1994,12 @@ class _DiscoverItem extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                padding: EdgeInsets.fromLTRB(
+                  compactLandscape ? 5 : 8,
+                  compactLandscape ? 5 : 8,
+                  compactLandscape ? 5 : 8,
+                  compactLandscape ? 5 : 8,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1978,13 +2007,14 @@ class _DiscoverItem extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.textOnDark,
-                        fontSize: 12.5,
+                        fontSize: compactLandscape ? 10.5 : 12.5,
                         fontWeight: FontWeight.w600,
+                        height: 1.1,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: compactLandscape ? 3 : 6),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -1994,17 +2024,17 @@ class _DiscoverItem extends StatelessWidget {
                               ClipOval(
                                 child: Image.network(
                                   CdnUtil.resize(avatarUrl, width: 64),
-                                  width: 14,
-                                  height: 14,
+                                  width: compactLandscape ? 11 : 14,
+                                  height: compactLandscape ? 11 : 14,
                                   fit: BoxFit.cover,
                                   errorBuilder: (_, __, ___) => Icon(
                                     Icons.person,
-                                    size: 14,
+                                    size: compactLandscape ? 11 : 14,
                                     color: Colors.white.withOpacity(0.2),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 4),
+                              SizedBox(width: compactLandscape ? 3 : 4),
                               Expanded(
                                 child: Text(
                                   userName,
@@ -2012,7 +2042,7 @@ class _DiscoverItem extends StatelessWidget {
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     color: AppColors.textOnDarkMuted,
-                                    fontSize: 10,
+                                    fontSize: compactLandscape ? 8.6 : 10,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
@@ -2020,20 +2050,20 @@ class _DiscoverItem extends StatelessWidget {
                             ],
                           ),
                         ),
-                        const SizedBox(width: 4),
+                        SizedBox(width: compactLandscape ? 2 : 4),
                         Row(
                           children: [
                             Icon(
                               LucideIcons.heart,
-                              size: 11,
+                              size: compactLandscape ? 9 : 11,
                               color: isLiked ? const Color(0xFFE0554A) : AppColors.textOnDarkMuted,
                             ),
-                            const SizedBox(width: 3),
+                            SizedBox(width: compactLandscape ? 2 : 3),
                             Text(
                               '$likes',
                               style: TextStyle(
                                 color: AppColors.textOnDarkMuted,
-                                fontSize: 10,
+                                fontSize: compactLandscape ? 8.6 : 10,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -3587,6 +3617,7 @@ class _DiscoverGenderBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isFemale = gender == '女';
+    final compactLandscape = _drawerCompactLandscape(context);
 
     return Text(
       isFemale ? '♀' : '♂',
@@ -3594,7 +3625,7 @@ class _DiscoverGenderBadge extends StatelessWidget {
         color: isFemale
             ? const Color(0xFFF28DB5)
             : const Color(0xFF72AFFF),
-        fontSize: 15, // 告别巨无霸 19，改成克制的 15
+        fontSize: compactLandscape ? 12 : 15,
         fontWeight: FontWeight.w800,
         height: 1,
         // 非常微弱的阴影，只为了防纯白背景，去掉了原本厚重的黑影

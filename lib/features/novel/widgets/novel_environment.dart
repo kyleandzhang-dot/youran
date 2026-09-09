@@ -756,6 +756,9 @@ class NovelWorldBackground extends StatefulWidget {
   const NovelWorldBackground({
     super.key,
     required this.url,
+    this.memoryBytes,
+    this.memoryCacheKey = '',
+    this.parallaxStrength = 1.5,
     this.fallbackAsset = '',
     this.characterPresent = false,
     this.isGenerating = false,
@@ -764,6 +767,17 @@ class NovelWorldBackground extends StatefulWidget {
   });
 
   final String url;
+
+  /// 开发者/本地预览可直接把图片字节送进与正式剧情相同的 Depth + Shader 链路。
+  /// 正式剧情不传此参数，仍然只使用 [url]。
+  final Uint8List? memoryBytes;
+
+  /// 本地图片的稳定缓存键。换图时应同时更换该 key，避免复用上一张图的 Depth。
+  final String memoryCacheKey;
+
+  /// 2.5D 位移强度。正式剧情默认 1.5；开发者工具可临时覆盖以快速调试。
+  final double parallaxStrength;
+
   final String fallbackAsset;
   final bool characterPresent;
   final bool isGenerating;
@@ -788,14 +802,14 @@ class _ResolvedNovelBackgroundImage {
 
 class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     with SingleTickerProviderStateMixin {
-  static const double _parallaxStrength = 1.0;
-
   late final AnimationController _motionController;
   bool _lowPowerEffects = false;
   bool _animationsDisabled = false;
 
-  // 真正显示在屏幕上的 URL：新图完整解码后才更新，避免切图黑屏。
+  // 真正显示在屏幕上的 source key：新图完整解码后才更新，避免切图黑屏。
+  // 对正式剧情它就是 URL / asset；对开发者本地图则是 memory:<cacheKey>。
   late String _displayedUrl;
+  Uint8List? _displayedMemoryBytes;
   int _loadToken = 0;
 
   // 2.5D 资源。人物立绘不进入这条链路，只有世界背景参与 Depth + Shader。
@@ -847,6 +861,21 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       _parallaxSourceImage != null &&
       _parallaxDepthImage != null;
 
+  double get _effectiveParallaxStrength =>
+      widget.parallaxStrength.clamp(.15, 2.5).toDouble();
+
+  String _sourceKeyForWidget(NovelWorldBackground value) {
+    final bytes = value.memoryBytes;
+    if (bytes != null && bytes.isNotEmpty) {
+      final explicitKey = value.memoryCacheKey.trim();
+      final key = explicitKey.isNotEmpty
+          ? explicitKey
+          : '${bytes.lengthInBytes}:${identityHashCode(bytes)}';
+      return 'memory:$key';
+    }
+    return value.url.trim();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -854,7 +883,8 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       vsync: this,
       duration: const Duration(seconds: 22),
     );
-    _displayedUrl = widget.url.trim();
+    _displayedUrl = _sourceKeyForWidget(widget);
+    _displayedMemoryBytes = widget.memoryBytes;
 
     if (_depthParallaxSupported) {
       WidgetsBinding.instance.pointerRouter.addGlobalRoute(
@@ -901,9 +931,10 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   @override
   void didUpdateWidget(covariant NovelWorldBackground oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final next = widget.url.trim();
-    if (next != oldWidget.url.trim()) {
-      _preloadThenSwap(next);
+    final next = _sourceKeyForWidget(widget);
+    final previous = _sourceKeyForWidget(oldWidget);
+    if (next != previous) {
+      unawaited(_preloadThenSwap(next, widget.memoryBytes));
     }
   }
 
@@ -1141,8 +1172,16 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     }
   }
 
-  ImageProvider? _providerFor(String value) {
+  ImageProvider? _providerFor(
+    String value, {
+    Uint8List? memoryBytes,
+  }) {
     if (value.isEmpty) return null;
+    if (value.startsWith('memory:')) {
+      final bytes = memoryBytes;
+      if (bytes == null || bytes.isEmpty) return null;
+      return MemoryImage(bytes);
+    }
     if (value.startsWith('data:image/')) {
       try {
         return MemoryImage(base64Decode(value.split(',').last));
@@ -1159,23 +1198,32 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   /// 新图先在后台完整解码，解码成功（或明确失败）之后再 setState 触发
   /// AnimatedSwitcher 的切换动画。这样动画开始时新图必然已经能立刻画出来，
   /// 老图会一直原地不动，杜绝“动画时间到了但图还没到”的黑屏窗口。
-  Future<void> _preloadThenSwap(String value) async {
+  Future<void> _preloadThenSwap(
+    String value,
+    Uint8List? memoryBytes,
+  ) async {
     final token = ++_loadToken;
 
     if (value.isEmpty) {
       if (mounted && token == _loadToken) {
-        setState(() => _displayedUrl = value);
+        setState(() {
+          _displayedUrl = value;
+          _displayedMemoryBytes = null;
+        });
         _clearParallaxImages();
         _syncLegacyBackgroundMotion();
       }
       return;
     }
 
-    final provider = _providerFor(value);
+    final provider = _providerFor(value, memoryBytes: memoryBytes);
     if (provider == null) {
       // 无法识别的 URL（比如 data: 解析失败），直接切换让 errorBuilder 兜底。
       if (mounted && token == _loadToken) {
-        setState(() => _displayedUrl = value);
+        setState(() {
+          _displayedUrl = value;
+          _displayedMemoryBytes = memoryBytes;
+        });
         _clearParallaxImages();
         _syncLegacyBackgroundMotion();
       }
@@ -1190,7 +1238,10 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
     // token 不一致说明这期间 URL 又变了，只认最新的那次。
     if (!mounted || token != _loadToken) return;
-    setState(() => _displayedUrl = value);
+    setState(() {
+      _displayedUrl = value;
+      _displayedMemoryBytes = memoryBytes;
+    });
     _syncLegacyBackgroundMotion();
     unawaited(_prepareDepthForDisplayedImage());
   }
@@ -1272,7 +1323,10 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     if (!_depthParallaxSupported || !mounted) return;
 
     final sourceKey = _displayedUrl.trim();
-    final provider = _providerFor(sourceKey);
+    final provider = _providerFor(
+      sourceKey,
+      memoryBytes: _displayedMemoryBytes,
+    );
     if (provider == null || sourceKey.isEmpty) {
       if (mounted) {
         setState(() {
@@ -1413,7 +1467,9 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
                       const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
                   color: const Color(0xB8000000),
                   child: Text(
-                    _parallaxReady ? '2.5D  1.0' : 'DEPTH',
+                    _parallaxReady
+                        ? '2.5D  ${_effectiveParallaxStrength.toStringAsFixed(1)}'
+                        : 'DEPTH',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 8.5,
@@ -1475,7 +1531,10 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   Widget _image() {
     // 这里读的是已经确认解码完成的 _displayedUrl，而不是仍可能在加载的 widget.url。
     final value = _displayedUrl;
-    final provider = _providerFor(value);
+    final provider = _providerFor(
+      value,
+      memoryBytes: _displayedMemoryBytes,
+    );
     if (provider == null) return _fallback();
     return Image(
       image: provider,
@@ -1595,7 +1654,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
                   depth: depth,
                   viewX: _animationsDisabled ? 0 : _viewX,
                   viewY: _animationsDisabled ? 0 : _viewY,
-                  strength: _parallaxStrength,
+                  strength: _effectiveParallaxStrength,
                 ),
                 child: const SizedBox.expand(),
               ),

@@ -1184,12 +1184,12 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   child: Align(
                     alignment: Alignment.centerRight,
                     child: Padding(
-                      // 右侧一级导航仍占据最右侧窄列；“可探索”稍微向左错开，
-                      // 保持屏幕右侧居中，同时避免与导航图标重叠。
+                      // “可探索”是场景级浮动入口，贴近屏幕右侧安全区。
+                      // 右侧一级导航位于右下角，两者垂直区域不同，不再额外让出 60~96px。
                       padding: EdgeInsets.only(
                         right: wideDialogueLayout
-                            ? 96.0
-                            : (shortWide ? 62.0 : (compact ? 60.0 : 76.0)),
+                            ? 24.0
+                            : (shortWide ? 12.0 : (compact ? 12.0 : 18.0)),
                       ),
                       child: _NovelFloatingSurroundingsAction(
                         scope: surroundingsAction!,

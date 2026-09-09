@@ -9,6 +9,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+typedef UnauthorizedRefreshHandler = Future<String?> Function();
+
 class ApiException implements Exception {
   const ApiException(
     this.message, {
@@ -37,6 +39,8 @@ class ApiClient {
     defaultValue: 'http://172.20.10.3:3000/api/v1',
   );
 
+  static final Object _suppressUnauthorizedRefreshZoneKey = Object();
+
   static String get baseUrl => _trimTrailingSlash(_envBaseUrl);
 
   static String get webSocketBaseUrl {
@@ -56,6 +60,7 @@ class ApiClient {
   String? userId;
 
   final http.Client _client = http.Client();
+  UnauthorizedRefreshHandler? _unauthorizedRefreshHandler;
 
   void setAccessToken(String? token) {
     final value = token?.trim();
@@ -66,6 +71,26 @@ class ApiClient {
     final value = id?.trim();
     userId = (value == null || value.isEmpty) ? null : value;
   }
+
+  /// 由 SessionManager 注入刷新逻辑，避免 ApiClient 反向 import SessionManager。
+  /// 所有使用本客户端的普通 API 都会自动获得 401 -> refresh -> 原请求重试一次。
+  void setUnauthorizedRefreshHandler(UnauthorizedRefreshHandler? handler) {
+    _unauthorizedRefreshHandler = handler;
+  }
+
+  /// refresh 接口本身也可能通过 ApiClient 发请求。
+  /// 用 Zone 只对当前 refresh 调用链关闭 401 自动刷新，避免 refresh 401 后递归等待自己。
+  Future<T> withoutUnauthorizedRefresh<T>(Future<T> Function() action) {
+    return runZoned<Future<T>>(
+      action,
+      zoneValues: <Object?, Object?>{
+        _suppressUnauthorizedRefreshZoneKey: true,
+      },
+    );
+  }
+
+  bool get _unauthorizedRefreshSuppressed =>
+      Zone.current[_suppressUnauthorizedRefreshZoneKey] == true;
 
   Future<Map<String, dynamic>> get(
     String path, {
@@ -140,10 +165,9 @@ class ApiClient {
     );
   }
 
-
   /// Multipart 上传（头像/图片等）。
   ///
-  /// 保持与普通请求相同的鉴权头，不引入额外业务逻辑。
+  /// 与普通 JSON 请求一样支持 access token 过期后自动刷新并重试一次。
   Future<Map<String, dynamic>> postMultipartBytes(
     String path, {
     required String fieldName,
@@ -151,16 +175,35 @@ class ApiClient {
     required String filename,
     Map<String, String>? fields,
     Map<String, String>? headers,
+  }) {
+    return _postMultipartBytes(
+      path,
+      fieldName: fieldName,
+      bytes: bytes,
+      filename: filename,
+      fields: fields,
+      headers: headers,
+      allowUnauthorizedRetry: true,
+    );
+  }
+
+  Future<Map<String, dynamic>> _postMultipartBytes(
+    String path, {
+    required String fieldName,
+    required List<int> bytes,
+    required String filename,
+    Map<String, String>? fields,
+    Map<String, String>? headers,
+    required bool allowUnauthorizedRetry,
   }) async {
     final uri = _buildUri(path, null);
+    final tokenAtRequest = accessToken;
     final request = http.MultipartRequest('POST', uri);
 
-    request.headers.addAll(<String, String>{
-      'Accept': 'application/json',
-      if (accessToken != null) 'Authorization': 'Bearer $accessToken',
-      if (userId != null) 'X-User-ID': userId!,
-      ...?headers,
-    });
+    request.headers.addAll(_buildHeaders(
+      headers,
+      includeContentType: false,
+    ));
 
     if (fields != null) {
       request.fields.addAll(fields);
@@ -179,6 +222,24 @@ class ApiClient {
           .send()
           .timeout(const Duration(seconds: 45));
       final response = await http.Response.fromStream(streamed);
+
+      if (await _shouldRetryUnauthorized(
+        response: response,
+        tokenAtRequest: tokenAtRequest,
+        headers: headers,
+        allowUnauthorizedRetry: allowUnauthorizedRetry,
+      )) {
+        return _postMultipartBytes(
+          path,
+          fieldName: fieldName,
+          bytes: bytes,
+          filename: filename,
+          fields: fields,
+          headers: headers,
+          allowUnauthorizedRetry: false,
+        );
+      }
+
       return _handleResponse(response);
     } on ApiException {
       rethrow;
@@ -197,50 +258,34 @@ class ApiClient {
     Object? body,
     Map<String, dynamic>? queryParams,
     Map<String, String>? headers,
+    bool allowUnauthorizedRetry = true,
   }) async {
     final uri = _buildUri(path, queryParams);
-
-    final requestHeaders = <String, String>{
-      'Accept': 'application/json',
-      'Content-Type': 'application/json; charset=utf-8',
-      if (accessToken != null) 'Authorization': 'Bearer $accessToken',
-      if (userId != null) 'X-User-ID': userId!,
-      ...?headers,
-    };
-
+    final tokenAtRequest = accessToken;
     final encodedBody = body == null ? null : jsonEncode(body);
 
     try {
-      late final http.Response response;
+      final response = await _sendJsonRequest(
+        method,
+        uri,
+        body: encodedBody,
+        headers: headers,
+      );
 
-      switch (method) {
-        case 'GET':
-          response = await _client
-              .get(uri, headers: requestHeaders)
-              .timeout(const Duration(seconds: 30));
-          break;
-        case 'POST':
-          response = await _client
-              .post(uri, headers: requestHeaders, body: encodedBody)
-              .timeout(const Duration(seconds: 30));
-          break;
-        case 'PUT':
-          response = await _client
-              .put(uri, headers: requestHeaders, body: encodedBody)
-              .timeout(const Duration(seconds: 30));
-          break;
-        case 'PATCH':
-          response = await _client
-              .patch(uri, headers: requestHeaders, body: encodedBody)
-              .timeout(const Duration(seconds: 30));
-          break;
-        case 'DELETE':
-          response = await _client
-              .delete(uri, headers: requestHeaders, body: encodedBody)
-              .timeout(const Duration(seconds: 30));
-          break;
-        default:
-          throw ApiException('不支持的请求方法：$method');
+      if (await _shouldRetryUnauthorized(
+        response: response,
+        tokenAtRequest: tokenAtRequest,
+        headers: headers,
+        allowUnauthorizedRetry: allowUnauthorizedRetry,
+      )) {
+        return _request(
+          method,
+          path,
+          body: body,
+          queryParams: queryParams,
+          headers: headers,
+          allowUnauthorizedRetry: false,
+        );
       }
 
       return _handleResponse(response);
@@ -253,6 +298,94 @@ class ApiClient {
     } catch (error) {
       throw ApiException('网络请求失败：$error');
     }
+  }
+
+  Future<http.Response> _sendJsonRequest(
+    String method,
+    Uri uri, {
+    required String? body,
+    Map<String, String>? headers,
+  }) async {
+    final requestHeaders = _buildHeaders(headers);
+
+    switch (method) {
+      case 'GET':
+        return _client
+            .get(uri, headers: requestHeaders)
+            .timeout(const Duration(seconds: 30));
+      case 'POST':
+        return _client
+            .post(uri, headers: requestHeaders, body: body)
+            .timeout(const Duration(seconds: 30));
+      case 'PUT':
+        return _client
+            .put(uri, headers: requestHeaders, body: body)
+            .timeout(const Duration(seconds: 30));
+      case 'PATCH':
+        return _client
+            .patch(uri, headers: requestHeaders, body: body)
+            .timeout(const Duration(seconds: 30));
+      case 'DELETE':
+        return _client
+            .delete(uri, headers: requestHeaders, body: body)
+            .timeout(const Duration(seconds: 30));
+      default:
+        throw ApiException('不支持的请求方法：$method');
+    }
+  }
+
+  Map<String, String> _buildHeaders(
+    Map<String, String>? headers, {
+    bool includeContentType = true,
+  }) {
+    return <String, String>{
+      'Accept': 'application/json',
+      if (includeContentType) 'Content-Type': 'application/json; charset=utf-8',
+      if (accessToken != null) 'Authorization': 'Bearer $accessToken',
+      if (userId != null) 'X-User-ID': userId!,
+      ...?headers,
+    };
+  }
+
+  Future<bool> _shouldRetryUnauthorized({
+    required http.Response response,
+    required String? tokenAtRequest,
+    required Map<String, String>? headers,
+    required bool allowUnauthorizedRetry,
+  }) async {
+    if (response.statusCode != 401 ||
+        !allowUnauthorizedRetry ||
+        tokenAtRequest == null ||
+        _unauthorizedRefreshSuppressed ||
+        _hasExplicitAuthorization(headers)) {
+      return false;
+    }
+
+    // 如果别的并发 401 已经刷新好了 token，本请求直接用新 token 重试，
+    // 不再触发第二次 refresh。
+    final currentToken = accessToken;
+    if (currentToken != null && currentToken != tokenAtRequest) {
+      return true;
+    }
+
+    final handler = _unauthorizedRefreshHandler;
+    if (handler == null) return false;
+
+    final refreshedToken = await handler();
+    final normalized = refreshedToken?.trim() ?? '';
+    if (normalized.isEmpty) return false;
+
+    // SessionManager 正常会先 setAccessToken；这里再兜底一次，确保自定义 handler
+    // 只返回 token 但忘记写入客户端时，原请求仍能正确重试。
+    if (accessToken != normalized) {
+      setAccessToken(normalized);
+    }
+    return true;
+  }
+
+  bool _hasExplicitAuthorization(Map<String, String>? headers) {
+    if (headers == null || headers.isEmpty) return false;
+    return headers.keys.any((key) => key.toLowerCase() == 'authorization');
   }
 
   Uri _buildUri(

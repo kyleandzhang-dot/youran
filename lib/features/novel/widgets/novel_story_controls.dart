@@ -105,8 +105,39 @@ class _NovelFloatingSurroundingsActionState
     final compact = widget.compact;
     final haloSize = compact ? 44.0 : 50.0;
     final coreSize = compact ? 34.0 : 39.0;
+    final accent = Theme.of(context).colorScheme.primary;
     final semanticLabel =
         scope.label.trim().isEmpty ? '探索周围' : scope.label.trim();
+
+    Widget fadingRing(double phase, double emphasis) {
+      final progress = Curves.easeOutCubic.transform(phase);
+      final opacity = ((1.0 - phase) * (scope.attention ? .52 : .34) * emphasis)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final scale = .82 + progress * .52;
+
+      return Transform.scale(
+        scale: scale,
+        child: Container(
+          width: haloSize,
+          height: haloSize,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: accent.withOpacity(opacity),
+              width: .9,
+            ),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: accent.withOpacity(opacity * .42),
+                blurRadius: 5 + progress * 8,
+                spreadRadius: .1 + progress * .45,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Semantics(
       button: true,
@@ -120,124 +151,118 @@ class _NovelFloatingSurroundingsActionState
           child: SizedBox(
             width: compact ? 62 : 70,
             height: compact ? 68 : 78,
-            child: AnimatedBuilder(
-              animation: _pulse,
-              builder: (context, _) {
-                final wave =
-                    (math.sin(_pulse.value * math.pi * 2) + 1.0) * .5;
-                final emphasis = scope.attention ? 1.0 : .64;
-                final glowOpacity = (.10 + wave * .16) * emphasis;
-                final ringOpacity = (.18 + wave * .16) * emphasis;
-                final glowScale = .94 + wave * .10;
+            child: RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _pulse,
+                builder: (context, _) {
+                  final phaseA = _animationsDisabled ? .38 : _pulse.value;
+                  final phaseB = (phaseA + .5) % 1.0;
+                  final wave =
+                      (math.sin(phaseA * math.pi * 2) + 1.0) * .5;
+                  final emphasis = scope.attention ? 1.0 : .72;
 
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    SizedBox(
-                      width: haloSize,
-                      height: haloSize,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        clipBehavior: Clip.none,
-                        children: <Widget>[
-                          Transform.scale(
-                            scale: glowScale,
-                            child: Container(
-                              width: haloSize,
-                              height: haloSize,
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      SizedBox(
+                        width: haloSize,
+                        height: haloSize,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          clipBehavior: Clip.none,
+                          children: <Widget>[
+                            if (!scope.loading) fadingRing(phaseA, emphasis),
+                            if (!scope.loading) fadingRing(phaseB, emphasis * .86),
+                            Container(
+                              width: coreSize,
+                              height: coreSize,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
+                                color: const Color(0xB0181C1A),
                                 border: Border.all(
-                                  color: const Color(0xFFF7EEDC)
-                                      .withOpacity(ringOpacity),
-                                  width: .7,
+                                  color: accent.withOpacity(
+                                    scope.attention ? .72 : .52,
+                                  ),
+                                  width: .85,
                                 ),
                                 boxShadow: <BoxShadow>[
                                   BoxShadow(
-                                    color: const Color(0xFFF7EEDC)
-                                        .withOpacity(glowOpacity),
-                                    blurRadius: 10 + wave * 10,
-                                    spreadRadius: .5 + wave * 1.6,
+                                    color: const Color(0xCC000000)
+                                        .withOpacity(.32),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                  BoxShadow(
+                                    color: accent.withOpacity(
+                                      (.08 + wave * .10) * emphasis,
+                                    ),
+                                    blurRadius: 7 + wave * 4,
                                   ),
                                 ],
                               ),
-                            ),
-                          ),
-                          Container(
-                            width: coreSize,
-                            height: coreSize,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: const Color(0x24101110),
-                              border: Border.all(
-                                color: Colors.white.withOpacity(.22),
-                                width: .65,
-                              ),
-                            ),
-                            alignment: Alignment.center,
-                            child: scope.loading
-                                ? SizedBox.square(
-                                    dimension: compact ? 14 : 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 1.35,
-                                      color: const Color(0xFFF7EEDC)
-                                          .withOpacity(.82),
+                              alignment: Alignment.center,
+                              child: scope.loading
+                                  ? SizedBox.square(
+                                      dimension: compact ? 14 : 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 1.35,
+                                        color: accent.withOpacity(.90),
+                                      ),
+                                    )
+                                  : Icon(
+                                      Icons.explore_outlined,
+                                      size: compact ? 20 : 23,
+                                      color: accent.withOpacity(.98),
+                                      shadows: <Shadow>[
+                                        Shadow(
+                                          color: accent.withOpacity(
+                                            (.18 + wave * .12) * emphasis,
+                                          ),
+                                          blurRadius: 5 + wave * 3,
+                                        ),
+                                        const Shadow(
+                                          color: Color(0xCC000000),
+                                          blurRadius: 4,
+                                          offset: Offset(0, 1),
+                                        ),
+                                      ],
                                     ),
-                                  )
-                                : Icon(
-                                    Icons.explore_outlined,
-                                    size: compact ? 20 : 23,
-                                    color: const Color(0xFFF7F2EA)
-                                        .withOpacity(.94),
-                                    shadows: <Shadow>[
-                                      Shadow(
-                                        color: const Color(0xFFF7EEDC)
-                                            .withOpacity(
-                                              (.20 + wave * .18) * emphasis,
-                                            ),
-                                        blurRadius: 8 + wave * 5,
-                                      ),
-                                      const Shadow(
-                                        color: Color(0xB3000000),
-                                        blurRadius: 5,
-                                        offset: Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(height: compact ? 3 : 4),
-                    Text(
-                      scope.loading ? '探索中' : '可探索',
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: const Color(0xFFF7F2EA).withOpacity(
-                          scope.loading ? .58 : .88,
+                            ),
+                          ],
                         ),
-                        fontFamily: 'WenJinMinchoP0',
-                        fontSize: compact ? 9.5 : 10.4,
-                        height: 1,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: compact ? .8 : 1.0,
-                        shadows: <Shadow>[
-                          Shadow(
-                            color: const Color(0xFFF7EEDC)
-                                .withOpacity(glowOpacity * .85),
-                            blurRadius: 7 + wave * 4,
-                          ),
-                          const Shadow(
-                            color: Color(0xCC000000),
-                            blurRadius: 5,
-                            offset: Offset(0, 1),
-                          ),
-                        ],
                       ),
-                    ),
-                  ],
-                );
-              },
+                      SizedBox(height: compact ? 3 : 4),
+                      Text(
+                        scope.loading ? '探索中' : '可探索',
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(
+                            scope.loading ? .62 : .94,
+                          ),
+                          fontFamily: 'WenJinMinchoP0',
+                          fontSize: compact ? 9.5 : 10.4,
+                          height: 1,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: compact ? .8 : 1.0,
+                          shadows: <Shadow>[
+                            Shadow(
+                              color: accent.withOpacity(
+                                (.10 + wave * .08) * emphasis,
+                              ),
+                              blurRadius: 4 + wave * 2,
+                            ),
+                            const Shadow(
+                              color: Color(0xE0000000),
+                              blurRadius: 5,
+                              offset: Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),

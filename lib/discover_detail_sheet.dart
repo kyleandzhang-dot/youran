@@ -737,10 +737,91 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     _toast('链接已复制');
   }
 
+  bool _useLandscapeLayout(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return size.width > size.height && size.width >= 640;
+  }
+
+  bool _compactLandscape(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return _useLandscapeLayout(context) && size.height < 560;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    
+    final mediaQuery = MediaQuery.of(context);
+    final bottomInset = mediaQuery.viewInsets.bottom;
+    final safeBottom = mediaQuery.padding.bottom;
+    final landscape = _useLandscapeLayout(context);
+    final compactLandscape = _compactLandscape(context);
+
+    if (landscape) {
+      final leftWidth = (mediaQuery.size.width * .43)
+          .clamp(compactLandscape ? 300.0 : 360.0, 620.0)
+          .toDouble();
+      final dockReserve =
+          (_replyingTo == null ? 62.0 : 92.0) + bottomInset + safeBottom;
+
+      return Scaffold(
+        backgroundColor: _pageBg,
+        resizeToAvoidBottomInset: false,
+        body: Stack(
+          children: <Widget>[
+            Positioned.fill(
+              child: Row(
+                children: <Widget>[
+                  SizedBox(
+                    width: leftWidth,
+                    child: _buildLandscapeMediaPane(),
+                  ),
+                  Container(
+                    width: 1,
+                    color: Colors.white.withOpacity(.055),
+                  ),
+                  Expanded(
+                    child: Stack(
+                      children: <Widget>[
+                        Positioned.fill(
+                          bottom: dockReserve,
+                          child: ListView(
+                            controller: _scrollController,
+                            padding: EdgeInsets.zero,
+                            physics: const BouncingScrollPhysics(),
+                            children: <Widget>[
+                              _buildArticleInfo(),
+                              _buildTags(),
+                              _buildCharacters(),
+                              _buildMainEnterButton(),
+                              _buildCommentSection(),
+                              SizedBox(height: compactLandscape ? 28 : 44),
+                            ],
+                          ),
+                        ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: bottomInset,
+                          child: _buildStickyBottomDock(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              top: mediaQuery.padding.top + (compactLandscape ? 8 : 12),
+              left: compactLandscape ? 10 : 16,
+              child: _buildStickyActionButton(
+                LucideIcons.chevronLeft,
+                () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: _pageBg,
       resizeToAvoidBottomInset: false,
@@ -763,16 +844,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
               ],
             ),
           ),
-          
           Positioned(
-            top: MediaQuery.paddingOf(context).top + 12,
+            top: mediaQuery.padding.top + 12,
             left: 16,
             child: _buildStickyActionButton(
               LucideIcons.chevronLeft,
               () => Navigator.of(context).pop(),
             ),
           ),
-
           Positioned(
             left: 0,
             right: 0,
@@ -873,6 +952,121 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     );
   }
 
+
+  Widget _buildLandscapeMediaPane() {
+    final media = _mediaItems;
+    if (media.isEmpty) return _errorPlaceholder();
+
+    final compact = _compactLandscape(context);
+    return ColoredBox(
+      color: _pageBg,
+      child: Stack(
+        fit: StackFit.expand,
+        alignment: Alignment.bottomCenter,
+        children: <Widget>[
+          PageView.builder(
+            controller: _mediaController,
+            itemCount: media.length,
+            onPageChanged: (index) => setState(() => _currentMediaIndex = index),
+            itemBuilder: (context, index) {
+              final item = media[index];
+              return GestureDetector(
+                onTap: () => _showImagePreview(item.url),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    ImageFiltered(
+                      imageFilter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                      child: _image(
+                        CdnUtil.resize(item.url, width: 260),
+                        fit: BoxFit.cover,
+                        opacity: .38,
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        compact ? 12 : 22,
+                        compact ? 8 : 18,
+                        compact ? 12 : 22,
+                        compact ? 8 : 18,
+                      ),
+                      child: _image(
+                        CdnUtil.resize(item.url, width: 1080),
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: compact ? 78 : 110,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: <Color>[
+                      _pageBg.withOpacity(.76),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: compact ? 58 : 78,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: <Color>[
+                      _pageBg.withOpacity(.92),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (media.length > 1)
+            Positioned(
+              bottom: compact ? 10 : 16,
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 9 : 12,
+                  vertical: compact ? 4 : 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(.42),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${_currentMediaIndex + 1}/${media.length}',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: compact ? 9.5 : 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _image(String url, {BoxFit fit = BoxFit.cover, double opacity = 1.0}) {
     Widget img;
     if (url.startsWith('http://') || url.startsWith('https://')) {
@@ -970,6 +1164,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   }
 
   Widget _buildArticleInfo() {
+    final compact = _compactLandscape(context);
     final detail = _detail;
     final title = detail?.title.isNotEmpty == true ? detail!.title : widget.title;
     final author = detail?.authorName.isNotEmpty == true
@@ -981,58 +1176,66 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final description = detail?.description ?? '';
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0), 
+      padding: EdgeInsets.fromLTRB(
+        compact ? 18 : 24,
+        compact ? 10 : 16,
+        compact ? 18 : 24,
+        0,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             title,
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.textOnDark,
-              fontSize: 24, 
+              fontSize: compact ? 19 : 24,
               fontWeight: FontWeight.w700,
-              height: 1.3,
+              height: compact ? 1.2 : 1.3,
             ),
           ),
-          const SizedBox(height: 20),
+          SizedBox(height: compact ? 11 : 20),
           Row(
             children: [
               Container(
-                width: 28,
-                height: 28,
+                width: compact ? 24 : 28,
+                height: compact ? 24 : 28,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8), 
+                  borderRadius: BorderRadius.circular(compact ? 6 : 8),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: avatar.isEmpty
                     ? _avatarPlaceholder()
                     : _image(avatar, fit: BoxFit.cover),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: compact ? 8 : 12),
               Flexible(
                 child: Text(
                   author,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: 14,
+                    fontSize: compact ? 12 : 14,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              const SizedBox(width: 14),
+              SizedBox(width: compact ? 10 : 14),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 8 : 10,
+                  vertical: compact ? 3 : 4,
+                ),
                 decoration: BoxDecoration(
-                  color: AppColors.accent.withOpacity(0.12), 
+                  color: AppColors.accent.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   _modeLabel(detail?.mode),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.accent,
-                    fontSize: 11,
+                    fontSize: compact ? 9.5 : 11,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -1040,20 +1243,23 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             ],
           ),
           if ((detail?.createdAt ?? '').isNotEmpty) ...[
-            const SizedBox(height: 14),
+            SizedBox(height: compact ? 8 : 14),
             Text(
               _formatDate(detail!.createdAt),
-              style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12),
+              style: TextStyle(
+                color: AppColors.textOnDarkMuted,
+                fontSize: compact ? 10.5 : 12,
+              ),
             ),
           ],
           if (description.isNotEmpty) ...[
-            const SizedBox(height: 24), 
+            SizedBox(height: compact ? 13 : 24),
             Text(
               description,
               style: TextStyle(
                 color: AppColors.textOnDark.withOpacity(0.85),
-                fontSize: 15,
-                height: 1.6,
+                fontSize: compact ? 13 : 15,
+                height: compact ? 1.45 : 1.6,
               ),
             ),
           ],
@@ -1071,26 +1277,35 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   }
 
   Widget _buildTags() {
+    final compact = _compactLandscape(context);
     final tags = _detail?.tags ?? const <String>[];
     if (tags.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 18 : 24,
+        compact ? 14 : 24,
+        compact ? 18 : 24,
+        0,
+      ),
       child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
+        spacing: compact ? 6 : 10,
+        runSpacing: compact ? 6 : 10,
         children: tags
             .map(
               (tag) => Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 9 : 12,
+                  vertical: compact ? 4 : 6,
+                ),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.06), 
+                  color: Colors.white.withOpacity(0.06),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   tag,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: 12,
+                    fontSize: compact ? 10.5 : 12,
                   ),
                 ),
               ),
@@ -1101,61 +1316,70 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   }
 
   Widget _buildCharacters() {
+    final compact = _compactLandscape(context);
     final characters = _detail?.characters ?? const <ScenarioCharacter>[];
     if (characters.isEmpty) return const SizedBox.shrink();
+    final avatarSize = compact ? 42.0 : 56.0;
+    final cardWidth = compact ? 48.0 : 60.0;
     return Padding(
-      padding: const EdgeInsets.only(top: 36), 
+      padding: EdgeInsets.only(top: compact ? 20 : 36),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 24),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: compact ? 18 : 24),
             child: Text(
               '登场角色',
               style: TextStyle(
                 color: AppColors.textOnDark,
-                fontSize: 15,
+                fontSize: compact ? 13 : 15,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: compact ? 10 : 16),
           SizedBox(
-            height: 90,
+            height: compact ? 66 : 90,
             child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: EdgeInsets.symmetric(horizontal: compact ? 18 : 24),
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               itemCount: characters.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 16),
+              separatorBuilder: (_, __) => SizedBox(width: compact ? 10 : 16),
               itemBuilder: (context, index) {
                 final char = characters[index];
                 return GestureDetector(
                   onTap: () => _showCharacterPopup(char),
                   child: SizedBox(
-                    width: 60,
+                    width: cardWidth,
                     child: Column(
                       children: [
                         Container(
-                          width: 56,
-                          height: 56,
+                          width: avatarSize,
+                          height: avatarSize,
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.04),
-                            borderRadius: BorderRadius.circular(16), 
+                            borderRadius: BorderRadius.circular(compact ? 11 : 16),
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: (char.avatarUrl ?? '').isEmpty
-                              ? const Icon(Icons.person, color: AppColors.textOnDarkMuted)
-                              : _image(CdnUtil.resize(char.avatarUrl!, width: 120), fit: BoxFit.cover), 
+                              ? const Icon(
+                                  Icons.person,
+                                  color: AppColors.textOnDarkMuted,
+                                )
+                              : _image(
+                                  CdnUtil.resize(char.avatarUrl!, width: 120),
+                                  fit: BoxFit.cover,
+                                ),
                         ),
-                        const SizedBox(height: 10),
+                        SizedBox(height: compact ? 5 : 10),
                         Text(
                           char.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.textOnDark,
-                            fontSize: 12,
+                            fontSize: compact ? 9.5 : 12,
                           ),
                         ),
                       ],
@@ -1171,37 +1395,47 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   }
 
   Widget _buildMainEnterButton() {
+    final compact = _compactLandscape(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 36, 24, 32),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 18 : 24,
+        compact ? 20 : 36,
+        compact ? 18 : 24,
+        compact ? 18 : 32,
+      ),
       child: Material(
         color: AppColors.accent,
-        borderRadius: BorderRadius.circular(14), 
+        borderRadius: BorderRadius.circular(compact ? 10 : 14),
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(compact ? 10 : 14),
           onTap: _launching ? null : _playScenario,
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: EdgeInsets.symmetric(vertical: compact ? 11 : 16),
             alignment: Alignment.center,
             child: _launching
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
+                ? SizedBox(
+                    width: compact ? 16 : 20,
+                    height: compact ? 16 : 20,
+                    child: const CircularProgressIndicator(
                       strokeWidth: 2,
                       color: Color(0xFF121212),
                     ),
                   )
-                : const Row(
+                : Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(LucideIcons.play, size: 18, color: Color(0xFF0A0A0A)),
-                      SizedBox(width: 8),
+                      Icon(
+                        LucideIcons.play,
+                        size: compact ? 15 : 18,
+                        color: const Color(0xFF0A0A0A),
+                      ),
+                      SizedBox(width: compact ? 6 : 8),
                       Text(
                         '进入世界',
                         style: TextStyle(
-                          color: Color(0xFF0A0A0A),
-                          fontSize: 15,
+                          color: const Color(0xFF0A0A0A),
+                          fontSize: compact ? 13 : 15,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1214,20 +1448,26 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   }
 
   Widget _buildCommentSection() {
+    final compact = _compactLandscape(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 18 : 24,
+        compact ? 6 : 10,
+        compact ? 18 : 24,
+        compact ? 18 : 24,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             '评论区${_totalComments > 0 ? ' ($_totalComments)' : ''}',
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.textOnDark,
-              fontSize: 16,
+              fontSize: compact ? 14 : 16,
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 24), 
+          SizedBox(height: compact ? 14 : 24), 
           if (_commentsLoading)
             const Center(
               child: Padding(
@@ -1573,12 +1813,18 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   }
 
   Widget _buildStickyBottomDock() {
+    final compact = _compactLandscape(context);
     final bottomPadding = MediaQuery.paddingOf(context).bottom;
     return ClipRect(
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30), 
         child: Container(
-          padding: EdgeInsets.fromLTRB(20, 14, 20, 14 + bottomPadding),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 14 : 20,
+            compact ? 8 : 14,
+            compact ? 14 : 20,
+            (compact ? 8 : 14) + bottomPadding,
+          ),
           decoration: BoxDecoration(
             color: _pageBg.withOpacity(0.85),
           ),
@@ -1593,9 +1839,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         '回复 @${_replyingTo!.authorName}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textOnDarkMuted,
-                          fontSize: 12,
+                          fontSize: compact ? 10.5 : 12,
                         ),
                       ),
                     ),
@@ -1609,23 +1855,28 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                SizedBox(height: compact ? 6 : 12),
               ],
               Row(
                 children: [
                   Expanded(
                     child: Container(
-                      height: 42,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      height: compact ? 36 : 42,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: compact ? 12 : 16,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(.06), 
-                        borderRadius: BorderRadius.circular(21), 
+                        borderRadius: BorderRadius.circular(compact ? 18 : 21), 
                       ),
                       alignment: Alignment.centerLeft,
                       child: TextField(
                         controller: _commentController,
                         focusNode: _commentFocusNode,
-                        style: const TextStyle(color: AppColors.textOnDark, fontSize: 14),
+                        style: TextStyle(
+                          color: AppColors.textOnDark,
+                          fontSize: compact ? 12.5 : 14,
+                        ),
                         onTapOutside: (_) {
                           if (_replyingTo != null && !_hasInput) {
                             _cancelReply(clearInput: false);
@@ -1638,7 +1889,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                               : '回复 @${_replyingTo!.authorName}',
                           hintStyle: TextStyle(
                             color: AppColors.textOnDarkMuted.withOpacity(.6),
-                            fontSize: 13,
+                            fontSize: compact ? 11.5 : 13,
                           ),
                           border: InputBorder.none,
                           isDense: true,
@@ -1647,7 +1898,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 20),
+                  SizedBox(width: compact ? 10 : 20),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 180),
                     child: _hasInput
@@ -1655,9 +1906,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                             key: const ValueKey('send'),
                             onTap: _sendingComment ? null : _submitComment,
                             child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
+                              padding: EdgeInsets.symmetric(
+                                horizontal: compact ? 12 : 16,
+                                vertical: compact ? 8 : 10,
                               ),
                               decoration: BoxDecoration(
                                 color: AppColors.accent,
@@ -1672,11 +1923,11 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                         color: Colors.black,
                                       ),
                                     )
-                                  : const Text(
+                                  : Text(
                                       '发送',
                                       style: TextStyle(
                                         color: Colors.black,
-                                        fontSize: 13,
+                                        fontSize: compact ? 11.5 : 13,
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
@@ -1693,7 +1944,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                   padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                                   child: Icon(
                                     _isCollected ? Icons.star_rounded : Icons.star_border_rounded,
-                                    size: 26, 
+                                    size: compact ? 22 : 26, 
                                     color: _isCollected ? Colors.amber : AppColors.textOnDark,
                                   ),
                                 ),
@@ -1709,7 +1960,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                     children: [
                                       Icon(
                                         _isLiked ? Icons.favorite : Icons.favorite_border,
-                                        size: 24,
+                                        size: compact ? 20 : 24,
                                         color: _isLiked
                                             ? const Color(0xFFE0554A)
                                             : AppColors.textOnDark,
@@ -1717,9 +1968,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                       const SizedBox(width: 6),
                                       Text(
                                         '$_likeCount',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           color: AppColors.textOnDark,
-                                          fontSize: 15,
+                                          fontSize: compact ? 12 : 15,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),

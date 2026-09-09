@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class TokenStorage {
   TokenStorage._();
-  
+
   static const _secureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(
       encryptedSharedPreferences: true,
@@ -18,13 +18,17 @@ class TokenStorage {
   static const _kRefreshToken = 'refresh_token';
   static const _kProfile = 'user_profile_snapshot';
 
-  // 内存兜底缓存
-  static final Map<String, String> _memoryCache = {};
+  // 内存兜底缓存。写入时始终同步一份，不能只在 SecureStorage 写失败时才填充；
+  // 否则后续一次偶发读取异常就会把“已有 token”误判成 null。
+  static final Map<String, String> _memoryCache = <String, String>{};
 
   static Future<void> save({
     required String accessToken,
     required String refreshToken,
   }) async {
+    _memoryCache[_kAccessToken] = accessToken;
+    _memoryCache[_kRefreshToken] = refreshToken;
+
     try {
       if (kIsWeb) {
         final prefs = await SharedPreferences.getInstance();
@@ -36,12 +40,12 @@ class TokenStorage {
       }
     } catch (e) {
       debugPrint('Storage Write Error: $e');
-      _memoryCache[_kAccessToken] = accessToken;
-      _memoryCache[_kRefreshToken] = refreshToken;
     }
   }
 
   static Future<void> updateAccessToken(String accessToken) async {
+    _memoryCache[_kAccessToken] = accessToken;
+
     try {
       if (kIsWeb) {
         final prefs = await SharedPreferences.getInstance();
@@ -51,18 +55,24 @@ class TokenStorage {
       }
     } catch (e) {
       debugPrint('Storage Update Error: $e');
-      _memoryCache[_kAccessToken] = accessToken;
     }
   }
 
   static Future<String?> readAccessToken() async {
     try {
+      final String? value;
       if (kIsWeb) {
         final prefs = await SharedPreferences.getInstance();
-        return prefs.getString(_kAccessToken);
+        value = prefs.getString(_kAccessToken);
       } else {
-        return await _secureStorage.read(key: _kAccessToken);
+        value = await _secureStorage.read(key: _kAccessToken);
       }
+
+      if (value != null && value.isNotEmpty) {
+        _memoryCache[_kAccessToken] = value;
+        return value;
+      }
+      return _memoryCache[_kAccessToken];
     } catch (e) {
       debugPrint('Storage Read Error: $e');
       return _memoryCache[_kAccessToken];
@@ -71,12 +81,19 @@ class TokenStorage {
 
   static Future<String?> readRefreshToken() async {
     try {
+      final String? value;
       if (kIsWeb) {
         final prefs = await SharedPreferences.getInstance();
-        return prefs.getString(_kRefreshToken);
+        value = prefs.getString(_kRefreshToken);
       } else {
-        return await _secureStorage.read(key: _kRefreshToken);
+        value = await _secureStorage.read(key: _kRefreshToken);
       }
+
+      if (value != null && value.isNotEmpty) {
+        _memoryCache[_kRefreshToken] = value;
+        return value;
+      }
+      return _memoryCache[_kRefreshToken];
     } catch (e) {
       debugPrint('Storage Read Error: $e');
       return _memoryCache[_kRefreshToken];
@@ -93,7 +110,9 @@ class TokenStorage {
       'username': username,
       'token_balance': tokenBalance,
     });
-    
+
+    _memoryCache[_kProfile] = payload;
+
     try {
       if (kIsWeb) {
         final prefs = await SharedPreferences.getInstance();
@@ -103,7 +122,6 @@ class TokenStorage {
       }
     } catch (e) {
       debugPrint('Storage SaveProfile Error: $e');
-      _memoryCache[_kProfile] = payload;
     }
   }
 
@@ -116,11 +134,17 @@ class TokenStorage {
       } else {
         raw = await _secureStorage.read(key: _kProfile);
       }
+
+      if (raw != null && raw.isNotEmpty) {
+        _memoryCache[_kProfile] = raw;
+      } else {
+        raw = _memoryCache[_kProfile];
+      }
     } catch (e) {
       debugPrint('Storage ReadProfile Error: $e');
       raw = _memoryCache[_kProfile];
     }
-    
+
     if (raw == null) return null;
     try {
       return jsonDecode(raw) as Map<String, dynamic>;

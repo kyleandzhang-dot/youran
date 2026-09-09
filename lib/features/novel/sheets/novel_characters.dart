@@ -5,7 +5,8 @@ part of '../novel_sheets.dart';
 // 页面入口 / 对外入口：
 //   - showNovelCharactersSheet(...)
 //   - NovelCharactersTab
-//   - showNovelNpcProfileSheet(...)
+//   - showNovelCharacterProfileSheet(...)
+//   - showNovelNpcProfileSheet(...)  // 兼容旧调用
 //   - showNovelPortraitSheet(...)
 //
 // 深色“队伍 / 结缘 / 伙伴养成”页保留在 novel_character.dart。
@@ -1776,13 +1777,15 @@ class _CharacterThumbStrip extends StatelessWidget {
   }
 }
 
-Future<void> showNovelNpcProfileSheet(
+Future<void> showNovelCharacterProfileSheet(
   BuildContext context,
   NovelGameController controller,
   NovelCharacter character,
 ) async {
   await _runNovelPageOnce('character-profile', () async {
-    final key = character.id.trim().isNotEmpty ? character.id.trim() : character.name.trim();
+    final key = character.id.trim().isNotEmpty
+        ? character.id.trim()
+        : character.name.trim();
     await _showNovelArchivePage<void>(
       context,
       child: _CharactersPanel(
@@ -1793,6 +1796,14 @@ Future<void> showNovelNpcProfileSheet(
     );
   });
 }
+
+// 旧调用继续可用；主角和 NPC 现在实际共用同一套人物资料页。
+Future<void> showNovelNpcProfileSheet(
+  BuildContext context,
+  NovelGameController controller,
+  NovelCharacter character,
+) =>
+    showNovelCharacterProfileSheet(context, controller, character);
 
 class _InlineCharacterVisualEditor extends StatefulWidget {
   const _InlineCharacterVisualEditor({

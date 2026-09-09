@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../game_shell.dart';
 import '../../api/user_api.dart';
@@ -61,6 +62,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     with WidgetsBindingObserver {
   static const Duration _sceneArrivalDuration =
       Duration(milliseconds: 2800);
+  static const String _displayModePreferenceKey =
+      'novel_display_mode_preference';
   // 世界地图已有右侧独立入口，主页左上角旧地图 / 地点面板先隐藏。
   static const bool _showLegacyLocationHud = true;
 
@@ -86,6 +89,8 @@ class _NovelGamePageState extends State<NovelGamePage>
   String? _backgroundPreviewOverride;
   Uint8List? _backgroundPreviewBytes;
   String? _backgroundPreviewFileName;
+  int _backgroundPreviewVersion = 0;
+  double _backgroundParallaxStrength = 1.5;
   NovelTimePeriod? _timePreviewOverride;
   String _lastWeatherSyncToken = '';
   Timer? _sceneArrivalTimer;
@@ -105,17 +110,73 @@ class _NovelGamePageState extends State<NovelGamePage>
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
+  Future<void> _applyDisplayModeOrientation(bool desktopMode) async {
+    if (!_isNativeMobilePlatform) return;
+    try {
+      await SystemChrome.setPreferredOrientations(
+        desktopMode
+            ? const <DeviceOrientation>[
+                DeviceOrientation.landscapeLeft,
+                DeviceOrientation.landscapeRight,
+              ]
+            : const <DeviceOrientation>[
+                DeviceOrientation.portraitUp,
+              ],
+      );
+    } catch (_) {
+      // 某些平台会忽略方向锁定；布局模式本身仍继续生效。
+    }
+  }
+
+  Future<void> _restoreDisplayModePreference() async {
+    bool? savedDesktop;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_displayModePreferenceKey)?.trim();
+      if (saved == 'desktop') {
+        savedDesktop = true;
+      } else if (saved == 'mobile') {
+        savedDesktop = false;
+      }
+    } catch (error) {
+      debugPrint('读取小说显示模式失败：$error');
+    }
+
+    if (!mounted) return;
+
+    // 没有本地记录时沿用当前全局默认；有记录时以玩家上一次手动选择为准。
+    final targetDesktop = savedDesktop ?? controller.desktopMode;
+    if (controller.desktopMode != targetDesktop) {
+      controller.setDisplayMode(
+        targetDesktop ? NovelDisplayMode.desktop : NovelDisplayMode.mobile,
+      );
+    }
+    await _applyDisplayModeOrientation(targetDesktop);
+  }
+
+  Future<void> _saveDisplayModePreference(bool desktopMode) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _displayModePreferenceKey,
+        desktopMode ? 'desktop' : 'mobile',
+      );
+    } catch (error) {
+      // 本地偏好写入失败不应该阻断当前模式切换。
+      debugPrint('保存小说显示模式失败：$error');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     controller.addListener(_onControllerChanged);
-    // 手机默认使用手机布局并锁定竖屏；Web / Desktop 不做屏幕方向控制。
-    if (_isNativeMobilePlatform) {
-      unawaited(SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
-        DeviceOrientation.portraitUp,
-      ]));
-    }
+
+    // 先恢复玩家上一次手动选择的显示模式，再让原生手机方向跟随。
+    // 没有保存记录时才沿用当前全局默认；切换剧本也会读取同一份偏好。
+    unawaited(_restoreDisplayModePreference());
+
     unawaited(_loadAdminStatus());
     unawaited(_initializeGame());
   }
@@ -410,12 +471,9 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   @override
   void dispose() {
-    // 离开小说游戏页时恢复默认竖屏，避免横屏锁定影响 App 其他页面。
-    if (_isNativeMobilePlatform) {
-      unawaited(SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
-        DeviceOrientation.portraitUp,
-      ]));
-    }
+    // 不要在 dispose() 里改屏幕方向。切换世界时旧 NovelGamePage 的 dispose
+    // 可能晚于新页面 initState 执行，若这里强制 portraitUp，会把新页面已经
+    // 恢复好的横屏模式再次覆盖。真正离开小说模块时，应由外层导航页决定方向。
     WidgetsBinding.instance.removeObserver(this);
     controller.removeListener(_onControllerChanged);
     _sceneArrivalTimer?.cancel();
@@ -498,8 +556,10 @@ class _NovelGamePageState extends State<NovelGamePage>
         weatherOverride: () => _weatherPreviewOverride,
         timeOverride: () => _timePreviewOverride,
         backgroundPreviewName: () => _backgroundPreviewFileName,
+        parallaxStrength: () => _backgroundParallaxStrength,
         setWeatherOverride: _setWeatherPreviewOverride,
         setTimeOverride: _setTimePreviewOverride,
+        setParallaxStrength: _setBackgroundParallaxStrength,
         setBackgroundPreview: _setBackgroundPreview,
         clearBackgroundPreview: _clearBackgroundPreview,
         previewCharacterSetup: _previewCharacterSetup,
@@ -549,9 +609,17 @@ class _NovelGamePageState extends State<NovelGamePage>
     setState(() => _timePreviewOverride = period);
   }
 
+  void _setBackgroundParallaxStrength(double value) {
+    if (!mounted) return;
+    setState(() {
+      _backgroundParallaxStrength = value.clamp(.15, 2.5).toDouble();
+    });
+  }
+
   void _setBackgroundPreview(Uint8List bytes, String fileName) {
     if (!mounted || bytes.isEmpty) return;
     setState(() {
+      _backgroundPreviewVersion++;
       _backgroundPreviewBytes = bytes;
       _backgroundPreviewFileName =
           fileName.trim().isEmpty ? '本地背景' : fileName.trim();
@@ -575,30 +643,17 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     final nextDesktop = !currentlyDesktop;
 
-    // “电脑模式”是布局模式，不等同于屏幕旋转。
-    // 只有在原生手机上，为了给宽屏布局足够空间，顺便切到横屏；
-    // Flutter Web / Windows / macOS 等桌面环境只切换布局，不操作方向。
-    if (_isNativeMobilePlatform) {
-      try {
-        await SystemChrome.setPreferredOrientations(
-          nextDesktop
-              ? const <DeviceOrientation>[
-                  DeviceOrientation.landscapeLeft,
-                  DeviceOrientation.landscapeRight,
-                ]
-              : const <DeviceOrientation>[
-                  DeviceOrientation.portraitUp,
-                ],
-        );
-      } catch (_) {
-        // 某些平台可能忽略方向锁定；布局切换仍然继续。
-      }
-    }
-
-    if (!mounted) return;
+    // 先更新全局模式，再让原生手机方向跟随它。这样新旧剧本页切换时
+    // 看到的是同一个状态源，不会出现“布局是电脑模式、方向却回竖屏”。
     controller.setDisplayMode(
       nextDesktop ? NovelDisplayMode.desktop : NovelDisplayMode.mobile,
     );
+    await Future.wait<void>(<Future<void>>[
+      _applyDisplayModeOrientation(nextDesktop),
+      _saveDisplayModePreference(nextDesktop),
+    ]);
+
+    if (!mounted) return;
   }
 
   Future<void> _previewCharacterSetup() async {
@@ -1538,24 +1593,41 @@ class _NovelGamePageState extends State<NovelGamePage>
     });
   }
 
-  Future<void> _openCurrentSpeakerProfile() async {
-    final character = controller.currentSpeakerCharacter;
-    if (character == null) return;
+  String _characterArchiveKey(NovelCharacter character) =>
+      character.id.trim().isNotEmpty
+          ? character.id.trim()
+          : character.name.trim();
 
-    final key = character.id.trim().isNotEmpty
-        ? character.id.trim()
-        : character.name.trim();
+  void _focusCharacterInArchive(NovelCharacter character) {
+    final key = _characterArchiveKey(character);
     if (key.isEmpty) return;
 
     FocusManager.instance.primaryFocus?.unfocus();
-    await controller.bgm.stopTypingSound();
-    if (!mounted) return;
+    unawaited(controller.bgm.stopTypingSound());
 
-    if (character.isMain) {
-      await showNovelHostProfileSheet(context, controller);
+    setState(() {
+      // 主角 / NPC 统一进入“人物”主页面，只改变当前聚焦角色。
+      // focusRequestId 保证即使已经停留在人物页，再点一次头像也会重新聚焦。
+      _characterFocusKey = key;
+      _characterFocusRequestId++;
+      _primaryTab = _NovelPrimaryTab.characters;
+      _mountedPrimaryTabs.add(_NovelPrimaryTab.characters);
+    });
+  }
+
+  void _openHostCharacterArchive() {
+    final host = controller.protagonist;
+    if (host == null) {
+      _selectPrimaryTab(_NovelPrimaryTab.characters);
       return;
     }
-    await showNovelNpcProfileSheet(context, controller, character);
+    _focusCharacterInArchive(host);
+  }
+
+  Future<void> _openCurrentSpeakerProfile() async {
+    final character = controller.currentSpeakerCharacter;
+    if (character == null || !mounted) return;
+    _focusCharacterInArchive(character);
   }
 
 
@@ -1684,33 +1756,25 @@ class _NovelGamePageState extends State<NovelGamePage>
                       duration: const Duration(milliseconds: 360),
                       switchInCurve: Curves.easeOutCubic,
                       switchOutCurve: Curves.easeInCubic,
-                      child: _backgroundPreviewBytes != null
-                          ? SizedBox.expand(
-                              key: ValueKey<String>(
-                                'developer-background|${_backgroundPreviewFileName ?? ''}|${_backgroundPreviewBytes!.lengthInBytes}',
-                              ),
-                              child: Image.memory(
-                                _backgroundPreviewBytes!,
-                                fit: BoxFit.cover,
-                                alignment: Alignment.center,
-                                gaplessPlayback: true,
-                                filterQuality: FilterQuality.high,
-                              ),
-                            )
-                          : NovelWorldBackground(
-                              url: background,
-                              fallbackAsset: 'assets/images/background_home.png',
-                              characterPresent: controller.storyStarted &&
-                                  controller.currentSpeakerName.isNotEmpty &&
-                                  !controller.isCinematic,
-                              isGenerating: controller.isGenerating,
-                              weatherEffect: _weatherPreviewOverride != null
-                                  ? activeWeather
-                                  : (controller.settings.weatherEffectsEnabled
-                                      ? activeWeather
-                                      : NovelWeatherEffect.none),
-                              timePeriod: activeTime,
-                            ),
+                      child: NovelWorldBackground(
+                        url: _backgroundPreviewBytes == null ? background : '',
+                        memoryBytes: _backgroundPreviewBytes,
+                        memoryCacheKey: _backgroundPreviewBytes == null
+                            ? ''
+                            : 'developer-background|$_backgroundPreviewVersion|${_backgroundPreviewFileName ?? ''}|${_backgroundPreviewBytes!.lengthInBytes}',
+                        parallaxStrength: _backgroundParallaxStrength,
+                        fallbackAsset: 'assets/images/background_home.png',
+                        characterPresent: controller.storyStarted &&
+                            controller.currentSpeakerName.isNotEmpty &&
+                            !controller.isCinematic,
+                        isGenerating: controller.isGenerating,
+                        weatherEffect: _weatherPreviewOverride != null
+                            ? activeWeather
+                            : (controller.settings.weatherEffectsEnabled
+                                ? activeWeather
+                                : NovelWeatherEffect.none),
+                        timePeriod: activeTime,
+                      ),
                     ),
                   ),
                   SafeArea(
@@ -1807,7 +1871,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                               child: NovelTopHud(
                                 controller: controller,
                                 onMenu: widget.onBack ?? openDrawer,
-                                onOpenProfile: () => showNovelHostProfileSheet(context, controller),
+                                onOpenProfile: _openHostCharacterArchive,
                                 onOpenStore: () =>
                                     showNovelStoreSheet(context, controller),
                                 onOpenSettings: () => showNovelSettingsSheet(

@@ -13,8 +13,10 @@ class NovelDeveloperPreviewActions {
     required this.weatherOverride,
     required this.timeOverride,
     required this.backgroundPreviewName,
+    required this.parallaxStrength,
     required this.setWeatherOverride,
     required this.setTimeOverride,
+    required this.setParallaxStrength,
     required this.setBackgroundPreview,
     required this.clearBackgroundPreview,
     required this.previewCharacterSetup,
@@ -54,8 +56,10 @@ class NovelDeveloperPreviewActions {
   final NovelWeatherEffect? Function() weatherOverride;
   final NovelTimePeriod? Function() timeOverride;
   final String? Function() backgroundPreviewName;
+  final double Function() parallaxStrength;
   final Future<void> Function(NovelWeatherEffect? value) setWeatherOverride;
   final void Function(NovelTimePeriod? value) setTimeOverride;
+  final ValueChanged<double> setParallaxStrength;
   final void Function(Uint8List bytes, String fileName) setBackgroundPreview;
   final VoidCallback clearBackgroundPreview;
 
@@ -258,6 +262,8 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
     final currentWeather = actions.weatherOverride();
     final currentTime = actions.timeOverride();
     final currentBackgroundName = actions.backgroundPreviewName();
+    final currentParallaxStrength =
+        actions.parallaxStrength().clamp(.15, 2.5).toDouble();
     const weatherOptions = <NovelWeatherEffect?>[
       null,
       NovelWeatherEffect.none,
@@ -718,9 +724,71 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                   ),
                 ],
                 Divider(height: 22, color: Colors.white.withOpacity(.10)),
+                Row(
+                  children: <Widget>[
+                    const Expanded(
+                      child: Text(
+                        '2.5D 强度',
+                        style: TextStyle(
+                          color: AppColors.textOnDark,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      currentParallaxStrength.toStringAsFixed(2),
+                      style: TextStyle(
+                        color: _novelDrawerAccent.withOpacity(.95),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w800,
+                        fontFeatures: const <FontFeature>[
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Slider(
+                  value: currentParallaxStrength,
+                  min: .15,
+                  max: 2.5,
+                  divisions: 47,
+                  onChanged: (value) {
+                    actions.setParallaxStrength(value);
+                    if (mounted) setState(() {});
+                  },
+                ),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: <double>[.75, 1.0, 1.5, 2.0, 2.5].map((value) {
+                    return _DeveloperChoiceChip(
+                      label: value.toStringAsFixed(value == 1.0 || value == 2.0 ? 1 : 2),
+                      selected: (currentParallaxStrength - value).abs() < .03,
+                      onTap: () {
+                        actions.setParallaxStrength(value);
+                        if (mounted) setState(() {});
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  currentBackgroundName == null
+                      ? '默认 1.50。选择背景后会直接走正式剧情的 Depth + Shader；调强度后回到剧情页即可比较。'
+                      : '当前本地背景正在复用正式剧情 2.5D 链路；调整后回到剧情页立即生效。',
+                  style: TextStyle(
+                    color: AppColors.textOnDarkMuted.withOpacity(.76),
+                    fontSize: 9.6,
+                    height: 1.45,
+                  ),
+                ),
+                Divider(height: 22, color: Colors.white.withOpacity(.10)),
                 _DeveloperPreviewRow(
-                  title: '2.5D 深度预览',
-                  subtitle: '上传图片后自动生成 Depth；鼠标 / 触摸移动查看立体视差',
+                  title: '独立 2.5D 深度实验室',
+                  subtitle: '单独查看原图 / Depth / Shader；正式剧情预览请直接用上方“更换背景”',
                   onTap: _openDepthParallaxPreview,
                 ),
                 Divider(height: 22, color: Colors.white.withOpacity(.10)),
