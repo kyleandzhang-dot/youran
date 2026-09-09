@@ -50,6 +50,74 @@ JsonMap decodeJsonMap(String value) {
   }
 }
 
+class NovelStoryClock {
+  const NovelStoryClock({
+    this.version = 1,
+    this.enabled = true,
+    this.dayIndex = 1,
+    this.minuteOfDay,
+    this.period = '',
+    this.timePrecision = 'unknown',
+    this.configuredPrecision = 'auto',
+    this.dayLabel = '',
+    this.timeDescription = '',
+    this.display = '',
+  });
+
+  final int version;
+  final bool enabled;
+  final int dayIndex;
+  final int? minuteOfDay;
+  final String period;
+  final String timePrecision;
+  final String configuredPrecision;
+  final String dayLabel;
+  final String timeDescription;
+  final String display;
+
+  String get periodKey => period.trim().toLowerCase();
+
+  bool get hasKnownTime =>
+      enabled && (display.trim().isNotEmpty || periodKey.isNotEmpty || minuteOfDay != null);
+
+  String get displayLabel {
+    final explicit = display.trim();
+    if (explicit.isNotEmpty) return explicit;
+    if (!enabled) return '';
+    final day = dayLabel.trim().isNotEmpty ? dayLabel.trim() : '第${dayIndex < 1 ? 1 : dayIndex}天';
+    final time = timeDescription.trim();
+    return time.isEmpty ? day : '$day · $time';
+  }
+
+  factory NovelStoryClock.fromDynamic(dynamic value) {
+    final json = asJsonMap(value);
+    if (json.isEmpty) return const NovelStoryClock();
+
+    final rawMinute = json['minute_of_day'];
+    final parsedMinute = rawMinute == null ? null : intValue(rawMinute, -1);
+    final minute = parsedMinute != null && parsedMinute >= 0 && parsedMinute < 1440
+        ? parsedMinute
+        : null;
+    final dayIndex = intValue(json['day_index'], 1);
+
+    return NovelStoryClock(
+      version: intValue(json['version'], 1),
+      enabled: boolValue(json['enabled'], true),
+      dayIndex: dayIndex < 1 ? 1 : dayIndex,
+      minuteOfDay: minute,
+      period: stringValue(json['period'] ?? json['period_key']).trim().toLowerCase(),
+      timePrecision: stringValue(json['time_precision'], 'unknown').trim().toLowerCase(),
+      configuredPrecision:
+          stringValue(json['configured_precision'], 'auto').trim().toLowerCase(),
+      dayLabel: stringValue(json['day_label']),
+      timeDescription: stringValue(
+        json['time_desc'] ?? json['period_name'],
+      ),
+      display: stringValue(json['display']),
+    );
+  }
+}
+
 class NovelWorldState {
   const NovelWorldState({
     this.location = '',
@@ -519,27 +587,41 @@ class NovelChoice {
   const NovelChoice({
     required this.text,
     this.type = 'normal',
+    this.intent = 'dialogue',
+    this.role = 'alternative',
     this.dice = false,
     String iconPath = '',
     this.raw = const <String, dynamic>{},
   }) : _iconPath = iconPath;
 
-  /// 三类剧情选项的默认图标资源路径。
-  /// 以后只需要把对应 PNG 放到这些位置，并在 pubspec.yaml 中声明 assets。
+  /// 剧情选项的默认图标资源路径。
+  /// progress 与 dialogue/action/battle 使用完全相同的资源约定；
+  /// 只需要把对应图片放到这些位置，并在 pubspec.yaml 中声明 assets。
   static const String dialogueIconPath =
       'assets/images/choices/dialogue.webp';
   static const String actionIconPath =
       'assets/images/choices/action.webp';  
   static const String battleIconPath =
       'assets/images/choices/battle.webp';
+  static const String progressIconPath =
+      'assets/images/choices/progress.webp';
 
   final String text;
   final String type;
+  /// 玩法语义，与路由 type 分离。progress 表示继续玩家已经确定的当前目标。
+  final String intent;
+  /// primary 只是展示优先级，不改变 dialogue/action/battle 的执行路由。
+  final String role;
   final bool dice;
   final String _iconPath;
   final JsonMap raw;
 
   String get normalizedType => type.trim().toLowerCase();
+  String get normalizedIntent => intent.trim().toLowerCase();
+  String get normalizedRole => role.trim().toLowerCase();
+
+  bool get isProgress => normalizedIntent == 'progress';
+  bool get isPrimary => normalizedRole == 'primary';
 
   bool get isDialogue =>
       normalizedType == 'dialogue' ||
@@ -575,11 +657,12 @@ class NovelChoice {
     final explicit = _iconPath.trim();
     if (explicit.isNotEmpty) return explicit;
 
-    return switch (normalizedType) {
-      'action' => actionIconPath,
-      'battle' => battleIconPath,
-      _ => dialogueIconPath,
-    };
+    // 路由危险性优先：正式 battle/action 仍显示原来的战斗/判定图标；
+    // 只有无需检定的普通 progress 才显示独立推进图标。
+    if (isBattle) return battleIconPath;
+    if (isAction) return actionIconPath;
+    if (isProgress) return progressIconPath;
+    return dialogueIconPath;
   }
 
   factory NovelChoice.fromDynamic(dynamic value) {
@@ -588,6 +671,8 @@ class NovelChoice {
     return NovelChoice(
       text: stringValue(json['text'] ?? json['label']),
       type: stringValue(json['type'], 'normal'),
+      intent: stringValue(json['intent'], 'dialogue'),
+      role: stringValue(json['role'], 'alternative'),
       dice: boolValue(json['dice'] ?? json['need_check']),
       iconPath: stringValue(
         json['icon_path'] ?? json['iconPath'] ?? json['icon'],

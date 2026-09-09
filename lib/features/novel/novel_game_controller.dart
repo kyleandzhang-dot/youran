@@ -344,7 +344,11 @@ class NovelGameController extends ChangeNotifier {
 
   NovelScenario? scenario;
   NovelWorldState world = const NovelWorldState();
-  String worldTimePeriodKey = '';
+  NovelStoryClock storyClock = const NovelStoryClock(enabled: false);
+  /// 最近一次 /scene-map 的完整权威快照。剧情页的可对话角色与地图共用它，
+  /// 避免页面再发第二次请求而读到不同结算阶段的数据。
+  JsonMap sceneMapPayload = <String, dynamic>{};
+  int sceneMapRevision = 0;
   List<NovelMessage> messages = <NovelMessage>[];
   List<NovelSentence> sentences = <NovelSentence>[];
   List<NovelChoice> choices = <NovelChoice>[];
@@ -412,10 +416,27 @@ class NovelGameController extends ChangeNotifier {
   }
 
   String get effectiveWorldTimePeriodKey {
-    final explicit = _normalizeWorldTimePeriodKey(worldTimePeriodKey);
-    if (explicit.isNotEmpty) return explicit;
-    final inferred = _normalizeWorldTimePeriodKey(world.timeDescription);
-    return inferred.isNotEmpty ? inferred : 'noon';
+    // story_clock 是唯一时间真值。没有建立时钟前使用中性 noon 光照，
+    // 不再从 time_desc / time_label 反向猜当前时间。
+    final clockPeriod = _normalizeWorldTimePeriodKey(storyClock.periodKey);
+    return clockPeriod.isNotEmpty ? clockPeriod : 'noon';
+  }
+
+  String get storyTimeDisplay => storyClock.displayLabel;
+
+  void _applyStoryClock(dynamic raw) {
+    final data = asJsonMap(raw);
+    if (data.isEmpty) return;
+    final next = NovelStoryClock.fromDynamic(data);
+    storyClock = next;
+
+    // NovelWorldState 里的旧展示字段继续作为单向投影供现有 UI 使用，
+    // 但永远不能反过来成为时间来源。
+    world = world.copyWith(
+      timeDescription: next.timeDescription,
+      timeLabel: next.dayLabel,
+      currentDay: next.dayIndex,
+    );
   }
 
   /// 远端 AI 模型配置。Vue 原版把这部分散在 index.vue；
@@ -549,7 +570,7 @@ class NovelGameController extends ChangeNotifier {
   String get locationSubtitle {
     final raw = world.location;
     final parts = raw.split(RegExp(r'[^一-龥a-zA-Z0-9]+')).where((part) => part.isNotEmpty).toList();
-    if (parts.length <= 1) return world.timeDescription;
+    if (parts.length <= 1) return '';
     return parts.sublist(0, parts.length - 1).join(' · ');
   }
 
@@ -797,7 +818,6 @@ class NovelGameController extends ChangeNotifier {
       ]);
       scenario = await backend.fetchScenario(scenarioId, full: true);
       world = scenario!.worldState;
-      worldTimePeriodKey = _normalizeWorldTimePeriodKey(world.timeDescription);
       bgm.setConfig(scenario!.bgmConfig);
       unawaited(bgm.preloadTypingSfx());
 
@@ -922,32 +942,14 @@ class NovelGameController extends ChangeNotifier {
 
     world = world.copyWith(
       location: stringValue(attributes['location'], world.location),
-      timeDescription: stringValue(
-        attributes['time_desc'] ?? attributes['world_time_str'],
-        world.timeDescription,
-      ),
       weather: stringValue(attributes['weather'], world.weather),
       atmosphere: stringValue(attributes['atmosphere'], world.atmosphere),
       backgroundUrl: stringValue(
         attributes['current_background_url'] ?? attributes['background_image'],
         world.backgroundUrl,
       ),
-      timeLabel: stringValue(attributes['time_label'], world.timeLabel),
-      currentDay: intValue(
-        attributes['story_current_day'] ?? attributes['current_day'],
-        world.currentDay,
-      ),
     );
-    final historyWorldTime = asJsonMap(attributes['world_time']);
-    final historyPeriodKey = stringValue(
-      attributes['period_key'] ?? historyWorldTime['period_key'],
-    );
-    final normalizedHistoryPeriod = _normalizeWorldTimePeriodKey(
-      historyPeriodKey.isNotEmpty ? historyPeriodKey : world.timeDescription,
-    );
-    if (normalizedHistoryPeriod.isNotEmpty) {
-      worldTimePeriodKey = normalizedHistoryPeriod;
-    }
+    _applyStoryClock(attributes['story_clock']);
 
     if (attributes['protagonist_condition'] != null) {
       protagonistCondition = stringValue(attributes['protagonist_condition'], protagonistCondition);
@@ -1681,6 +1683,9 @@ class NovelGameController extends ChangeNotifier {
         payload = await backend.fetchSceneMap(sessionId);
       }
       sceneMap = NovelSceneMapData.fromDynamic(payload);
+      sceneMapPayload = Map<String, dynamic>.of(payload);
+      _applyStoryClock(payload['story_clock']);
+      sceneMapRevision += 1;
       _lastSceneMapRefreshAt = DateTime.now();
     } on NoSuchMethodError {
       sceneMapError = '当前客户端尚未接入场景地图接口';
@@ -2267,20 +2272,10 @@ class NovelGameController extends ChangeNotifier {
     final previousMessageLocation = world.location;
     world = world.copyWith(
       location: stringValue(extra['location'], world.location),
-      timeDescription: stringValue(extra['time_desc'], world.timeDescription),
       weather: stringValue(extra['weather'], world.weather),
       atmosphere: stringValue(extra['atmosphere'], world.atmosphere),
     );
-    final messageWorldTime = asJsonMap(extra['world_time']);
-    final messagePeriodKey = stringValue(
-      extra['period_key'] ?? messageWorldTime['period_key'],
-    );
-    final normalizedMessagePeriod = _normalizeWorldTimePeriodKey(
-      messagePeriodKey.isNotEmpty ? messagePeriodKey : world.timeDescription,
-    );
-    if (normalizedMessagePeriod.isNotEmpty) {
-      worldTimePeriodKey = normalizedMessagePeriod;
-    }
+    _applyStoryClock(extra['story_clock']);
     if (world.location != previousMessageLocation) {
       surroundingsData = <String, dynamic>{};
       surroundingsAvailability = <String, dynamic>{};
@@ -3251,29 +3246,18 @@ class NovelGameController extends ChangeNotifier {
         playerHint = stringValue(data['player_hint']);
         break;
       case 'world_state_update':
-        final worldTimeData = asJsonMap(data['world_time']);
         final previousLocation = world.location;
         world = world.copyWith(
           location: stringValue(data['current_location'] ?? data['location'], world.location),
-          timeDescription: stringValue(
-            data['time_desc'] ?? worldTimeData['period_name'],
-            world.timeDescription,
-          ),
           weather: stringValue(data['weather'], world.weather),
           atmosphere: stringValue(data['atmosphere'], world.atmosphere),
-          timeLabel: stringValue(data['time_label'], world.timeLabel),
-          currentDay: intValue(data['story_current_day'] ?? data['current_day'], world.currentDay),
         );
-        final incomingPeriodKey = stringValue(worldTimeData['period_key']);
-        final normalizedPeriod = _normalizeWorldTimePeriodKey(
-          incomingPeriodKey.isNotEmpty ? incomingPeriodKey : world.timeDescription,
-        );
-        if (normalizedPeriod.isNotEmpty) {
-          worldTimePeriodKey = normalizedPeriod;
+        _applyStoryClock(data['story_clock']);
+        if (boolValue(data['is_timeskip']) && storyClock.displayLabel.isNotEmpty) {
+          timeSkipLabel = storyClock.displayLabel;
         }
-        if (boolValue(data['is_timeskip']) && stringValue(data['time_label']).isNotEmpty) {
-          timeSkipLabel = stringValue(data['time_label']);
-        }
+        // Presence/settlement 变化必须重读 scene-map。新的 conversation_targets 与
+        // story_clock 会在同一份快照里落到 Controller，页面不再自行竞争请求。
         unawaited(refreshSceneMap(force: true));
         if (world.location != previousLocation) {
           surroundingsData = <String, dynamic>{};

@@ -15,6 +15,10 @@ class NovelInputBar extends StatefulWidget {
     required this.luckyCardCount,
     required this.onToggleLuckyCard,
     required this.onSend,
+    this.targetActorName = '',
+    this.targetActorAvatarUrl = '',
+    this.targetActorPlaceholder = '',
+    this.onClearTargetActor,
   });
 
   final TextEditingController controller;
@@ -26,6 +30,10 @@ class NovelInputBar extends StatefulWidget {
   final int luckyCardCount;
   final VoidCallback onToggleLuckyCard;
   final ValueChanged<String> onSend;
+  final String targetActorName;
+  final String targetActorAvatarUrl;
+  final String targetActorPlaceholder;
+  final VoidCallback? onClearTargetActor;
 
   @override
   State<NovelInputBar> createState() => _NovelInputBarState();
@@ -832,6 +840,17 @@ class _NovelInputBarState extends State<NovelInputBar> {
     );
     final shortViewport = viewport.shortViewport;
     final shortWide = viewport.shortWide;
+    final targetActorName = widget.targetActorName.trim();
+    final targetActorActive = targetActorName.isNotEmpty;
+    final contextChips = <Widget>[
+      if (targetActorActive)
+        _TargetActorContextChip(
+          name: targetActorName,
+          avatarUrl: widget.targetActorAvatarUrl.trim(),
+          onClear: widget.onClearTargetActor,
+        ),
+      for (final item in referencedItems) _buildReferencedItemChip(item),
+    ];
 
     return AnimatedOpacity(
         opacity: widget.enabled ? 1 : .50,
@@ -893,16 +912,16 @@ class _NovelInputBarState extends State<NovelInputBar> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  if (referencedItems.isNotEmpty) ...<Widget>[
+                  if (contextChips.isNotEmpty) ...<Widget>[
+                    // 对话目标和引用物品是同一层“输入上下文”：角色优先，其后是物品引用。
                     SizedBox(
-                      height: shortViewport ? 23 : 26,
+                      height: shortViewport ? 26 : 30,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         physics: const BouncingScrollPhysics(),
-                        itemCount: referencedItems.length,
+                        itemCount: contextChips.length,
                         separatorBuilder: (_, __) => const SizedBox(width: 5),
-                        itemBuilder: (context, index) =>
-                            _buildReferencedItemChip(referencedItems[index]),
+                        itemBuilder: (context, index) => contextChips[index],
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -1037,7 +1056,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 7),
+                            const SizedBox(width: 6),
                             Expanded(
                               child: Focus(
                                 onKeyEvent: _handleInputKey,
@@ -1050,7 +1069,9 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                   keyboardType: TextInputType.multiline,
                                   textInputAction: TextInputAction.send,
                                   onSubmitted: (_) => _submit(),
-                                  cursorColor: NovelPalette.accent,
+                                  cursorColor: targetActorActive
+                                      ? Colors.white.withOpacity(.92)
+                                      : NovelPalette.accent,
                                   style: TextStyle(
                                     color: const Color(0xFFF4F3EE),
                                     fontSize: shortViewport ? 13.4 : 14,
@@ -1062,13 +1083,19 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                         ? '正在转文字…'
                                         : speaking
                                             ? '正在听… 松开后转成文字'
-                                            : (widget.luckyCardActive
-                                                ? '运气已加持，描述你的行动…'
-                                                : '描述你想做的事…'),
+                                            : targetActorActive
+                                                ? '输入要说的话…'
+                                                : (widget.luckyCardActive
+                                                    ? '运气已加持，描述你的行动…'
+                                                    : '描述你想做的事…'),
                                     hintStyle: TextStyle(
                                       color: speechBusy
-                                          ? NovelPalette.accent.withOpacity(.76)
-                                          : Colors.white.withOpacity(focused ? .48 : .32),
+                                          ? Colors.white.withOpacity(.58)
+                                          : Colors.white.withOpacity(
+                                              targetActorActive
+                                                  ? (focused ? .42 : .30)
+                                                  : (focused ? .48 : .32),
+                                            ),
                                       fontSize: shortViewport ? 12.5 : 13.2,
                                       fontWeight: FontWeight.w400,
                                     ),
@@ -1389,6 +1416,193 @@ class _ReferencedInventoryChipState extends State<_ReferencedInventoryChip> {
                 ),
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class _TargetActorContextChip extends StatelessWidget {
+  const _TargetActorContextChip({
+    required this.name,
+    this.avatarUrl = '',
+    this.onClear,
+  });
+
+  final String name;
+  final String avatarUrl;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = NovelViewportMetrics.of(context).compactChrome;
+    final textColor = Colors.white.withOpacity(.90);
+    final subtleColor = Colors.white.withOpacity(.52);
+    final avatarSize = compact ? 18.0 : 20.0;
+    final prefixHeight = compact ? 25.0 : 28.0;
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: compact ? 140 : 168),
+      child: Container(
+        height: prefixHeight,
+        padding: EdgeInsets.only(
+          left: compact ? 6 : 7,
+          right: onClear == null ? (compact ? 7 : 8) : 3,
+        ),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(.040),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(
+            color: Colors.white.withOpacity(.135),
+            width: .65,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              '对',
+              style: TextStyle(
+                color: subtleColor,
+                fontSize: compact ? 10.4 : 11.0,
+                height: 1,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 5),
+            _TargetActorMiniAvatar(
+              name: name,
+              avatarUrl: avatarUrl,
+              size: avatarSize,
+            ),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: compact ? 10.8 : 11.5,
+                  height: 1,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: .05,
+                ),
+              ),
+            ),
+            const SizedBox(width: 3),
+            Text(
+              '说：',
+              style: TextStyle(
+                color: subtleColor,
+                fontSize: compact ? 10.4 : 11.0,
+                height: 1,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            if (onClear != null) ...<Widget>[
+              const SizedBox(width: 2),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onClear,
+                  borderRadius: BorderRadius.circular(5),
+                  splashColor: Colors.white.withOpacity(.055),
+                  highlightColor: Colors.white.withOpacity(.035),
+                  child: SizedBox(
+                    width: compact ? 21 : 23,
+                    height: prefixHeight,
+                    child: Center(
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: compact ? 13.5 : 14.5,
+                        color: Colors.white.withOpacity(.62),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TargetActorMiniAvatar extends StatelessWidget {
+  const _TargetActorMiniAvatar({
+    required this.name,
+    required this.avatarUrl,
+    required this.size,
+  });
+
+  final String name;
+  final String avatarUrl;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final cleanAvatar = avatarUrl.trim();
+    final initial = name.trim().isEmpty ? '' : name.trim().substring(0, 1);
+    final radius = BorderRadius.circular(5);
+
+    if (cleanAvatar.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: radius,
+        child: Image.network(
+          cleanAvatar,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _AvatarFallback(
+            initial: initial,
+            size: size,
+            radius: radius,
+          ),
+        ),
+      );
+    }
+
+    return _AvatarFallback(
+      initial: initial,
+      size: size,
+      radius: radius,
+    );
+  }
+}
+
+class _AvatarFallback extends StatelessWidget {
+  const _AvatarFallback({
+    required this.initial,
+    required this.size,
+    required this.radius,
+  });
+
+  final String initial;
+  final double size;
+  final BorderRadius radius;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: radius,
+      child: Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        color: Colors.white.withOpacity(.070),
+        child: Text(
+          initial,
+          maxLines: 1,
+          overflow: TextOverflow.clip,
+          style: TextStyle(
+            color: Colors.white.withOpacity(.86),
+            fontSize: size * .48,
+            height: 1,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ),

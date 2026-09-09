@@ -99,6 +99,13 @@ class _NovelGamePageState extends State<NovelGamePage>
   String? _sceneArrivalPreviewTitle;
   String? _sceneArrivalPreviewSubtitle;
   int _sceneArrivalRunId = 0;
+  List<NovelSceneBark> _sceneBarks = const <NovelSceneBark>[];
+  List<NovelSceneBarkActor> _talkTargets = const <NovelSceneBarkActor>[];
+  NovelSceneBarkActor? _targetSceneActor;
+  String _sceneBarkRefreshToken = '';
+  int _sceneBarkRefreshRequestId = 0;
+  Timer? _sceneBarkRefreshTimer;
+  bool _lastGeneratingForBarks = false;
 
   NovelGameController get controller => widget.controller;
 
@@ -202,6 +209,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     // 初始化失败时由页面自动打开菜单，不再继续预加载剧情音频。
     if (!controller.isInitialized) return;
 
+    _scheduleSceneBarkRefresh(force: true);
+
     // 进入剧情后先生成并预热内存打字音，避免第一段流式文字到来时
     // Android / iOS 才初始化播放器池而丢失前几个 tick。
     await controller.bgm.preloadTypingSfx();
@@ -234,6 +243,7 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _onControllerChanged() {
     if (!mounted) return;
     _syncSceneArrival();
+    _syncSceneBarksAfterControllerChange();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _processOverlayRequests();
@@ -274,6 +284,110 @@ class _NovelGamePageState extends State<NovelGamePage>
         _sceneArrivalPreviewSubtitle = null;
       });
     });
+  }
+
+  void _syncSceneBarksAfterControllerChange() {
+    final wasGenerating = _lastGeneratingForBarks;
+    _lastGeneratingForBarks = controller.isGenerating;
+
+    if (!controller.isInitialized ||
+        !controller.storyStarted ||
+        controller.isGenerating) {
+      return;
+    }
+
+    final token = _sceneBarkToken();
+    if (token.isEmpty) return;
+    if (token != _sceneBarkRefreshToken || wasGenerating) {
+      _scheduleSceneBarkRefresh(force: wasGenerating);
+    }
+  }
+
+  String _sceneBarkToken() {
+    final sessionId = controller.sessionId.trim();
+    if (sessionId.isEmpty) return '';
+    return <String>[
+      sessionId,
+      controller.locationTitle.trim(),
+      controller.locationSubtitle.trim(),
+      '${controller.sceneMapRevision}',
+    ].join('\u0001');
+  }
+
+  void _scheduleSceneBarkRefresh({bool force = false}) {
+    _sceneBarkRefreshTimer?.cancel();
+    _sceneBarkRefreshTimer = Timer(
+      force ? Duration.zero : const Duration(milliseconds: 280),
+      () => unawaited(_refreshSceneBarks(force: force)),
+    );
+  }
+
+  Future<void> _refreshSceneBarks({bool force = false}) async {
+    if (!mounted || !controller.isInitialized || !controller.storyStarted) {
+      return;
+    }
+    final token = _sceneBarkToken();
+    if (token.isEmpty) return;
+    if (!force &&
+        token == _sceneBarkRefreshToken &&
+        (_sceneBarks.isNotEmpty || _talkTargets.isNotEmpty)) {
+      return;
+    }
+
+    final requestId = ++_sceneBarkRefreshRequestId;
+    _sceneBarkRefreshToken = token;
+    try {
+      // Scene people 与地图、story_clock 共用 Controller 的同一份权威 scene-map 快照。
+      // 如果初始化阶段快照还没到，只触发 Controller 刷新；revision 更新后本方法会自动重跑。
+      if (controller.sceneMapPayload.isEmpty) {
+        await controller.refreshSceneMap(force: true, notify: false);
+      }
+      if (!mounted || requestId != _sceneBarkRefreshRequestId) return;
+      final payload = controller.sceneMapPayload;
+      final nextBarks = NovelSceneBark.listFromSceneMap(payload);
+      final nextTargets = NovelSceneBarkActor.talkTargetsFromSceneMap(payload);
+      setState(() {
+        _sceneBarks = nextBarks;
+        _talkTargets = nextTargets;
+        if (_targetSceneActor != null &&
+            !nextTargets.any((actor) => actor.id == _targetSceneActor!.id) &&
+            !nextBarks.any((bark) => bark.clickable && bark.actor.id == _targetSceneActor!.id)) {
+          _targetSceneActor = null;
+        }
+      });
+    } catch (error) {
+      // 场景气泡只是氛围层，拉取失败不应该打断剧情阅读。
+      debugPrint('刷新场景气泡失败：$error');
+    }
+  }
+
+  void _handleSceneBarkTap(NovelSceneBark bark) {
+    if (!bark.clickable || bark.actor.cleanName.isEmpty) return;
+    setState(() => _targetSceneActor = bark.actor);
+    _inputFocusNode.requestFocus();
+  }
+
+  void _handleTalkTargetTap(NovelSceneBarkActor actor) {
+    if (actor.cleanName.isEmpty) return;
+    setState(() => _targetSceneActor = actor);
+    _inputFocusNode.requestFocus();
+  }
+
+  void _clearTargetSceneActor() {
+    if (_targetSceneActor == null) return;
+    setState(() => _targetSceneActor = null);
+  }
+
+  void _sendStoryInput(String text) {
+    controller.goLatest();
+    final target = _targetSceneActor;
+    final cleanText = text.trim();
+    if (target != null && target.cleanName.isNotEmpty) {
+      setState(() => _targetSceneActor = null);
+      unawaited(controller.sendPlayerMessage('对${target.cleanName}说：$cleanText'));
+      return;
+    }
+    unawaited(controller.sendPlayerMessage(cleanText));
   }
 
   Future<void> _openSceneMap() async {
@@ -477,6 +591,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     WidgetsBinding.instance.removeObserver(this);
     controller.removeListener(_onControllerChanged);
     _sceneArrivalTimer?.cancel();
+    _sceneBarkRefreshTimer?.cancel();
     _inputController.dispose();
     _inputFocusNode.dispose();
     if (widget.disposeController) controller.dispose();
@@ -828,6 +943,12 @@ class _NovelGamePageState extends State<NovelGamePage>
       NovelChoice(
         text: '迎战挡在前方的对手',
         type: 'battle',
+      ),
+      NovelChoice(
+        text: '继续前往当前目标',
+        type: 'dialogue',
+        intent: 'progress',
+        role: 'primary',
       ),
     ];
 
@@ -1799,16 +1920,12 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 controller.locationSubtitle;
                         final rawLocationSubtitle =
                             controller.locationSubtitle.trim();
-                        final worldTimeLabel =
-                            controller.world.timeDescription.trim();
-                        final worldMapHudTitle = rawLocationSubtitle.isNotEmpty &&
-                                rawLocationSubtitle != worldTimeLabel
-                            ? rawLocationSubtitle.split(' · ').first
-                            : controller.locationTitle;
-                        final worldMapHudSubtitle =
-                            worldMapHudTitle != controller.locationTitle
-                                ? '当前位置 · ${controller.locationTitle}'
-                                : rawLocationSubtitle;
+                        final worldTimeLabel = controller.storyTimeDisplay.trim();
+                        final worldMapHudTitle = controller.locationTitle;
+                        final worldMapHudSubtitle = <String>[
+                          if (worldTimeLabel.isNotEmpty) worldTimeLabel,
+                          if (rawLocationSubtitle.isNotEmpty) rawLocationSubtitle,
+                        ].join(' · ');
                         final sceneHudTransitionDuration = _sceneArrivalActive
                             ? const Duration(milliseconds: 180)
                             : const Duration(milliseconds: 620);
@@ -1841,6 +1958,20 @@ class _NovelGamePageState extends State<NovelGamePage>
                         final inlineSurroundingsEnabled =
                             inlineSurroundingsVisible &&
                             !controller.isSurroundingsLoading;
+                        final rightSceneExploreVisible =
+                            !showInlineSurroundingsDock &&
+                            _primaryTab == _NovelPrimaryTab.story &&
+                            controller.storyStarted &&
+                            !controller.isCinematic &&
+                            !keyboardActive &&
+                            !controller.hasNext &&
+                            !controller.isGenerating &&
+                            !_sceneArrivalActive &&
+                            !_battleOpen &&
+                            !_endingOpen &&
+                            controller.surroundingsActionLabel
+                                .trim()
+                                .isNotEmpty;
 
                         return Stack(
                           // 允许底部探索区单独越过 SafeArea 的左右 14px，
@@ -1977,21 +2108,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                                         ? constraints.maxWidth
                                         : math.min(720.0, constraints.maxWidth),
                                     child: NovelChoiceDockActionScope(
-                                      // 底部大探索舞台已隐藏，恢复原来的轻量“探索周围”入口。
-                                      // 只在最新剧情、生成结束且没有其他覆盖层时出现。
-                                      visible: !showInlineSurroundingsDock &&
-                                          _primaryTab == _NovelPrimaryTab.story &&
-                                          controller.storyStarted &&
-                                          !controller.isCinematic &&
-                                          !keyboardActive &&
-                                          !controller.hasNext &&
-                                          !controller.isGenerating &&
-                                          !_sceneArrivalActive &&
-                                          !_battleOpen &&
-                                          !_endingOpen &&
-                                          controller.surroundingsActionLabel
-                                              .trim()
-                                              .isNotEmpty,
+                                      // 右侧“可探索”现在并入附近人物工具组，
+                                      // 这里关闭旧的独立悬浮入口，避免重复显示。
+                                      visible: false,
                                       label: controller.surroundingsActionLabel,
                                       attention: controller.surroundingsNeedsAttention,
                                       loading: controller.isSurroundingsLoading,
@@ -2004,10 +2123,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       active: _primaryTab == _NovelPrimaryTab.story,
                                       textController: _inputController,
                                       focusNode: _inputFocusNode,
-                                      onSend: (text) {
-                                        controller.goLatest();
-                                        unawaited(controller.sendPlayerMessage(text));
-                                      },
+                                      onSend: _sendStoryInput,
                                       onContinue: controller.continueStory,
                                       onForceContinue: controller.forceContinue,
                                       onOpenChoices: () =>
@@ -2027,9 +2143,66 @@ class _NovelGamePageState extends State<NovelGamePage>
                                           controller.currentSpeakerCharacter == null
                                               ? null
                                               : _openCurrentSpeakerProfile,
+                                      targetActorName:
+                                          _targetSceneActor?.cleanName ?? '',
+                                      targetActorAvatarUrl:
+                                          _targetSceneActor?.avatarUrl ?? '',
+                                      targetActorPlaceholder:
+                                          _targetSceneActor?.inputPlaceholder ?? '',
+                                      onClearTargetActor: _clearTargetSceneActor,
                                       ),
                                     ),
                                   ),
+                                ),
+                              ),
+                            if (_primaryTab == _NovelPrimaryTab.story &&
+                                controller.storyStarted &&
+                                !controller.isCinematic &&
+                                !keyboardActive &&
+                                !controller.isGenerating &&
+                                !_sceneArrivalActive &&
+                                !_battleOpen &&
+                                !_endingOpen &&
+                                (_talkTargets.isNotEmpty ||
+                                    rightSceneExploreVisible))
+                              Positioned(
+                                right: compact ? 6 : 14,
+                                top: shortWide ? 92 : 118,
+                                bottom: shortWide ? 84 : 212,
+                                child: NovelRightSceneDock(
+                                  targets: _talkTargets,
+                                  selectedActorId: _targetSceneActor?.id ?? '',
+                                  onSelected: _handleTalkTargetTap,
+                                  onClear: _clearTargetSceneActor,
+                                  exploreVisible: rightSceneExploreVisible,
+                                  exploreLabel: controller.isSurroundingsLoading
+                                      ? '探索中'
+                                      : '可探索',
+                                  exploreAttention:
+                                      controller.surroundingsNeedsAttention,
+                                  exploreLoading:
+                                      controller.isSurroundingsLoading,
+                                  onExplore: () => _selectPrimaryTab(
+                                    _NovelPrimaryTab.surroundings,
+                                  ),
+                                ),
+                              ),
+                            if (_primaryTab == _NovelPrimaryTab.story &&
+                                controller.storyStarted &&
+                                !controller.isCinematic &&
+                                !keyboardActive &&
+                                !controller.isGenerating &&
+                                !_sceneArrivalActive &&
+                                !_battleOpen &&
+                                !_endingOpen &&
+                                _sceneBarks.isNotEmpty)
+                              Positioned.fill(
+                                child: NovelSceneBarkLayer(
+                                  barks: _sceneBarks,
+                                  // 群众/摊贩气泡是场景常驻氛围层；选中对话对象后也不隐藏。
+                                  enabled: true,
+                                  bottomReserve: inlineSurroundingsHeight,
+                                  onBarkTap: _handleSceneBarkTap,
                                 ),
                               ),
                             if (inlineSurroundingsVisible)

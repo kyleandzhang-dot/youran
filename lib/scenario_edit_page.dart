@@ -1124,6 +1124,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final landscape = media.size.width > media.size.height;
+    final sidebarWidth = landscape
+        ? (media.size.width * .285).clamp(248.0, 340.0).toDouble()
+        : 0.0;
+
     return Theme(
       data: Theme.of(context).copyWith(
         brightness: Brightness.dark,
@@ -1139,37 +1145,373 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       ),
       child: Scaffold(
         backgroundColor: _pageBg,
+        resizeToAvoidBottomInset: true,
         body: _loading
             ? _buildLoading()
             : _error != null
                 ? _buildError()
                 : Stack(
                     children: [
-                      CustomScrollView(
-                        physics: const BouncingScrollPhysics(),
-                        slivers: [
-                          _buildAppBar(),
-                          SliverToBoxAdapter(child: _buildHero()),
-                          SliverToBoxAdapter(child: _buildSectionTabs()),
-                          SliverPadding(
-                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
-                            sliver: SliverToBoxAdapter(child: _buildCurrentSection()),
-                          ),
-                        ],
+                      if (landscape)
+                        _buildLandscapeEditor(sidebarWidth)
+                      else
+                        CustomScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          slivers: [
+                            _buildAppBar(),
+                            SliverToBoxAdapter(child: _buildHero()),
+                            SliverToBoxAdapter(child: _buildSectionTabs()),
+                            SliverPadding(
+                              padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+                              sliver: SliverToBoxAdapter(
+                                child: _buildCurrentSection(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      _buildBottomBar(
+                        leftInset: landscape ? sidebarWidth + 1 : 0,
+                        compact: landscape,
                       ),
-                      _buildBottomBar(),
                       if (_actionLoading)
                         Positioned.fill(
                           child: ColoredBox(
                             color: Colors.black.withOpacity(0.5),
                             child: const Center(
-                              child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.accent),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.2,
+                                color: AppColors.accent,
+                              ),
                             ),
                           ),
                         ),
                     ],
                   ),
       ),
+    );
+  }
+
+  Widget _buildLandscapeEditor(double sidebarWidth) {
+    return SafeArea(
+      bottom: false,
+      child: Column(
+        children: [
+          _buildLandscapeTopBar(),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  width: sidebarWidth,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(.015),
+                      border: Border(
+                        right: BorderSide(
+                          color: Colors.white.withOpacity(.055),
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    child: ListView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(14, 10, 14, 92),
+                      children: [
+                        _buildLandscapeHero(),
+                        const SizedBox(height: 18),
+                        _buildVerticalSectionTabs(),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final horizontalPadding = constraints.maxWidth >= 900
+                          ? 32.0
+                          : constraints.maxWidth >= 640
+                              ? 24.0
+                              : 16.0;
+                      return SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPadding,
+                          18,
+                          horizontalPadding,
+                          94,
+                        ),
+                        child: Align(
+                          alignment: Alignment.topCenter,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 1120),
+                            child: _buildCurrentSection(),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandscapeTopBar() {
+    return SizedBox(
+      height: 50,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: '返回',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: const Icon(
+                Icons.arrow_back_ios_new_rounded,
+                size: 18,
+                color: AppColors.textOnDark,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Text(
+              '编辑世界',
+              style: TextStyle(
+                color: AppColors.textOnDark,
+                fontSize: 14.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (_dirty) ...[
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withOpacity(.10),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+                child: const Text(
+                  '未保存',
+                  style: TextStyle(
+                    color: AppColors.accent,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+            const Spacer(),
+            IconButton(
+              tooltip: '更多',
+              visualDensity: VisualDensity.compact,
+              onPressed: _showMoreMenu,
+              icon: const Icon(
+                Icons.more_horiz_rounded,
+                color: AppColors.textOnDark,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeHero() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GestureDetector(
+              onTap: _editCover,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 88,
+                    height: 88,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: _coverUrl.isEmpty
+                        ? const Icon(
+                            Icons.landscape_outlined,
+                            size: 28,
+                            color: AppColors.textOnDarkMuted,
+                          )
+                        : Image.network(
+                            CdnUtil.resize(_coverUrl, width: 240),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const Icon(
+                              Icons.broken_image_outlined,
+                              color: AppColors.textOnDarkMuted,
+                            ),
+                          ),
+                  ),
+                  Positioned(
+                    right: -5,
+                    bottom: -5,
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: AppColors.accent,
+                        borderRadius: BorderRadius.circular(9),
+                        border: Border.all(color: _pageBg, width: 3),
+                      ),
+                      child: _uploadingCover
+                          ? const Padding(
+                              padding: EdgeInsets.all(6),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.4,
+                                color: Color(0xFF0C0C0C),
+                              ),
+                            )
+                          : const Icon(
+                              LucideIcons.camera,
+                              size: 13,
+                              color: Color(0xFF0C0C0C),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.accent.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      _modeLabel(_mode),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.accent,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _titleController,
+                    onChanged: (_) => _markDirty(),
+                    maxLines: 2,
+                    style: const TextStyle(
+                      color: AppColors.textOnDark,
+                      fontSize: 17,
+                      height: 1.12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: '世界名称',
+                      hintStyle: TextStyle(color: AppColors.textOnDarkMuted),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'ID  ${_id.isEmpty ? widget.scenarioId : _id}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: AppColors.textOnDarkMuted,
+            fontSize: 9.8,
+            fontFamily: 'Courier',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVerticalSectionTabs() {
+    final tabs = <(ScenarioEditorSection, String, IconData)>[
+      (ScenarioEditorSection.overview, '基础', Icons.tune_rounded),
+      (ScenarioEditorSection.characters, '角色', Icons.people_alt_outlined),
+      (ScenarioEditorSection.story, '剧情', Icons.route_rounded),
+      (ScenarioEditorSection.bgm, 'BGM', Icons.graphic_eq_rounded),
+      (ScenarioEditorSection.lorebook, '知识库', Icons.menu_book_outlined),
+    ];
+
+    return Column(
+      children: [
+        for (final item in tabs) ...[
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(11),
+              onTap: () => _setSection(item.$1),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                decoration: BoxDecoration(
+                  color: _section == item.$1
+                      ? AppColors.accent.withOpacity(.10)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      item.$3,
+                      size: 17,
+                      color: _section == item.$1
+                          ? AppColors.accent
+                          : AppColors.textOnDarkMuted,
+                    ),
+                    const SizedBox(width: 11),
+                    Text(
+                      item.$2,
+                      style: TextStyle(
+                        color: _section == item.$1
+                            ? AppColors.textOnDark
+                            : AppColors.textOnDarkMuted,
+                        fontSize: 12.5,
+                        fontWeight: _section == item.$1
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_section == item.$1)
+                      Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(
+                          color: AppColors.accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 3),
+        ],
+      ],
     );
   }
 
@@ -2041,35 +2383,46 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     );
   }
 
-  Widget _buildBottomBar() {
+  Widget _buildBottomBar({double leftInset = 0, bool compact = false}) {
     return Positioned(
-      left: 0,
+      left: leftInset,
       right: 0,
       bottom: 0,
       child: Container(
         padding: EdgeInsets.fromLTRB(
-          20,
-          12,
-          20,
-          16 + MediaQuery.paddingOf(context).bottom,
+          compact ? 16 : 20,
+          compact ? 8 : 12,
+          compact ? 16 : 20,
+          (compact ? 8 : 16) + MediaQuery.paddingOf(context).bottom,
         ),
         decoration: BoxDecoration(
           color: _pageBg.withOpacity(0.95),
+          border: compact
+              ? Border(
+                  top: BorderSide(
+                    color: Colors.white.withOpacity(.045),
+                    width: 1,
+                  ),
+                )
+              : null,
         ),
         child: Material(
           color: _dirty ? AppColors.accent : Colors.white.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(compact ? 10 : 12),
           child: InkWell(
             onTap: _saving ? null : (_dirty ? _save : widget.onPublish),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(compact ? 10 : 12),
             child: Container(
-              height: 52,
+              height: compact ? 42 : 52,
               alignment: Alignment.center,
               child: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF0C0C0C)),
+                  ? SizedBox(
+                      width: compact ? 18 : 20,
+                      height: compact ? 18 : 20,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF0C0C0C),
+                      ),
                     )
                   : Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -2080,10 +2433,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                               : widget.onPublish != null
                                   ? Icons.rocket_launch_outlined
                                   : Icons.check_rounded,
-                          size: 18,
-                          color: _dirty ? const Color(0xFF0C0C0C) : AppColors.textOnDarkMuted,
+                          size: compact ? 16 : 18,
+                          color: _dirty
+                              ? const Color(0xFF0C0C0C)
+                              : AppColors.textOnDarkMuted,
                         ),
-                        const SizedBox(width: 8),
+                        SizedBox(width: compact ? 7 : 8),
                         Text(
                           _dirty
                               ? '保存修改'
@@ -2091,9 +2446,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                                   ? '发布剧本'
                                   : '已保存',
                           style: TextStyle(
-                            fontSize: 14.5,
+                            fontSize: compact ? 13.2 : 14.5,
                             fontWeight: FontWeight.w700,
-                            color: _dirty ? const Color(0xFF0C0C0C) : AppColors.textOnDarkMuted,
+                            color: _dirty
+                                ? const Color(0xFF0C0C0C)
+                                : AppColors.textOnDarkMuted,
                           ),
                         ),
                       ],
@@ -2352,10 +2709,16 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
-    final dialogWidth = math.min(media.size.width - 28, 520.0);
+    final landscape = media.size.width > media.size.height;
+    final dialogWidth = landscape
+        ? math.min(media.size.width - 36, 860.0)
+        : math.min(media.size.width - 28, 520.0);
 
     return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: landscape ? 18 : 20,
+        vertical: landscape ? 10 : 20,
+      ),
       backgroundColor: const Color(0xFF141414),
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
@@ -2364,159 +2727,243 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
       child: SizedBox(
         width: dialogWidth,
         child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '裁剪剧本封面',
-                          style: TextStyle(
-                            color: AppColors.textOnDark,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        SizedBox(height: 6),
-                        Text(
-                          '固定 1:1 · 双指或滚轮缩放 · 拖动调整位置',
-                          style: TextStyle(
-                            color: AppColors.textOnDarkMuted,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _cropping ? null : () => Navigator.of(context).pop(),
-                    icon: const Icon(
-                      Icons.close_rounded,
-                      size: 20,
-                      color: AppColors.textOnDarkMuted,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              AspectRatio(
-                aspectRatio: 1,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: Crop(
-                      image: widget.image,
-                      controller: _cropController,
-                      aspectRatio: 1,
-                      interactive: true,
-                      fixCropRect: true,
-                      initialRectBuilder: InitialRectBuilder.withSizeAndRatio(
-                        size: 0.92,
-                        aspectRatio: 1,
-                      ),
-                      baseColor: Colors.black,
-                      maskColor: Colors.black.withOpacity(0.56),
-                      radius: 2,
-                      filterQuality: FilterQuality.medium,
-                      progressIndicator: const Center(
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppColors.accent,
-                        ),
-                      ),
-                      cornerDotBuilder: (_, __) => const SizedBox.shrink(),
-                      onCropped: (result) {
-                        switch (result) {
-                          case CropSuccess(:final croppedImage):
-                            if (mounted) {
-                              Navigator.of(context).pop(croppedImage);
-                            }
-                          case CropFailure(:final cause):
-                            if (!mounted) return;
-                            setState(() {
-                              _cropping = false;
-                              _error = '裁剪失败：$cause';
-                            });
-                        }
-                      },
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                '建议把人物主体和重要文字留在中间区域，发现页会按这个方形封面展示。',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: AppColors.textOnDarkMuted,
-                  fontSize: 12,
-                  height: 1.5,
-                ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFFE0554A), fontSize: 12),
-                ),
-              ],
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _cropping ? null : () => Navigator.of(context).pop(),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.textOnDarkMuted,
-                        side: BorderSide.none,
-                        backgroundColor: Colors.white.withOpacity(0.04),
-                        minimumSize: const Size.fromHeight(50),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: const Text('取消'),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: _cropping ? null : _confirmCrop,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: const Color(0xFF0B0B0B),
-                        minimumSize: const Size.fromHeight(50),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: _cropping
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Color(0xFF0B0B0B),
-                              ),
-                            )
-                          : const Text(
-                              '使用此封面',
-                              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-                            ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+          padding: EdgeInsets.all(landscape ? 18 : 24),
+          child: landscape
+              ? _buildLandscapeCropContent(media.size, dialogWidth)
+              : _buildPortraitCropContent(),
         ),
       ),
     );
   }
+
+  Widget _buildLandscapeCropContent(Size screenSize, double dialogWidth) {
+    final cropSize = math
+        .min(screenSize.height - 72, dialogWidth * .54)
+        .clamp(210.0, 430.0)
+        .toDouble();
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: cropSize,
+          height: cropSize,
+          child: _buildCropSurface(),
+        ),
+        const SizedBox(width: 22),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildCropHeader(compact: true),
+              const SizedBox(height: 14),
+              const Text(
+                '建议把人物主体和重要文字留在中间区域。横屏只是编辑布局变化，最终发现页仍按 1:1 方形封面展示。',
+                style: TextStyle(
+                  color: AppColors.textOnDarkMuted,
+                  fontSize: 11.5,
+                  height: 1.5,
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: Color(0xFFE0554A),
+                    fontSize: 11.5,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+              _buildCropActions(compact: true),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPortraitCropContent() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildCropHeader(),
+        const SizedBox(height: 20),
+        AspectRatio(
+          aspectRatio: 1,
+          child: _buildCropSurface(),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          '建议把人物主体和重要文字留在中间区域，发现页会按这个方形封面展示。',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.textOnDarkMuted,
+            fontSize: 12,
+            height: 1.5,
+          ),
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            _error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFFE0554A),
+              fontSize: 12,
+            ),
+          ),
+        ],
+        const SizedBox(height: 24),
+        _buildCropActions(),
+      ],
+    );
+  }
+
+  Widget _buildCropHeader({bool compact = false}) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '裁剪剧本封面',
+                style: TextStyle(
+                  color: AppColors.textOnDark,
+                  fontSize: compact ? 16 : 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              SizedBox(height: compact ? 4 : 6),
+              Text(
+                '固定 1:1 · 双指或滚轮缩放 · 拖动调整位置',
+                maxLines: 2,
+                style: TextStyle(
+                  color: AppColors.textOnDarkMuted,
+                  fontSize: compact ? 10.8 : 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
+          onPressed: _cropping ? null : () => Navigator.of(context).pop(),
+          icon: Icon(
+            Icons.close_rounded,
+            size: compact ? 18 : 20,
+            color: AppColors.textOnDarkMuted,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCropSurface() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: ColoredBox(
+        color: Colors.black,
+        child: Crop(
+          image: widget.image,
+          controller: _cropController,
+          aspectRatio: 1,
+          interactive: true,
+          fixCropRect: true,
+          initialRectBuilder: InitialRectBuilder.withSizeAndRatio(
+            size: 0.92,
+            aspectRatio: 1,
+          ),
+          baseColor: Colors.black,
+          maskColor: Colors.black.withOpacity(0.56),
+          radius: 2,
+          filterQuality: FilterQuality.medium,
+          progressIndicator: const Center(
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: AppColors.accent,
+            ),
+          ),
+          cornerDotBuilder: (_, __) => const SizedBox.shrink(),
+          onCropped: (result) {
+            switch (result) {
+              case CropSuccess(:final croppedImage):
+                if (mounted) {
+                  Navigator.of(context).pop(croppedImage);
+                }
+              case CropFailure(:final cause):
+                if (!mounted) return;
+                setState(() {
+                  _cropping = false;
+                  _error = '裁剪失败：$cause';
+                });
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCropActions({bool compact = false}) {
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton(
+            onPressed: _cropping ? null : () => Navigator.of(context).pop(),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.textOnDarkMuted,
+              side: BorderSide.none,
+              backgroundColor: Colors.white.withOpacity(0.04),
+              minimumSize: Size.fromHeight(compact ? 42 : 50),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(compact ? 10 : 12),
+              ),
+            ),
+            child: Text(
+              '取消',
+              style: TextStyle(fontSize: compact ? 12.5 : 14),
+            ),
+          ),
+        ),
+        SizedBox(width: compact ? 10 : 16),
+        Expanded(
+          child: FilledButton(
+            onPressed: _cropping ? null : _confirmCrop,
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.accent,
+              foregroundColor: const Color(0xFF0B0B0B),
+              minimumSize: Size.fromHeight(compact ? 42 : 50),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(compact ? 10 : 12),
+              ),
+            ),
+            child: _cropping
+                ? SizedBox(
+                    width: compact ? 18 : 20,
+                    height: compact ? 18 : 20,
+                    child: const CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF0B0B0B),
+                    ),
+                  )
+                : Text(
+                    '使用此封面',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: compact ? 12.5 : 14,
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
 }
 
 class _CharacterEditorSheet extends StatefulWidget {
@@ -2672,7 +3119,10 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final media = MediaQuery.of(context);
+    final bottomInset = media.viewInsets.bottom;
+    final size = media.size;
+    final landscape = size.width > size.height;
     final portrait = _portraitUrl.text.trim();
     final avatar = _avatarUrl.text.trim();
     final isPlayer = _character['role']?.toString() == 'player';
@@ -2681,218 +3131,366 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       duration: const Duration(milliseconds: 180),
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Container(
-        height: MediaQuery.sizeOf(context).height * 0.94,
-        decoration: const BoxDecoration(
+        height: landscape ? size.height * .96 : size.height * 0.94,
+        decoration: BoxDecoration(
           color: _bg,
+          borderRadius: landscape
+              ? const BorderRadius.vertical(top: Radius.circular(18))
+              : BorderRadius.zero,
         ),
+        clipBehavior: Clip.antiAlias,
         child: Column(
           children: [
             Container(
-              height: 56,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              height: landscape ? 50 : 56,
+              padding: EdgeInsets.symmetric(horizontal: landscape ? 10 : 16),
+              decoration: landscape
+                  ? BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: Colors.white.withOpacity(.05),
+                          width: 1,
+                        ),
+                      ),
+                    )
+                  : null,
               child: Row(
                 children: [
                   TextButton(
-                    onPressed: () => Navigator.pop(context), 
-                    child: const Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 15)),
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(
+                      '取消',
+                      style: TextStyle(
+                        color: AppColors.textOnDarkMuted,
+                        fontSize: landscape ? 13.5 : 15,
+                      ),
+                    ),
                   ),
                   Expanded(
                     child: Text(
                       isPlayer ? '主角档案' : '角色详情',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppColors.textOnDark, fontSize: 16, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        color: AppColors.textOnDark,
+                        fontSize: landscape ? 14.5 : 16,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   TextButton(
-                    onPressed: _save, 
-                    child: const Text('完成', style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700, fontSize: 15)),
+                    onPressed: _save,
+                    child: Text(
+                      '完成',
+                      style: TextStyle(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w700,
+                        fontSize: landscape ? 13.5 : 15,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
             Expanded(
-              child: ListView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 48),
-                children: [
-                  AspectRatio(
-                    aspectRatio: 4 / 6,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.03),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Stack(
-                        children: [
-                          Positioned.fill(
-                            child: portrait.isEmpty
-                                ? const Center(
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.image_outlined, size: 40, color: AppColors.textOnDarkMuted),
-                                        SizedBox(height: 12),
-                                        Text('角色立绘', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 14)),
-                                      ],
-                                    ),
-                                  )
-                                : Image.network(
-                                    CdnUtil.resize(portrait, width: 800),
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, __, ___) => const Center(
-                                      child: Icon(Icons.broken_image_outlined, color: AppColors.textOnDarkMuted),
-                                    ),
-                                  ),
-                          ),
-                          if (_uploadingPortrait)
-                            Positioned.fill(
-                              child: ColoredBox(
-                                color: Colors.black54,
-                                child: const Center(
-                                  child: SizedBox(
-                                    width: 32,
-                                    height: 32,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: AppColors.accent,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          Positioned(
-                            right: 12,
-                            bottom: 12,
-                            child: _mediaButton(
-                              label: _uploadingPortrait
-                                  ? '上传中'
-                                  : widget.onPickMedia != null
-                                      ? '替换立绘'
-                                      : '填写地址',
-                              loading: _uploadingPortrait,
-                              onTap: _uploadingPortrait
-                                  ? null
-                                  : widget.onPickMedia != null
-                                      ? () => _pick(ScenarioMediaKind.portrait)
-                                      : () => _showUrlEditor(_portraitUrl, '立绘地址'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _card(
-                    child: Row(
+              child: landscape
+                  ? _buildLandscapeCharacterEditor(portrait, avatar)
+                  : ListView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 48),
                       children: [
-                        GestureDetector(
-                          onTap: _uploadingAvatar
-                              ? null
-                              : widget.onPickMedia != null
-                                  ? () => _pick(ScenarioMediaKind.avatar)
-                                  : () => _showUrlEditor(_avatarUrl, '头像地址'),
-                          child: Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.04),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            clipBehavior: Clip.antiAlias,
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                avatar.isEmpty
-                                    ? const Icon(Icons.person_outline_rounded, size: 28, color: AppColors.textOnDarkMuted)
-                                    : Image.network(
-                                        CdnUtil.resize(avatar, width: 150),
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) => const Icon(
-                                          Icons.person_outline_rounded,
-                                          color: AppColors.textOnDarkMuted,
-                                        ),
-                                      ),
-                                if (_uploadingAvatar)
-                                  const ColoredBox(
-                                    color: Colors.black54,
-                                    child: Center(
-                                      child: SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: AppColors.accent,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              _field(_name, '姓名'),
-                              const SizedBox(height: 10),
-                              _field(_identity, '身份，例如：赛博黑客'),
-                            ],
-                          ),
-                        ),
+                        _buildPortraitEditor(portrait),
+                        const SizedBox(height: 16),
+                        _buildIdentityEditor(avatar),
+                        const SizedBox(height: 16),
+                        _buildCharacterSettingsEditor(),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  _card(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const _SheetTitle('角色设定'),
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: DropdownButtonFormField<String>(
-                                value: _genderValue,
-                                dropdownColor: const Color(0xFF161616),
-                                decoration: _decoration('性别'),
-                                icon: const Icon(Icons.expand_more_rounded, size: 18, color: AppColors.textOnDarkMuted),
-                                items: const ['男', '女', '未知']
-                                    .map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(color: AppColors.textOnDark, fontSize: 13))))
-                                    .toList(),
-                                onChanged: (value) => _jsonData['gender'] = value ?? '未知',
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(child: _field(_age, '年龄')),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        _field(_appearance, '外貌特征', minLines: 3),
-                        const SizedBox(height: 12),
-                        _field(_background, '背景 / 人设', minLines: 4),
-                        const SizedBox(height: 16),
-                        _listTagsEditor('性格标签', 'personality'),
-                        const SizedBox(height: 16),
-                        _listTagsEditor('喜欢', 'likes'),
-                        const SizedBox(height: 16),
-                        _listTagsEditor('讨厌', 'dislikes'),
-                        const SizedBox(height: 16),
-                        _listTagsEditor('说话风格', 'speech_style'),
-                        const SizedBox(height: 16),
-                        _field(_secret, '秘密 / 隐藏信息', minLines: 3),
-                        const SizedBox(height: 12),
-                        _field(_examples, '对话示例', minLines: 4),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeCharacterEditor(String portrait, String avatar) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final leftWidth = (constraints.maxWidth * .37)
+            .clamp(270.0, 420.0)
+            .toDouble();
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: leftWidth,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 10, 14),
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: _buildPortraitEditor(portrait, fill: true),
+                    ),
+                    const SizedBox(height: 10),
+                    _buildIdentityEditor(avatar, compact: true),
+                  ],
+                ),
+              ),
+            ),
+            VerticalDivider(
+              width: 1,
+              thickness: 1,
+              color: Colors.white.withOpacity(.05),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(14, 12, 16, 32),
+                child: _buildCharacterSettingsEditor(compact: true),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildPortraitEditor(String portrait, {bool fill = false}) {
+    final surface = Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(fill ? 14 : 16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: portrait.isEmpty
+                ? const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.image_outlined,
+                          size: 40,
+                          color: AppColors.textOnDarkMuted,
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          '角色立绘',
+                          style: TextStyle(
+                            color: AppColors.textOnDarkMuted,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : Image.network(
+                    CdnUtil.resize(portrait, width: fill ? 640 : 800),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const Center(
+                      child: Icon(
+                        Icons.broken_image_outlined,
+                        color: AppColors.textOnDarkMuted,
+                      ),
+                    ),
+                  ),
+          ),
+          if (_uploadingPortrait)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black54,
+                child: Center(
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.accent,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Positioned(
+            right: fill ? 10 : 12,
+            bottom: fill ? 10 : 12,
+            child: _mediaButton(
+              label: _uploadingPortrait
+                  ? '上传中'
+                  : widget.onPickMedia != null
+                      ? '替换立绘'
+                      : '填写地址',
+              loading: _uploadingPortrait,
+              onTap: _uploadingPortrait
+                  ? null
+                  : widget.onPickMedia != null
+                      ? () => _pick(ScenarioMediaKind.portrait)
+                      : () => _showUrlEditor(_portraitUrl, '立绘地址'),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (fill) return surface;
+    return AspectRatio(aspectRatio: 4 / 6, child: surface);
+  }
+
+  Widget _buildIdentityEditor(String avatar, {bool compact = false}) {
+    return _card(
+      compact: compact,
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: _uploadingAvatar
+                ? null
+                : widget.onPickMedia != null
+                    ? () => _pick(ScenarioMediaKind.avatar)
+                    : () => _showUrlEditor(_avatarUrl, '头像地址'),
+            child: Container(
+              width: compact ? 58 : 72,
+              height: compact ? 58 : 72,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.04),
+                borderRadius: BorderRadius.circular(compact ? 16 : 20),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  avatar.isEmpty
+                      ? Icon(
+                          Icons.person_outline_rounded,
+                          size: compact ? 24 : 28,
+                          color: AppColors.textOnDarkMuted,
+                        )
+                      : Image.network(
+                          CdnUtil.resize(avatar, width: 150),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Icon(
+                            Icons.person_outline_rounded,
+                            color: AppColors.textOnDarkMuted,
+                          ),
+                        ),
+                  if (_uploadingAvatar)
+                    const ColoredBox(
+                      color: Colors.black54,
+                      child: Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.accent,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(width: compact ? 12 : 16),
+          Expanded(
+            child: Column(
+              children: [
+                _field(_name, '姓名', compact: compact),
+                SizedBox(height: compact ? 8 : 10),
+                _field(
+                  _identity,
+                  '身份，例如：赛博黑客',
+                  compact: compact,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCharacterSettingsEditor({bool compact = false}) {
+    return _card(
+      compact: compact,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _SheetTitle('角色设定', compact: compact),
+          SizedBox(height: compact ? 12 : 16),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _genderValue,
+                  dropdownColor: const Color(0xFF161616),
+                  decoration: _decoration('性别', compact: compact),
+                  icon: const Icon(
+                    Icons.expand_more_rounded,
+                    size: 18,
+                    color: AppColors.textOnDarkMuted,
+                  ),
+                  items: const ['男', '女', '未知']
+                      .map(
+                        (e) => DropdownMenuItem(
+                          value: e,
+                          child: Text(
+                            e,
+                            style: TextStyle(
+                              color: AppColors.textOnDark,
+                              fontSize: compact ? 12.2 : 13,
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) =>
+                      _jsonData['gender'] = value ?? '未知',
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _field(_age, '年龄', compact: compact),
+              ),
+            ],
+          ),
+          SizedBox(height: compact ? 10 : 12),
+          _field(
+            _appearance,
+            '外貌特征',
+            minLines: compact ? 2 : 3,
+            compact: compact,
+          ),
+          SizedBox(height: compact ? 10 : 12),
+          _field(
+            _background,
+            '背景 / 人设',
+            minLines: compact ? 3 : 4,
+            compact: compact,
+          ),
+          SizedBox(height: compact ? 12 : 16),
+          _listTagsEditor('性格标签', 'personality', compact: compact),
+          SizedBox(height: compact ? 12 : 16),
+          _listTagsEditor('喜欢', 'likes', compact: compact),
+          SizedBox(height: compact ? 12 : 16),
+          _listTagsEditor('讨厌', 'dislikes', compact: compact),
+          SizedBox(height: compact ? 12 : 16),
+          _listTagsEditor('说话风格', 'speech_style', compact: compact),
+          SizedBox(height: compact ? 12 : 16),
+          _field(
+            _secret,
+            '秘密 / 隐藏信息',
+            minLines: compact ? 2 : 3,
+            compact: compact,
+          ),
+          SizedBox(height: compact ? 10 : 12),
+          _field(
+            _examples,
+            '对话示例',
+            minLines: compact ? 3 : 4,
+            compact: compact,
+          ),
+        ],
       ),
     );
   }
@@ -2973,60 +3571,87 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     );
   }
 
-  Widget _card({required Widget child}) {
+  Widget _card({required Widget child, bool compact = false}) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(compact ? 14 : 20),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.02),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(compact ? 14 : 16),
       ),
       child: child,
     );
   }
 
-  Widget _field(TextEditingController controller, String hint, {int minLines = 1}) {
+  Widget _field(
+    TextEditingController controller,
+    String hint, {
+    int minLines = 1,
+    bool compact = false,
+  }) {
     return TextField(
       controller: controller,
       minLines: minLines,
       maxLines: minLines == 1 ? 1 : 8,
-      style: const TextStyle(color: AppColors.textOnDark, fontSize: 13.5, height: 1.5),
-      decoration: _decoration(hint),
+      style: TextStyle(
+        color: AppColors.textOnDark,
+        fontSize: compact ? 12.4 : 13.5,
+        height: compact ? 1.4 : 1.5,
+      ),
+      decoration: _decoration(hint, compact: compact),
     );
   }
 
-  InputDecoration _decoration(String hint) {
+  InputDecoration _decoration(String hint, {bool compact = false}) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 13),
+      hintStyle: TextStyle(
+        color: AppColors.textOnDarkMuted,
+        fontSize: compact ? 12 : 13,
+      ),
       filled: true,
       fillColor: Colors.white.withOpacity(0.03),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: compact ? 13 : 16,
+        vertical: compact ? 12 : 16,
+      ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(compact ? 10 : 12),
         borderSide: BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(compact ? 10 : 12),
         borderSide: BorderSide(color: AppColors.accent.withOpacity(0.4)),
       ),
     );
   }
 
-  Widget _listTagsEditor(String label, String field) {
+  Widget _listTagsEditor(String label, String field, {bool compact = false}) {
     final raw = _jsonData[field];
     final values = raw is List ? raw.map((e) => e.toString()).toList() : <String>[];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 10),
+        Text(
+          label,
+          style: TextStyle(
+            color: AppColors.textOnDarkMuted,
+            fontSize: compact ? 11.2 : 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        SizedBox(height: compact ? 8 : 10),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: [
             for (var i = 0; i < values.length; i++)
               Container(
-                padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 9 : 10,
+                  compact ? 5 : 6,
+                  compact ? 5 : 6,
+                  compact ? 5 : 6,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.04),
                   borderRadius: BorderRadius.circular(8),
@@ -3034,7 +3659,13 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(values[i], style: const TextStyle(color: AppColors.textOnDark, fontSize: 12)),
+                    Text(
+                      values[i],
+                      style: TextStyle(
+                        color: AppColors.textOnDark,
+                        fontSize: compact ? 11.2 : 12,
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     GestureDetector(
                       onTap: () {
@@ -3076,12 +3707,22 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                 }
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 10 : 12,
+                  vertical: compact ? 7 : 8,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.accent.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Text('+ 添加', style: TextStyle(color: AppColors.accent, fontSize: 12, fontWeight: FontWeight.w600)),
+                child: Text(
+                  '+ 添加',
+                  style: TextStyle(
+                    color: AppColors.accent,
+                    fontSize: compact ? 11.2 : 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
           ],
@@ -3092,16 +3733,17 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
 }
 
 class _SheetTitle extends StatelessWidget {
-  const _SheetTitle(this.text);
+  const _SheetTitle(this.text, {this.compact = false});
   final String text;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         color: AppColors.textOnDark,
-        fontSize: 15,
+        fontSize: compact ? 13.5 : 15,
         fontWeight: FontWeight.w700,
       ),
     );

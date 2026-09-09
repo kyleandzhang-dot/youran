@@ -23,7 +23,7 @@ Future<void> showNovelChoicesSheet(
         return _SheetScaffold(
           title: previewOnly ? '选择框样式' : '命运选择',
           subtitle: previewOnly
-              ? '固定预览 dialogue / action / battle 三种类型'
+              ? '固定预览 dialogue / action / battle / progress 四种语义'
               : (controller.playerHint.isEmpty
                   ? '每一个决定都会留下痕迹'
                   : controller.playerHint),
@@ -56,17 +56,23 @@ Future<void> showNovelChoicesSheet(
                   ? Icons.flash_on_rounded
                   : isAction
                       ? Icons.casino_outlined
-                      : Icons.chat_bubble_outline_rounded;
+                      : choice.isProgress
+                          ? Icons.arrow_forward_rounded
+                          : Icons.chat_bubble_outline_rounded;
 
               return _ActionTile(
                 number: previewOnly ? null : index + 1,
                 icon: fallbackIcon,
-                assetIconPath: previewOnly ? choice.iconPath : '',
+                assetIconPath: choice.iconPath,
                 title: choice.text,
                 subtitle: previewOnly
-                    ? typeLabel
-                    : (isAction ? '该行动可能触发判定' : ''),
-                highlighted: previewOnly ? (isAction || isBattle) : isAction,
+                    ? '$typeLabel · ${choice.intent} · ${choice.role}'
+                    : (choice.isProgress
+                        ? '继续当前目标'
+                        : (isAction ? '该行动可能触发判定' : '')),
+                // primary/type 不再通过绿色或高亮底色区分；
+                // 选择语义统一只看图标与文案。
+                highlighted: false,
                 onTap: () async {
                   Navigator.of(context).pop();
                   if (!previewOnly) {

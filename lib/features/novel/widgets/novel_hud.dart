@@ -238,9 +238,14 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
     final compact = NovelViewportMetrics.of(context).compactChrome;
     final completed = _status == 'completed';
     final failed = _status == 'failed';
+    final maxGoalWidth = math.min(
+      compact ? 286.0 : 372.0,
+      media.size.width * .5,
+    );
 
     final feedbackLabel = completed ? '目标完成' : '目标失败';
     final feedbackAccent = failed ? NovelPalette.danger : NovelPalette.accent;
@@ -249,7 +254,7 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
 
     return IgnorePointer(
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: compact ? 286 : 372),
+        constraints: BoxConstraints(maxWidth: maxGoalWidth),
         child: Padding(
           padding: EdgeInsets.only(left: compact ? 10 : 14),
           child: AnimatedOpacity(
@@ -322,7 +327,8 @@ class _NovelGoalHudState extends State<NovelGoalHud> {
                       Flexible(
                         child: Text(
                           _displayText,
-                          maxLines: 2,
+                          maxLines: compact ? 3 : 2,
+                          softWrap: true,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.left,
                           style: TextStyle(

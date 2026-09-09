@@ -29,6 +29,7 @@ part 'widgets/novel_hud.dart';
 part 'widgets/novel_portrait.dart';
 part 'widgets/novel_story_reader.dart';
 part 'widgets/novel_story_controls.dart';
+part 'widgets/novel_scene_barks.dart';
 part 'widgets/novel_input.dart';
 part 'widgets/novel_feedback_overlays.dart';
 part 'widgets/novel_choice_panel.dart';

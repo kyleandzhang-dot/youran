@@ -237,7 +237,9 @@ class _CharactersPanelState extends State<_CharactersPanel> {
               );
             case _CharacterViewportMode.landscape:
               return Padding(
-                padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
+                // 横屏给顶部 / 底部真正的呼吸空间；右侧悬浮导航的避让
+                // 由人物舞台内部单独处理，避免无意义地压缩整页。
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 7),
                 child: content,
               );
             case _CharacterViewportMode.portrait:
@@ -407,7 +409,8 @@ class _CharacterArchiveHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (dense) {
-      if (onClose == null) return const SizedBox(height: 2);
+      // 嵌入式横屏也保留一条轻量顶部留白，避免人物资料直接顶到屏幕边缘。
+      if (onClose == null) return const SizedBox(height: 7);
       return SizedBox(
         height: 34,
         child: Align(
@@ -667,8 +670,15 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
 
         if (landscape) {
           // 修改点：三栏布局，左侧资料，中间立绘，右侧编辑器
-          final infoWidth = (constraints.maxWidth * .32).clamp(220.0, 320.0).toDouble();
-          final editorWidth = (constraints.maxWidth * .26).clamp(200.0, 280.0).toDouble();
+          final infoWidth =
+              (constraints.maxWidth * .31).clamp(220.0, 315.0).toDouble();
+          final editorWidth =
+              (constraints.maxWidth * .27).clamp(220.0, 300.0).toDouble();
+
+          // 右侧一级悬浮导航覆盖在人物页上方，因此编辑器必须主动留出
+          // 一条不可占用的安全带。宽屏留 76px，较窄横屏略收紧。
+          final rightFloatingRailReserve =
+              constraints.maxWidth < 780 ? 62.0 : 76.0;
 
           Widget portraitArtwork() => AnimatedSwitcher(
                 duration: const Duration(milliseconds: 260),
@@ -698,7 +708,7 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
               SizedBox(
                 width: infoWidth,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 6, 8, 4),
+                  padding: const EdgeInsets.fromLTRB(16, 9, 10, 8),
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
                     child: _CharacterShowcaseInfo(
@@ -716,7 +726,7 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
               Expanded(
                 child: ClipRect(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 2, 4, 0),
+                    padding: const EdgeInsets.fromLTRB(6, 5, 6, 2),
                     child: Transform.scale(
                       scale: 1.04,
                       alignment: Alignment.bottomCenter,
@@ -727,9 +737,15 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
               ),
               // 右侧：立绘生成编辑器区
               SizedBox(
-                width: editorWidth,
+                // 把悬浮导航的安全带算进右栏总宽度，保证编辑器自身不会被挤窄。
+                width: editorWidth + rightFloatingRailReserve,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 6, 16, 12),
+                  padding: EdgeInsets.fromLTRB(
+                    12,
+                    9,
+                    rightFloatingRailReserve,
+                    9,
+                  ),
                   child: _CharacterQuickPortraitEditor(
                     controller: widget.controller,
                     character: widget.character,
@@ -1449,7 +1465,7 @@ class _CharacterQuickPortraitEditorState
     Widget inputFieldContainer = Container(
       decoration: BoxDecoration(
         color: _archiveSurface,
-        borderRadius: BorderRadius.circular(widget.landscapeDense ? 7 : 10),
+        borderRadius: BorderRadius.circular(widget.landscapeDense ? 9 : 12),
         border: Border.all(
           color: _archiveLine,
           width: 1,
@@ -1503,19 +1519,10 @@ class _CharacterQuickPortraitEditorState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Text(
-            '更换立绘',
-            style: TextStyle(
-              color: Color(0xFF414A44),
-              fontSize: 10.5,
-              fontWeight: FontWeight.w700,
-              letterSpacing: .3,
-            ),
-          ),
-          SizedBox(height: widget.landscapeDense ? 4 : 6),
-          if (widget.fillHeight) 
-            Expanded(child: inputFieldContainer) 
-          else 
+          // 横屏不再额外显示“更换立绘”四字标题，把宝贵高度全部交给描述框。
+          if (widget.fillHeight)
+            Expanded(child: inputFieldContainer)
+          else
             inputFieldContainer,
           if (_errorText.isNotEmpty) ...<Widget>[
             const SizedBox(height: 5),
@@ -1530,18 +1537,25 @@ class _CharacterQuickPortraitEditorState
               ),
             ),
           ],
-          SizedBox(height: widget.landscapeDense ? 5 : 7),
+          SizedBox(height: widget.landscapeDense ? 7 : 10),
           SizedBox(
             width: double.infinity,
-            height: widget.landscapeDense ? 34 : 40,
+            height: widget.landscapeDense ? 36 : 42,
             child: Material(
               color: Colors.transparent,
+              borderRadius:
+                  BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+              clipBehavior: Clip.antiAlias,
               child: InkWell(
+                borderRadius:
+                    BorderRadius.circular(widget.landscapeDense ? 9 : 12),
                 onTap: (_generating || _uploading) ? null : _generatePortrait,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
+                    borderRadius:
+                        BorderRadius.circular(widget.landscapeDense ? 9 : 12),
                     color: _generating
                         ? _archiveSurfaceSoft
                         : _archiveThemeGreen,
@@ -1588,13 +1602,18 @@ class _CharacterQuickPortraitEditorState
               ),
             ),
           ),
-          SizedBox(height: widget.landscapeDense ? 5 : 7),
+          SizedBox(height: widget.landscapeDense ? 7 : 10),
           SizedBox(
             width: double.infinity,
-            height: widget.landscapeDense ? 34 : 38,
+            height: widget.landscapeDense ? 36 : 42,
             child: Material(
               color: Colors.transparent,
+              borderRadius:
+                  BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+              clipBehavior: Clip.antiAlias,
               child: InkWell(
+                borderRadius:
+                    BorderRadius.circular(widget.landscapeDense ? 9 : 12),
                 onTap: (_generating || _uploading)
                     ? null
                     : _pickAndApplyLocalPortrait,
@@ -1602,6 +1621,8 @@ class _CharacterQuickPortraitEditorState
                   duration: const Duration(milliseconds: 160),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
+                    borderRadius:
+                        BorderRadius.circular(widget.landscapeDense ? 9 : 12),
                     color: _uploading
                         ? _archiveSurfaceSoft
                         : Colors.transparent,

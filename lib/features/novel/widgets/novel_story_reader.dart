@@ -19,6 +19,10 @@ class NovelDialogPanel extends StatefulWidget {
     required this.onOpenJourney,
     required this.onRevert,
     this.onOpenPortrait,
+    this.targetActorName = '',
+    this.targetActorAvatarUrl = '',
+    this.targetActorPlaceholder = '',
+    this.onClearTargetActor,
     this.active = true,
     this.bottomReservedHeight = 0,
   });
@@ -35,6 +39,10 @@ class NovelDialogPanel extends StatefulWidget {
   final VoidCallback onOpenJourney;
   final VoidCallback onRevert;
   final VoidCallback? onOpenPortrait;
+  final String targetActorName;
+  final String targetActorAvatarUrl;
+  final String targetActorPlaceholder;
+  final VoidCallback? onClearTargetActor;
 
   /// 剧情页底部由外层占用的固定高度。
   /// 例如主页内嵌的走路探索区会占据屏幕底部，正文、选择框与输入栏
@@ -51,12 +59,63 @@ class NovelDialogPanel extends StatefulWidget {
 
 enum _NovelLineMode { narration, npc, protagonist }
 
+// 混合句不再在同一个舞台里按逐字进度切换“正文 / 对白”。
+// 前置正文、角色对白、后置正文各自成为一个真正的阅读子页。
+enum _NovelMixedPageKind { leadingNarration, dialogue, trailingNarration }
+
+class _NovelMixedReaderPage {
+  const _NovelMixedReaderPage({required this.kind, required this.text});
+
+  final _NovelMixedPageKind kind;
+  final String text;
+}
+
+List<_NovelMixedReaderPage> _novelMixedReaderPages(NovelSentence? sentence) {
+  if (sentence == null || !sentence.hasMixedContent) {
+    return const <_NovelMixedReaderPage>[];
+  }
+
+  final pages = <_NovelMixedReaderPage>[];
+  final leading = _sanitizeNovelStreamingText(sentence.leadingNarration);
+  final dialogue = _sanitizeNovelStreamingText(sentence.text);
+  final trailing = _sanitizeNovelStreamingText(sentence.trailingNarration);
+
+  if (_novelVisibleNarrationText(leading).trim().isNotEmpty) {
+    pages.add(_NovelMixedReaderPage(
+      kind: _NovelMixedPageKind.leadingNarration,
+      text: leading,
+    ));
+  }
+  if (dialogue.trim().isNotEmpty) {
+    pages.add(_NovelMixedReaderPage(
+      kind: _NovelMixedPageKind.dialogue,
+      text: dialogue,
+    ));
+  }
+  if (_novelVisibleNarrationText(trailing).trim().isNotEmpty) {
+    pages.add(_NovelMixedReaderPage(
+      kind: _NovelMixedPageKind.trailingNarration,
+      text: trailing,
+    ));
+  }
+
+  return pages;
+}
+
+int _novelReaderPageCount(NovelSentence sentence) {
+  final mixedPages = _novelMixedReaderPages(sentence);
+  return mixedPages.isEmpty ? 1 : mixedPages.length;
+}
+
 class _NovelDialogPanelState extends State<NovelDialogPanel>
     with SingleTickerProviderStateMixin {
   Timer? _revealTimer;
   int _visibleLength = 0;
   String _lastIdentity = '';
-  // 用户主动点“快速显示”后，当前句后续 SSE 继续补长时也保持全文直出 + 静音。
+  String _lastSentenceIdentity = '';
+  int _mixedPageIndex = 0;
+  bool _enterPreviousSentenceAtLastMixedPage = false;
+  // 用户主动点“快速显示”后，当前页后续 SSE 继续补长时也保持全文直出 + 静音。
   // 用 identity 而不是全局 bool，进入下一句会自动恢复正常逐字与打字音。
   String _skippedRevealIdentity = '';
   String _lastFullText = '';
@@ -159,10 +218,17 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     required bool compact,
     required bool shortViewport,
     required bool choicesVisible,
+    required bool inputContextVisible,
   }) {
     final base = shortViewport ? 46.0 : (compact ? 52.0 : 54.0);
+    // 输入框上方出现“对某人说 / 引用物品”这类上下文条时，
+    // 底部输入区真实高度会变高。这里提前把剧情正文往上让位，
+    // 避免正文/对白与上下文条重叠。
+    final contextReserve = inputContextVisible
+        ? (shortViewport ? 30.0 : (compact ? 33.0 : 34.0))
+        : 0.0;
     final text = widget.textController.text;
-    if (text.isEmpty) return base;
+    if (text.isEmpty) return base + contextReserve;
 
     // 与实际输入栏宽度保持近似：页面主体最多 720，扣除继续按钮、幸运卡和发送键。
     var textWidth = math.min(availableWidth, 720.0) - 124.0;
@@ -181,6 +247,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
     final lines = painter.computeLineMetrics().length.clamp(1, 5);
     return base +
+        contextReserve +
         (lines - 1) * (shortViewport ? 17.0 : (compact ? 19.0 : 20.0));
   }
 
@@ -230,17 +297,77 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     return 'assistant-message';
   }
 
+  int _safeMixedPageIndex(List<_NovelMixedReaderPage> pages) {
+    if (pages.isEmpty) return 0;
+    return _mixedPageIndex.clamp(0, pages.length - 1).toInt();
+  }
+
+  bool get _hasNextMixedReaderPage {
+    final pages = _novelMixedReaderPages(controller.currentSentence);
+    return pages.isNotEmpty && _safeMixedPageIndex(pages) < pages.length - 1;
+  }
+
+  bool get _hasPreviousMixedReaderPage {
+    final pages = _novelMixedReaderPages(controller.currentSentence);
+    return pages.isNotEmpty && _safeMixedPageIndex(pages) > 0;
+  }
+
+  bool get _canMoveNextReaderPage =>
+      _hasNextMixedReaderPage || controller.hasNext;
+
+  bool get _canMovePreviousReaderPage =>
+      _hasPreviousMixedReaderPage || controller.hasPrevious;
+
+  void _setMixedReaderPage(int nextIndex) {
+    final pages = _novelMixedReaderPages(controller.currentSentence);
+    if (pages.isEmpty) return;
+    final target = nextIndex.clamp(0, pages.length - 1).toInt();
+    if (target == _safeMixedPageIndex(pages)) return;
+
+    if (mounted) {
+      setState(() => _mixedPageIndex = target);
+    } else {
+      _mixedPageIndex = target;
+    }
+    _syncReveal(force: true);
+  }
+
   void _syncReveal({bool force = false}) {
     final sentence = controller.currentSentence;
-    // 后端已输出最终可展示的 currentSentence；前端不再做角色名/动作/引号解析。
-    final full = _sanitizeNovelSentenceReaderText(sentence);
-
-    // 必须把 assistant message id 放进 identity。
-    // 否则新一轮回复如果仍是“第 0 句 + 同一个说话人 + 同一种类型”，
-    // 会被误判成上一轮句子的 SSE 续写，继承旧的逐字与音效状态。
     final messageKey = _currentAssistantMessageKey;
-    final identity =
+
+    // “句子身份”和“阅读页身份”分开：同一个后端 sentence 可以有多个前端阅读页。
+    // 这样正文、对白、后置正文翻页时会各自拥有独立逐字进度和打字音状态。
+    final sentenceIdentity =
         '$messageKey|${controller.currentSentenceIndex}|${sentence?.speakerName ?? ''}|${sentence?.type ?? ''}';
+    final mixedPages = _novelMixedReaderPages(sentence);
+
+    if (sentenceIdentity != _lastSentenceIdentity) {
+      _lastSentenceIdentity = sentenceIdentity;
+      if (_enterPreviousSentenceAtLastMixedPage && mixedPages.isNotEmpty) {
+        _mixedPageIndex = mixedPages.length - 1;
+      } else {
+        _mixedPageIndex = 0;
+      }
+      _enterPreviousSentenceAtLastMixedPage = false;
+    } else if (mixedPages.isNotEmpty) {
+      _mixedPageIndex = _safeMixedPageIndex(mixedPages);
+    } else {
+      _mixedPageIndex = 0;
+    }
+
+    final activeMixedPage = mixedPages.isEmpty
+        ? null
+        : mixedPages[_safeMixedPageIndex(mixedPages)];
+
+    // 混合句只把“当前子页”的文字送进逐字系统；绝不再把三段拼成一个显示流。
+    final full = sentence?.hasMixedContent == true
+        ? (activeMixedPage?.text ?? '')
+        : _sanitizeNovelSentenceReaderText(sentence);
+    final pageToken = activeMixedPage == null
+        ? (sentence?.hasMixedContent == true ? 'mixed-empty' : 'single')
+        : '${activeMixedPage.kind.name}:$_mixedPageIndex';
+    final identity = '$sentenceIdentity|$pageToken';
 
     if (force || identity != _lastIdentity) {
       _lastIdentity = identity;
@@ -259,8 +386,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         return;
       }
 
-      // 每页第一次展示时播放；即使当时仍在生成，完成后回看也不会重复响。
-      final soundKey = '$messageKey|${controller.currentSentenceIndex}';
+      // 每一个“真正阅读页”第一次展示时播放；回看同一页不重复响。
+      final soundKey = '$messageKey|${controller.currentSentenceIndex}|$pageToken';
       _typingSoundForReveal = _typingSoundVisited.add(soundKey);
 
       _revealing = full.isNotEmpty;
@@ -268,9 +395,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       return;
     }
 
-    // SSE 继续补长同一句时保留已经打出的部分，不闪回。
-    // 原代码拿 full.length 和实时 _fullText.length 比较，两者其实是同一个值，
-    // 导致流式补长后 timer 已结束时无法重新启动。
+    // SSE 只补长当前子页时保留已经打出的部分，不闪回。
+    // 其他子页即使在后台继续生成，也不会把当前页强制切走。
     if (full != _lastFullText) {
       final previousLength = _lastFullRunes.length;
       final nextRunes = full.runes.toList(growable: false);
@@ -409,9 +535,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   }
 
   void _handleStoryTap() {
-    // 主动快速显示与“自然追到当前流尾”必须区分开：
-    // 前者要锁定当前句为全文直出，后续 SSE 也不能重新启动逐字 Timer / 打字音。
-    if (_revealing || controller.isGenerating) {
+    // 第一次点击只负责补全“当前阅读页”，不会把混合句剩余正文/对白一起灌进来。
+    if (_revealing) {
       _skippedRevealIdentity = _lastIdentity;
       _typingSoundForReveal = false;
       _visibleLength = _fullRuneLength;
@@ -420,6 +545,25 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       unawaited(controller.bgm.stopTypingSound());
       return;
     }
+
+    // 当前子页已经读完：只要后面的混合子页已经生成，就先翻子页。
+    // 即使整条 SSE 还没完全结束，也不再让后续阶段自动顶掉当前内容。
+    if (_hasNextMixedReaderPage) {
+      unawaited(_goNextAfterTypingStops());
+      return;
+    }
+
+    // 还在生成、但下一子页尚未出现时，点击仍表示“当前页后续全文直出”。
+    if (controller.isGenerating) {
+      _skippedRevealIdentity = _lastIdentity;
+      _typingSoundForReveal = false;
+      _visibleLength = _fullRuneLength;
+      _publishVisibleText();
+      _finishReveal();
+      unawaited(controller.bgm.stopTypingSound());
+      return;
+    }
+
     if (controller.hasNext || controller.pendingFateRevert) {
       unawaited(_goNextAfterTypingStops());
     }
@@ -428,7 +572,17 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   Future<void> _goNextAfterTypingStops() async {
     await controller.bgm.stopTypingSound();
     if (!mounted) return;
+
+    if (_hasNextMixedReaderPage) {
+      _setMixedReaderPage(_mixedPageIndex + 1);
+      return;
+    }
+
+    final hadControllerNext = controller.hasNext;
     controller.goNext();
+    if (hadControllerNext) {
+      _syncReveal(force: true);
+    }
   }
 
   double _swipeLimit(double width) =>
@@ -493,7 +647,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   Future<void> _commitSwipe(int direction) async {
     if (_swipeTransitioning || !mounted) return;
 
-    final canMove = direction < 0 ? controller.hasNext : controller.hasPrevious;
+    final canMove = direction < 0
+        ? _canMoveNextReaderPage
+        : _canMovePreviousReaderPage;
     if (!canMove) {
       await _springSwipeBack();
       return;
@@ -526,9 +682,29 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       if (!mounted) return;
 
       if (direction < 0) {
-        controller.goNext();
+        if (_hasNextMixedReaderPage) {
+          _mixedPageIndex = _safeMixedPageIndex(
+                _novelMixedReaderPages(controller.currentSentence),
+              ) +
+              1;
+          _syncReveal(force: true);
+        } else {
+          controller.goNext();
+          _syncReveal(force: true);
+        }
       } else {
-        controller.goPrevious();
+        if (_hasPreviousMixedReaderPage) {
+          _mixedPageIndex = _safeMixedPageIndex(
+                _novelMixedReaderPages(controller.currentSentence),
+              ) -
+              1;
+          _syncReveal(force: true);
+        } else {
+          // 从下一条历史记录右滑回来时，若上一条是混合句，应落在它的最后子页。
+          _enterPreviousSentenceAtLastMixedPage = true;
+          controller.goPrevious();
+          _syncReveal(force: true);
+        }
       }
 
       if (!mounted) return;
@@ -572,7 +748,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     final width = MediaQuery.sizeOf(context).width;
     final limit = _swipeLimit(width);
     final wantsNext = _horizontalDragDistance < 0;
-    final canMove = wantsNext ? controller.hasNext : controller.hasPrevious;
+    final canMove =
+        wantsNext ? _canMoveNextReaderPage : _canMovePreviousReaderPage;
 
     // 可翻页时正常跟手；已经到头时增加阻尼，只让内容轻轻被“拉动”。
     final rawVisual = canMove
@@ -606,7 +783,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
     final directionSource = hasEnoughDistance ? distance : velocity;
     final direction = directionSource < 0 ? -1 : 1;
-    final canMove = direction < 0 ? controller.hasNext : controller.hasPrevious;
+    final canMove = direction < 0
+        ? _canMoveNextReaderPage
+        : _canMovePreviousReaderPage;
 
     if (!canMove) {
       unawaited(_springSwipeBack());
@@ -645,13 +824,42 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     final sentence = controller.currentSentence;
     final controllerSpeaker = controller.currentSpeakerName.trim();
     final sentenceSpeaker = sentence?.speakerName.trim() ?? '';
-    final speaker = controllerSpeaker.isNotEmpty ? controllerSpeaker : sentenceSpeaker;
+    final speaker =
+        controllerSpeaker.isNotEmpty ? controllerSpeaker : sentenceSpeaker;
     final character = controller.currentSpeakerCharacter;
     final sentenceType = sentence?.type.toLowerCase().trim() ?? '';
-    final isHost = sentence?.isProtagonist == true || character?.isMain == true;
+    final isHost =
+        sentence?.isProtagonist == true || character?.isMain == true;
     final hasSpeaker = speaker.isNotEmpty || character != null;
-    final isNarration = sentence == null || (!hasSpeaker && (sentence.isNarration || sentenceType == 'narration' || sentenceType == 'action'));
-    final mode = isNarration ? _NovelLineMode.narration : isHost ? _NovelLineMode.protagonist : _NovelLineMode.npc;
+    final isNarration = sentence == null ||
+        (!hasSpeaker &&
+            (sentence.isNarration ||
+                sentenceType == 'narration' ||
+                sentenceType == 'action'));
+    final mode = isNarration
+        ? _NovelLineMode.narration
+        : isHost
+            ? _NovelLineMode.protagonist
+            : _NovelLineMode.npc;
+
+    final mixedPages = _novelMixedReaderPages(sentence);
+    final mixedPageIndex = _safeMixedPageIndex(mixedPages);
+    final activeMixedPage =
+        mixedPages.isEmpty ? null : mixedPages[mixedPageIndex];
+    final isMixedSentence = sentence?.hasMixedContent == true;
+    final mixedNarrationPageActive = isMixedSentence &&
+        activeMixedPage != null &&
+        activeMixedPage.kind != _NovelMixedPageKind.dialogue;
+    final dialoguePageActive = isMixedSentence
+        ? activeMixedPage?.kind == _NovelMixedPageKind.dialogue
+        : mode != _NovelLineMode.narration;
+    final hasNextMixedReaderPage =
+        mixedPages.isNotEmpty && mixedPageIndex < mixedPages.length - 1;
+    final hasPreviousMixedReaderPage =
+        mixedPages.isNotEmpty && mixedPageIndex > 0;
+    final readerHasNext = hasNextMixedReaderPage || controller.hasNext;
+    final readerHasPrevious =
+        hasPreviousMixedReaderPage || controller.hasPrevious;
 
     final affection = mode == _NovelLineMode.npc ? character?.affection : null;
     final affectionPulse = mode == _NovelLineMode.npc
@@ -668,8 +876,17 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
           orElse: () => '',
         );
 
-    final canShowChoices = controller.choices.isNotEmpty && !controller.hasNext && !controller.isGenerating && !_revealing;
-    final inputEnabled = !controller.isGenerating && !_revealing && !controller.isCinematic && !controller.pendingFateRevert;
+    final targetActorActive = widget.targetActorName.trim().isNotEmpty;
+    final canShowChoices = !targetActorActive &&
+        controller.choices.isNotEmpty &&
+        !readerHasNext &&
+        !controller.isGenerating &&
+        !_revealing;
+    final inputEnabled = !hasNextMixedReaderPage &&
+        !controller.isGenerating &&
+        !_revealing &&
+        !controller.isCinematic &&
+        !controller.pendingFateRevert;
 
     final emptyTextFallback =
         controller.isGenerating ? '' : '等待故事继续…';
@@ -704,7 +921,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             : ((controller.hasNext || controller.isGenerating)
                 ? (shortWide ? 52.0 : (compact ? 58.0 : 70.0))
                 : 0.0);
-        final browsingStory = controller.hasNext;
+        final browsingStory = readerHasNext;
 
         // 一级导航已移回右侧 HUD，不再占据底部。
         // 回看历史 / 逐字显示 / 生成中只影响输入区；底部只保留系统安全区。
@@ -722,12 +939,14 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         // 外层 NovelGamePage 已经用 SafeArea 消化系统底部安全区。
         // 此处再加 viewPadding.bottom 会在 iPhone 上重复占位。
         const navigationHeight = 0.0;
+        final inputContextVisible = targetActorActive;
         final composerHeight = composerVisible
             ? _adaptiveFooterHeight(
                   availableWidth: constraints.maxWidth,
                   compact: compact,
                   shortViewport: shortViewport,
                   choicesVisible: canShowChoices,
+                  inputContextVisible: inputContextVisible,
                 )
             : 0.0;
         final footerHeight = navigationHeight +
@@ -775,6 +994,19 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                 .clamp(0.0, availableHeight)
                 .toDouble();
 
+        // 进度条也按“真正阅读页”计数：一个混合 sentence 可以占 2~3 页。
+        var readerPageIndex = mixedPages.isEmpty ? 0 : mixedPageIndex;
+        var readerPageTotal = 0;
+        for (var i = 0; i < controller.sentences.length; i++) {
+          final pageCount = _novelReaderPageCount(controller.sentences[i]);
+          if (i < controller.currentSentenceIndex) {
+            readerPageIndex += pageCount;
+          }
+          readerPageTotal += pageCount;
+        }
+        if (readerPageTotal <= 0) readerPageTotal = 1;
+        readerPageIndex = readerPageIndex.clamp(0, readerPageTotal - 1).toInt();
+
         return GestureDetector(
           // 整个对话舞台都能接收横滑，而不是只有命中内部文字/按钮时才生效。
           behavior: HitTestBehavior.translucent,
@@ -791,7 +1023,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
               // 当前角色半身立绘。
               // 500×800 原图只显示顶部约 64%，避免把完整全身硬塞进画面。
               // NPC 靠左；主角/玩家靠右。
-              if (mode != _NovelLineMode.narration && portraitUrl.isNotEmpty)
+              if (dialoguePageActive && portraitUrl.isNotEmpty)
                 Builder(
                   builder: (context) {
                     // 使用当前剧情舞台的真实尺寸，而不是全局 MediaQuery。
@@ -865,15 +1097,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                       right: showOnRight ? protagonistRightOffset : null,
                       child: ValueListenableBuilder<String>(
                         valueListenable: _displayTextNotifier,
-                        builder: (context, visibleText, _) {
-                          final dialogueActive = _novelDialogueIsActive(
-                            sentence,
-                            visibleText,
-                          );
-                          // 混合句进入正文阶段时立刻撤掉人物层，保证正文与立绘
-                          // 永远不会同时出现在画面上；重新进入对白阶段时再柔和入场。
-                          if (!dialogueActive) return const SizedBox.shrink();
-
+                        builder: (context, _, __) {
+                          // 当前页是否为对白页已经由分页状态决定，不再由逐字进度切阶段。
                           return TweenAnimationBuilder<double>(
                             key: ValueKey<String>(
                               'portrait-dialogue-phase|${controller.currentSentenceIndex}|$portraitUrl',
@@ -945,31 +1170,28 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   },
                 ),
 
-              // 混合句仍按同一句的逐字进度播放，但舞台改成严格互斥：
-              // 前置正文 -> 角色立绘对白 -> 后置正文。任何时刻只显示一种。
-              if (mode != _NovelLineMode.narration &&
-                  sentence?.hasMixedContent == true)
+              // 混合句现在是真正分页：当前子页是正文时只构建正文层。
+              if (mixedNarrationPageActive)
                 Positioned(
                   left: 0,
                   right: narrationRightSafeWidth,
-                  // 混合页有角色立绘时，把正文重心抬到屏幕中间偏上，
-                  // 给下方/侧边人物留出更干净的视觉空间；没有立绘时保持原来的居中。
-                  // 这里从页面一开始就按 portraitUrl 判定，避免立绘淡入后正文突然跳位。
+                  // 混合页的旁白也统一贴近底部，不再因为有角色对白/立绘
+                  // 就飘到屏幕上方；这样流式打字时视觉重心始终稳定。
                   top: canShowChoices ? choiceContentTop : 0,
-                  bottom: canShowChoices ? choiceContentBottom : 0,
+                  bottom: canShowChoices ? choiceContentBottom : panelBottom,
                   child: _withSwipeMotion(
                     Padding(
                       padding: EdgeInsets.symmetric(
                         horizontal: compact ? 20 : 34,
                       ),
                       child: Align(
-                        alignment: portraitUrl.isNotEmpty
-                            ? const Alignment(0, -.36)
-                            : Alignment.center,
+                        alignment: Alignment.bottomCenter,
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 650),
+                          constraints: BoxConstraints(
+                            maxWidth: 650,
+                            maxHeight: availableHeight * .52,
+                          ),
                           child: _NovelMixedNarrationSurface(
-                            sentence: sentence!,
                             displayTextListenable: _displayTextNotifier,
                             isRevealing: _revealing,
                             fontFamily: controller.settings.fontFamily,
@@ -983,7 +1205,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   ),
                 ),
 
-              if (mode == _NovelLineMode.narration)
+              if (!isMixedSentence && mode == _NovelLineMode.narration)
                 if (canShowChoices)
                   Positioned(
                     left: 0,
@@ -1010,7 +1232,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                             isRevealing: _revealing,
                             fontFamily: controller.settings.fontFamily,
                             fontSize: controller.settings.fontSize,
-                            hasNext: controller.hasNext,
+                            hasNext: readerHasNext,
                             choices: controller.choices,
                             playerHint: controller.playerHint,
                             onSelected: controller.selectChoice,
@@ -1054,7 +1276,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                             isRevealing: _revealing,
                             fontFamily: controller.settings.fontFamily,
                             fontSize: controller.settings.fontSize,
-                            hasNext: controller.hasNext,
+                            hasNext: readerHasNext,
                             choices: const <NovelChoice>[],
                             playerHint: controller.playerHint,
                             onSelected: controller.selectChoice,
@@ -1067,8 +1289,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                       ),
                       screen.width,
                     ),
-                  )
-              else
+                  ),
+              if (dialoguePageActive)
                 Positioned(
                   left: 0,
                   right: dialogueRightSafeWidth,
@@ -1076,15 +1298,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   bottom: canShowChoices ? choiceContentBottom : panelBottom,
                   child: ValueListenableBuilder<String>(
                     valueListenable: _displayTextNotifier,
-                    builder: (context, visibleText, _) {
-                      final dialogueActive = _novelDialogueIsActive(
-                        sentence,
-                        visibleText,
-                      );
-                      // 与人物立绘使用同一个阶段判断：正文阶段完全不构建对白区，
-                      // 避免淡出期间仍与正文重叠。
-                      if (!dialogueActive) return const SizedBox.shrink();
-
+                    builder: (context, _, __) {
                       return TweenAnimationBuilder<double>(
                         key: ValueKey<String>(
                           'dialogue-phase|${controller.currentSentenceIndex}|$speaker',
@@ -1129,13 +1343,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                                 isRevealing: _revealing,
                                 fontFamily: controller.settings.fontFamily,
                                 fontSize: controller.settings.fontSize,
-                                hasNext: controller.hasNext,
+                                hasNext: readerHasNext,
                                 choices: canShowChoices
                                     ? controller.choices
                                     : const <NovelChoice>[],
                                 playerHint: controller.playerHint,
                                 showPlayerHint: !_revealing &&
-                                    !controller.hasNext &&
+                                    !readerHasNext &&
                                     !controller.isGenerating,
                                 maxPanelHeight: canShowChoices
                                     ? choiceAvailableContentHeight
@@ -1184,13 +1398,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   child: Align(
                     alignment: Alignment.centerRight,
                     child: Padding(
-                      // “可探索”是场景级浮动入口，贴近屏幕右侧安全区。
-                      // 右侧一级导航位于右下角，两者垂直区域不同，不再额外让出 60~96px。
-                      padding: EdgeInsets.only(
-                        right: wideDialogueLayout
-                            ? 24.0
-                            : (shortWide ? 12.0 : (compact ? 12.0 : 18.0)),
-                      ),
+                      // “可探索”作为场景级浮动入口直接右对齐。
+                      // 外层剧情舞台本身已经处理 SafeArea，不再额外向左缩进。
+                      padding: EdgeInsets.zero,
                       child: _NovelFloatingSurroundingsAction(
                         scope: surroundingsAction!,
                         compact: compact || shortWide,
@@ -1214,13 +1424,17 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   onOpenCharacters: widget.onOpenCharacters,
                   onOpenJourney: widget.onOpenJourney,
                   onContinue: widget.onContinue,
+                  targetActorName: widget.targetActorName,
+                  targetActorAvatarUrl: widget.targetActorAvatarUrl,
+                  targetActorPlaceholder: widget.targetActorPlaceholder,
+                  onClearTargetActor: widget.onClearTargetActor,
                 ),
               ),
               if (_showSwipeHint &&
                   !canShowChoices &&
                   !controller.isGenerating &&
                   !_revealing &&
-                  (controller.hasPrevious || controller.hasNext))
+                  (readerHasPrevious || readerHasNext))
                 Positioned(
                   // 左右保持统一安全边距；右侧功能入口独立悬浮。
                   left: compact ? 18 : 34,
@@ -1237,8 +1451,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                 right: compact ? 18 : 34,
                 bottom: footerBottom + navigationHeight + (compact ? 6 : 8),
                 child: _StoryProgressLocator(
-                  currentIndex: controller.currentSentenceIndex,
-                  totalCount: controller.sentences.length,
+                  currentIndex: readerPageIndex,
+                  totalCount: readerPageTotal,
                   isBrowsingHistory: browsingStory,
                 ),
               ),
@@ -1343,108 +1557,8 @@ class _NovelNarrationSurface extends StatelessWidget {
   }
 }
 
-class _NovelVisibleReaderParts {
-  const _NovelVisibleReaderParts({
-    this.leadingNarration = '',
-    this.dialogue = '',
-    this.trailingNarration = '',
-  });
-
-  final String leadingNarration;
-  final String dialogue;
-  final String trailingNarration;
-}
-
-_NovelVisibleReaderParts _visibleReaderParts(
-  NovelSentence? sentence,
-  String visibleText,
-) {
-  if (sentence == null || !sentence.hasMixedContent) {
-    return _NovelVisibleReaderParts(dialogue: visibleText);
-  }
-
-  final leading = _sanitizeNovelStreamingText(sentence.leadingNarration);
-  final dialogue = _sanitizeNovelStreamingText(sentence.text);
-  final trailing = _sanitizeNovelStreamingText(sentence.trailingNarration);
-  var remaining = visibleText.runes.length;
-
-  String take(String value) {
-    if (value.isEmpty || remaining <= 0) return '';
-    final length = value.runes.length;
-    final count = math.min(remaining, length).toInt();
-    remaining -= count;
-    return _novelPrefixByRunes(value, count);
-  }
-
-  void consumeGap() {
-    if (remaining <= 0) return;
-    // _sanitizeNovelSentenceReaderText 在相邻部分之间只插入一个换行。
-    remaining = math.max(0, remaining - 1).toInt();
-  }
-
-  final visibleLeading = take(leading);
-  // leading 剥符号前非空不代表它会显示任何东西——纯符号残留（比如只有一个
-  // 孤立的 （ 或 *）剥完是空字符串，不值得为它扣一次“段落停顿”的预算。
-  // dialogue 走的是 _buildNovelDialogueDisplaySpans，不做符号剥离，
-  // 所以 dialogue 的 isNotEmpty 判断本身就是准的，不用同样处理。
-  if (leading.isNotEmpty &&
-      visibleLeading.runes.length >= leading.runes.length &&
-      _novelVisibleNarrationText(leading).trim().isNotEmpty) {
-    consumeGap();
-  }
-  final visibleDialogue = take(dialogue);
-  if (dialogue.isNotEmpty &&
-      visibleDialogue.runes.length >= dialogue.runes.length) {
-    consumeGap();
-  }
-  final visibleTrailing = take(trailing);
-
-  return _NovelVisibleReaderParts(
-    leadingNarration: visibleLeading,
-    dialogue: visibleDialogue,
-    trailingNarration: visibleTrailing,
-  );
-}
-
-enum _NovelMixedReaderPhase {
-  leadingNarration,
-  dialogue,
-  trailingNarration,
-}
-
-_NovelMixedReaderPhase _novelMixedReaderPhase(
-  NovelSentence? sentence,
-  String visibleText,
-) {
-  // 非混合页沿用普通对白语义；只有 hasMixedContent 才需要在
-  // “前置正文 -> 角色对白 -> 后置正文”三种舞台之间切换。
-  if (sentence?.hasMixedContent != true) {
-    return _NovelMixedReaderPhase.dialogue;
-  }
-
-  final parts = _visibleReaderParts(sentence, visibleText);
-  final trailingVisible =
-      _novelVisibleNarrationText(parts.trailingNarration).trim().isNotEmpty;
-  if (trailingVisible) {
-    return _NovelMixedReaderPhase.trailingNarration;
-  }
-  if (parts.dialogue.trim().isNotEmpty) {
-    return _NovelMixedReaderPhase.dialogue;
-  }
-  return _NovelMixedReaderPhase.leadingNarration;
-}
-
-bool _novelDialogueIsActive(
-  NovelSentence? sentence,
-  String visibleText,
-) {
-  return _novelMixedReaderPhase(sentence, visibleText) ==
-      _NovelMixedReaderPhase.dialogue;
-}
-
 class _NovelMixedNarrationSurface extends StatelessWidget {
   const _NovelMixedNarrationSurface({
-    required this.sentence,
     required this.displayTextListenable,
     required this.isRevealing,
     required this.fontFamily,
@@ -1452,7 +1566,6 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
     required this.onTap,
   });
 
-  final NovelSentence sentence;
   final ValueListenable<String> displayTextListenable;
   final bool isRevealing;
   final String? fontFamily;
@@ -1471,23 +1584,11 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
         child: ValueListenableBuilder<String>(
           valueListenable: displayTextListenable,
           builder: (context, value, _) {
-            final parts = _visibleReaderParts(sentence, value);
-            final phase = _novelMixedReaderPhase(sentence, value);
-
-            // 对白阶段正文层完全撤掉，严格保证“正文”和“立绘对白”不同时出现。
-            if (phase == _NovelMixedReaderPhase.dialogue) {
-              return const SizedBox.shrink();
-            }
-
-            final narration =
-                phase == _NovelMixedReaderPhase.trailingNarration
-                    ? parts.trailingNarration
-                    : parts.leadingNarration;
-            final visibleNarration = _novelVisibleNarrationText(narration).trim();
+            final visibleNarration = _novelVisibleNarrationText(value).trim();
             if (visibleNarration.isEmpty) return const SizedBox.shrink();
 
             return TweenAnimationBuilder<double>(
-              key: ValueKey<_NovelMixedReaderPhase>(phase),
+              key: ValueKey<String>('mixed-narration-page'),
               tween: Tween<double>(begin: 0, end: 1),
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
@@ -1526,7 +1627,7 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
                   child: Transform.translate(
                     offset: Offset(0, (1 - entrance) * 5),
                     child: _NovelNarrationParagraphText(
-                      value: narration,
+                      value: value,
                       style: style,
                       textAlign:
                           shortWide ? TextAlign.center : TextAlign.left,
@@ -1762,7 +1863,9 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                   final display = value.isEmpty && !hasStoryText
                       ? emptyTextFallback
                       : value;
-                  final parts = _visibleReaderParts(sentence, display);
+                  // _displayTextNotifier 现在永远只承载“当前阅读页”的文字。
+                  // 普通对白页和混合对白子页都可直接渲染，不再按 rune 长度反推阶段。
+                  final dialogueText = display;
                   final alignment = shortWide
                       ? TextAlign.center
                       : (wideDialogueLayout
@@ -1791,11 +1894,11 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: <Widget>[
-                          if (parts.dialogue.isNotEmpty)
+                          if (dialogueText.isNotEmpty)
                             Text.rich(
                               TextSpan(
                                 children: _buildNovelDialogueDisplaySpans(
-                                  parts.dialogue,
+                                  dialogueText,
                                   style,
                                 ),
                               ),
@@ -2359,33 +2462,43 @@ class _GameContinueGlyph extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 可直接放入你自己的游戏 UI PNG：assets/images/novel_continue.png
-    // 推荐透明底、白/香槟色细线菱形 + 向下箭头，尺寸 96x96 或 128x128。
+    // 不再读取 assets/images/novel_continue.png，避免 Web 端缺资源时反复 404。
     return SizedBox(
       width: size,
       height: size,
-      child: Image.asset(
-        'assets/images/novel_continue.png',
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (_, __, ___) => Stack(
-          alignment: Alignment.center,
-          children: <Widget>[
-            Transform.rotate(
-              angle: .7853981633974483,
-              child: Container(
-                width: size * .56,
-                height: size * .56,
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.10),
-                  border: Border.all(color: const Color(0xFFF3EBDD).withOpacity(.48), width: .85),
-                  boxShadow: <BoxShadow>[BoxShadow(color: Colors.black.withOpacity(.26), blurRadius: 12, offset: const Offset(0, 4))],
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          Transform.rotate(
+            angle: .7853981633974483,
+            child: Container(
+              width: size * .52,
+              height: size * .52,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(.08),
+                border: Border.all(
+                  color: const Color(0xFFF3EBDD).withOpacity(.42),
+                  width: .75,
                 ),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withOpacity(.18),
+                    blurRadius: 9,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
             ),
-            Icon(Icons.keyboard_arrow_down_rounded, size: size * .54, color: const Color(0xFFF6F1E7).withOpacity(.92), shadows: const <Shadow>[Shadow(color: Color(0xB3000000), blurRadius: 7)]),
-          ],
-        ),
+          ),
+          Icon(
+            Icons.keyboard_arrow_down_rounded,
+            size: size * .50,
+            color: const Color(0xFFF6F1E7).withOpacity(.88),
+            shadows: const <Shadow>[
+              Shadow(color: Color(0x8A000000), blurRadius: 6),
+            ],
+          ),
+        ],
       ),
     );
   }

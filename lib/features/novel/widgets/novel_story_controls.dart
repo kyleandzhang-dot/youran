@@ -105,7 +105,9 @@ class _NovelFloatingSurroundingsActionState
     final compact = widget.compact;
     final haloSize = compact ? 44.0 : 50.0;
     final coreSize = compact ? 34.0 : 39.0;
-    final accent = Theme.of(context).colorScheme.primary;
+    // 探索入口属于 Novel 主题，不跟随 App Theme.primary（有些页面会是紫色）。
+    // 固定使用小说系统的主题绿，确保剧情页视觉语言一致。
+    const accent = NovelPalette.accent;
     final semanticLabel =
         scope.label.trim().isEmpty ? '探索周围' : scope.label.trim();
 
@@ -236,8 +238,8 @@ class _NovelFloatingSurroundingsActionState
                         scope.loading ? '探索中' : '可探索',
                         maxLines: 1,
                         style: TextStyle(
-                          color: Colors.white.withOpacity(
-                            scope.loading ? .62 : .94,
+                          color: accent.withOpacity(
+                            scope.loading ? .62 : .96,
                           ),
                           fontFamily: 'WenJinMinchoP0',
                           fontSize: compact ? 9.5 : 10.4,
@@ -283,6 +285,7 @@ class NovelChoiceDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final choices = this.choices;
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.narrowWidth;
     final shortViewport = viewport.shortViewport;
@@ -309,7 +312,7 @@ class _ChoiceColors {
   static const Color numberBorder = Color(0x38FFFFFF);
 }
 
-class _InlineNovelChoices extends StatelessWidget {
+class _InlineNovelChoices extends StatefulWidget {
   const _InlineNovelChoices({
     required this.choices,
     required this.onSelected,
@@ -322,9 +325,33 @@ class _InlineNovelChoices extends StatelessWidget {
   final VoidCallback onCustomInput;
   final VoidCallback onContinue;
 
+  @override
+  State<_InlineNovelChoices> createState() => _InlineNovelChoicesState();
+}
+
+class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _handleChoicePanUpdate(DragUpdateDetails details) {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    final nextOffset = (_scrollController.offset - details.delta.dx)
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    if ((nextOffset - _scrollController.offset).abs() < .1) return;
+    _scrollController.jumpTo(nextOffset);
+  }
+
   IconData _fallbackIconFor(NovelChoice choice) {
     if (choice.isBattle) return Icons.flash_on_rounded;
     if (choice.isAction) return Icons.casino_outlined;
+    if (choice.isProgress) return Icons.arrow_forward_rounded;
     return Icons.chat_bubble_outline_rounded;
   }
 
@@ -378,6 +405,7 @@ class _InlineNovelChoices extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final choices = widget.choices;
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.narrowWidth;
     final shortViewport = viewport.shortViewport;
@@ -394,7 +422,8 @@ class _InlineNovelChoices extends StatelessWidget {
           compact: compact,
         );
 
-        return SingleChildScrollView(
+        final scrollView = SingleChildScrollView(
+          controller: _scrollController,
           scrollDirection: Axis.horizontal,
           physics: const BouncingScrollPhysics(),
           clipBehavior: Clip.none,
@@ -415,7 +444,7 @@ class _InlineNovelChoices extends StatelessWidget {
                       child: Material(
                         color: Colors.transparent,
                         child: InkWell(
-                          onTap: () => onSelected(entry.value),
+                          onTap: () => widget.onSelected(entry.value),
                           borderRadius: BorderRadius.zero,
                           splashColor: Colors.white.withOpacity(.07),
                           highlightColor: Colors.white.withOpacity(.03),
@@ -424,6 +453,8 @@ class _InlineNovelChoices extends StatelessWidget {
                               horizontal: compact ? 9 : 11,
                             ),
                             decoration: BoxDecoration(
+                              // primary 只负责排序/语义，不改变按钮颜色。
+                              // 所有剧情选项保持统一视觉，类型差异只由图标表达。
                               color: _ChoiceColors.card,
                               borderRadius: BorderRadius.zero,
                               border: Border.all(
@@ -502,6 +533,30 @@ class _InlineNovelChoices extends StatelessWidget {
             ],
           ),
         );
+
+        final scrollableChoices = choices.length <= 2
+            ? scrollView
+            : GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanUpdate: _handleChoicePanUpdate,
+                child: scrollView,
+              );
+
+        // 不显示底部滚动条；手机上手指落在选项区域时，优先横向拖动选项，
+        // 避免被外层剧情页滚动手势抢走。
+        return ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(
+            scrollbars: false,
+            dragDevices: <PointerDeviceKind>{
+              PointerDeviceKind.touch,
+              PointerDeviceKind.mouse,
+              PointerDeviceKind.trackpad,
+              PointerDeviceKind.stylus,
+              PointerDeviceKind.unknown,
+            },
+          ),
+          child: scrollableChoices,
+        );
       },
     );
   }
@@ -520,6 +575,10 @@ class _NovelDialogFooter extends StatelessWidget {
     required this.onOpenCharacters,
     required this.onOpenJourney,
     required this.onContinue,
+    this.targetActorName = '',
+    this.targetActorAvatarUrl = '',
+    this.targetActorPlaceholder = '',
+    this.onClearTargetActor,
   });
 
   final NovelGameController controller;
@@ -533,6 +592,10 @@ class _NovelDialogFooter extends StatelessWidget {
   final VoidCallback onOpenCharacters;
   final VoidCallback onOpenJourney;
   final VoidCallback onContinue;
+  final String targetActorName;
+  final String targetActorAvatarUrl;
+  final String targetActorPlaceholder;
+  final VoidCallback? onClearTargetActor;
 
   @override
   Widget build(BuildContext context) {
@@ -589,10 +652,6 @@ class _NovelDialogFooter extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
-                if (!choicesAvailable) ...<Widget>[
-                  _GameContinueButton(onTap: onContinue),
-                  const SizedBox(width: 9),
-                ],
                 Expanded(
                   child: NovelInputBar(
                     controller: textController,
@@ -604,6 +663,10 @@ class _NovelDialogFooter extends StatelessWidget {
                     luckyCardCount: controller.luckyCardCount,
                     onToggleLuckyCard: controller.toggleLuckyCard,
                     onSend: onSend,
+                    targetActorName: targetActorName,
+                    targetActorAvatarUrl: targetActorAvatarUrl,
+                    targetActorPlaceholder: targetActorPlaceholder,
+                    onClearTargetActor: onClearTargetActor,
                   ),
                 ),
               ],

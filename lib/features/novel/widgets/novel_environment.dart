@@ -1023,10 +1023,16 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     final horizontalRate = landscape ? -event.x : event.y;
     final verticalRate = landscape ? event.y : -event.x;
 
-    _sensorViewX =
-        (_sensorViewX + horizontalRate * dt * .92).clamp(-.88, .88).toDouble();
-    _sensorViewY =
-        (_sensorViewY + verticalRate * dt * .92).clamp(-.88, .88).toDouble();
+    // 强视差手感：左右更明显，上下稍弱，避免横屏游玩时产生过强晕动。
+    // 2.5 档现在会在轻微倾斜时就产生清晰的近远景分离，而不是只在大幅转动时可见。
+    const horizontalGyroGain = 1.95;
+    const verticalGyroGain = 1.65;
+    _sensorViewX = (_sensorViewX + horizontalRate * dt * horizontalGyroGain)
+        .clamp(-.98, .98)
+        .toDouble();
+    _sensorViewY = (_sensorViewY + verticalRate * dt * verticalGyroGain)
+        .clamp(-.98, .98)
+        .toDouble();
     _publishParallaxView();
   }
 
@@ -1043,17 +1049,19 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     final dy = event.y - originY;
     final landscape = _lastLandscape ?? false;
 
-    final targetX = (landscape ? -dy : dx) / 5.2;
-    final targetY = (landscape ? -dx : -dy) / 5.2;
+    // 重力锚点也同步增强，否则陀螺仪推开后会被过于保守的锚定迅速“吃掉”。
+    // 横向仍比纵向稍强：横屏视觉小说里左右景深最自然。
+    final targetX = (landscape ? -dy : dx) / 3.35;
+    final targetY = (landscape ? -dx : -dy) / 3.75;
 
-    // 只做慢速锚定；快速瞬态仍由陀螺仪承担。
-    _sensorViewX = (_sensorViewX * .90 +
-            targetX.clamp(-.78, .78).toDouble() * .10)
-        .clamp(-.88, .88)
+    // 保留慢速稳定感，但提高锚定目标幅度与跟随比例。
+    _sensorViewX = (_sensorViewX * .86 +
+            targetX.clamp(-.94, .94).toDouble() * .14)
+        .clamp(-.98, .98)
         .toDouble();
-    _sensorViewY = (_sensorViewY * .90 +
-            targetY.clamp(-.78, .78).toDouble() * .10)
-        .clamp(-.88, .88)
+    _sensorViewY = (_sensorViewY * .87 +
+            targetY.clamp(-.90, .90).toDouble() * .13)
+        .clamp(-.98, .98)
         .toDouble();
     _publishParallaxView();
   }
@@ -1789,8 +1797,11 @@ class _NovelBackgroundParallaxPainter extends CustomPainter {
     shader.setFloat(1, size.height);
     shader.setFloat(2, viewX);
     shader.setFloat(3, viewY);
-    shader.setFloat(4, strength);
-    shader.setFloat(5, 1.045 + strength * .035);
+    // 正式剧情把 UI 的 0.15~2.5 强度映射得更有存在感。
+    // 2.5 会得到约 3.05 的 shader 强度；同步增加 overscan，避免强位移露边。
+    final visualStrength = strength * 1.22;
+    shader.setFloat(4, visualStrength);
+    shader.setFloat(5, 1.06 + visualStrength * .045);
     shader.setImageSampler(0, source);
     shader.setImageSampler(1, depth);
 

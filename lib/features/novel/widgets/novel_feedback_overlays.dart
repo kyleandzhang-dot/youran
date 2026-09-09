@@ -478,7 +478,7 @@ class NovelDiceOverlay extends StatelessWidget {
   }
 }
 
-class NovelTimeSkipOverlay extends StatelessWidget {
+class NovelTimeSkipOverlay extends StatefulWidget {
   const NovelTimeSkipOverlay({
     super.key,
     required this.label,
@@ -489,20 +489,150 @@ class NovelTimeSkipOverlay extends StatelessWidget {
   final VoidCallback onDismiss;
 
   @override
+  State<NovelTimeSkipOverlay> createState() => _NovelTimeSkipOverlayState();
+}
+
+class _NovelTimeSkipOverlayState extends State<NovelTimeSkipOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _opacity;
+  late final Animation<double> _scale;
+  late final Animation<double> _lift;
+  bool _dismissed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2600),
+    );
+
+    _opacity = TweenSequence<double>(<TweenSequenceItem<double>>[
+      TweenSequenceItem<double>(
+        tween: Tween<double>(begin: 0, end: 1)
+            .chain(CurveTween(curve: Curves.easeOutCubic)),
+        weight: 18,
+      ),
+      TweenSequenceItem<double>(
+        tween: ConstantTween<double>(1),
+        weight: 60,
+      ),
+      TweenSequenceItem<double>(
+        tween: Tween<double>(begin: 1, end: 0)
+            .chain(CurveTween(curve: Curves.easeInCubic)),
+        weight: 22,
+      ),
+    ]).animate(_controller);
+
+    _scale = Tween<double>(begin: .985, end: 1).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0, .28, curve: Curves.easeOutCubic),
+      ),
+    );
+    _lift = Tween<double>(begin: 8, end: 0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0, .28, curve: Curves.easeOutCubic),
+      ),
+    );
+
+    _controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) _dismiss();
+    });
+    _controller.forward();
+  }
+
+  void _dismiss() {
+    if (_dismissed) return;
+    _dismissed = true;
+    widget.onDismiss();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    final compact = NovelViewportMetrics.of(context).compactContent;
+    final cleanLabel = widget.label.trim();
+    final labelLength = cleanLabel.runes.length;
+    final letterSpacing = labelLength <= 4 ? 7.0 : (labelLength <= 8 ? 4.0 : 2.0);
+
     return GestureDetector(
-        onTap: onDismiss,
-        child: ColoredBox(
-          color: const Color(0xD9000000),
-          child: Center(
-              child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
-            Container(width: 54, height: 1, color: Colors.white.withOpacity(.48)),
-            const SizedBox(height: 22),
-            Text(label, style: const TextStyle(color: NovelPalette.text, fontSize: 24, fontWeight: FontWeight.w500, letterSpacing: 5)),
-            const SizedBox(height: 22),
-            Container(width: 54, height: 1, color: Colors.white.withOpacity(.48)),
-          ])),
-        ));
+      behavior: HitTestBehavior.opaque,
+      onTap: _dismiss,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, _) {
+          final opacity = _opacity.value.clamp(0.0, 1.0).toDouble();
+          final scale = reduceMotion ? 1.0 : _scale.value;
+          final lift = reduceMotion ? 0.0 : _lift.value;
+
+          return Opacity(
+            opacity: opacity,
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                ColoredBox(
+                  color: Colors.black.withOpacity(.64),
+                ),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      center: const Alignment(0, -.06),
+                      radius: .78,
+                      colors: <Color>[
+                        Colors.white.withOpacity(.018),
+                        Colors.transparent,
+                        Colors.black.withOpacity(.14),
+                      ],
+                      stops: const <double>[0, .54, 1],
+                    ),
+                  ),
+                ),
+                Center(
+                  child: Transform.translate(
+                    offset: Offset(0, lift),
+                    child: Transform.scale(
+                      scale: scale,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 32),
+                        child: Text(
+                          cleanLabel,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.fade,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(.94),
+                            fontSize: compact ? 25 : 30,
+                            height: 1.35,
+                            fontWeight: FontWeight.w400,
+                            letterSpacing: letterSpacing,
+                            shadows: <Shadow>[
+                              Shadow(
+                                color: Colors.black.withOpacity(.42),
+                                blurRadius: 18,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 }
 
