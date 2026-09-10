@@ -1170,7 +1170,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                           ],
                         ),
                       _buildBottomBar(
-                        leftInset: landscape ? sidebarWidth + 1 : 0,
+                        // Landscape editor content is inside SafeArea, so the
+                        // bottom action bar must use the same horizontal insets.
+                        leftInset: landscape
+                            ? media.padding.left + sidebarWidth + 1
+                            : 0,
+                        rightInset: landscape ? media.padding.right : 0,
                         compact: landscape,
                       ),
                       if (_actionLoading)
@@ -2383,10 +2388,14 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     );
   }
 
-  Widget _buildBottomBar({double leftInset = 0, bool compact = false}) {
+  Widget _buildBottomBar({
+    double leftInset = 0,
+    double rightInset = 0,
+    bool compact = false,
+  }) {
     return Positioned(
       left: leftInset,
-      right: 0,
+      right: rightInset,
       bottom: 0,
       child: Container(
         padding: EdgeInsets.fromLTRB(

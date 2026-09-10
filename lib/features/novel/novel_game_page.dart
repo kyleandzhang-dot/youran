@@ -95,6 +95,9 @@ class _NovelGamePageState extends State<NovelGamePage>
   String _lastWeatherSyncToken = '';
   Timer? _sceneArrivalTimer;
   String _lastSceneArrivalToken = '';
+  // 首次从历史记录恢复时，当前地点只是已有状态，不是一次新的抵达。
+  // 先用历史中的当前位置给 arrival token 做基线，避免每次刷新都误播“新地点”。
+  bool _sceneArrivalHydrated = false;
   bool _sceneArrivalActive = false;
   String? _sceneArrivalPreviewTitle;
   String? _sceneArrivalPreviewSubtitle;
@@ -255,10 +258,23 @@ class _NovelGamePageState extends State<NovelGamePage>
     final title = controller.locationTitle.trim();
     final subtitle = controller.locationSubtitle.trim();
 
-    // 回看历史时不重复播放场景揭示；只有抵达最新剧情中的新地点才触发。
-    if (!controller.storyStarted || title.isEmpty || controller.hasNext) return;
+    if (!controller.isInitialized || title.isEmpty) return;
 
     final token = '$title\u0000$subtitle';
+
+    // 初始化完成后的第一次同步只是“恢复当前世界”。
+    // 如果已经存在历史 AI 消息，就把当前位置登记成基线，不播放抵达动画。
+    // 真正的新开局此时 storyStarted=false，之后第一次实际进入/移动仍会正常触发。
+    if (!_sceneArrivalHydrated) {
+      _sceneArrivalHydrated = true;
+      if (controller.storyStarted && controller.lastAssistantMessage != null) {
+        _lastSceneArrivalToken = token;
+        return;
+      }
+    }
+
+    // 回看旧页时不播放；只有停在最新剧情并且地点真的变化才触发。
+    if (!controller.storyStarted || controller.hasNext) return;
     if (token == _lastSceneArrivalToken) return;
     _lastSceneArrivalToken = token;
 
@@ -310,7 +326,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       sessionId,
       controller.locationTitle.trim(),
       controller.locationSubtitle.trim(),
-      '${controller.sceneMapRevision}',
     ].join('\u0001');
   }
 
@@ -337,13 +352,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     final requestId = ++_sceneBarkRefreshRequestId;
     _sceneBarkRefreshToken = token;
     try {
-      // Scene people 与地图、story_clock 共用 Controller 的同一份权威 scene-map 快照。
-      // 如果初始化阶段快照还没到，只触发 Controller 刷新；revision 更新后本方法会自动重跑。
-      if (controller.sceneMapPayload.isEmpty) {
-        await controller.refreshSceneMap(force: true, notify: false);
-      }
+      final payload = await controller.backend.fetchSceneMap(controller.sessionId);
       if (!mounted || requestId != _sceneBarkRefreshRequestId) return;
-      final payload = controller.sceneMapPayload;
       final nextBarks = NovelSceneBark.listFromSceneMap(payload);
       final nextTargets = NovelSceneBarkActor.talkTargetsFromSceneMap(payload);
       setState(() {
@@ -752,20 +762,20 @@ class _NovelGamePageState extends State<NovelGamePage>
     });
   }
 
-  Future<void> _toggleDisplayMode(bool currentlyDesktop) async {
+  Future<void> _setReadingMode(bool immersiveMode) async {
     _inputFocusNode.unfocus();
     FocusManager.instance.primaryFocus?.unfocus();
 
-    final nextDesktop = !currentlyDesktop;
+    if (controller.desktopMode == immersiveMode) return;
 
-    // 先更新全局模式，再让原生手机方向跟随它。这样新旧剧本页切换时
-    // 看到的是同一个状态源，不会出现“布局是电脑模式、方向却回竖屏”。
+    // 阅读模式只改变剧情布局语义：标准=竖屏，沉浸=横屏。
+    // 底层继续复用既有 mobile / desktop 布局状态，避免牵动整套响应式实现。
     controller.setDisplayMode(
-      nextDesktop ? NovelDisplayMode.desktop : NovelDisplayMode.mobile,
+      immersiveMode ? NovelDisplayMode.desktop : NovelDisplayMode.mobile,
     );
     await Future.wait<void>(<Future<void>>[
-      _applyDisplayModeOrientation(nextDesktop),
-      _saveDisplayModePreference(nextDesktop),
+      _applyDisplayModeOrientation(immersiveMode),
+      _saveDisplayModePreference(immersiveMode),
     ]);
 
     if (!mounted) return;
@@ -943,12 +953,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       NovelChoice(
         text: '迎战挡在前方的对手',
         type: 'battle',
-      ),
-      NovelChoice(
-        text: '继续前往当前目标',
-        type: 'dialogue',
-        intent: 'progress',
-        role: 'primary',
       ),
     ];
 
@@ -1920,12 +1924,16 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 controller.locationSubtitle;
                         final rawLocationSubtitle =
                             controller.locationSubtitle.trim();
-                        final worldTimeLabel = controller.storyTimeDisplay.trim();
-                        final worldMapHudTitle = controller.locationTitle;
-                        final worldMapHudSubtitle = <String>[
-                          if (worldTimeLabel.isNotEmpty) worldTimeLabel,
-                          if (rawLocationSubtitle.isNotEmpty) rawLocationSubtitle,
-                        ].join(' · ');
+                        final worldTimeLabel =
+                            controller.world.timeDescription.trim();
+                        final worldMapHudTitle = rawLocationSubtitle.isNotEmpty &&
+                                rawLocationSubtitle != worldTimeLabel
+                            ? rawLocationSubtitle.split(' · ').first
+                            : controller.locationTitle;
+                        final worldMapHudSubtitle =
+                            worldMapHudTitle != controller.locationTitle
+                                ? '当前位置 · ${controller.locationTitle}'
+                                : rawLocationSubtitle;
                         final sceneHudTransitionDuration = _sceneArrivalActive
                             ? const Duration(milliseconds: 180)
                             : const Duration(milliseconds: 620);
@@ -1958,6 +1966,25 @@ class _NovelGamePageState extends State<NovelGamePage>
                         final inlineSurroundingsEnabled =
                             inlineSurroundingsVisible &&
                             !controller.isSurroundingsLoading;
+                        final storyClock = controller.storyClock;
+                        final storyDayLabel = storyClock.enabled
+                            ? (storyClock.dayLabel.trim().isNotEmpty
+                                ? storyClock.dayLabel.trim()
+                                : '第${storyClock.dayIndex < 1 ? 1 : storyClock.dayIndex}天')
+                            : '';
+                        final storyPeriodLabel = storyClock.enabled
+                            ? (storyClock.timeDescription.trim().isNotEmpty
+                                ? storyClock.timeDescription.trim()
+                                : switch (storyClock.periodKey) {
+                                    'morning' => '早晨',
+                                    'noon' => '中午',
+                                    'afternoon' => '下午',
+                                    'evening' => '傍晚',
+                                    'night' => '夜晚',
+                                    'midnight' => '深夜',
+                                    _ => '',
+                                  })
+                            : '';
                         final rightSceneExploreVisible =
                             !showInlineSurroundingsDock &&
                             _primaryTab == _NovelPrimaryTab.story &&
@@ -2008,6 +2035,8 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 onOpenSettings: () => showNovelSettingsSheet(
                                   context,
                                   controller,
+                                  immersiveMode: desktopMode,
+                                  onReadingModeChanged: _setReadingMode,
                                   isAdmin: _isAdmin,
                                   developerPreview:
                                       _isAdmin ? _developerPreviewActions : null,
@@ -2015,22 +2044,26 @@ class _NovelGamePageState extends State<NovelGamePage>
                               ),
                             ),
 
-                            // 手机 / 电脑是两套布局模式，不再把“横屏”当成电脑模式。
-                            // Web / Desktop 只改变布局；原生手机进入电脑模式时才辅助切到横屏。
+                            // 故事时间属于“场景信息”，不再挤在顶部系统工具栏。
+                            // 它始终停在右侧场景轴上；最后一页时附近角色会从它下方接入。
                             if (!_immersiveInputMode &&
                                 controller.storyStarted &&
+                                !controller.isCinematic &&
                                 !keyboardActive &&
                                 !_battleOpen &&
-                                !_endingOpen)
+                                !_endingOpen &&
+                                storyDayLabel.isNotEmpty)
                               Positioned(
-                                right: compact ? 0 : 2,
-                                top: shortWide ? 44 : 52,
-                                child: _NovelDisplayModeToggle(
-                                  desktop: desktopMode,
-                                  onTap: () => _toggleDisplayMode(desktopMode),
+                                right: compact ? 10 : 18,
+                                top: shortWide ? 48 : 66,
+                                child: _NovelSceneTimeStamp(
+                                  dayLabel: storyDayLabel,
+                                  periodLabel: storyPeriodLabel,
+                                  compact: compact,
+                                  shortWide: shortWide,
                                 ),
                               ),
-                            
+
                             // 完美左对齐 + 高度紧凑优化：把位置和目标包在一个 Column 里
                             if (!_immersiveInputMode && controller.storyStarted && !keyboardActive)
                               Positioned(
@@ -2096,6 +2129,10 @@ class _NovelGamePageState extends State<NovelGamePage>
                               ),
                             if (controller.storyStarted && !controller.isCinematic)
                               Align(
+                                // Stack 前后会动态插入/移除地点标题、右侧人物和气泡层。
+                                // 顶层稳定 Key 保证这些兄弟节点变化时 Reader State 不会被卸载重建，
+                                // 否则 NovelDialogPanel.initState() 会再次启动逐字动画。
+                                key: const ValueKey<String>('novel-story-reader-stage'),
                                 alignment: Alignment.bottomCenter,
                                 child: Padding(
                                   // 剧情区域始终保持左右对称，不为右侧悬浮按钮预留宽度。
@@ -2108,9 +2145,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                                         ? constraints.maxWidth
                                         : math.min(720.0, constraints.maxWidth),
                                     child: NovelChoiceDockActionScope(
-                                      // 右侧“可探索”现在并入附近人物工具组，
-                                      // 这里关闭旧的独立悬浮入口，避免重复显示。
-                                      visible: false,
+                                      // 探索入口属于剧情阅读舞台，不再塞进附近角色列表。
+                                      // 只在最后一页由 Reader 放到正文右上方。
+                                      visible: rightSceneExploreVisible,
                                       label: controller.surroundingsActionLabel,
                                       attention: controller.surroundingsNeedsAttention,
                                       loading: controller.isSurroundingsLoading,
@@ -2159,25 +2196,26 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 controller.storyStarted &&
                                 !controller.isCinematic &&
                                 !keyboardActive &&
+                                !showBottomNav &&
+                                !controller.hasNext &&
                                 !controller.isGenerating &&
                                 !_sceneArrivalActive &&
                                 !_battleOpen &&
                                 !_endingOpen &&
-                                (_talkTargets.isNotEmpty ||
-                                    rightSceneExploreVisible))
+                                _talkTargets.isNotEmpty)
                               Positioned(
                                 right: compact ? 6 : 14,
-                                top: shortWide ? 92 : 118,
+                                // 时间牌改为上下两层后高度更高；人物/探索从它下方留出呼吸感。
+                                top: shortWide ? 106 : 136,
                                 bottom: shortWide ? 84 : 212,
                                 child: NovelRightSceneDock(
                                   targets: _talkTargets,
                                   selectedActorId: _targetSceneActor?.id ?? '',
                                   onSelected: _handleTalkTargetTap,
                                   onClear: _clearTargetSceneActor,
-                                  exploreVisible: rightSceneExploreVisible,
-                                  exploreLabel: controller.isSurroundingsLoading
-                                      ? '探索中'
-                                      : '可探索',
+                                  // 探索入口已经移入剧情正文舞台；右侧 Dock 只负责附近角色。
+                                  exploreVisible: false,
+                                  exploreLabel: '',
                                   exploreAttention:
                                       controller.surroundingsNeedsAttention,
                                   exploreLoading:
@@ -2401,6 +2439,96 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 }
 
+class _NovelSceneTimeStamp extends StatelessWidget {
+  const _NovelSceneTimeStamp({
+    required this.dayLabel,
+    required this.periodLabel,
+    required this.compact,
+    required this.shortWide,
+  });
+
+  final String dayLabel;
+  final String periodLabel;
+  final bool compact;
+  final bool shortWide;
+
+  @override
+  Widget build(BuildContext context) {
+    final day = dayLabel.trim();
+    final period = periodLabel.trim();
+    if (day.isEmpty) return const SizedBox.shrink();
+
+    // 时间只做“场景字幕”，不再使用卡片、遮罩或边框。
+    // 两行排版保留主次层级：天数是主信息，时段是轻量副信息。
+    return IgnorePointer(
+      child: Semantics(
+        label: period.isEmpty ? '故事时间 $day' : '故事时间 $day $period',
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: shortWide ? 2 : 3,
+            vertical: 2,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              Text(
+                day,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.92),
+                  fontFamily: 'WenJinMinchoP0',
+                  fontSize: shortWide ? 10.4 : (compact ? 11.0 : 11.7),
+                  height: 1.05,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: .48,
+                  shadows: const <Shadow>[
+                    Shadow(
+                      color: Color(0xA8000000),
+                      blurRadius: 6,
+                      offset: Offset(0, 1),
+                    ),
+                    Shadow(
+                      color: Color(0x52000000),
+                      blurRadius: 12,
+                    ),
+                  ],
+                ),
+              ),
+              if (period.isNotEmpty) ...<Widget>[
+                SizedBox(height: shortWide ? 4 : 5),
+                Text(
+                  period,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.62),
+                    fontFamily: 'WenJinMinchoP0',
+                    fontSize: shortWide ? 8.5 : (compact ? 9.0 : 9.5),
+                    height: 1.0,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 1.18,
+                    shadows: const <Shadow>[
+                      Shadow(
+                        color: Color(0x98000000),
+                        blurRadius: 5,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FatalError extends StatelessWidget {
   const _FatalError({
     required this.message,
@@ -2563,78 +2691,5 @@ class _NovelPreviewButton extends StatelessWidget {
 }
 
 
-class _NovelDisplayModeToggle extends StatelessWidget {
-  const _NovelDisplayModeToggle({
-    required this.desktop,
-    required this.onTap,
-  });
 
-  final bool desktop;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final viewport = NovelViewportMetrics.of(context, desktopMode: desktop);
-    final shortWide = viewport.shortWide;
-    final label = desktop && shortWide ? '横屏' : (desktop ? '电脑' : '手机');
-    final tooltip = desktop && shortWide
-        ? '当前：手机横屏适配 · 点击切回手机竖屏'
-        : (desktop
-            ? '当前：电脑模式 · 点击切换手机模式'
-            : '当前：手机模式 · 点击切换电脑模式');
-
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(18),
-          splashColor: Colors.white.withOpacity(.08),
-          highlightColor: Colors.white.withOpacity(.035),
-          child: Container(
-            height: shortWide ? 30 : 34,
-            padding: EdgeInsets.symmetric(horizontal: shortWide ? 7 : 9),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(.22),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: Colors.white.withOpacity(.14),
-                width: .7,
-              ),
-              boxShadow: <BoxShadow>[
-                BoxShadow(
-                  color: Colors.black.withOpacity(.14),
-                  blurRadius: 10,
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Icon(
-                  desktop
-                      ? Icons.desktop_windows_outlined
-                      : Icons.phone_android_rounded,
-                  size: shortWide ? 15.5 : 17,
-                  color: Colors.white.withOpacity(.88),
-                ),
-                SizedBox(width: shortWide ? 4 : 5),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(.88),
-                    fontSize: shortWide ? 9.6 : 10.5,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: .2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 

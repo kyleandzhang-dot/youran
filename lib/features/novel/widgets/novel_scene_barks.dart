@@ -442,7 +442,13 @@ class NovelRightSceneDock extends StatelessWidget {
 
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.compactChrome;
-    final width = compact ? 88.0 : 104.0;
+    final targetWidth = compact ? 88.0 : 104.0;
+    final exploreWidth = compact ? 38.0 : 42.0;
+    final horizontalGap = exploreVisible && targets.isNotEmpty
+        ? (compact ? 8.0 : 10.0)
+        : 0.0;
+    final totalWidth = targetWidth +
+        (exploreVisible ? exploreWidth + horizontalGap : 0.0);
     final fallbackHeight = viewport.shortWide
         ? 150.0
         : (viewport.phoneWidth ? 236.0 : 314.0);
@@ -452,44 +458,44 @@ class NovelRightSceneDock extends StatelessWidget {
         final maxHeight = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : fallbackHeight;
-        final exploreGap = exploreVisible && targets.isNotEmpty
-            ? (compact ? 5.0 : 6.0)
-            : 0.0;
-        final exploreReserve = exploreVisible ? (compact ? 28.0 : 30.0) : 0.0;
-        final targetMaxHeight = math.max(
-          0.0,
-          maxHeight - exploreGap - exploreReserve,
-        );
 
+        // 探索是“场景动作”，不再接在人物头像列表最下面。
+        // 它独立浮在人物列左侧，避免看起来像又一个角色槽位。
         return RepaintBoundary(
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxWidth: width,
+              maxWidth: totalWidth,
               maxHeight: maxHeight,
             ),
-            child: Column(
+            child: Row(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
+                if (exploreVisible)
+                  Padding(
+                    padding: EdgeInsets.only(top: compact ? 3 : 4),
+                    child: _SceneExploreAction(
+                      label: exploreLabel,
+                      attention: exploreAttention,
+                      loading: exploreLoading,
+                      compact: compact,
+                      onTap: onExplore,
+                    ),
+                  ),
+                if (exploreVisible && targets.isNotEmpty)
+                  SizedBox(width: horizontalGap),
                 if (targets.isNotEmpty)
                   ConstrainedBox(
-                    constraints: BoxConstraints(maxHeight: targetMaxHeight),
+                    constraints: BoxConstraints(
+                      maxWidth: targetWidth,
+                      maxHeight: maxHeight,
+                    ),
                     child: NovelTalkTargetBar(
                       targets: targets,
                       selectedActorId: selectedActorId,
                       onSelected: onSelected,
                       onClear: onClear,
                     ),
-                  ),
-                if (exploreVisible && targets.isNotEmpty)
-                  SizedBox(height: exploreGap),
-                if (exploreVisible)
-                  _SceneExploreAction(
-                    label: exploreLabel,
-                    attention: exploreAttention,
-                    loading: exploreLoading,
-                    compact: compact,
-                    onTap: onExplore,
                   ),
               ],
             ),
@@ -521,15 +527,15 @@ class _SceneExploreAction extends StatefulWidget {
 
 class _SceneExploreActionState extends State<_SceneExploreAction>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _glassSweep;
+  late final AnimationController _pulse;
   bool _reduceMotion = false;
 
   @override
   void initState() {
     super.initState();
-    _glassSweep = AnimationController(
+    _pulse = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2400),
+      duration: const Duration(milliseconds: 2200),
     );
   }
 
@@ -544,17 +550,23 @@ class _SceneExploreActionState extends State<_SceneExploreAction>
   void didUpdateWidget(covariant _SceneExploreAction oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.loading != widget.loading ||
-        oldWidget.attention != widget.attention) {
+        oldWidget.attention != widget.attention ||
+        oldWidget.label != widget.label) {
       _syncAnimation();
     }
   }
 
+  bool get _shouldPulse {
+    final label = widget.label.trim();
+    if (widget.loading) return false;
+    return label != '已探索';
+  }
+
   void _syncAnimation() {
-    // 入口可点击时用极轻的玻璃高光提示，不通过绿色/霓虹色抢画面。
-    if (!_reduceMotion && !widget.loading) {
-      if (!_glassSweep.isAnimating) _glassSweep.repeat();
+    if (!_reduceMotion && _shouldPulse) {
+      if (!_pulse.isAnimating) _pulse.repeat();
     } else {
-      _glassSweep
+      _pulse
         ..stop()
         ..value = 0;
     }
@@ -562,139 +574,125 @@ class _SceneExploreActionState extends State<_SceneExploreAction>
 
   @override
   void dispose() {
-    _glassSweep.dispose();
+    _pulse.dispose();
     super.dispose();
+  }
+
+  Widget _pulseRing({
+    required double phase,
+    required double size,
+    required double strength,
+  }) {
+    final safe = phase.clamp(0.0, 1.0).toDouble();
+    return Opacity(
+      opacity: ((1 - safe) * strength).clamp(0.0, 1.0).toDouble(),
+      child: Transform.scale(
+        scale: 1 + safe * .62,
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white.withOpacity(.72),
+              width: .65,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final rawLabel = widget.label.trim();
-    final displayLabel = widget.loading
+    final semanticsLabel = widget.loading
         ? '探索中'
         : (rawLabel.isEmpty || rawLabel == '探索' || rawLabel == '探索周围'
-            ? '可探索'
+            ? '探索周围'
             : rawLabel);
 
-    // 右侧人物栏在小屏/横屏时可能只剩 70px 左右，探索入口必须主动收窄。
-    // 固定最大宽度 + ellipsis，避免图标、文字、箭头组成的 Row 再次溢出。
-    final buttonWidth = widget.compact ? 64.0 : 68.0;
-    final buttonHeight = widget.compact ? 28.0 : 30.0;
-    final foreground = Colors.white.withOpacity(widget.attention ? .92 : .80);
-    final surface = Colors.black.withOpacity(widget.attention ? .22 : .17);
-    final border = Colors.white.withOpacity(widget.attention ? .16 : .10);
-    final radius = BorderRadius.circular(widget.compact ? 7.0 : 8.0);
+    // 探索入口现在是独立圆形场景动作，不再占用整条“人物行”宽度。
+    final hitSize = widget.compact ? 38.0 : 42.0;
+    final coreSize = widget.compact ? 27.0 : 31.0;
+    final pulseSlotSize = widget.compact ? 31.0 : 33.0;
+    final foreground = Colors.white.withOpacity(widget.attention ? .98 : .90);
+    final pulseStrength = widget.attention ? .42 : .28;
 
-    return Align(
-      alignment: Alignment.centerRight,
-      widthFactor: 1,
-      child: Semantics(
-        button: true,
-        enabled: !widget.loading,
-        label: displayLabel,
-        child: ClipRRect(
-          borderRadius: radius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 9.0, sigmaY: 9.0),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: widget.loading ? null : widget.onTap,
-                borderRadius: radius,
-                splashColor: Colors.white.withOpacity(.07),
-                highlightColor: Colors.white.withOpacity(.035),
+    return Semantics(
+      button: true,
+      enabled: !widget.loading,
+      label: semanticsLabel,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: widget.loading ? null : widget.onTap,
+          borderRadius: BorderRadius.circular(99),
+          splashColor: Colors.white.withOpacity(.035),
+          highlightColor: Colors.white.withOpacity(.018),
+          child: SizedBox.square(
+            dimension: hitSize,
+            child: Center(
+              child: SizedBox(
+                width: pulseSlotSize,
+                height: pulseSlotSize,
                 child: AnimatedBuilder(
-                  animation: _glassSweep,
+                  animation: _pulse,
                   builder: (context, _) {
-                    final phase = _reduceMotion ? 0.0 : _glassSweep.value;
-                    return SizedBox(
-                      width: buttonWidth,
-                      height: buttonHeight,
-                      child: Stack(
-                        clipBehavior: Clip.hardEdge,
-                        children: <Widget>[
-                          Positioned.fill(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: surface,
-                                borderRadius: radius,
-                                border: Border.all(color: border, width: .65),
-                              ),
-                            ),
+                    final p1 = _reduceMotion ? 0.0 : _pulse.value;
+                    final p2 = _reduceMotion
+                        ? 0.0
+                        : ((_pulse.value + .50) % 1.0);
+                    return Stack(
+                      alignment: Alignment.center,
+                      clipBehavior: Clip.none,
+                      children: <Widget>[
+                        if (_shouldPulse && !_reduceMotion) ...<Widget>[
+                          _pulseRing(
+                            phase: p1,
+                            size: coreSize,
+                            strength: pulseStrength,
                           ),
-                          if (!widget.loading && !_reduceMotion)
-                            Positioned.fill(
-                              child: IgnorePointer(
-                                child: Transform.translate(
-                                  offset: Offset(-44 + phase * 112, 0),
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Transform.rotate(
-                                      angle: -.20,
-                                      child: Container(
-                                        width: 17,
-                                        height: buttonHeight * 1.7,
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            begin: Alignment.centerLeft,
-                                            end: Alignment.centerRight,
-                                            colors: <Color>[
-                                              Colors.transparent,
-                                              Colors.white.withOpacity(
-                                                widget.attention ? .11 : .065,
-                                              ),
-                                              Colors.transparent,
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          Padding(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: widget.compact ? 6.0 : 7.0,
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.max,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: <Widget>[
-                                if (widget.loading)
-                                  SizedBox.square(
-                                    dimension: widget.compact ? 11.0 : 12.0,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 1.15,
-                                      color: foreground,
-                                    ),
-                                  )
-                                else
-                                  Icon(
-                                    Icons.explore_outlined,
-                                    size: widget.compact ? 13.0 : 14.0,
-                                    color: foreground,
-                                  ),
-                                SizedBox(width: widget.compact ? 4.0 : 5.0),
-                                Expanded(
-                                  child: Text(
-                                    displayLabel,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    softWrap: false,
-                                    style: TextStyle(
-                                      color: foreground,
-                                      fontSize: widget.compact ? 9.6 : 10.2,
-                                      height: 1,
-                                      fontWeight: FontWeight.w600,
-                                      letterSpacing: .16,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                          _pulseRing(
+                            phase: p2,
+                            size: coreSize,
+                            strength: pulseStrength * .82,
                           ),
                         ],
-                      ),
+                        ClipOval(
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                            child: Container(
+                              width: coreSize,
+                              height: coreSize,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.black.withOpacity(.22),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(
+                                    widget.attention ? .27 : .16,
+                                  ),
+                                  width: .7,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: widget.loading
+                                  ? SizedBox.square(
+                                      dimension: widget.compact ? 11.0 : 12.0,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 1.15,
+                                        color: foreground,
+                                      ),
+                                    )
+                                  : Icon(
+                                      Icons.explore_outlined,
+                                      size: widget.compact ? 15.0 : 17.0,
+                                      color: foreground,
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),
@@ -737,83 +735,47 @@ class NovelTalkTargetBar extends StatelessWidget {
         final maxHeight = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : fallbackHeight;
-        final titleHeight = compact ? 9.5 : 10.5;
-        final titleGap = compact ? 5.0 : 6.0;
         final itemHeight = compact ? 30.0 : 34.0;
         final itemGap = compact ? 6.0 : 7.0;
         final naturalListHeight = targets.length * itemHeight +
             math.max(0, targets.length - 1) * itemGap;
-        final listMaxHeight = math.max(0.0, maxHeight - titleHeight - titleGap);
-        final listHeight = math.min(naturalListHeight, listMaxHeight);
-        final totalHeight = titleHeight + titleGap + listHeight;
+        final listHeight = math.min(naturalListHeight, maxHeight);
 
-        if (totalHeight <= 0) return const SizedBox.shrink();
+        if (listHeight <= 0) return const SizedBox.shrink();
 
+        // 不再显示“当前可对话”标题。角色名字 + 圆头像本身已经足够表达交互含义，
+        // 也让探索入口能直接与角色行在同一视觉轴上。
         return RepaintBoundary(
           child: SizedBox(
             width: width,
-            height: totalHeight,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: <Widget>[
-                SizedBox(
-                  height: titleHeight,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      '当前可对话',
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.64),
-                        fontSize: compact ? 8.6 : 9.2,
-                        height: 1,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: .68,
-                        shadows: const <Shadow>[
-                          Shadow(
-                            color: Color(0x66000000),
-                            blurRadius: 4,
-                            offset: Offset(0, 1),
-                          ),
-                        ],
+            height: listHeight,
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context).copyWith(
+                scrollbars: false,
+                overscroll: false,
+              ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.vertical,
+                physics: const BouncingScrollPhysics(),
+                clipBehavior: Clip.none,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    for (var i = 0; i < targets.length; i++) ...<Widget>[
+                      _TalkTargetChip(
+                        actor: targets[i],
+                        selected: selectedActorId.trim().isNotEmpty &&
+                            selectedActorId.trim() == targets[i].id.trim(),
+                        compact: compact,
+                        onTap: () => onSelected(targets[i]),
                       ),
-                    ),
-                  ),
+                      if (i != targets.length - 1)
+                        SizedBox(height: itemGap),
+                    ],
+                  ],
                 ),
-                SizedBox(height: titleGap),
-                SizedBox(
-                  height: listHeight,
-                  child: ScrollConfiguration(
-                    behavior: ScrollConfiguration.of(context).copyWith(
-                      scrollbars: false,
-                      overscroll: false,
-                    ),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.vertical,
-                      physics: const BouncingScrollPhysics(),
-                      clipBehavior: Clip.none,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: <Widget>[
-                          for (var i = 0; i < targets.length; i++) ...<Widget>[
-                            _TalkTargetChip(
-                              actor: targets[i],
-                              selected: selectedActorId.trim().isNotEmpty &&
-                                  selectedActorId.trim() == targets[i].id.trim(),
-                              compact: compact,
-                              onTap: () => onSelected(targets[i]),
-                            ),
-                            if (i != targets.length - 1)
-                              SizedBox(height: itemGap),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         );

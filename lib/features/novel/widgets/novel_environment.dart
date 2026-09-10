@@ -1683,16 +1683,18 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
   @override
   Widget build(BuildContext context) {
+    // 让原画本身保持亮度：普通场景不再全屏压黑。
+    // 天气负责天气的暗度，人物出现只做极轻的景深分离。
     final weatherDim = switch (widget.weatherEffect) {
-      NovelWeatherEffect.thunderstorm => .30,
-      NovelWeatherEffect.heavyRain => .16,
-      NovelWeatherEffect.blizzard => .14,
-      NovelWeatherEffect.cloudy => .08,
+      NovelWeatherEffect.thunderstorm => .18,
+      NovelWeatherEffect.heavyRain => .09,
+      NovelWeatherEffect.blizzard => .06,
+      NovelWeatherEffect.cloudy => .03,
       _ => .0,
     };
     final dim = math.max(
       weatherDim,
-      widget.characterPresent ? .12 : .08,
+      widget.characterPresent ? .04 : .0,
     );
     final blur = widget.characterPresent ? 2.2 : 0.0;
 
@@ -1728,9 +1730,9 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
               end: Alignment.bottomCenter,
               stops: const <double>[0, .45, 1],
               colors: <Color>[
-                const Color(0xFF0F172A).withOpacity(.12),
-                const Color(0xFF0F172A).withOpacity(.36),
-                const Color(0xFF0F172A).withOpacity(.72),
+                Colors.transparent,
+                const Color(0xFF0F172A).withOpacity(.08),
+                const Color(0xFF0F172A).withOpacity(.38),
               ],
             ),
           ),
@@ -1743,8 +1745,8 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
               stops: <double>[.46, .82, 1],
               colors: <Color>[
                 Colors.transparent,
-                Color(0x19000000),
-                Color(0x70000000),
+                Color(0x0D000000),
+                Color(0x2E000000),
               ],
             ),
           ),

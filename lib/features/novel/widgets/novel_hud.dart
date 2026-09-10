@@ -45,6 +45,7 @@ class NovelTopHud extends StatelessWidget {
                   _TopIconButton(
                     tooltip: '菜单',
                     icon: Icons.menu_rounded,
+                    assetPath: 'assets/images/icons/menu.png',
                     onTap: onMenu,
                     size: shortWide ? 19 : 21,
                     dimension: buttonDimension,
@@ -112,6 +113,7 @@ class NovelTopHud extends StatelessWidget {
                 _TopIconButton(
                   tooltip: '设置',
                   icon: Icons.settings_outlined,
+                  assetPath: 'assets/images/icons/settings.png',
                   onTap: onOpenSettings,
                   size: shortWide ? 18 : 20,
                   dimension: buttonDimension,
@@ -609,6 +611,7 @@ class _TopIconButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onTap,
+    this.assetPath = '',
     this.size = 20,
     this.dimension = 38,
   });
@@ -616,11 +619,24 @@ class _TopIconButton extends StatelessWidget {
   final String tooltip;
   final IconData icon;
   final VoidCallback onTap;
+  final String assetPath;
   final double size;
   final double dimension;
 
+  Widget _fallbackIcon() {
+    return Icon(
+      icon,
+      size: size,
+      color: Colors.white,
+      shadows: const <Shadow>[
+        Shadow(color: Color(0xAA000000), blurRadius: 8),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cleanAssetPath = assetPath.trim();
     return Tooltip(
       message: tooltip,
       child: Material(
@@ -632,14 +648,19 @@ class _TopIconButton extends StatelessWidget {
             width: dimension,
             height: dimension,
             child: Center(
-              child: Icon(
-                icon,
-                size: size,
-                color: Colors.white.withOpacity(.88),
-                shadows: const <Shadow>[
-                  Shadow(color: Color(0xAA000000), blurRadius: 8),
-                ],
-              ),
+              child: cleanAssetPath.isEmpty
+                  ? _fallbackIcon()
+                  : Image.asset(
+                      cleanAssetPath,
+                      width: size,
+                      height: size,
+                      fit: BoxFit.contain,
+                      color: Colors.white,
+                      colorBlendMode: BlendMode.srcIn,
+                      filterQuality: FilterQuality.high,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, __, ___) => _fallbackIcon(),
+                    ),
             ),
           ),
         ),

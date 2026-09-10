@@ -2093,17 +2093,17 @@ class NovelGameController extends ChangeNotifier {
           case NovelStreamEventType.text:
             _appendStreamText(event.text);
             break;
-          case NovelStreamEventType.completed:
-            // complete 可能紧跟在最后一个 token 后面；先把缓冲刷进 message，
-            // 避免服务端 completed 没带 content 时漏掉尾部文本。
+          case NovelStreamEventType.speakerSentence:
+            // 真 Speaker 流：每个事件只代表一个已经稳定的阅读页。
+            // 这里只 append/幂等覆盖对应 index，绝不能把它当 completed。
             _flushStreamText(notify: false);
-            if (boolValue(event.raw['speaker_streaming'])) {
-              // 后端复用 message_saved 分批推送 SpeakerAI 的累计结构。
-              // 这只是展示进度，不能提前关闭 isGenerating。
-              await _applySpeakerStreamProgress(event);
-            } else {
-              await _completeGeneration(event);
-            }
+            _applySpeakerSentence(event);
+            break;
+          case NovelStreamEventType.messageSaved:
+            // 新版协议中 message_saved 永远是本轮唯一最终帧。
+            // 所有逐页增量都已经通过 speaker_sentence append 完成。
+            _flushStreamText(notify: false);
+            await _completeGeneration(event);
             break;
           case NovelStreamEventType.suggestions:
             choices = event.suggestions;
@@ -2238,9 +2238,10 @@ class NovelGameController extends ChangeNotifier {
 
   Future<void> _completeGeneration(NovelStreamEvent event) async {
     if (messages.isEmpty) return;
-    final visibleSentence = currentSentence;
     final visibleSentenceIndex = currentSentenceIndex;
     final last = messages.last;
+    final streamedItemCount = last.sentenceItems.length;
+    final streamedVisualCount = sentences.length;
     final cleanContent = event.content.isNotEmpty
         ? parser.cleanAiTags(event.content).trim()
         : last.content;
@@ -2284,21 +2285,33 @@ class NovelGameController extends ChangeNotifier {
     }
 
     isGenerating = false;
-    // 完成事件可能把流式纯文本替换为结构化 sentenceItems。
-    // 优先按内容找回玩家正在看的页，找不到再按旧下标夹紧；绝不抢回第一页。
-    _rebuildSentences();
-    if (sentences.isNotEmpty) {
-      final matchingIndex = visibleSentence == null
-          ? -1
-          : sentences.indexWhere(
-              (item) =>
-                  item.readerText == visibleSentence.readerText &&
-                  item.speakerName == visibleSentence.speakerName &&
-                  item.type == visibleSentence.type,
-            );
-      currentSentenceIndex = matchingIndex >= 0
-          ? matchingIndex
-          : visibleSentenceIndex.clamp(0, sentences.length - 1).toInt();
+
+    // 新版真流式协议的关键约束：
+    // speaker_sentence 是唯一能够创建/追加“可播放阅读页”的事件；
+    // message_saved 只是最终持久化确认，绝不能再次 rebuild 当前阅读队列。
+    //
+    // 旧逻辑在这里调用 _rebuildSentences()，即使最终 sentence_items 与已经
+    // 播放的流式页面完全相同，也会让 Reader 在“最后一页 + generating=false”这个
+    // 边界重新经历一次结构同步，造成偶发的最后一句二次逐字动画。
+    //
+    // 现在完整 sentence_items 仍然写入 messages，作为历史/刷新后的权威快照；
+    // 但本轮屏幕正在使用的 sentences 列表保持原对象和原下标，最终确认不碰播放器。
+    if (streamedVisualCount == 0) {
+      // 防御性兜底：正常新版协议一定先收到 speaker_sentence。
+      // 只有异常代理/测试环境直接送来 message_saved 时，才允许从最终快照构建一次。
+      _rebuildSentences(resetIndex: true);
+    } else {
+      currentSentenceIndex = visibleSentenceIndex
+          .clamp(0, sentences.length - 1)
+          .toInt();
+
+      if (event.sentenceItems.length != streamedItemCount) {
+        debugPrint(
+          'speaker final snapshot count mismatch: '
+          'streamed=$streamedItemCount final=${event.sentenceItems.length}; '
+          'keeping streamed reader queue to prevent replay',
+        );
+      }
     }
     _notify();
     unawaited(refreshSceneMap(force: true));
@@ -2309,27 +2322,48 @@ class NovelGameController extends ChangeNotifier {
     }
   }
 
-  Future<void> _applySpeakerStreamProgress(NovelStreamEvent event) async {
+  void _applySpeakerSentence(NovelStreamEvent event) {
     if (messages.isEmpty || event.sentenceItems.isEmpty) return;
+
+    final incoming = event.sentenceItems.first;
+    final rawIndex = intValue(
+      event.raw['sentence_index'],
+      -1,
+    );
+    if (rawIndex < 0) return;
 
     final visibleSentenceIndex = currentSentenceIndex;
     final last = messages.last;
+    final nextItems = List<NovelSentence>.of(last.sentenceItems);
+
+    // 真增量协议必须严格 append。网络层即使偶发重复投递同一个 index，
+    // 也只做幂等覆盖；绝不 append 第二份同页，也不允许跳号制造空洞。
+    if (rawIndex < nextItems.length) {
+      nextItems[rawIndex] = incoming;
+    } else if (rawIndex == nextItems.length) {
+      nextItems.add(incoming);
+    } else {
+      debugPrint(
+        'speaker sentence out of order: index=$rawIndex current=${nextItems.length}',
+      );
+      return;
+    }
+
     messages[messages.length - 1] = last.copyWith(
       id: event.messageId.isEmpty ? last.id : event.messageId,
-      sentenceItems: event.sentenceItems,
+      sentenceItems: nextItems,
       status: 'streaming',
     );
     _markLatestUserSuccess();
     _rebuildSentences();
-    // 新批次只是在补齐后续结构。保持用户正在看的句子，不自动追到最后一项。
+
+    // 新页只进入队列，不抢玩家当前正在看的页。第一页首次到达时 index=0
+    // 自然可见；之后 Speaker 再快也不会自动跳到最后一页。
     if (sentences.isNotEmpty) {
       currentSentenceIndex =
           visibleSentenceIndex.clamp(0, sentences.length - 1).toInt();
     }
     _notify();
-
-    // 给 Flutter 一帧刷新首个结构项；不按正文长度阻塞网络流。
-    await Future<void>.delayed(const Duration(milliseconds: 16));
   }
 
   void _markLatestUserSuccess() {

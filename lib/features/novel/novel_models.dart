@@ -1108,7 +1108,8 @@ class NovelSendRequest {
 
 enum NovelStreamEventType {
   text,
-  completed,
+  speakerSentence,
+  messageSaved,
   suggestions,
   playerHint,
   score,

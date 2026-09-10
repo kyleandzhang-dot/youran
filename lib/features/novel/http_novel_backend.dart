@@ -706,10 +706,23 @@ class HttpNovelBackend
       return;
     }
 
-    if (const {'message_saved', 'complete', 'completed', 'done'}.contains(type)) {
+    if (type == 'speaker_sentence') {
+      final sentenceJson = asJsonMap(source['sentence'] ?? source['item']);
+      if (sentenceJson.isNotEmpty) {
+        yield NovelStreamEvent(
+          type: NovelStreamEventType.speakerSentence,
+          messageId: stringValue(source['message_id'] ?? source['id']),
+          sentenceItems: <NovelSentence>[NovelSentence.fromJson(sentenceJson)],
+          raw: source,
+        );
+      }
+      return;
+    }
+
+    if (type == 'message_saved') {
       final suggestionsRaw = source['suggested_replies'] ?? source['suggestions'];
       yield NovelStreamEvent(
-        type: NovelStreamEventType.completed,
+        type: NovelStreamEventType.messageSaved,
         messageId: stringValue(source['message_id'] ?? source['id']),
         content: stringValue(source['content']),
         sentenceItems: asJsonList(source['sentence_items'])

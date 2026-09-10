@@ -12,6 +12,8 @@ const Color _novelDrawerAccent = NovelPalette.accent;
 Future<void> showNovelSettingsSheet(
   BuildContext context,
   NovelGameController controller, {
+  required bool immersiveMode,
+  required Future<void> Function(bool immersiveMode) onReadingModeChanged,
   bool isAdmin = false,
   NovelDeveloperPreviewActions? developerPreview,
 }) async {
@@ -19,6 +21,8 @@ Future<void> showNovelSettingsSheet(
     context,
     child: _SettingsPanel(
       controller: controller,
+      immersiveMode: immersiveMode,
+      onReadingModeChanged: onReadingModeChanged,
       isAdmin: isAdmin,
       developerPreview: developerPreview,
     ),
@@ -115,11 +119,15 @@ class _SettingsDrawerScaffold extends StatelessWidget {
 class _SettingsPanel extends StatefulWidget {
   const _SettingsPanel({
     required this.controller,
+    required this.immersiveMode,
+    required this.onReadingModeChanged,
     required this.isAdmin,
     this.developerPreview,
   });
 
   final NovelGameController controller;
+  final bool immersiveMode;
+  final Future<void> Function(bool immersiveMode) onReadingModeChanged;
   final bool isAdmin;
   final NovelDeveloperPreviewActions? developerPreview;
 
@@ -130,6 +138,19 @@ class _SettingsPanel extends StatefulWidget {
 class _SettingsPanelState extends State<_SettingsPanel> {
   NovelGameController get controller => widget.controller;
   bool _showDeveloperTools = false;
+  late bool _immersiveMode;
+
+  @override
+  void initState() {
+    super.initState();
+    _immersiveMode = widget.immersiveMode;
+  }
+
+  Future<void> _setReadingMode(bool immersiveMode) async {
+    if (_immersiveMode == immersiveMode) return;
+    setState(() => _immersiveMode = immersiveMode);
+    await widget.onReadingModeChanged(immersiveMode);
+  }
 
   String _modelLabel() {
     if (controller.currentNovelModel.isEmpty) return '自动选择';
@@ -452,6 +473,52 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   ],
                 ),
               ),
+              SizedBox(height: compactLandscape ? 12 : 24),
+              const _CleanSettingsHeader(
+                icon: Icons.auto_stories_outlined,
+                title: '阅读模式',
+                subtitle: '标准专注阅读，沉浸展开场景',
+              ),
+              SizedBox(height: compactLandscape ? 6 : 10),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final stackChoices = constraints.maxWidth < 220;
+                  final standard = _ReadingModeChoice(
+                    label: '标准',
+                    caption: '竖屏 · 专注阅读',
+                    immersive: false,
+                    selected: !_immersiveMode,
+                    compact: compactLandscape,
+                    onTap: () => unawaited(_setReadingMode(false)),
+                  );
+                  final immersive = _ReadingModeChoice(
+                    label: '沉浸',
+                    caption: '横屏 · 展开场景',
+                    immersive: true,
+                    selected: _immersiveMode,
+                    compact: compactLandscape,
+                    onTap: () => unawaited(_setReadingMode(true)),
+                  );
+
+                  if (stackChoices) {
+                    return Column(
+                      children: <Widget>[
+                        standard,
+                        SizedBox(height: compactLandscape ? 5 : 7),
+                        immersive,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    children: <Widget>[
+                      Expanded(child: standard),
+                      SizedBox(width: compactLandscape ? 6 : 8),
+                      Expanded(child: immersive),
+                    ],
+                  );
+                },
+              ),
               if (widget.isAdmin && developerPreview != null) ...<Widget>[
                 SizedBox(height: compactLandscape ? 12 : 26),
                 Divider(height: 1, color: Colors.white.withOpacity(.10)),
@@ -636,6 +703,162 @@ class _ArtStyleCard extends StatelessWidget {
                   ),
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadingModeChoice extends StatelessWidget {
+  const _ReadingModeChoice({
+    required this.label,
+    required this.caption,
+    required this.immersive,
+    required this.selected,
+    required this.compact,
+    required this.onTap,
+  });
+
+  final String label;
+  final String caption;
+  final bool immersive;
+  final bool selected;
+  final bool compact;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedBorder = Colors.white.withOpacity(.30);
+    final idleBorder = Colors.white.withOpacity(.08);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        splashColor: Colors.white.withOpacity(.045),
+        highlightColor: Colors.white.withOpacity(.02),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          height: compact ? 48 : 56,
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 10 : 12,
+            vertical: compact ? 7 : 8,
+          ),
+          decoration: BoxDecoration(
+            color: selected
+                ? Colors.white.withOpacity(.050)
+                : Colors.white.withOpacity(.012),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: selected ? selectedBorder : idleBorder,
+              width: selected ? .9 : .65,
+            ),
+          ),
+          child: Row(
+            children: <Widget>[
+              _ReadingModeGlyph(
+                immersive: immersive,
+                selected: selected,
+                compact: compact,
+              ),
+              SizedBox(width: compact ? 9 : 11),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.fade,
+                      softWrap: false,
+                      style: TextStyle(
+                        color: selected
+                            ? AppColors.textOnDark
+                            : AppColors.textOnDark.withOpacity(.72),
+                        fontSize: compact ? 11.2 : 12.8,
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                        letterSpacing: .2,
+                      ),
+                    ),
+                    SizedBox(height: compact ? 1 : 2),
+                    Text(
+                      caption,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppColors.textOnDarkMuted.withOpacity(
+                          selected ? .78 : .52,
+                        ),
+                        fontSize: compact ? 8.0 : 9.2,
+                        height: 1.1,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected) ...<Widget>[
+                SizedBox(width: compact ? 5 : 7),
+                Icon(
+                  Icons.check_rounded,
+                  size: compact ? 12 : 14,
+                  color: Colors.white.withOpacity(.82),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadingModeGlyph extends StatelessWidget {
+  const _ReadingModeGlyph({
+    required this.immersive,
+    required this.selected,
+    required this.compact,
+  });
+
+  final bool immersive;
+  final bool selected;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = immersive ? (compact ? 25.0 : 28.0) : (compact ? 17.0 : 19.0);
+    final height = immersive ? (compact ? 15.0 : 17.0) : (compact ? 24.0 : 27.0);
+    final stroke = selected
+        ? Colors.white.withOpacity(.86)
+        : Colors.white.withOpacity(.34);
+
+    return SizedBox(
+      width: compact ? 28 : 32,
+      height: compact ? 30 : 34,
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(immersive ? 4 : 5),
+            border: Border.all(color: stroke, width: 1),
+          ),
+          child: Center(
+            child: Container(
+              width: immersive ? 6 : 3,
+              height: 1,
+              decoration: BoxDecoration(
+                color: selected
+                    ? Colors.white.withOpacity(.64)
+                    : Colors.white.withOpacity(.22),
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
           ),
         ),
       ),

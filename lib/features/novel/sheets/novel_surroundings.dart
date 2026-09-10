@@ -97,6 +97,32 @@ class NovelSurroundingsInlineDock extends StatelessWidget {
   }
 }
 
+/// 剧情页的主舞台：直接复用探索页的可移动区域。
+///
+/// 与底部 InlineDock 不同，这里保留探索页的横向世界、镜头跟随与纵深移动，
+/// 只是去掉独立探索页的外壳，让对白/旁白由剧情阅读器叠在舞台上。
+class NovelStoryWalkStage extends StatelessWidget {
+  const NovelStoryWalkStage({
+    super.key,
+    required this.controller,
+    this.enabled = true,
+  });
+
+  final NovelGameController controller;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurroundFogPrototype(
+      controller: controller,
+      developerPreview: false,
+      embedded: true,
+      storyStage: true,
+      movementEnabled: enabled,
+    );
+  }
+}
+
 enum _SurroundNodeType {
   environment,
   container,
@@ -1669,6 +1695,7 @@ class _SurroundFogPrototype extends StatefulWidget {
     this.previewBattleLauncher,
     this.onClose,
     this.embedded = false,
+    this.storyStage = false,
     this.movementEnabled = true,
   });
 
@@ -1677,6 +1704,7 @@ class _SurroundFogPrototype extends StatefulWidget {
   final NovelSurroundingsPreviewBattleLauncher? previewBattleLauncher;
   final VoidCallback? onClose;
   final bool embedded;
+  final bool storyStage;
   final bool movementEnabled;
 
   @override
@@ -3319,12 +3347,19 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         : protagonistAvatar;
     // 嵌入正文底部时，人物不能沿用独立探索页的大尺寸。
     // 按当前舞台高度动态缩放，让完整立绘（尤其头部/脚部）更容易留在画面内。
-    final playerHeight = widget.embedded
-        ? (_walkStageHeight * .42).clamp(72.0, 96.0).toDouble()
-        : 132.0;
-    final playerWidth = widget.embedded
-        ? (playerHeight * .64).clamp(46.0, 62.0).toDouble()
-        : 88.0;
+    // 高度倍率降到 0.35，最大高度限制在 160 像素，这对于半身/全身立绘是一个比较舒服的比例
+    final playerHeight = widget.storyStage
+        ? (_walkStageHeight * .35).clamp(100.0, 160.0).toDouble()
+        : widget.embedded
+            ? (_walkStageHeight * .42).clamp(72.0, 96.0).toDouble()
+            : 132.0;
+
+    // 宽度同步收缩，保持原图比例不被挤压
+    final playerWidth = widget.storyStage
+        ? (playerHeight * .50).clamp(50.0, 80.0).toDouble()
+        : widget.embedded
+            ? (playerHeight * .64).clamp(46.0, 62.0).toDouble()
+            : 88.0;
     return Positioned(
       left: _playerWorldX - cameraX - playerWidth / 2,
       top: playerY - playerHeight,
@@ -3333,7 +3368,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       child: IgnorePointer(
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 160),
-          opacity: widget.movementEnabled ? 1 : .74,
+          opacity: 1.0,
           child: AnimatedBuilder(
             animation: _walkTicker,
             builder: (context, child) {
@@ -3374,7 +3409,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   }
 
   Widget _buildWalkJoystick() {
-    final size = widget.embedded ? 58.0 : 82.0;
+    final size = widget.storyStage ? 70.0 : (widget.embedded ? 58.0 : 82.0);
     return SizedBox(
       width: size,
       height: size,
@@ -3433,17 +3468,24 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         // 正文底部是“单屏横版舞台”，不再强行做 1.9 屏的超宽世界。
         // 原来把一张 16:9 场景硬撑到近两屏宽，再用 cover，会把上下裁掉很多。
         // 嵌入模式保持接近当前可视宽度，人物仍可左右走动；独立探索页继续保留横向卷轴。
-        final worldWidth = widget.embedded
+        // 正文舞台不再自己绘制/拉伸一张“探索背景”。
+        // 它只是覆盖在原 NovelWorldBackground 上面的透明可移动坐标层，
+        // 所以正文舞台使用当前可视宽度，不做横向相机卷动。
+        final worldWidth = widget.storyStage
             ? viewportWidth
-            : math.max(
-                viewportWidth * 1.90,
-                stageHeight * (16 / 9),
-              ).toDouble();
+            : widget.embedded
+                ? viewportWidth
+                : math.max(
+                    viewportWidth * 1.90,
+                    stageHeight * (16 / 9),
+                  ).toDouble();
         _ensureWalkLayout(worldWidth, stageHeight);
-        final cameraX = (_playerWorldX - viewportWidth * .5)
-            .clamp(0.0, math.max(0.0, worldWidth - viewportWidth))
-            .toDouble();
-        final nearest = _nearestWalkInteractableIndex();
+        final cameraX = widget.storyStage
+            ? 0.0
+            : (_playerWorldX - viewportWidth * .5)
+                .clamp(0.0, math.max(0.0, worldWidth - viewportWidth))
+                .toDouble();
+        final nearest = widget.storyStage ? null : _nearestWalkInteractableIndex();
         final goal = _remote
             ? stringValue(widget.controller.surroundingsData['goal'], '调查当前场景')
             : '自由探索海滩，收集材料并寻找目标';
@@ -3455,109 +3497,43 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
             child: Stack(
               fit: StackFit.expand,
               children: <Widget>[
-                Positioned(
-                  left: -cameraX,
-                  top: 0,
-                  width: worldWidth,
-                  height: stageHeight,
-                  child: _previewBackgroundBytes != null
-                      ? Image.memory(
-                          _previewBackgroundBytes!,
-                          // 底部横版优先完整保留场景的左右信息；
-                          // 16:9 / 2:1 场景只会产生很轻的上下裁切或留白。
-                          fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
-                          alignment: widget.embedded
-                              ? Alignment.bottomCenter
-                              : Alignment.center,
-                          filterQuality: FilterQuality.high,
-                        )
-                      : widget.controller.world.backgroundUrl.trim().isNotEmpty
-                          ? _walkImageSource(
-                              widget.controller.world.backgroundUrl.trim(),
-                              fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
-                              alignment: widget.embedded
-                                  ? Alignment.bottomCenter
-                                  : Alignment.center,
-                              fallback: DecoratedBox(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: <Color>[
-                                Color(0xFF273B3B),
-                                Color(0xFF17272A),
-                                Color(0xFF0C1417),
-                              ],
-                              stops: <double>[0, .55, 1],
-                            ),
-                          ),
-                          child: Stack(
-                            children: <Widget>[
-                              Positioned(
-                                left: worldWidth * .12,
-                                top: stageHeight * .28,
-                                child: Icon(
-                                  Icons.park_rounded,
-                                  size: 120,
-                                  color: Colors.black.withOpacity(.16),
-                                ),
-                              ),
-                              Positioned(
-                                left: worldWidth * .63,
-                                top: stageHeight * .31,
-                                child: Icon(
-                                  Icons.landscape_rounded,
-                                  size: 150,
-                                  color: Colors.black.withOpacity(.18),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                            )
-                          : DecoratedBox(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: <Color>[
-                                Color(0xFF273B3B),
-                                Color(0xFF17272A),
-                                Color(0xFF0C1417),
-                              ],
-                              stops: <double>[0, .55, 1],
-                            ),
-                          ),
-                          child: Stack(
-                            children: <Widget>[
-                              Positioned(
-                                left: worldWidth * .12,
-                                top: stageHeight * .28,
-                                child: Icon(
-                                  Icons.park_rounded,
-                                  size: 120,
-                                  color: Colors.black.withOpacity(.16),
-                                ),
-                              ),
-                              Positioned(
-                                left: worldWidth * .63,
-                                top: stageHeight * .31,
-                                child: Icon(
-                                  Icons.landscape_rounded,
-                                  size: 150,
-                                  color: Colors.black.withOpacity(.18),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                ),
-                ...List<Widget>.generate(
-                  _rows * _columns,
-                  (index) => _buildWalkObject(index, cameraX),
-                ),
+                // 正文舞台完全透明：底下就是原来的 NovelWorldBackground。
+                // 只有独立/嵌入探索页才自己绘制探索背景。
+                if (!widget.storyStage)
+                  Positioned(
+                    left: -cameraX,
+                    top: 0,
+                    width: worldWidth,
+                    height: stageHeight,
+                    child: _previewBackgroundBytes != null
+                        ? Image.memory(
+                            _previewBackgroundBytes!,
+                            fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
+                            alignment: widget.embedded
+                                ? Alignment.bottomCenter
+                                : Alignment.center,
+                            filterQuality: FilterQuality.high,
+                          )
+                        : widget.controller.world.backgroundUrl.trim().isNotEmpty
+                            ? _walkImageSource(
+                                widget.controller.world.backgroundUrl.trim(),
+                                fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
+                                alignment: widget.embedded
+                                    ? Alignment.bottomCenter
+                                    : Alignment.center,
+                                fallback: const SizedBox.expand(),
+                              )
+                            : const SizedBox.expand(),
+                  ),
+                // 正文舞台只借用“走路坐标系”，不把探索节点图标叠到剧情背景上。
+                if (!widget.storyStage)
+                  ...List<Widget>.generate(
+                    _rows * _columns,
+                    (index) => _buildWalkObject(index, cameraX),
+                  ),
                 _buildWalkPlayer(cameraX),
-                Positioned(
+                if (!widget.storyStage)
+                  Positioned(
                   left: widget.embedded ? 9 : 12,
                   top: widget.embedded ? 7 : 11,
                   right: widget.embedded
@@ -3603,7 +3579,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     ),
                   ),
                 ),
-                if (widget.embedded)
+                if (widget.embedded && !widget.storyStage)
                   Positioned(
                     right: 8,
                     top: 8,
@@ -3630,14 +3606,20 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     ),
                   ),
                 Positioned(
-                  left: widget.embedded ? 8 : 12,
-                  bottom: widget.embedded ? 8 : 12,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 160),
-                    opacity: widget.movementEnabled ? 1 : .34,
-                    child: IgnorePointer(
-                      ignoring: !widget.movementEnabled,
-                      child: _buildWalkJoystick(),
+                  left: 0,
+                  right: 0,
+                  // 【修改 3】：增加针对 storyStage（剧情舞台）的底边距判定
+                  // 这里的 65.0 可以根据你的实际情况微调（如果还重叠就改到 80.0）
+                  bottom: widget.storyStage ? 65.0 : (widget.embedded ? 8.0 : 12.0),
+                  child: Align(
+                    alignment: Alignment.bottomCenter, 
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 160),
+                      opacity: widget.movementEnabled ? 1 : .34,
+                      child: IgnorePointer(
+                        ignoring: !widget.movementEnabled,
+                        child: _buildWalkJoystick(),
+                      ),
                     ),
                   ),
                 ),

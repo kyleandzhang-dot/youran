@@ -496,8 +496,6 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
   void _requestWorldMenu() {
     if (_closing) return;
     _closing = true;
-    // 返回键只退出开场覆盖层，并把“打开左侧世界菜单”的意图交回游戏页。
-    // 不启动正文，避免开场被中断后落到无内容页面。
     Navigator.of(context).pop(true);
   }
 
@@ -515,6 +513,234 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
     }
   }
 
+  Widget _buildParagraphList({
+    required double fontSize,
+    required double lineHeight,
+    required double paragraphGap,
+    required double maxWidth,
+  }) {
+    return SingleChildScrollView(
+      controller: _scrollController,
+      physics: const BouncingScrollPhysics(),
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: List<Widget>.generate(_visibleCount, (index) {
+              final current = index == _visibleCount - 1;
+              final targetOpacity = current ? .96 : .34;
+              return TweenAnimationBuilder<double>(
+                key: ValueKey<String>('opening-paragraph-$index'),
+                tween: Tween<double>(begin: 0, end: targetOpacity),
+                duration: const Duration(milliseconds: 900),
+                curve: Curves.easeOutCubic,
+                builder: (context, value, child) {
+                  final revealProgress = targetOpacity <= 0
+                      ? 1.0
+                      : (value / targetOpacity)
+                          .clamp(0.0, 1.0)
+                          .toDouble();
+                  return Opacity(
+                    opacity: value.clamp(0.0, 1.0).toDouble(),
+                    child: Transform.translate(
+                      offset: Offset(0, (1 - revealProgress) * 8),
+                      child: child,
+                    ),
+                  );
+                },
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: paragraphGap),
+                  child: Text(
+                    _paragraphs[index],
+                    textAlign: TextAlign.justify,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontFamily: widget.controller.settings.fontFamily,
+                      fontSize: fontSize,
+                      height: lineHeight,
+                      letterSpacing: .7,
+                      fontWeight:
+                          current ? FontWeight.w500 : FontWeight.w400,
+                      shadows: current
+                          ? const <Shadow>[
+                              Shadow(
+                                color: Color(0x52000000),
+                                blurRadius: 18,
+                                offset: Offset(0, 4),
+                              ),
+                            ]
+                          : const <Shadow>[],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContinueHint({required bool compact}) {
+    if (_visibleCount <= 0) return const SizedBox.shrink();
+    return FadeTransition(
+      opacity: _breathe,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            _finished ? '轻触进入故事' : '轻触继续',
+            style: TextStyle(
+              color: Colors.white.withOpacity(.58),
+              fontSize: compact ? 9.5 : 10.5,
+              letterSpacing: compact ? 1.2 : 1.6,
+            ),
+          ),
+          SizedBox(width: compact ? 6 : 8),
+          Icon(
+            Icons.chevron_right_rounded,
+            size: compact ? 14 : 16,
+            color: Colors.white.withOpacity(.42),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPortraitOpening(Size size) {
+    final compact = size.width < 560;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        compact ? 28 : size.width * .14,
+        34,
+        compact ? 28 : size.width * .14,
+        48,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            '序章',
+            style: TextStyle(
+              color: NovelPalette.accent.withOpacity(.55),
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 2,
+            ),
+          ),
+          const Spacer(flex: 3),
+          Expanded(
+            flex: 9,
+            child: _buildParagraphList(
+              fontSize: compact ? 15.5 : 17,
+              lineHeight: 1.95,
+              paragraphGap: 20,
+              maxWidth: 680,
+            ),
+          ),
+          const Spacer(flex: 1),
+          Align(
+            alignment: Alignment.center,
+            child: _buildContinueHint(compact: false),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandscapeOpening(Size size) {
+    final short = size.height < 440;
+    final veryShort = size.height < 360;
+    final edge = short ? 22.0 : 36.0;
+    final railWidth = veryShort ? 72.0 : (short ? 86.0 : 112.0);
+    final gap = veryShort ? 14.0 : (short ? 22.0 : 34.0);
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        edge,
+        veryShort ? 12 : (short ? 16 : 26),
+        edge,
+        veryShort ? 10 : (short ? 14 : 22),
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1080),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              SizedBox(
+                width: railWidth,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    SizedBox(height: veryShort ? 2 : 6),
+                    Text(
+                      '序章',
+                      style: TextStyle(
+                        color: NovelPalette.accent.withOpacity(.60),
+                        fontSize: short ? 9 : 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: short ? 2.2 : 3.0,
+                      ),
+                    ),
+                    SizedBox(height: short ? 8 : 12),
+                    Text(
+                      '故事开场',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.30),
+                        fontSize: short ? 8.5 : 9.5,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: .8,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (!veryShort)
+                      Text(
+                        '${_visibleCount.clamp(0, _paragraphs.length)} / ${_paragraphs.length}',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.24),
+                          fontSize: 9,
+                          letterSpacing: 1.0,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              SizedBox(width: gap),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _buildParagraphList(
+                          fontSize: veryShort ? 13.2 : (short ? 14.2 : 16.2),
+                          lineHeight: veryShort ? 1.56 : (short ? 1.68 : 1.82),
+                          paragraphGap: veryShort ? 10 : (short ? 13 : 17),
+                          maxWidth: 760,
+                        ),
+                      ),
+                    ),
+                    if (_visibleCount > 0) ...<Widget>[
+                      SizedBox(height: veryShort ? 4 : 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: _buildContinueHint(compact: true),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -526,6 +752,8 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final background = widget.controller.world.backgroundUrl;
+    final landscape = size.width > size.height;
+
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) {
@@ -537,152 +765,52 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
           onTap: _advance,
           behavior: HitTestBehavior.opaque,
           child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-              child: Opacity(
-                opacity: .22,
-                child: NovelArtwork(
-                  url: background,
-                  assetCandidates: const <String>['assets/images/home_background.jpg'],
-                  fit: BoxFit.cover,
+            fit: StackFit.expand,
+            children: <Widget>[
+              ImageFiltered(
+                imageFilter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                child: Opacity(
+                  opacity: landscape ? .26 : .22,
+                  child: NovelArtwork(
+                    url: background,
+                    assetCandidates: const <String>[
+                      'assets/images/home_background.jpg',
+                    ],
+                    fit: BoxFit.cover,
+                  ),
                 ),
               ),
-            ),
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: <Color>[
-                    Color(0xD9000000),
-                    Color(0xA8090A0A),
-                    Color(0xF2050606),
-                  ],
-                  stops: <double>[0, .48, 1],
-                ),
-              ),
-            ),
-            SafeArea(
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  size.width < 560 ? 28 : size.width * .14,
-                  34,
-                  size.width < 560 ? 28 : size.width * .14,
-                  64,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      '序章',
-                      style: TextStyle(
-                        color: NovelPalette.accent.withOpacity(.55),
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 2,
-                      ),
-                    ),
-                    const Spacer(flex: 4),
-                    Expanded(
-                      flex: 8,
-                      child: SingleChildScrollView(
-                        controller: _scrollController,
-                        // 自动跟随最新段落，同时保留手动滚动兜底。
-                        physics: const BouncingScrollPhysics(),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 680),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            // 未出现的段落不再提前占据布局高度。
-                            // 每新增一段，滚动范围才真实增长，最后一段会被自动顶上来。
-                            children: List<Widget>.generate(_visibleCount, (index) {
-                              final current = index == _visibleCount - 1;
-                              final targetOpacity = current ? .96 : .34;
-                              return TweenAnimationBuilder<double>(
-                                key: ValueKey<String>('opening-paragraph-$index'),
-                                tween: Tween<double>(begin: 0, end: targetOpacity),
-                                duration: const Duration(milliseconds: 900),
-                                curve: Curves.easeOutCubic,
-                                builder: (context, value, child) {
-                                  final revealProgress = targetOpacity <= 0
-                                      ? 1.0
-                                      : (value / targetOpacity)
-                                          .clamp(0.0, 1.0)
-                                          .toDouble();
-                                  return Opacity(
-                                    opacity: value.clamp(0.0, 1.0).toDouble(),
-                                    child: Transform.translate(
-                                      offset: Offset(0, (1 - revealProgress) * 8),
-                                      child: child,
-                                    ),
-                                  );
-                                },
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 20),
-                                  child: Text(
-                                    _paragraphs[index],
-                                    textAlign: TextAlign.justify,
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontFamily: widget.controller.settings.fontFamily,
-                                      fontSize: size.width < 560 ? 15.5 : 17,
-                                      height: 1.95,
-                                      letterSpacing: .75,
-                                      fontWeight: current ? FontWeight.w500 : FontWeight.w400,
-                                      shadows: current
-                                          ? const <Shadow>[
-                                              Shadow(
-                                                color: Color(0x52000000),
-                                                blurRadius: 18,
-                                                offset: Offset(0, 4),
-                                              ),
-                                            ]
-                                          : const <Shadow>[],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const Spacer(flex: 2),
-                    if (_visibleCount > 0)
-                      FadeTransition(
-                        opacity: _breathe,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: <Widget>[
-                            Container(
-                              width: 24,
-                              height: 1,
-                              color: Colors.white.withOpacity(.20),
-                            ),
-                            const SizedBox(width: 10),
-                            Text(
-                              _finished ? '轻触进入故事' : '轻触继续',
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(.58),
-                                fontSize: 10.5,
-                                letterSpacing: 1.6,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Container(
-                              width: 24,
-                              height: 1,
-                              color: Colors.white.withOpacity(.20),
-                            ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: landscape
+                        ? Alignment.centerLeft
+                        : Alignment.topCenter,
+                    end: landscape
+                        ? Alignment.centerRight
+                        : Alignment.bottomCenter,
+                    colors: landscape
+                        ? const <Color>[
+                            Color(0xF20A0A0A),
+                            Color(0xBA080909),
+                            Color(0xE6050606),
+                          ]
+                        : const <Color>[
+                            Color(0xD9000000),
+                            Color(0xA8090A0A),
+                            Color(0xF2050606),
                           ],
-                        ),
-                      ),
-                  ],
+                    stops: landscape
+                        ? const <double>[0, .50, 1]
+                        : const <double>[0, .48, 1],
+                  ),
                 ),
               ),
-            ),
+              SafeArea(
+                child: landscape
+                    ? _buildLandscapeOpening(size)
+                    : _buildPortraitOpening(size),
+              ),
             ],
           ),
         ),

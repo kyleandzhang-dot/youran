@@ -950,18 +950,16 @@ class _NovelInputBarState extends State<NovelInputBar> {
                               : Colors.white.withOpacity(speechBusy ? .075 : .04),
                           borderRadius: BorderRadius.zero,
                           border: Border.all(
+                            // 竖屏、横屏、电脑统一使用同一套高可见度边线，
+                            // 不再让非横屏模式显得灰暗或线条偏细。
                             color: speechBusy
                                 ? NovelPalette.accent.withOpacity(.72)
                                 : Colors.white.withOpacity(
-                                    shortWide
-                                        ? (focused
-                                            ? .36
-                                            : (glassActive ? .28 : .20))
-                                        : (focused
-                                            ? .26
-                                            : (glassActive ? .18 : .10)),
+                                    focused
+                                        ? .36
+                                        : (glassActive ? .28 : .20),
                                   ),
-                            width: speechBusy ? .9 : (shortWide ? .85 : .7),
+                            width: speechBusy ? .9 : .85,
                           ),
                         ),
                         child: Row(
