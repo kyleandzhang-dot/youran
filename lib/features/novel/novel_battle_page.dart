@@ -28,8 +28,7 @@ class YoranBattleEnemy {
     this.realm = '',
     this.difficultyLabel = '',
     this.openingEstimate = '',
-    this.basicAttackMin = 5,
-    this.basicAttackMax = 8,
+    this.basicAttackPowerPercent = 65,
     this.hitBonus = 4,
     this.playerDamageMultiplier = 1,
     this.opponentDamageMultiplier = 1,
@@ -48,8 +47,7 @@ class YoranBattleEnemy {
   final String realm;
   final String difficultyLabel;
   final String openingEstimate;
-  final int basicAttackMin;
-  final int basicAttackMax;
+  final int basicAttackPowerPercent;
   final int hitBonus;
   final double playerDamageMultiplier;
   final double opponentDamageMultiplier;
@@ -61,9 +59,8 @@ class YoranBattleEnemy {
 
 /// 后端技能库在战斗页中的运行时视图。
 ///
-/// [fromState] 可直接消费 `protagonist.status['skills']` 中的字符串或字典，
-/// 并读取 SkillDesigner 生成的 `battle_spec`。这样开发者测试与正式战斗
-/// 不再只显示技能名称，而是真正使用后端给出的伤害、消耗、冷却和附加效果。
+/// 新协议只执行百分比技能：伤害使用 power_percent，治疗/回能使用最大值百分比。
+/// 旧 damage.min/max、amount、extra_damage 不再读取或换算。
 class YoranBattleSkill {
   const YoranBattleSkill({
     this.id = '',
@@ -71,23 +68,21 @@ class YoranBattleSkill {
     required this.detail,
     this.archetype = 'direct',
     this.quality = 0,
-    this.minDamage = 0,
-    this.maxDamage = 0,
+    this.powerPercent = 0,
     this.hitBonus = 4,
     this.energyCost = 0,
-    this.energyGain = 0,
+    this.energyMaxQiPercent = 0,
     this.cooldown = 0,
     this.burnTurns = 0,
-    this.burnDamage = 0,
-    this.healAmount = 0,
+    this.burnPowerPercent = 0,
+    this.healMaxHpPercent = 0,
     this.lifestealPercent = 0,
     this.healthCost = 0,
     this.stunTurns = 0,
     this.guardReductionPercent = 0,
     this.enemyHitDifficultyBonus = 0,
     this.exposeHitBonus = 0,
-    this.exposeExtraDamageMin = 0,
-    this.exposeExtraDamageMax = 0,
+    this.exposeExtraPowerPercent = 0,
     this.exposes = false,
     this.guarding = false,
     this.dodging = false,
@@ -95,8 +90,8 @@ class YoranBattleSkill {
     this.piercesGuard = false,
     this.targetSelf = false,
     this.canSelfKill = false,
-    this.counterMin = 0,
-    this.counterMax = 0,
+    this.counterPowerPercent = 0,
+    this.vfxSpec = const <String, dynamic>{},
   });
 
   final String id;
@@ -104,23 +99,22 @@ class YoranBattleSkill {
   final String detail;
   final String archetype;
   final int quality;
-  final int minDamage;
-  final int maxDamage;
+  /// 100 = 100% 标准基础威力。实际点数只在本场战斗结算时计算。
+  final int powerPercent;
   final int hitBonus;
   final int energyCost;
-  final int energyGain;
+  final int energyMaxQiPercent;
   final int cooldown;
   final int burnTurns;
-  final int burnDamage;
-  final int healAmount;
+  final int burnPowerPercent;
+  final int healMaxHpPercent;
   final int lifestealPercent;
   final int healthCost;
   final int stunTurns;
   final int guardReductionPercent;
   final int enemyHitDifficultyBonus;
   final int exposeHitBonus;
-  final int exposeExtraDamageMin;
-  final int exposeExtraDamageMax;
+  final int exposeExtraPowerPercent;
   final bool exposes;
   final bool guarding;
   final bool dodging;
@@ -128,10 +122,13 @@ class YoranBattleSkill {
   final bool piercesGuard;
   final bool targetSelf;
   final bool canSelfKill;
-  final int counterMin;
-  final int counterMax;
+  final int counterPowerPercent;
+  /// 后端在技能首次学会/命名时生成并持久化的受限 VFX DSL。
+  /// 战斗中只解释执行，不再调用 LLM。
+  final Map<String, dynamic> vfxSpec;
 
   bool get isSelfAction => targetSelf || guarding || dodging || resting;
+  bool get hasVfx => vfxSpec.isNotEmpty;
 
   String get iconType {
     final type = archetype.trim().toLowerCase();
@@ -144,10 +141,10 @@ class YoranBattleSkill {
     if (dodging) return 'evade';
     if (lifestealPercent > 0) return 'lifesteal';
     if (exposes) return 'expose';
-    if (counterMax > 0) return 'counter';
+    if (counterPowerPercent > 0) return 'counter';
     if (stunTurns > 0) return 'stun';
-    if (healAmount > 0 && maxDamage <= 0) return 'heal';
-    if ((energyGain > 0 || resting) && maxDamage <= 0) return 'energy';
+    if (healMaxHpPercent > 0 && powerPercent <= 0) return 'heal';
+    if ((energyMaxQiPercent > 0 || resting) && powerPercent <= 0) return 'energy';
     return 'direct';
   }
 
@@ -168,56 +165,32 @@ class YoranBattleSkill {
   }
 
   static YoranBattleSkill? fromState(dynamic raw) {
-    if (raw is String) {
-      final name = raw.trim();
-      if (name.isEmpty) return null;
-      return YoranBattleSkill(
-        name: name,
-        detail: '暂无技能描述',
-        quality: 3,
-        minDamage: 10,
-        maxDamage: 15,
-        hitBonus: 4,
-        energyCost: 12,
-        cooldown: 1,
-      );
-    }
+    if (raw is! Map) return null;
     final skill = _stringMap(raw);
     final name = '${skill['name'] ?? ''}'.trim();
     if (name.isEmpty) return null;
 
     final spec = _stringMap(skill['battle_spec']);
-    if (spec.isEmpty) {
-      final description = '${skill['description'] ?? ''}'.trim();
-      return YoranBattleSkill(
-        name: name,
-        detail: description.isEmpty ? '暂无技能描述' : description,
-        quality: 3,
-        minDamage: 10,
-        maxDamage: 15,
-        hitBonus: 4,
-        energyCost: 12,
-        cooldown: 1,
-      );
-    }
+    if (spec.isEmpty) return null;
+    final powerSystem = '${spec['power_system'] ?? ''}'.trim().toLowerCase();
+    final schemaVersion = _asInt(spec['schema_version'] ?? spec['version']);
+    if (powerSystem != 'percent_v1' && schemaVersion < 4) return null;
 
-    final damage = _stringMap(spec['damage']);
     var burnTurns = 0;
-    var burnDamage = 0;
-    var healAmount = 0;
-    var energyGain = 0;
+    var burnPowerPercent = 0;
+    var healMaxHpPercent = 0;
+    var energyMaxQiPercent = 0;
     var lifestealPercent = 0;
     var stunTurns = 0;
     var guardReductionPercent = 0;
     var enemyHitDifficultyBonus = 0;
     var exposeHitBonus = 0;
-    var exposeExtraDamageMin = 0;
-    var exposeExtraDamageMax = 0;
+    var exposeExtraPowerPercent = 0;
     var guarding = false;
     var dodging = false;
     var exposes = false;
-    var counterMin = 0;
-    var counterMax = 0;
+    var counterPowerPercent = 0;
+
     final effects = spec['effects'];
     if (effects is List) {
       for (final rawEffect in effects.take(2)) {
@@ -225,12 +198,15 @@ class YoranBattleSkill {
         switch ('${effect['type'] ?? ''}'.trim().toLowerCase()) {
           case 'damage_over_time':
             burnTurns = _asInt(effect['duration']).clamp(0, 3).toInt();
-            burnDamage = _asInt(effect['damage']).clamp(0, 60).toInt();
+            burnPowerPercent =
+                _asInt(effect['power_percent']).clamp(0, 120).toInt();
             break;
           case 'evade':
             dodging = true;
             enemyHitDifficultyBonus =
-                _asInt(effect['enemy_hit_difficulty_bonus'], 5).clamp(1, 8).toInt();
+                _asInt(effect['enemy_hit_difficulty_bonus'], 5)
+                    .clamp(1, 8)
+                    .toInt();
             break;
           case 'guard':
             guarding = true;
@@ -238,10 +214,12 @@ class YoranBattleSkill {
                 _asInt(effect['reduction_percent'], 50).clamp(10, 75).toInt();
             break;
           case 'heal':
-            healAmount = _asInt(effect['amount']).clamp(0, 100).toInt();
+            healMaxHpPercent =
+                _asInt(effect['max_hp_percent']).clamp(0, 60).toInt();
             break;
           case 'energy_restore':
-            energyGain = _asInt(effect['amount']).clamp(0, 100).toInt();
+            energyMaxQiPercent =
+                _asInt(effect['max_energy_percent']).clamp(0, 60).toInt();
             break;
           case 'lifesteal':
             lifestealPercent = _asInt(effect['percent']).clamp(0, 100).toInt();
@@ -252,72 +230,1368 @@ class YoranBattleSkill {
           case 'next_attack_bonus':
             exposes = true;
             exposeHitBonus = _asInt(effect['hit_bonus'], 2).clamp(0, 4).toInt();
-            final extraDamage = _stringMap(effect['extra_damage']);
-            exposeExtraDamageMin =
-                _asInt(extraDamage['min']).clamp(0, 10).toInt();
-            exposeExtraDamageMax = math
-                .max(exposeExtraDamageMin, _asInt(extraDamage['max']))
-                .clamp(0, 12)
-                .toInt();
+            exposeExtraPowerPercent =
+                _asInt(effect['extra_power_percent']).clamp(0, 140).toInt();
             break;
           case 'counter':
-            final counterDamage = _stringMap(effect['damage']);
-            counterMin = _asInt(counterDamage['min']).clamp(0, 60).toInt();
-            counterMax = math
-                .max(counterMin, _asInt(counterDamage['max']))
-                .clamp(0, 60)
-                .toInt();
+            counterPowerPercent =
+                _asInt(effect['power_percent']).clamp(0, 420).toInt();
             break;
         }
       }
     }
 
-    final minDamage = _asInt(damage['min']).clamp(0, 60).toInt();
-    final maxDamage = math
-        .max(minDamage, _asInt(damage['max']))
-        .clamp(0, 60)
-        .toInt();
+    final powerPercent = _asInt(spec['power_percent']).clamp(0, 500).toInt();
     final energyCost = _asInt(spec['energy_cost']).clamp(0, 40).toInt();
     final cooldown = _asInt(spec['cooldown']).clamp(0, 3).toInt();
-    final quality = _asInt(spec['quality']).clamp(0, 10).toInt();
-    
+    final quality = _asInt(spec['quality'], 3).clamp(1, 10).toInt();
     final designNote = '${spec['design_note'] ?? skill['description'] ?? ''}'.trim();
+    final effectLabels = <String>[
+      if (powerPercent > 0) '威力 $powerPercent%',
+      if (burnPowerPercent > 0 && burnTurns > 0)
+        '持续$burnTurns回合 · 每回合威力$burnPowerPercent%',
+      if (healMaxHpPercent > 0) '恢复最大生命$healMaxHpPercent%',
+      if (energyMaxQiPercent > 0) '恢复最大精力$energyMaxQiPercent%',
+      if (lifestealPercent > 0) '吸血$lifestealPercent%',
+      if (guardReductionPercent > 0) '减伤$guardReductionPercent%',
+      if (enemyHitDifficultyBonus > 0) '敌方命中难度+$enemyHitDifficultyBonus',
+      if (stunTurns > 0) '压制1回合',
+      if (exposes && exposeExtraPowerPercent > 0)
+        '下一击命中+$exposeHitBonus · 额外威力$exposeExtraPowerPercent%',
+      if (counterPowerPercent > 0) '受击反击 · 威力$counterPowerPercent%',
+    ];
+    final gameplayDetail = effectLabels.join(' · ');
+
+    if (powerPercent <= 0 &&
+        burnPowerPercent <= 0 &&
+        healMaxHpPercent <= 0 &&
+        energyMaxQiPercent <= 0 &&
+        lifestealPercent <= 0 &&
+        guardReductionPercent <= 0 &&
+        enemyHitDifficultyBonus <= 0 &&
+        stunTurns <= 0 &&
+        exposeExtraPowerPercent <= 0 &&
+        counterPowerPercent <= 0) {
+      return null;
+    }
+
     return YoranBattleSkill(
       id: '${skill['id'] ?? ''}'.trim(),
       name: name,
-      detail: designNote.isEmpty ? '暂无技能描述' : designNote,
+      detail: gameplayDetail.isNotEmpty
+          ? gameplayDetail
+          : (designNote.isEmpty ? '暂无技能描述' : designNote),
       archetype: '${spec['archetype'] ?? skill['category'] ?? 'direct'}'
           .trim()
           .toLowerCase(),
       quality: quality,
-      minDamage: minDamage,
-      maxDamage: maxDamage,
+      powerPercent: powerPercent,
       hitBonus: _asInt(spec['hit_bonus'], 4).clamp(0, 10).toInt(),
       energyCost: energyCost,
-      energyGain: energyGain,
+      energyMaxQiPercent: energyMaxQiPercent,
       cooldown: cooldown,
       burnTurns: burnTurns,
-      burnDamage: burnDamage,
-      healAmount: healAmount,
+      burnPowerPercent: burnPowerPercent,
+      healMaxHpPercent: healMaxHpPercent,
       lifestealPercent: lifestealPercent,
       healthCost: _asInt(spec['health_cost']).clamp(0, 100).toInt(),
       stunTurns: stunTurns,
       guardReductionPercent: guardReductionPercent,
       enemyHitDifficultyBonus: enemyHitDifficultyBonus,
       exposeHitBonus: exposeHitBonus,
-      exposeExtraDamageMin: exposeExtraDamageMin,
-      exposeExtraDamageMax: exposeExtraDamageMax,
+      exposeExtraPowerPercent: exposeExtraPowerPercent,
       exposes: exposes,
       guarding: guarding,
       dodging: dodging,
       piercesGuard: '${spec['archetype'] ?? ''}'.trim().toLowerCase() == 'control',
       targetSelf: '${spec['target'] ?? ''}'.trim().toLowerCase() == 'self',
       canSelfKill: _asBool(spec['can_self_kill']),
-      counterMin: counterMin,
-      counterMax: counterMax,
+      counterPowerPercent: counterPowerPercent,
+      vfxSpec: Map<String, dynamic>.unmodifiable(_stringMap(skill['vfx_spec'])),
     );
   }
 }
+
+double _battleVfxDouble(dynamic value, [double fallback = 0]) {
+  if (value is num) return value.toDouble();
+  return double.tryParse('${value ?? ''}') ?? fallback;
+}
+
+Color _battleVfxPalette(String palette) => switch (palette.trim().toLowerCase()) {
+      'ice_blue' => const Color(0xFF83E7FF),
+      'flame' => const Color(0xFFFF7A2C),
+      'emerald' => const Color(0xFF6DE6B4),
+      'gold' => const Color(0xFFFFD873),
+      'crimson' => const Color(0xFFFF5C67),
+      'shadow' => const Color(0xFF9670C9),
+      'white' => const Color(0xFFF5F3FF),
+      _ => const Color(0xFFB779FF),
+    };
+
+const Set<String> _battleVfxHumanTokens = <String>{
+  'human', 'humanoid', 'person', 'body', 'face', 'head', 'arm', 'leg', 'hand', 'foot',
+  'warrior', 'swordsman', 'samurai', 'ninja', 'knight', 'fighter', 'character',
+  'figure', 'stick', 'stickman', 'silhouette', 'man', 'woman', 'girl', 'boy', 'hero', 'avatar',
+};
+
+bool _battleVfxLooksHuman(dynamic value) {
+  final text = '${value ?? ''}'.trim().toLowerCase();
+  if (text.isEmpty) return false;
+  return _battleVfxHumanTokens.any(text.contains);
+}
+
+Map<String, dynamic> _sanitizeBattleVfxSpec(Map<String, dynamic> raw) {
+  if (raw.isEmpty) return const <String, dynamic>{};
+  final spec = Map<String, dynamic>.from(raw);
+  final identity = '${spec['visual_identity'] ?? ''}'.trim().toLowerCase();
+  if (_battleVfxLooksHuman(identity) || identity == 'transformation') {
+    spec['visual_identity'] = 'elemental_construct';
+  }
+  final rawSequence = spec['sequence'];
+  if (rawSequence is List) {
+    final filtered = <Map<String, dynamic>>[];
+    for (final rawItem in rawSequence.take(12)) {
+      if (rawItem is! Map) continue;
+      final item = rawItem.map((key, value) => MapEntry('$key', value));
+      final blocked = _battleVfxLooksHuman(item['type']) ||
+          _battleVfxLooksHuman(item['shape']) ||
+          _battleVfxLooksHuman(item['motion']) ||
+          _battleVfxLooksHuman(item['path']) ||
+          _battleVfxLooksHuman(item['origin']) ||
+          _battleVfxLooksHuman(item['role']) ||
+          _battleVfxLooksHuman(item['subject']) ||
+          _battleVfxLooksHuman(item['subject_type']);
+      if (blocked) continue;
+      filtered.add(item);
+    }
+    spec['sequence'] = filtered;
+  }
+  return Map<String, dynamic>.unmodifiable(spec);
+}
+
+
+class _BattleSkillVfxPainter extends CustomPainter {
+  const _BattleSkillVfxPainter({
+    required this.spec,
+    required this.progress,
+    required this.impactProgress,
+    required this.targetSelf,
+    required this.hit,
+    required this.critical,
+  });
+
+  final Map<String, dynamic> spec;
+  final double progress;
+  final double impactProgress;
+  final bool targetSelf;
+  final bool hit;
+  final bool critical;
+
+  Color get accent => _battleVfxPalette('${spec['palette'] ?? ''}');
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final caster = Offset(size.width * .28, size.height * .46);
+    final target = targetSelf
+        ? Offset(size.width * .32, size.height * .46)
+        : Offset(size.width * .70, size.height * .45);
+    _BattleVfxGraphRenderer(spec: spec, progress: progress, accent: accent)
+        .paint(canvas, size, caster: caster, target: target);
+
+    if (hit && impactProgress > 0) {
+      final t = impactProgress.clamp(0.0, 1.0).toDouble();
+      final fade = (1 - t).clamp(0.0, 1.0).toDouble();
+      final power = critical ? 1.0 : .72;
+      canvas.drawRect(
+        Offset.zero & size,
+        Paint()..color = Colors.white.withOpacity(.18 * fade * power),
+      );
+      final center = target;
+      final radius = 18 + t * (critical ? 160 : 112);
+      canvas.drawCircle(center, radius, Paint()
+        ..color = accent.withOpacity(.54 * fade * power)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = critical ? 5.0 : 2.6);
+      final rays = critical ? 22 : 14;
+      for (var i = 0; i < rays; i++) {
+        final a = i * math.pi * 2 / rays;
+        final p1 = Offset(center.dx + math.cos(a) * 12, center.dy + math.sin(a) * 12);
+        final p2 = Offset(center.dx + math.cos(a) * (38 + 45 * t), center.dy + math.sin(a) * (38 + 45 * t));
+        canvas.drawLine(p1, p2, Paint()
+          ..color = (i.isEven ? Colors.white : accent).withOpacity(.34 * fade)
+          ..strokeWidth = i.isEven ? 1.3 : .7
+          ..strokeCap = StrokeCap.round);
+      }
+    }
+
+    final caption = '${spec['caption'] ?? ''}'.trim();
+    if (caption.isNotEmpty) {
+      final intensity = YoranBattleSkill._asInt(spec['intensity'], 4).clamp(1, 10).toInt();
+      final appear = (progress / .12).clamp(0.0, 1.0).toDouble();
+      final disappear = ((1 - progress) / .18).clamp(0.0, 1.0).toDouble();
+      final opacity = math.min(appear, disappear) * .90;
+      final painter = TextPainter(
+        text: TextSpan(
+          text: caption,
+          style: TextStyle(
+            color: Colors.white.withOpacity(opacity),
+            fontSize: intensity >= 8 ? 19 : 14,
+            fontWeight: FontWeight.w900,
+            letterSpacing: intensity >= 8 ? 4.2 : 2.5,
+            shadows: const <Shadow>[Shadow(color: Colors.black, blurRadius: 10)],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: size.width * .66);
+      painter.paint(canvas, Offset((size.width - painter.width) / 2, size.height * .22));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BattleSkillVfxPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.impactProgress != impactProgress ||
+      oldDelegate.spec != spec ||
+      oldDelegate.hit != hit ||
+      oldDelegate.critical != critical ||
+      oldDelegate.targetSelf != targetSelf;
+}
+
+
+class _BattleVfxGraphRenderer {
+  const _BattleVfxGraphRenderer({
+    required this.spec,
+    required this.progress,
+    required this.accent,
+  });
+
+  final Map<String, dynamic> spec;
+  final double progress;
+  final Color accent;
+
+  Map<String, dynamic> _map(dynamic value) {
+    if (value is! Map) return const <String, dynamic>{};
+    return value.map((key, item) => MapEntry('$key', item));
+  }
+
+  double _d(dynamic value, [double fallback = 0]) {
+    if (value is num) return value.toDouble();
+    return double.tryParse('${value ?? ''}') ?? fallback;
+  }
+
+  int _i(dynamic value, [int fallback = 0]) {
+    if (value is num) return value.round();
+    return int.tryParse('${value ?? ''}') ?? fallback;
+  }
+
+  String _s(dynamic value, [String fallback = '']) {
+    final text = '${value ?? ''}'.trim();
+    return text.isEmpty ? fallback : text;
+  }
+
+  double _clamp01(double value) => value.clamp(0.0, 1.0).toDouble();
+
+  double _easeOut(double t) {
+    final x = _clamp01(t);
+    return 1 - math.pow(1 - x, 3).toDouble();
+  }
+
+  double _easeInOut(double t) {
+    final x = _clamp01(t);
+    return x < .5
+        ? 4 * x * x * x
+        : 1 - math.pow(-2 * x + 2, 3).toDouble() / 2;
+  }
+
+  double _pulse(double t) => math.sin(_clamp01(t) * math.pi);
+
+  double _seed01(int index, int salt, int seed) {
+    final x = math.sin((index + seed * .071) * 12.9898 + salt * 78.233) * 43758.5453;
+    return x - x.floorToDouble();
+  }
+
+  Paint _stroke(Color color, double opacity, double width, {double blur = 0}) {
+    final paint = Paint()
+      ..color = color.withOpacity(_clamp01(opacity))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(.35, width)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    if (blur > .01) {
+      paint.maskFilter = MaskFilter.blur(BlurStyle.normal, blur);
+    }
+    return paint;
+  }
+
+  Paint _fill(Color color, double opacity, {double blur = 0, bool additive = false}) {
+    final paint = Paint()
+      ..color = color.withOpacity(_clamp01(opacity))
+      ..style = PaintingStyle.fill;
+    if (blur > .01) paint.maskFilter = MaskFilter.blur(BlurStyle.normal, blur);
+    if (additive) paint.blendMode = BlendMode.plus;
+    return paint;
+  }
+
+  void _layeredPath(
+    Canvas canvas,
+    Path path,
+    Color color,
+    double opacity,
+    double width, {
+    double glow = 4,
+    bool whiteCore = true,
+  }) {
+    if (glow > .01) {
+      canvas.drawPath(path, _stroke(color, opacity * .17, width * 2.5, blur: glow));
+    }
+    canvas.drawPath(path, _stroke(color, opacity * .78, width));
+    if (whiteCore) {
+      canvas.drawPath(path, _stroke(Colors.white, opacity * .78, math.max(.6, width * .20)));
+    }
+  }
+
+  Offset _originFor(Map<String, dynamic> item, Size size, Offset caster, Offset target) {
+    switch (_s(item['origin'], 'target').toLowerCase()) {
+      case 'caster':
+        return caster;
+      case 'center':
+        return Offset(size.width * .5, size.height * .44);
+      case 'sky':
+        return Offset(target.dx, size.height * .08);
+      case 'ground':
+        return Offset(target.dx, size.height * .72);
+      default:
+        return target;
+    }
+  }
+
+  double _directionAngle(String direction, double randomAngle) {
+    switch (direction) {
+      case 'left_to_right':
+        return 0;
+      case 'right_to_left':
+        return math.pi;
+      case 'up':
+        return -math.pi / 2;
+      case 'down':
+        return math.pi / 2;
+      default:
+        return randomAngle;
+    }
+  }
+
+  List<dynamic> _renderSequence() {
+    final raw = spec['sequence'];
+    final original = raw is List ? raw : const <dynamic>[];
+    if (_i(spec['schema_version'], 1) >= 3) return original;
+
+    // Legacy V1/V2 specs used only a few coarse primitives. Upgrade them locally so
+    // already-owned skills immediately benefit from V3 without another LLM request.
+    final caption = _s(spec['caption']).toLowerCase();
+    final element = _s(spec['element'], 'arcane').toLowerCase();
+    final style = _s(spec['style'], 'burst').toLowerCase();
+    final intensity = _i(spec['intensity'], 4).clamp(1, 10).toInt();
+    final seed = caption.runes.fold<int>(17, (value, rune) => ((value * 31) + rune) & 0x7fffffff) % 10000;
+    final particles = math.min(120, 30 + intensity * 8);
+
+    Map<String, dynamic> n(
+      String type,
+      double at,
+      double duration, {
+      double scale = 1,
+      int amount = 4,
+      String direction = 'center',
+      String shape = 'spark',
+      String motion = 'radial',
+      String path = 'straight',
+      String origin = 'target',
+      int particleCount = 0,
+      double speed = .7,
+      double spread = .6,
+      double gravity = 0,
+      double trail = .3,
+      double glow = .35,
+      int variant = 0,
+      int salt = 0,
+    }) => <String, dynamic>{
+      'type': type, 'at': at, 'duration': duration, 'scale': scale,
+      'amount': amount, 'direction': direction, 'shape': shape, 'motion': motion,
+      'path': path, 'origin': origin, 'particle_count': particleCount,
+      'speed': speed, 'spread': spread, 'gravity': gravity, 'trail': trail,
+      'glow': glow, 'variant': variant, 'seed': (seed + salt) % 10000,
+    };
+
+    if (caption.contains('龙')) {
+      return <dynamic>[
+        if (intensity >= 8) n('darken', 0, .30, amount: 1, salt: 1),
+        n('sigil', .02, .28, origin: 'caster', amount: 5, variant: seed % 6, salt: 2),
+        n('dragon_trail', .16, .54, scale: 1.18, amount: 7, direction: 'left_to_right', path: 'serpentine', shape: element == 'ice' ? 'snow' : 'spark', particleCount: particles, trail: .82, glow: .52, salt: 3),
+        n('particle_burst', .60, .28, scale: 1.2, particleCount: math.min(120, particles + 24), shape: element == 'ice' ? 'shard' : 'streak', motion: 'radial', speed: 1.05, spread: .95, gravity: element == 'ice' ? .18 : 0, trail: .48, glow: .42, salt: 4),
+        n('impact_lines', .61, .18, scale: 1.3, amount: 9, salt: 5),
+      ];
+    }
+    if (caption.contains('莲')) {
+      return <dynamic>[
+        n('energy_orb', .02, .26, origin: 'center', particleCount: 24, shape: 'ember', motion: 'converge', glow: .58, salt: 6),
+        n('lotus', .16, .47, origin: 'center', scale: 1.18, amount: 8, variant: seed % 6, salt: 7),
+        n('rune_ring', .20, .40, origin: 'center', scale: 1.32, amount: 6, variant: (seed + 2) % 6, salt: 8),
+        n('petal_burst', .46, .32, origin: 'center', particleCount: math.min(100, particles), shape: 'petal', motion: 'swirl', speed: .78, spread: .88, gravity: -.06, glow: .40, salt: 9),
+        n('particle_burst', .62, .28, origin: 'center', particleCount: math.min(120, particles + 28), shape: 'ember', motion: 'radial', speed: 1.1, spread: 1, trail: .38, glow: .52, salt: 10),
+        n('impact_lines', .63, .18, origin: 'center', scale: 1.3, amount: 9, salt: 11),
+      ];
+    }
+    if (style == 'slash' || <String>['斩', '刀', '剑', '刃'].any((token) => caption.contains(token))) {
+      return <dynamic>[
+        if (intensity >= 8) n('darken', 0, .28, amount: 1, salt: 12),
+        if (element == 'lightning' || intensity >= 8) n('sigil', .02, .28, origin: 'center', amount: 5, variant: seed % 6, salt: 13),
+        n('blade_manifest', .14, .34, origin: 'caster', scale: 1.16, particleCount: 22 + intensity * 3, shape: 'blade', motion: 'converge', glow: .54, salt: 14),
+        n('slash', .42, .18, scale: 1.35, amount: 6, direction: 'left_to_right', path: seed.isEven ? 'crescent' : 'arc', trail: .78, glow: .54, salt: 15),
+        n('particle_burst', .48, .28, particleCount: math.min(120, particles + 24), shape: 'streak', motion: 'cone', speed: 1.1, spread: .84, trail: .72, glow: .44, salt: 16),
+        n('impact_lines', .49, .17, scale: 1.35, amount: 10, salt: 17),
+        if (intensity >= 8) n('space_crack', .54, .38, scale: 1.2, amount: 8, path: 'zigzag', glow: .48, salt: 18),
+        if (element == 'lightning') n('lightning', .57, .32, scale: 1.22, amount: 8, motion: 'scatter', salt: 19),
+      ];
+    }
+    if (element == 'lightning') {
+      return <dynamic>[
+        n('sigil', .03, .30, origin: 'caster', amount: 6, variant: seed % 6, salt: 20),
+        n('trail', .16, .42, origin: 'caster', direction: 'left_to_right', path: 'zigzag', particleCount: math.min(100, particles), shape: 'streak', motion: 'stream', speed: .96, spread: .32, trail: .74, glow: .38, salt: 21),
+        n('lightning', .38, .36, amount: 9, motion: 'scatter', glow: .48, salt: 22),
+        n('particle_burst', .58, .26, particleCount: math.min(120, particles + 18), shape: 'streak', motion: 'radial', speed: 1.02, spread: .92, trail: .58, glow: .42, salt: 23),
+        n('impact_lines', .59, .18, amount: 10, scale: 1.25, salt: 24),
+      ];
+    }
+    if (element == 'ice') {
+      return <dynamic>[
+        n('rune_ring', .03, .30, origin: 'caster', amount: 5, variant: seed % 6, salt: 25),
+        n('trail', .16, .44, origin: 'caster', direction: 'left_to_right', path: 'wave', particleCount: math.min(90, particles), shape: 'snow', motion: 'stream', speed: .82, spread: .42, trail: .52, glow: .30, salt: 26),
+        n('particle_burst', .56, .30, particleCount: math.min(120, particles + 20), shape: 'shard', motion: 'radial', speed: .98, spread: .95, gravity: .20, trail: .38, glow: .34, salt: 27),
+        n('ground_crack', .58, .30, amount: 8, scale: 1.1, salt: 28),
+        n('shockwave', .59, .23, scale: 1.25, amount: 5, salt: 29),
+      ];
+    }
+    if (element == 'fire') {
+      return <dynamic>[
+        n('energy_orb', .03, .28, origin: 'caster', particleCount: 26 + intensity * 3, shape: 'ember', motion: 'converge', glow: .58, salt: 30),
+        n('beam', .24, .42, origin: 'caster', direction: 'left_to_right', path: seed % 3 == 0 ? 'wave' : 'straight', particleCount: math.min(90, particles), shape: 'streak', motion: 'stream', speed: .96, spread: .26, trail: .70, glow: .52, salt: 31),
+        n('particle_burst', .59, .28, particleCount: math.min(120, particles + 24), shape: 'ember', motion: 'radial', speed: 1.08, spread: .98, trail: .42, glow: .50, salt: 32),
+        n('impact_lines', .60, .18, amount: 9, scale: 1.25, salt: 33),
+      ];
+    }
+    if (style == 'aura') {
+      return <dynamic>[
+        n('rune_ring', .04, .44, origin: 'caster', amount: 6, variant: seed % 6, salt: 34),
+        n('energy_orb', .18, .44, origin: 'caster', particleCount: 22 + intensity * 3, shape: 'star', motion: 'converge', glow: .44, salt: 35),
+        n('particle_emitter', .20, .62, origin: 'caster', particleCount: math.min(80, particles), shape: 'star', motion: 'rise', speed: .34, spread: .72, gravity: -.14, trail: .14, glow: .30, salt: 36),
+      ];
+    }
+
+    // Generic legacy skill: keep its old primary idea but add a deterministic visual identity.
+    return <dynamic>[
+      n('sigil', .03, .30, origin: 'caster', amount: 5, variant: seed % 6, salt: 37),
+      n('energy_orb', .18, .28, origin: 'caster', particleCount: 20 + intensity * 3, shape: 'spark', motion: 'converge', glow: .46, salt: 38),
+      n('projectile', .36, .30, origin: 'caster', direction: 'left_to_right', shape: seed.isEven ? 'diamond' : 'orb', path: seed % 3 == 0 ? 'arc' : 'straight', glow: .34, salt: 39),
+      n('particle_burst', .60, .26, particleCount: math.min(110, particles), shape: 'spark', motion: 'radial', speed: .92, spread: .86, trail: .30, glow: .38, salt: 40),
+      n('impact_lines', .61, .18, amount: 8, scale: 1.16, salt: 41),
+    ];
+  }
+
+  void paint(Canvas canvas, Size size, {required Offset caster, required Offset target}) {
+    final identity = _s(spec['visual_identity']).toLowerCase();
+    final intensity = _i(spec['intensity'], 4).clamp(1, 10).toInt();
+    final sequence = _renderSequence();
+
+    // Cinematic skills get a subtle vignette, not a full-screen colored fog.
+    if (identity == 'domain' || identity == 'magic_sigil' || identity == 'summoned_creature') {
+      final r = math.max(size.width, size.height) * .72;
+      final shader = RadialGradient(
+        colors: <Color>[accent.withOpacity(.025 + intensity * .002), Colors.transparent],
+      ).createShader(Rect.fromCircle(center: Offset(size.width * .5, size.height * .44), radius: r));
+      canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
+    }
+
+    for (final raw in sequence.take(10)) {
+      final item = _map(raw);
+      if (item.isEmpty) continue;
+      final at = _d(item['at']).clamp(0.0, .97).toDouble();
+      final duration = math.max(.06, _d(item['duration'], .30));
+      if (progress < at) continue;
+      final local = ((progress - at) / duration).clamp(0.0, 1.0).toDouble();
+      _drawNode(canvas, size, caster, target, item, local, intensity);
+    }
+  }
+
+  void _drawNode(
+    Canvas canvas,
+    Size size,
+    Offset caster,
+    Offset target,
+    Map<String, dynamic> item,
+    double t,
+    int intensity,
+  ) {
+    final type = _s(item['type']).toLowerCase();
+    final scale = _d(item['scale'], 1).clamp(.35, 2.4).toDouble();
+    final amount = _i(item['amount'], 3).clamp(1, 12).toInt();
+    final direction = _s(item['direction'], 'center').toLowerCase();
+    final pathKind = _s(item['path'], 'straight').toLowerCase();
+    final seed = _i(item['seed'], 0).clamp(0, 9999).toInt();
+    final origin = _originFor(item, size, caster, target);
+    final pulse = _pulse(t);
+    final fade = (1 - (t - .72).clamp(0.0, .28) / .28).clamp(0.0, 1.0).toDouble();
+    final glow = _d(item['glow'], .35).clamp(0.0, 1.0).toDouble();
+
+    if (type == 'darken') {
+      canvas.drawRect(Offset.zero & size, Paint()..color = Colors.black.withOpacity(.50 * pulse));
+      return;
+    }
+    if (type == 'screen_flash') {
+      canvas.drawRect(Offset.zero & size, Paint()..color = Colors.white.withOpacity(.62 * pulse));
+      return;
+    }
+    if (type == 'starfield') {
+      _drawStarfield(canvas, size, item, t, fade, seed);
+      return;
+    }
+    if (type == 'particle_emitter' || type == 'particle_burst' || type == 'petal_burst') {
+      _drawParticles(canvas, size, origin, item, t, intensity,
+          burst: type != 'particle_emitter', forcedShape: type == 'petal_burst' ? 'petal' : null);
+      return;
+    }
+    if (type == 'sigil' || type == 'rune_ring') {
+      _drawSigil(canvas, origin, item, t, scale, intensity, fade, ringOnly: type == 'rune_ring');
+      return;
+    }
+    if (type == 'energy_orb' || type == 'charge' || type == 'aura') {
+      _drawEnergyOrb(canvas, size, origin, item, t, scale, intensity, fade,
+          aura: type == 'aura');
+      return;
+    }
+    if (type == 'blade_manifest') {
+      _drawBlade(canvas, size, caster, target, item, t, scale, intensity, fade);
+      return;
+    }
+    if (type == 'beam') {
+      _drawBeam(canvas, size, caster, target, item, t, scale, intensity, fade);
+      return;
+    }
+    if (type == 'crescent_wave') {
+      _drawCrescent(canvas, size, caster, target, item, t, scale, intensity, fade);
+      return;
+    }
+    if (type == 'projectile_swarm') {
+      _drawProjectileSwarm(canvas, size, caster, target, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'dragon_trail') {
+      _drawDragon(canvas, size, caster, target, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'lotus') {
+      _drawLotus(canvas, size, origin, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'vortex') {
+      _drawVortex(canvas, size, origin, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'meteor') {
+      _drawMeteor(canvas, size, target, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'force_field') {
+      _drawForceField(canvas, origin, item, t, scale, intensity, fade);
+      return;
+    }
+    if (type == 'impact_lines') {
+      _drawImpactLines(canvas, origin, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'ground_crack') {
+      _drawGroundCrack(canvas, size, origin, item, t, scale, fade, seed);
+      return;
+    }
+    if (type == 'trail') {
+      _drawTrail(canvas, size, caster, target, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'smoke' || type == 'frost_mist') {
+      final smokeItem = <String, dynamic>{...item, 'shape': type == 'frost_mist' ? 'snow' : 'dust', 'motion': 'rise'};
+      _drawParticles(canvas, size, origin, smokeItem, t, intensity, burst: false);
+      return;
+    }
+    if (type == 'slash') {
+      _drawSlash(canvas, size, caster, target, item, t, scale, intensity, fade, pathKind);
+      return;
+    }
+    if (type == 'projectile') {
+      _drawProjectile(canvas, size, caster, target, item, t, scale, intensity, fade);
+      return;
+    }
+    if (type == 'lightning') {
+      _drawLightning(canvas, size, origin, target, item, t, scale, intensity, fade, seed);
+      return;
+    }
+    if (type == 'ice_shards' || type == 'fire_particles') {
+      final particleItem = <String, dynamic>{
+        ...item,
+        'shape': type == 'ice_shards' ? 'shard' : 'ember',
+        'motion': _s(item['motion'], 'radial'),
+        'particle_count': _i(item['particle_count'], amount * 9),
+      };
+      _drawParticles(canvas, size, origin, particleItem, t, intensity, burst: true);
+      return;
+    }
+    if (type == 'shockwave' || type == 'explosion') {
+      _drawShockwave(canvas, origin, item, t, scale, intensity, fade, seed, explosion: type == 'explosion');
+      return;
+    }
+    if (type == 'heal_ring') {
+      _drawHealRing(canvas, origin, item, t, scale, intensity, fade);
+      return;
+    }
+    if (type == 'shield') {
+      _drawShield(canvas, origin, item, t, scale, intensity, fade);
+      return;
+    }
+    if (type == 'afterimage') {
+      _drawAfterimages(canvas, size, caster, target, item, t, scale, fade);
+      return;
+    }
+    if (type == 'space_crack') {
+      _drawSpaceCrack(canvas, size, origin, item, t, scale, intensity, fade, seed);
+      return;
+    }
+  }
+
+  void _drawParticles(
+    Canvas canvas,
+    Size size,
+    Offset origin,
+    Map<String, dynamic> item,
+    double t,
+    int intensity, {
+    bool burst = false,
+    String? forcedShape,
+  }) {
+    final seed = _i(item['seed'], 0);
+    final shape = forcedShape ?? _s(item['shape'], 'spark').toLowerCase();
+    final motion = _s(item['motion'], burst ? 'radial' : 'stream').toLowerCase();
+    final direction = _s(item['direction'], 'radial').toLowerCase();
+    var count = _i(item['particle_count'], 0);
+    if (count <= 0) count = _i(item['amount'], 3) * (burst ? 9 : 7);
+    count = count.clamp(2, 120).toInt();
+    final speed = _d(item['speed'], .65).clamp(0.0, 1.5).toDouble();
+    final spread = _d(item['spread'], .55).clamp(0.0, 1.0).toDouble();
+    final gravity = _d(item['gravity'], 0).clamp(-1.0, 1.0).toDouble();
+    final trail = _d(item['trail'], .25).clamp(0.0, 1.0).toDouble();
+    final glow = _d(item['glow'], .35).clamp(0.0, 1.0).toDouble();
+    final scale = _d(item['scale'], 1).clamp(.35, 2.4).toDouble();
+    final baseDistance = size.shortestSide * (.20 + speed * .62) * scale;
+
+    Offset particlePosition(int i, double age) {
+      final a0 = _seed01(i, 11, seed) * math.pi * 2;
+      final s1 = _seed01(i, 17, seed);
+      final s2 = _seed01(i, 23, seed);
+      final s3 = _seed01(i, 29, seed);
+      final baseAngle = _directionAngle(direction, a0);
+      final jitter = (s1 - .5) * math.pi * (direction == 'radial' ? 2 : .9) * spread;
+      final angle = baseAngle + jitter;
+      final distance = baseDistance * (.52 + s2 * .78) * age;
+      final gravY = size.height * gravity * age * age * .16;
+
+      switch (motion) {
+        case 'rise':
+          return Offset(
+            origin.dx + (s1 - .5) * size.width * .24 * spread + math.sin(age * 7 + i) * 5,
+            origin.dy - distance * .72 + gravY,
+          );
+        case 'fall':
+          return Offset(
+            origin.dx + (s1 - .5) * size.width * .30 * spread,
+            origin.dy + distance * .78 + gravY,
+          );
+        case 'orbit':
+          final r = size.shortestSide * (.08 + s2 * .18) * scale * (1 - age * .16);
+          final a = a0 + age * (2.2 + s3 * 3.4) * (i.isEven ? 1 : -1);
+          return Offset(origin.dx + math.cos(a) * r, origin.dy + math.sin(a) * r * .62);
+        case 'swirl':
+        case 'spiral':
+          final r = size.shortestSide * (.04 + age * (.10 + spread * .22)) * scale * (.65 + s2 * .6);
+          final a = a0 + age * (4.0 + s3 * 5.0) * (i.isEven ? 1 : -1);
+          return Offset(origin.dx + math.cos(a) * r, origin.dy + math.sin(a) * r * .68 + gravY);
+        case 'converge':
+          final startR = size.shortestSide * (.18 + s2 * .30) * scale;
+          final a = a0 + age * (i.isEven ? .8 : -.8);
+          final r = startR * (1 - _easeOut(age));
+          return Offset(origin.dx + math.cos(a) * r, origin.dy + math.sin(a) * r * .65);
+        case 'wave':
+          return Offset(
+            origin.dx + math.cos(angle) * distance,
+            origin.dy + math.sin(angle) * distance + math.sin(age * math.pi * 5 + i) * 12 * spread + gravY,
+          );
+        case 'stream':
+          final side = (s1 - .5) * size.shortestSide * .18 * spread * (1 - age * .55);
+          return Offset(
+            origin.dx + math.cos(baseAngle) * distance + math.cos(baseAngle + math.pi / 2) * side,
+            origin.dy + math.sin(baseAngle) * distance + math.sin(baseAngle + math.pi / 2) * side + gravY,
+          );
+        case 'cone':
+        case 'scatter':
+        case 'radial':
+        default:
+          return Offset(
+            origin.dx + math.cos(angle) * distance,
+            origin.dy + math.sin(angle) * distance * (.72 + s3 * .35) + gravY,
+          );
+      }
+    }
+
+    for (var i = 0; i < count; i++) {
+      final spawn = burst
+          ? _seed01(i, 31, seed) * .10
+          : (i / count) * (.52 + _seed01(i, 37, seed) * .12);
+      if (t <= spawn) continue;
+      final age = ((t - spawn) / math.max(.001, 1 - spawn)).clamp(0.0, 1.0).toDouble();
+      if (age >= 1) continue;
+      final life = math.sin(age * math.pi).clamp(0.0, 1.0).toDouble();
+      final p = particlePosition(i, age);
+      final previous = particlePosition(i, math.max(0.0, age - (.035 + trail * .11)));
+      final rnd = _seed01(i, 41, seed);
+      final sizePx = (.8 + rnd * (2.0 + intensity * .10)) * scale;
+      _drawParticleShape(canvas, shape, p, previous, sizePx, life, glow, i, seed);
+    }
+  }
+
+  void _drawParticleShape(
+    Canvas canvas,
+    String shape,
+    Offset p,
+    Offset previous,
+    double sizePx,
+    double life,
+    double glow,
+    int index,
+    int seed,
+  ) {
+    final angle = math.atan2(p.dy - previous.dy, p.dx - previous.dx);
+    final additive = Paint()
+      ..blendMode = BlendMode.plus
+      ..color = accent.withOpacity((.16 + glow * .22) * life);
+    if (glow > .12) {
+      canvas.drawCircle(p, sizePx * (1.8 + glow * 2.4), additive);
+    }
+
+    if (shape == 'streak' || shape == 'line') {
+      canvas.drawLine(previous, p, _stroke(accent, .72 * life, math.max(.65, sizePx * .62)));
+      canvas.drawLine(previous, p, _stroke(Colors.white, .52 * life, math.max(.35, sizePx * .18)));
+      return;
+    }
+    if (shape == 'orb' || shape == 'spark' || shape == 'ember' || shape == 'dust') {
+      final c = shape == 'ember' && index.isEven ? Colors.white : accent;
+      canvas.drawCircle(p, sizePx * (shape == 'dust' ? 1.5 : 1), _fill(c, (shape == 'dust' ? .18 : .72) * life));
+      if (shape == 'ember') canvas.drawLine(previous, p, _stroke(accent, .30 * life, .7));
+      return;
+    }
+
+    canvas.save();
+    canvas.translate(p.dx, p.dy);
+    canvas.rotate(angle + (_seed01(index, 47, seed) - .5) * 1.4);
+    if (shape == 'shard') {
+      final shard = Path()
+        ..moveTo(sizePx * 2.8, 0)
+        ..lineTo(-sizePx * 1.2, -sizePx * .9)
+        ..lineTo(-sizePx * .4, sizePx * 1.1)
+        ..close();
+      canvas.drawPath(shard, _fill(accent, .70 * life));
+      canvas.drawPath(shard, _stroke(Colors.white, .45 * life, .45));
+    } else if (shape == 'diamond' || shape == 'blade') {
+      final long = shape == 'blade' ? 4.2 : 2.2;
+      final path = Path()
+        ..moveTo(sizePx * long, 0)
+        ..lineTo(0, -sizePx * .75)
+        ..lineTo(-sizePx * (shape == 'blade' ? 1.8 : 2.0), 0)
+        ..lineTo(0, sizePx * .75)
+        ..close();
+      canvas.drawPath(path, _fill(accent, .58 * life));
+      canvas.drawPath(path, _stroke(Colors.white, .62 * life, .5));
+    } else if (shape == 'petal') {
+      final len = sizePx * 4.0;
+      final wid = sizePx * 1.45;
+      final path = Path()
+        ..moveTo(-len * .35, 0)
+        ..quadraticBezierTo(0, -wid, len * .65, 0)
+        ..quadraticBezierTo(0, wid, -len * .35, 0)
+        ..close();
+      canvas.drawPath(path, _fill(accent, .48 * life));
+      canvas.drawPath(path, _stroke(Colors.white, .30 * life, .4));
+    } else if (shape == 'snow') {
+      for (var k = 0; k < 3; k++) {
+        final a = k * math.pi / 3;
+        canvas.drawLine(
+          Offset(math.cos(a) * -sizePx * 1.8, math.sin(a) * -sizePx * 1.8),
+          Offset(math.cos(a) * sizePx * 1.8, math.sin(a) * sizePx * 1.8),
+          _stroke(Colors.white, .50 * life, .45),
+        );
+      }
+    } else if (shape == 'star') {
+      for (var k = 0; k < 2; k++) {
+        final a = k * math.pi / 2;
+        canvas.drawLine(
+          Offset(math.cos(a) * -sizePx * 2.0, math.sin(a) * -sizePx * 2.0),
+          Offset(math.cos(a) * sizePx * 2.0, math.sin(a) * sizePx * 2.0),
+          _stroke(Colors.white, .62 * life, .55),
+        );
+      }
+    } else if (shape == 'rune') {
+      canvas.drawCircle(Offset.zero, sizePx * 1.5, _stroke(accent, .52 * life, .5));
+      canvas.drawLine(Offset(-sizePx, 0), Offset(sizePx, 0), _stroke(Colors.white, .34 * life, .4));
+    } else {
+      canvas.drawCircle(Offset.zero, sizePx, _fill(accent, .62 * life));
+    }
+    canvas.restore();
+  }
+
+  void _drawStarfield(Canvas canvas, Size size, Map<String, dynamic> item, double t, double fade, int seed) {
+    final count = _i(item['particle_count'], 36).clamp(12, 90).toInt();
+    for (var i = 0; i < count; i++) {
+      final x = _seed01(i, 61, seed) * size.width;
+      final y = _seed01(i, 67, seed) * size.height * .82;
+      final twinkle = .35 + .65 * math.sin((t * 6 + i * .73)).abs();
+      final r = .35 + _seed01(i, 71, seed) * 1.1;
+      canvas.drawCircle(Offset(x, y), r, _fill(i % 4 == 0 ? accent : Colors.white, .10 * fade * twinkle));
+    }
+  }
+
+  void _drawSigil(Canvas canvas, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade, {bool ringOnly = false}) {
+    final amount = _i(item['amount'], 5).clamp(2, 12).toInt();
+    final variant = _i(item['variant'], 0).clamp(0, 6).toInt();
+    final reveal = _easeOut(t);
+    final r = (28 + intensity * 3.4) * scale * reveal;
+    canvas.save();
+    canvas.translate(c.dx, c.dy);
+    canvas.rotate(t * (variant.isEven ? .65 : -.48));
+    for (var ring = 0; ring < math.min(4, 1 + amount ~/ 3); ring++) {
+      final rr = r * (1 - ring * .18);
+      final rect = Rect.fromCircle(center: Offset.zero, radius: rr);
+      for (var i = 0; i < 12; i++) {
+        canvas.drawArc(rect, i * math.pi * 2 / 12 + ring * .19, math.pi * (.045 + (i % 3) * .012), false,
+            _stroke(i.isEven ? accent : Colors.white, (.20 + ring * .035) * fade, .65 + ring * .18));
+      }
+    }
+    if (!ringOnly) {
+      if (variant % 3 == 0) {
+        // Eye-shaped sigil.
+        final eye = Path()
+          ..moveTo(-r * .82, 0)
+          ..quadraticBezierTo(0, -r * .40, r * .82, 0)
+          ..quadraticBezierTo(0, r * .40, -r * .82, 0);
+        _layeredPath(canvas, eye, accent, .62 * fade, 1.05 * scale, glow: 3.0);
+        canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: r * .15, height: r * .55), _fill(Colors.white, .72 * fade));
+      } else {
+        final sides = 3 + variant % 4;
+        final poly = Path();
+        for (var i = 0; i <= sides; i++) {
+          final a = -math.pi / 2 + i * math.pi * 2 / sides;
+          final p = Offset(math.cos(a) * r * .62, math.sin(a) * r * .62);
+          if (i == 0) poly.moveTo(p.dx, p.dy); else poly.lineTo(p.dx, p.dy);
+        }
+        _layeredPath(canvas, poly, accent, .48 * fade, .9 * scale, glow: 2.5, whiteCore: false);
+      }
+      for (var i = 0; i < amount; i++) {
+        final a = i * math.pi * 2 / amount - t * 1.1;
+        final p = Offset(math.cos(a) * r * .82, math.sin(a) * r * .82);
+        canvas.drawCircle(p, 1.1 * scale, _fill(Colors.white, .42 * fade));
+      }
+    }
+    canvas.restore();
+  }
+
+  void _drawEnergyOrb(Canvas canvas, Size size, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade, {bool aura = false}) {
+    final pulse = _pulse(t);
+    final amount = _i(item['amount'], 4).clamp(2, 10).toInt();
+    final coreR = (4 + intensity * .45 + pulse * 6) * scale;
+    canvas.drawCircle(c, coreR * 2.4, _fill(accent, .10 * pulse, blur: 5, additive: true));
+    canvas.drawCircle(c, coreR, _fill(Colors.white, .82 * pulse));
+    canvas.drawCircle(c, coreR + 3 * scale, _stroke(accent, .68 * pulse, 1.1));
+    for (var i = 0; i < math.min(5, amount); i++) {
+      final r = (20 + i * 11 + t * (aura ? 18 : 9)) * scale;
+      final rect = Rect.fromCircle(center: c, radius: r);
+      canvas.drawArc(rect, i * .78 + t * (i.isEven ? 1.3 : -.9), math.pi * (aura ? .95 : .55), false,
+          _stroke(i.isEven ? accent : Colors.white, (.22 - i * .025) * fade, .8 + i * .08));
+    }
+    if (_i(item['particle_count'], 0) > 0) {
+      final particles = <String, dynamic>{...item, 'motion': _s(item['motion'], 'converge'), 'shape': _s(item['shape'], 'spark')};
+      _drawParticles(canvas, size, c, particles, t, intensity, burst: false);
+    }
+  }
+
+  void _drawBlade(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade) {
+    final q = _easeOut(t);
+    final start = Offset(caster.dx - size.width * .06, caster.dy + size.height * .08);
+    final len = math.min(size.width * .34, 220.0) * q * scale;
+    final angle = -.16;
+    canvas.save();
+    canvas.translate(start.dx, start.dy);
+    canvas.rotate(angle);
+    final blade = Path()
+      ..moveTo(-len * .10, 3 * scale)
+      ..lineTo(len, -2 * scale)
+      ..lineTo(len * .92, 2 * scale)
+      ..lineTo(-len * .10, 6 * scale)
+      ..close();
+    canvas.drawPath(blade, _fill(accent, .26 * fade));
+    canvas.drawLine(Offset(-len * .08, 3 * scale), Offset(len, 0), _stroke(Colors.white, .88 * fade, 1.4 * scale));
+    canvas.drawLine(Offset(-len * .18, 4 * scale), Offset(-len * .03, 4 * scale), _stroke(accent, .82 * fade, 5 * scale));
+    canvas.drawLine(Offset(-len * .08, -8 * scale), Offset(-len * .08, 14 * scale), _stroke(Colors.white, .46 * fade, 1.2 * scale));
+    canvas.restore();
+    if (_i(item['particle_count'], 0) > 0) {
+      final p = <String, dynamic>{...item, 'origin': 'caster', 'motion': 'converge', 'shape': 'streak'};
+      _drawParticles(canvas, size, start, p, t, intensity, burst: false);
+    }
+  }
+
+  Path _beamPath(Offset start, Offset end, String pathKind, double reveal, double scale) {
+    final p = Path()..moveTo(start.dx, start.dy);
+    final current = Offset(start.dx + (end.dx - start.dx) * reveal, start.dy + (end.dy - start.dy) * reveal);
+    if (pathKind == 'wave') {
+      final mid = Offset((start.dx + current.dx) * .5, (start.dy + current.dy) * .5 - 18 * scale * math.sin(reveal * math.pi));
+      p.quadraticBezierTo(mid.dx, mid.dy, current.dx, current.dy);
+    } else if (pathKind == 'arc' || pathKind == 'crescent') {
+      final mid = Offset((start.dx + current.dx) * .5, math.min(start.dy, current.dy) - 42 * scale);
+      p.quadraticBezierTo(mid.dx, mid.dy, current.dx, current.dy);
+    } else {
+      p.lineTo(current.dx, current.dy);
+    }
+    return p;
+  }
+
+  void _drawBeam(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade) {
+    final reveal = _easeOut(math.min(1.0, t * 1.35));
+    final path = _beamPath(caster, target, _s(item['path'], 'straight'), reveal, scale);
+    final width = (3.2 + intensity * .55) * scale;
+    _layeredPath(canvas, path, accent, .88 * fade, width, glow: 7 + _d(item['glow'], .4) * 8);
+    final side1 = path;
+    canvas.drawPath(side1, _stroke(accent, .16 * fade, width * 2.2));
+    if (_i(item['particle_count'], 0) > 0) {
+      final mid = Offset(caster.dx + (target.dx - caster.dx) * reveal * .55, caster.dy + (target.dy - caster.dy) * reveal * .55);
+      final p = <String, dynamic>{...item, 'origin': 'caster', 'motion': 'stream', 'direction': target.dx >= caster.dx ? 'left_to_right' : 'right_to_left', 'shape': _s(item['shape'], 'streak')};
+      _drawParticles(canvas, size, mid, p, t, intensity, burst: false);
+    }
+  }
+
+  void _drawCrescent(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade) {
+    final q = _easeOut(t);
+    final center = Offset(caster.dx + (target.dx - caster.dx) * q, caster.dy + (target.dy - caster.dy) * q);
+    final r = (32 + intensity * 4.5) * scale;
+    final rect = Rect.fromCircle(center: center, radius: r);
+    canvas.drawArc(rect, -math.pi * .72, math.pi * 1.36, false, _stroke(accent, .18 * fade, 9 * scale, blur: 4));
+    canvas.drawArc(rect, -math.pi * .72, math.pi * 1.36, false, _stroke(accent, .78 * fade, 3.2 * scale));
+    canvas.drawArc(rect, -math.pi * .72, math.pi * 1.36, false, _stroke(Colors.white, .82 * fade, .9 * scale));
+  }
+
+  void _drawProjectileSwarm(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    var count = _i(item['particle_count'], 48) ~/ 4;
+    count = count.clamp(8, 28).toInt();
+    for (var i = 0; i < count; i++) {
+      final delay = (i / count) * .38 + _seed01(i, 83, seed) * .05;
+      if (t < delay) continue;
+      final u = ((t - delay) / math.max(.01, 1 - delay)).clamp(0.0, 1.0).toDouble();
+      final lane = (_seed01(i, 89, seed) - .5) * size.height * .42;
+      final arc = math.sin(u * math.pi) * (18 + _seed01(i, 97, seed) * 42) * (i.isEven ? -1 : 1);
+      final p = Offset(
+        caster.dx + (target.dx - caster.dx) * _easeOut(u),
+        caster.dy + lane * (1 - u) + (target.dy - caster.dy) * u + arc,
+      );
+      final prevU = math.max(0.0, u - .06);
+      final prev = Offset(
+        caster.dx + (target.dx - caster.dx) * _easeOut(prevU),
+        caster.dy + lane * (1 - prevU) + (target.dy - caster.dy) * prevU + math.sin(prevU * math.pi) * (18 + _seed01(i, 97, seed) * 42) * (i.isEven ? -1 : 1),
+      );
+      _drawParticleShape(canvas, _s(item['shape'], 'blade'), p, prev, (1.2 + _seed01(i, 101, seed) * 1.1) * scale, fade, _d(item['glow'], .3), i, seed);
+    }
+  }
+
+  void _drawDragon(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final reveal = _easeInOut(t);
+    final startX = caster.dx - size.width * .08;
+    final endX = target.dx + size.width * .08;
+    Offset point(double u) {
+      final x = startX + (endX - startX) * u * reveal;
+      final wave = math.sin((u * 3.15 - reveal * .55 + (seed % 11) * .013) * math.pi) * 30 * scale;
+      final lift = -math.sin(u * math.pi) * 22 * scale;
+      return Offset(x, caster.dy + (target.dy - caster.dy) * u + wave * (1 - u * .18) + lift);
+    }
+    final body = Path();
+    for (var i = 0; i <= 46; i++) {
+      final p = point(i / 46);
+      if (i == 0) body.moveTo(p.dx, p.dy); else body.lineTo(p.dx, p.dy);
+    }
+    canvas.drawPath(body, _stroke(accent, .13 * fade, 22 * scale, blur: 8));
+    canvas.drawPath(body, _stroke(accent, .30 * fade, 12 * scale, blur: 2));
+    canvas.drawPath(body, _stroke(accent, .64 * fade, 6.5 * scale));
+    canvas.drawPath(body, _stroke(Colors.white, .84 * fade, 1.35 * scale));
+
+    for (var i = 5; i < 42; i += 4) {
+      final u = i / 46;
+      final p = point(u);
+      final p2 = point(math.min(1.0, u + .018));
+      final a = math.atan2(p2.dy - p.dy, p2.dx - p.dx) - math.pi / 2;
+      final len = (4 + _seed01(i, 109, seed) * 7) * scale;
+      canvas.drawLine(p, Offset(p.dx + math.cos(a) * len, p.dy + math.sin(a) * len), _stroke(Colors.white, .30 * fade, .7));
+    }
+
+    final head = point(1);
+    final neck = point(.965);
+    final angle = math.atan2(head.dy - neck.dy, head.dx - neck.dx);
+    canvas.save();
+    canvas.translate(head.dx, head.dy);
+    canvas.rotate(angle);
+    final s = (13 + intensity * .60) * scale;
+    final headPath = Path()
+      ..moveTo(s * 1.20, 0)
+      ..lineTo(s * .38, -s * .60)
+      ..lineTo(-s * .55, -s * .48)
+      ..lineTo(-s * .25, -s * .08)
+      ..lineTo(-s * .72, s * .44)
+      ..lineTo(s * .22, s * .54)
+      ..close();
+    canvas.drawPath(headPath, _fill(accent, .56 * fade));
+    canvas.drawPath(headPath, _stroke(Colors.white, .78 * fade, 1.0));
+    final horns = Path()
+      ..moveTo(-s * .30, -s * .43)..lineTo(-s * .68, -s * 1.15)
+      ..moveTo(s * .08, -s * .50)..lineTo(-s * .02, -s * 1.20);
+    canvas.drawPath(horns, _stroke(accent, .88 * fade, 1.2));
+    canvas.drawCircle(Offset(s * .48, -s * .16), 1.8 * scale, _fill(Colors.white, .96 * fade, blur: 1));
+    canvas.restore();
+
+    final pItem = <String, dynamic>{
+      ...item,
+      'origin': 'caster',
+      'motion': 'stream',
+      'direction': 'left_to_right',
+      'shape': _s(item['shape'], 'snow'),
+      'particle_count': _i(item['particle_count'], 48 + intensity * 4),
+      'spread': math.min(.58, _d(item['spread'], .38)),
+    };
+    _drawParticles(canvas, size, point(.55), pItem, t, intensity, burst: false);
+  }
+
+  void _drawLotus(Canvas canvas, Size size, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final bloom = _easeOut(t);
+    final amount = _i(item['amount'], 7).clamp(4, 12).toInt();
+    final variant = _i(item['variant'], 0);
+    final spin = t * (.22 + variant * .025);
+    canvas.save();
+    canvas.translate(c.dx, c.dy);
+    void petal(double angle, double len, double width, double alpha) {
+      canvas.save();
+      canvas.rotate(angle);
+      final p = Path()
+        ..moveTo(0, 0)
+        ..cubicTo(len * .24, -width, len * .74, -width * .82, len, 0)
+        ..cubicTo(len * .74, width * .82, len * .24, width, 0, 0)
+        ..close();
+      final paint = Paint()
+        ..shader = LinearGradient(
+          colors: <Color>[Colors.white.withOpacity(.80 * alpha), accent.withOpacity(.64 * alpha), accent.withOpacity(.04)],
+          stops: const <double>[0, .34, 1],
+        ).createShader(Rect.fromLTWH(0, -width, len, width * 2));
+      paint.blendMode = BlendMode.plus;
+      canvas.drawPath(p, paint);
+      canvas.drawPath(p, _stroke(Colors.white, .26 * alpha, .55));
+      canvas.restore();
+    }
+    final outer = math.max(10, amount * 2);
+    final outerLen = (28 + 52 * bloom + intensity * 1.7) * scale;
+    final outerW = (8 + 12 * bloom) * scale;
+    for (var i = 0; i < outer; i++) {
+      petal(i * math.pi * 2 / outer + spin, outerLen, outerW, fade);
+    }
+    final inner = math.max(7, amount + 2);
+    for (var i = 0; i < inner; i++) {
+      petal(i * math.pi * 2 / inner - spin * 1.5 + .22, outerLen * .62, outerW * .68, fade * .86);
+    }
+    final ringR = outerLen * .95;
+    final ring = Rect.fromCircle(center: Offset.zero, radius: ringR);
+    for (var i = 0; i < 18; i++) {
+      canvas.drawArc(ring, i * math.pi * 2 / 18 - t * .5, math.pi * .038, false, _stroke(accent, .26 * fade, .8));
+    }
+    final core = (5 + 10 * _pulse(t)) * scale;
+    canvas.drawCircle(Offset.zero, core * 2.2, _fill(accent, .12 * fade, blur: 5, additive: true));
+    canvas.drawCircle(Offset.zero, core, _fill(Colors.white, .88 * fade));
+    canvas.restore();
+  }
+
+  void _drawVortex(Canvas canvas, Size size, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final arms = _i(item['amount'], 6).clamp(3, 10).toInt();
+    final radius = size.shortestSide * (.12 + intensity * .012) * scale * _easeOut(t);
+    for (var arm = 0; arm < arms; arm++) {
+      final path = Path();
+      for (var i = 0; i <= 32; i++) {
+        final u = i / 32;
+        final a = arm * math.pi * 2 / arms + u * math.pi * (2.2 + (seed % 5) * .18) + t * 2.4;
+        final r = radius * u;
+        final p = Offset(c.dx + math.cos(a) * r, c.dy + math.sin(a) * r * .62);
+        if (i == 0) path.moveTo(p.dx, p.dy); else path.lineTo(p.dx, p.dy);
+      }
+      _layeredPath(canvas, path, accent, .38 * fade, 1.0 + arm % 2 * .4, glow: 2.5, whiteCore: arm % 3 == 0);
+    }
+    final particles = <String, dynamic>{...item, 'motion': 'spiral', 'shape': _s(item['shape'], 'streak')};
+    _drawParticles(canvas, size, c, particles, t, intensity, burst: false);
+  }
+
+  void _drawMeteor(Canvas canvas, Size size, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final q = _easeInOut(t);
+    final start = Offset(target.dx - size.width * .28, -size.height * .08);
+    final p = Offset(start.dx + (target.dx - start.dx) * q, start.dy + (target.dy - start.dy) * q);
+    final prevQ = math.max(0.0, q - .12);
+    final prev = Offset(start.dx + (target.dx - start.dx) * prevQ, start.dy + (target.dy - start.dy) * prevQ);
+    final tail = Path()..moveTo(prev.dx, prev.dy)..lineTo(p.dx, p.dy);
+    _layeredPath(canvas, tail, accent, .72 * fade, (6 + intensity * .5) * scale, glow: 8);
+    final r = (8 + intensity * .65) * scale;
+    canvas.drawCircle(p, r * 2.4, _fill(accent, .18 * fade, blur: 7, additive: true));
+    canvas.drawCircle(p, r, _fill(Colors.white, .88 * fade));
+    final particles = <String, dynamic>{...item, 'origin': 'sky', 'direction': 'down', 'motion': 'stream', 'shape': _s(item['shape'], 'ember'), 'particle_count': math.max(24, _i(item['particle_count'], 48))};
+    _drawParticles(canvas, size, p, particles, t, intensity, burst: false);
+  }
+
+  void _drawForceField(Canvas canvas, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade) {
+    final amount = _i(item['amount'], 5).clamp(2, 10).toInt();
+    final q = _easeOut(t);
+    for (var i = 0; i < amount; i++) {
+      final rx = (26 + i * 9 + q * 30) * scale;
+      final ry = rx * (.42 + (i % 2) * .08);
+      final rect = Rect.fromCenter(center: c, width: rx * 2, height: ry * 2);
+      canvas.drawArc(rect, i * .6 + t * (i.isEven ? 1.1 : -.7), math.pi * (1.15 - i * .035), false,
+          _stroke(i.isEven ? accent : Colors.white, (.30 - i * .018) * fade, .8 + (i % 3) * .25));
+    }
+    canvas.drawCircle(c, (11 + intensity) * scale * _pulse(t), _stroke(Colors.white, .18 * fade, .7));
+  }
+
+  void _drawImpactLines(Canvas canvas, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final amount = (_i(item['amount'], 8) * 2).clamp(8, 28).toInt();
+    final q = _easeOut(t);
+    for (var i = 0; i < amount; i++) {
+      final a = i * math.pi * 2 / amount + (_seed01(i, 127, seed) - .5) * .22;
+      final inner = (12 + _seed01(i, 131, seed) * 16) * scale * q;
+      final outer = inner + (28 + _seed01(i, 137, seed) * (44 + intensity * 3)) * scale * q;
+      final p1 = Offset(c.dx + math.cos(a) * inner, c.dy + math.sin(a) * inner);
+      final p2 = Offset(c.dx + math.cos(a) * outer, c.dy + math.sin(a) * outer);
+      canvas.drawLine(p1, p2, _stroke(i % 4 == 0 ? Colors.white : accent, (.52 - i % 3 * .08) * fade, .55 + _seed01(i, 139, seed) * 1.2));
+    }
+  }
+
+  void _drawGroundCrack(Canvas canvas, Size size, Offset c, Map<String, dynamic> item, double t, double scale, double fade, int seed) {
+    final branches = _i(item['amount'], 8).clamp(4, 12).toInt();
+    final q = _easeOut(t);
+    for (var i = 0; i < branches; i++) {
+      final base = math.pi * (.08 + .84 * i / math.max(1, branches - 1));
+      final path = Path()..moveTo(c.dx, c.dy);
+      var x = c.dx;
+      var y = c.dy;
+      for (var k = 0; k < 5; k++) {
+        final step = (10 + _seed01(i * 11 + k, 149, seed) * 16) * scale * q;
+        final a = base + (_seed01(i * 17 + k, 151, seed) - .5) * .65;
+        x += math.cos(a) * step;
+        y += math.sin(a) * step * .55;
+        path.lineTo(x, y);
+      }
+      canvas.drawPath(path, _stroke(Colors.black, .72 * fade, 2.4 * scale));
+      canvas.drawPath(path, _stroke(accent, .42 * fade, .75 * scale));
+    }
+  }
+
+  void _drawTrail(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final q = _easeOut(t);
+    final kind = _s(item['path'], 'wave');
+    final path = Path();
+    final steps = 34;
+    for (var i = 0; i <= steps; i++) {
+      final u = i / steps * q;
+      var x = caster.dx + (target.dx - caster.dx) * u;
+      var y = caster.dy + (target.dy - caster.dy) * u;
+      if (kind == 'wave' || kind == 'serpentine') y += math.sin((u * 3.0 + t * .8) * math.pi) * 18 * scale;
+      if (kind == 'arc') y -= math.sin(u * math.pi) * 42 * scale;
+      if (kind == 'spiral') {
+        x += math.cos(u * math.pi * 6) * (1 - u) * 28 * scale;
+        y += math.sin(u * math.pi * 6) * (1 - u) * 18 * scale;
+      }
+      if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+    _layeredPath(canvas, path, accent, .58 * fade, 2.2 * scale, glow: 4.0);
+    final p = <String, dynamic>{...item, 'origin': 'caster', 'direction': target.dx >= caster.dx ? 'left_to_right' : 'right_to_left', 'motion': 'stream'};
+    _drawParticles(canvas, size, caster, p, t, intensity, burst: false);
+  }
+
+  void _drawSlash(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade, String pathKind) {
+    final reveal = _easeOut(t);
+    final reverse = _s(item['direction']) == 'right_to_left';
+    final start = reverse ? Offset(size.width * .88, target.dy + 34 * scale) : Offset(size.width * .10, target.dy + 34 * scale);
+    final endFull = reverse ? Offset(size.width * .10, target.dy - 34 * scale) : Offset(size.width * .90, target.dy - 34 * scale);
+    final end = Offset(start.dx + (endFull.dx - start.dx) * reveal, start.dy + (endFull.dy - start.dy) * reveal);
+    final mid = Offset((start.dx + end.dx) * .5, (start.dy + end.dy) * .5 - (pathKind == 'crescent' ? 46 : 18) * scale);
+    final slash = Path()..moveTo(start.dx, start.dy)..quadraticBezierTo(mid.dx, mid.dy, end.dx, end.dy);
+    canvas.drawPath(slash, _stroke(Colors.black, .88 * fade, (7.5 + intensity * .25) * scale));
+    _layeredPath(canvas, slash, accent, .96 * fade, (2.5 + intensity * .12) * scale, glow: 5.5 + _d(item['glow'], .4) * 5);
+    final amount = _i(item['amount'], 4).clamp(1, 10).toInt();
+    for (var i = 0; i < amount; i++) {
+      final off = (i - (amount - 1) / 2) * 4.2 * scale;
+      final ghost = Path()..moveTo(start.dx, start.dy + off)..quadraticBezierTo(mid.dx, mid.dy + off * .35, end.dx, end.dy + off);
+      canvas.drawPath(ghost, _stroke(accent, .11 * fade, .65));
+    }
+  }
+
+  void _drawProjectile(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade) {
+    final q = _easeOut(t);
+    final arc = _s(item['path']) == 'arc' ? -math.sin(q * math.pi) * 42 * scale : -math.sin(q * math.pi) * 14 * scale;
+    final p = Offset(caster.dx + (target.dx - caster.dx) * q, caster.dy + (target.dy - caster.dy) * q + arc);
+    final prevQ = math.max(0.0, q - .12);
+    final prev = Offset(caster.dx + (target.dx - caster.dx) * prevQ, caster.dy + (target.dy - caster.dy) * prevQ + (_s(item['path']) == 'arc' ? -math.sin(prevQ * math.pi) * 42 * scale : 0));
+    _drawParticleShape(canvas, _s(item['shape'], 'diamond'), p, prev, (2.2 + intensity * .10) * scale, fade, _d(item['glow'], .35), 0, _i(item['seed'], 0));
+    canvas.drawLine(prev, p, _stroke(accent, .36 * fade, 2.2 * scale, blur: 2));
+  }
+
+  void _drawLightning(Canvas canvas, Size size, Offset origin, Offset target, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final amount = _i(item['amount'], 5).clamp(2, 12).toInt();
+    final q = _easeOut(t);
+    for (var b = 0; b < amount; b++) {
+      final randomA = _seed01(b, 157, seed) * math.pi * 2;
+      final baseA = _directionAngle(_s(item['direction'], 'radial'), randomA);
+      final length = (42 + intensity * 7 + _seed01(b, 163, seed) * 52) * scale * q;
+      final path = Path()..moveTo(origin.dx, origin.dy);
+      var x = origin.dx;
+      var y = origin.dy;
+      for (var k = 1; k <= 8; k++) {
+        final u = k / 8;
+        final perp = (_seed01(b * 19 + k, 167, seed) - .5) * 24 * scale * (1 - u * .35);
+        x = origin.dx + math.cos(baseA) * length * u + math.cos(baseA + math.pi / 2) * perp;
+        y = origin.dy + math.sin(baseA) * length * u + math.sin(baseA + math.pi / 2) * perp;
+        path.lineTo(x, y);
+      }
+      _layeredPath(canvas, path, accent, .72 * fade, 1.25 * scale, glow: 3.2);
+    }
+  }
+
+  void _drawShockwave(Canvas canvas, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed, {required bool explosion}) {
+    final q = _easeOut(t);
+    final r = (14 + q * (explosion ? 132 : 96)) * scale;
+    canvas.drawCircle(c, r, _stroke(accent, .56 * fade, explosion ? 2.8 : 1.7));
+    canvas.drawCircle(c, r * .72, _stroke(Colors.white, .30 * fade, .75));
+    if (explosion) {
+      final rays = (_i(item['amount'], 5) * 3).clamp(10, 30).toInt();
+      for (var i = 0; i < rays; i++) {
+        final a = i * math.pi * 2 / rays + (_seed01(i, 173, seed) - .5) * .12;
+        final inner = r * (.12 + _seed01(i, 179, seed) * .08);
+        final outer = r * (.55 + _seed01(i, 181, seed) * .40);
+        canvas.drawLine(Offset(c.dx + math.cos(a) * inner, c.dy + math.sin(a) * inner), Offset(c.dx + math.cos(a) * outer, c.dy + math.sin(a) * outer), _stroke(i.isEven ? Colors.white : accent, .42 * fade, .65 + _seed01(i, 191, seed)));
+      }
+      final core = (5 + 11 * _pulse(t)) * scale;
+      canvas.drawCircle(c, core * 2.5, _fill(accent, .12 * fade, blur: 4, additive: true));
+      canvas.drawCircle(c, core, _fill(Colors.white, .80 * fade));
+    }
+  }
+
+  void _drawHealRing(Canvas canvas, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade) {
+    final amount = _i(item['amount'], 4).clamp(2, 10).toInt();
+    final q = _easeOut(t);
+    for (var i = 0; i < amount; i++) {
+      final r = (22 + i * 13 + q * 24) * scale;
+      final rect = Rect.fromCircle(center: c, radius: r);
+      canvas.drawArc(rect, -math.pi * .8 + i * .6 + t, math.pi * 1.18, false, _stroke(i.isEven ? accent : Colors.white, (.34 - i * .025) * fade, 1.0));
+    }
+    for (var i = 0; i < 6; i++) {
+      final a = i * math.pi * 2 / 6 - t * .6;
+      final p = Offset(c.dx + math.cos(a) * 18 * scale, c.dy + math.sin(a) * 18 * scale);
+      canvas.drawCircle(p, 1.3 * scale, _fill(Colors.white, .42 * fade));
+    }
+  }
+
+  void _drawShield(Canvas canvas, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade) {
+    final q = _easeOut(t);
+    final r = (34 + intensity * 2.4 + 12 * _pulse(t)) * scale * q;
+    final shield = Path()
+      ..moveTo(c.dx, c.dy - r)
+      ..quadraticBezierTo(c.dx + r * .88, c.dy - r * .45, c.dx + r * .68, c.dy + r * .40)
+      ..quadraticBezierTo(c.dx + r * .34, c.dy + r * .96, c.dx, c.dy + r * 1.12)
+      ..quadraticBezierTo(c.dx - r * .34, c.dy + r * .96, c.dx - r * .68, c.dy + r * .40)
+      ..quadraticBezierTo(c.dx - r * .88, c.dy - r * .45, c.dx, c.dy - r)
+      ..close();
+    canvas.drawPath(shield, _fill(accent, .045 * fade));
+    _layeredPath(canvas, shield, accent, .68 * fade, 1.7 * scale, glow: 3.2, whiteCore: false);
+    _drawSigil(canvas, c, {...item, 'amount': 4, 'variant': 2}, t, scale * .62, intensity, fade, ringOnly: false);
+  }
+
+  void _drawAfterimages(Canvas canvas, Size size, Offset caster, Offset target, Map<String, dynamic> item, double t, double scale, double fade) {
+    final count = _i(item['amount'], 5).clamp(2, 10).toInt();
+    final dx = target.dx - caster.dx;
+    final dy = target.dy - caster.dy;
+    final distance = math.max(1.0, math.sqrt(dx * dx + dy * dy));
+    final ux = dx / distance;
+    final uy = dy / distance;
+    final nx = -uy;
+    final ny = ux;
+    for (var i = count - 1; i >= 0; i--) {
+      final u = (t - i * .055).clamp(0.0, 1.0).toDouble();
+      final eased = _easeOut(u);
+      final p = Offset(
+        caster.dx + dx * eased,
+        caster.dy + dy * u - math.sin(u * math.pi) * 10,
+      );
+      final opacity = (.07 + (count - i) * .026) * fade;
+      final length = (18 + (count - i) * 5.0) * scale;
+      final bend = math.sin((u + i * .17) * math.pi * 2) * 6 * scale;
+      final start = Offset(p.dx - ux * length, p.dy - uy * length);
+      final end = Offset(p.dx + ux * 7 * scale, p.dy + uy * 7 * scale);
+      final path = Path()
+        ..moveTo(start.dx, start.dy)
+        ..quadraticBezierTo(
+          p.dx + nx * bend,
+          p.dy + ny * bend,
+          end.dx,
+          end.dy,
+        );
+      canvas.drawPath(path, _stroke(accent, opacity * .72, 5.2 * scale, blur: 6));
+      canvas.drawPath(path, _stroke(accent, opacity, 1.45 * scale));
+      canvas.drawPath(path, _stroke(Colors.white, opacity * .42, .55 * scale));
+    }
+  }
+
+  void _drawSpaceCrack(Canvas canvas, Size size, Offset c, Map<String, dynamic> item, double t, double scale, int intensity, double fade, int seed) {
+    final q = _easeOut(math.min(1.0, t * 1.3));
+    final start = Offset(size.width * .10, c.dy + 22 * scale);
+    final end = Offset(size.width * .90, c.dy - 28 * scale);
+    final main = Path()..moveTo(start.dx, start.dy);
+    final segments = 18;
+    for (var i = 1; i <= segments; i++) {
+      final u = i / segments * q;
+      final x = start.dx + (end.dx - start.dx) * u;
+      final y = start.dy + (end.dy - start.dy) * u + (_seed01(i, 197, seed) - .5) * 9 * scale;
+      main.lineTo(x, y);
+    }
+    canvas.drawPath(main, _stroke(Colors.black, .96 * fade, (7 + intensity * .2) * scale));
+    canvas.drawPath(main, _stroke(accent, .78 * fade, 1.8 * scale, blur: 2.8));
+    canvas.drawPath(main, _stroke(Colors.white, .56 * fade, .65 * scale));
+    final branches = _i(item['amount'], 7).clamp(3, 12).toInt();
+    for (var i = 0; i < branches; i++) {
+      final u = .15 + i / math.max(1, branches - 1) * .70;
+      if (u > q) continue;
+      var x = start.dx + (end.dx - start.dx) * u;
+      var y = start.dy + (end.dy - start.dy) * u;
+      final branch = Path()..moveTo(x, y);
+      final side = i.isEven ? -1.0 : 1.0;
+      for (var k = 0; k < 4; k++) {
+        x += side * (8 + _seed01(i * 13 + k, 199, seed) * 17) * scale;
+        y += (_seed01(i * 17 + k, 211, seed) - .5) * 22 * scale;
+        branch.lineTo(x, y);
+      }
+      canvas.drawPath(branch, _stroke(accent, .42 * fade, .75));
+    }
+  }
+}
+
 
 String _battleSkillTypeName(String type) => switch (type) {
       'direct' => '直击',
@@ -417,6 +1691,7 @@ class YoranBattleCompanion {
     required this.avatar,
     required this.portrait,
     required this.skills,
+    this.star = 0,
   });
 
   final String id;
@@ -424,6 +1699,12 @@ class YoranBattleCompanion {
   final String avatar;
   final String portrait;
   final List<YoranBattleSkill> skills;
+  final int star;
+
+  // Star is supplied by the backend companion payload. Keep the actual rule in one
+  // deterministic place so battle preview and execution always agree.
+  double get skillEffectMultiplier => 1.0 + star.clamp(0, 10) * .03;
+  int get skillEffectPercent => (skillEffectMultiplier * 100).round();
 
   static YoranBattleCompanion? fromState(dynamic raw) {
     final data = YoranBattleSkill._stringMap(raw);
@@ -444,8 +1725,84 @@ class YoranBattleCompanion {
       avatar: '${data['avatar_url'] ?? ''}'.trim(),
       portrait: '${data['portrait_url'] ?? ''}'.trim(),
       skills: skills,
+      star: YoranBattleSkill._asInt(data['star']).clamp(0, 10).toInt(),
     );
   }
+}
+
+int _battleImageCacheWidth(
+  BuildContext context,
+  double logicalWidth,
+  int maxCacheWidth,
+) {
+  final pixelRatio = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 3.0);
+  return (logicalWidth * pixelRatio)
+      .round()
+      .clamp(1, maxCacheWidth)
+      .toInt();
+}
+
+ImageProvider<Object>? _battleImageProviderForPrecache(
+  String source,
+  int cacheWidth,
+) {
+  final path = source.trim();
+  if (path.isEmpty) return null;
+  final ImageProvider<Object> baseProvider =
+      path.startsWith('http://') || path.startsWith('https://')
+          ? NetworkImage(path)
+          : AssetImage(path);
+  return ResizeImage.resizeIfNeeded(cacheWidth, null, baseProvider);
+}
+
+Future<void> _precacheBattleImage(
+  BuildContext context,
+  String source,
+  int cacheWidth,
+) async {
+  final provider = _battleImageProviderForPrecache(source, cacheWidth);
+  if (provider == null) return;
+  try {
+    await precacheImage(provider, context);
+  } catch (_) {
+    // 图片预热失败不能阻断战斗；正式显示时仍会走原有 fallback/errorBuilder。
+  }
+}
+
+Future<void> _precacheCompanionBattleImages(
+  BuildContext context,
+  List<YoranBattleCompanion> companions,
+) async {
+  if (companions.isEmpty) return;
+  final screenWidth = MediaQuery.sizeOf(context).width;
+  // 与援助大立绘和底部小头像的 _BattleImage cacheWidth 保持一致，
+  // 确保预热后的解码结果能直接命中 Flutter ImageCache。
+  final assistCacheWidth =
+      _battleImageCacheWidth(context, screenWidth * .5, 900);
+  final avatarCacheWidth = _battleImageCacheWidth(context, 30, 120);
+  final futures = <Future<void>>[];
+  final seen = <String>{};
+
+  void queue(String source, int cacheWidth) {
+    final path = source.trim();
+    if (path.isEmpty) return;
+    final key = '$path@$cacheWidth';
+    if (!seen.add(key)) return;
+    futures.add(_precacheBattleImage(context, path, cacheWidth));
+  }
+
+  for (final companion in companions) {
+    final assistSource = companion.portrait.trim().isNotEmpty
+        ? companion.portrait
+        : companion.avatar;
+    final avatarSource = companion.avatar.trim().isNotEmpty
+        ? companion.avatar
+        : companion.portrait;
+    queue(assistSource, assistCacheWidth);
+    queue(avatarSource, avatarCacheWidth);
+  }
+
+  if (futures.isNotEmpty) await Future.wait(futures);
 }
 
 /// 后端背包消耗品在战斗页中的运行时视图。
@@ -910,11 +2267,8 @@ class YoranGeneratedBattleSetup {
     if (opponentName.isEmpty) {
       throw const FormatException('后端没有返回有效的对手名称');
     }
-    final basicMin = _int(basicAttack['min'], 5).clamp(1, 25).toInt();
-    final basicMax = math
-        .max(basicMin, _int(basicAttack['max'], 8))
-        .clamp(1, 25)
-        .toInt();
+    final basicPowerPercent =
+        _int(basicAttack['power_percent'], 65).clamp(35, 220).toInt();
     final maxHp = _int(stats['max_health'], 100).clamp(1, 1000).toInt();
     final playerMultiplier =
         _double(matchup['player_damage_multiplier']).clamp(.05, 20).toDouble();
@@ -964,8 +2318,7 @@ class YoranGeneratedBattleSetup {
         realm: _string(opponent['realm']),
         difficultyLabel: _string(matchup['difficulty_label']),
         openingEstimate: _string(matchup['opening_estimate']),
-        basicAttackMin: basicMin,
-        basicAttackMax: basicMax,
+        basicAttackPowerPercent: basicPowerPercent,
         hitBonus: _int(stats['hit_bonus'], 4).clamp(0, 10).toInt(),
         playerDamageMultiplier: playerMultiplier,
         opponentDamageMultiplier: opponentMultiplier,
@@ -986,15 +2339,14 @@ const List<YoranBattleSkill> yoranBaseBattleSkills = <YoranBattleSkill>[
   YoranBattleSkill(
     name: '普通攻击',
     detail: '基础攻击动作，无需消耗精力',
-    minDamage: 5,
-    maxDamage: 8,
+    powerPercent: 65,
     hitBonus: 6,
   ),
   YoranBattleSkill(
     name: '休整',
     detail: '放缓呼吸并调整状态，恢复大量精力',
     archetype: 'energy',
-    energyGain: 20,
+    energyMaxQiPercent: 20,
     resting: true,
     targetSelf: true,
   ),
@@ -1027,8 +2379,7 @@ const List<YoranBattleSkill> yoranDefaultBattleSkills = <YoranBattleSkill>[
     name: '强力攻击',
     detail: '蓄力后发动更重的一击，可穿过部分防御',
     quality: 2,
-    minDamage: 9,
-    maxDamage: 12,
+    powerPercent: 110,
     hitBonus: 4,
     energyCost: 15,
     cooldown: 1,
@@ -1200,6 +2551,11 @@ class _YoranGeneratedBattleLoaderPageState
 
     try {
       final setup = await widget.setupLoader();
+      if (!mounted || epoch != _loadEpoch) return;
+
+      // 后端数据一到就先预热援助角色图片。加载页会继续显示，
+      // 等大立绘/头像进入 Flutter ImageCache 后再真正挂载战斗页。
+      await _precacheCompanionBattleImages(context, setup.companions);
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _setup = setup;
@@ -1518,6 +2874,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     with TickerProviderStateMixin {
   static const int _baseMaxHp = 100;
   static const int _baseMaxQi = 100;
+  static const double _baseSkillPower = 10.0;
+  static const double _skillDamageVariance = .10;
   static const int _maxBattleLogEntries = 120;
   static const Duration _maximumSpeechDuration = Duration(seconds: 30);
   static const Duration _speechTranscriptionTimeout = Duration(seconds: 10);
@@ -1540,6 +2898,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   late final AnimationController _playerGuardImpactController;
   late final AnimationController _combatTextController;
   late final AnimationController _companionAssistController;
+  late final AnimationController _skillVfxController;
+  late final AnimationController _skillImpactController;
   late final AnimationController _playerBreathController;
   late final AnimationController _enemyBreathController;
 
@@ -1585,6 +2945,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   YoranBattleSkill? _activeAssistSkill;
   final Set<String> _usedCompanionSkillIds = <String>{};
   bool _companionAssistUsedThisRound = false;
+  bool _companionImagesPrecacheStarted = false;
   int _enemyStunnedByCompanion = 0;
   int _companionCounterMin = 0;
   int _companionCounterMax = 0;
@@ -1615,6 +2976,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   Color _combatTextColor = _BattleColors.enemy;
   bool _playerDamageCritical = false;
   bool _enemyDamageCritical = false;
+  YoranBattleSkill? _activeSkillVfx;
+  bool _activeSkillVfxHit = true;
+  bool _activeSkillVfxCritical = false;
   bool _busy = true;
   bool _entranceVisible = true;
   YoranBattleOutcome? _outcome;
@@ -1782,6 +3146,13 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           });
         }
       });
+    _skillVfxController = _controller(1200)
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted) {
+          setState(() => _activeSkillVfx = null);
+        }
+      });
+    _skillImpactController = _controller(190);
     _playerBreathController = _controller(3900)
       ..value = .18
       ..repeat(reverse: true);
@@ -1794,6 +3165,16 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
 
     _resetBattle(startEntrance: true);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_companionImagesPrecacheStarted) return;
+    _companionImagesPrecacheStarted = true;
+    // 兼容直接 showYoranBattlePage 的入口：没有战前 loader 时，
+    // 也会在战斗页第一次拿到 MediaQuery 后立刻预热援助角色图片。
+    unawaited(_precacheCompanionBattleImages(context, _battleCompanions));
   }
 
   AnimationController _controller(int milliseconds) => AnimationController(
@@ -1836,6 +3217,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _playerGuardImpactController.dispose();
     _combatTextController.dispose();
     _companionAssistController.dispose();
+    _skillVfxController.dispose();
+    _skillImpactController.dispose();
     _playerBreathController.dispose();
     _enemyBreathController.dispose();
     _speechSessionId++;
@@ -2119,6 +3502,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   }
 
   Widget _buildCompanionSkillCard(
+    YoranBattleCompanion companion,
     YoranBattleSkill skill, {
     required bool compact,
   }) {
@@ -2192,12 +3576,25 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     ),
                   ),
                 ),
-                if (used)
+                const SizedBox(width: 5),
+                Text(
+                  '${companion.star}★ · 效果${companion.skillEffectPercent}%',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: used ? Colors.white24 : accent.withOpacity(.78),
+                    fontSize: compact ? 7.4 : 8.2,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .15,
+                  ),
+                ),
+                if (used) ...<Widget>[
+                  const SizedBox(width: 4),
                   const Icon(
                     Icons.check_circle_rounded,
                     size: 13,
                     color: Colors.white24,
                   ),
+                ],
               ],
             ),
             SizedBox(height: compact ? 3 : 7),
@@ -2291,6 +3688,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               Expanded(
                 child: index < entries.length
                     ? _buildCompanionSkillCard(
+                        entries[index].key,
                         entries[index].value,
                         compact: compact,
                       )
@@ -2338,26 +3736,61 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       _activeAssistCompanion = companion;
       _activeAssistSkill = skill;
     });
-    unawaited(_companionAssistController.forward(from: 0));
     unawaited(HapticFeedback.mediumImpact());
-    if (!await _pause(260)) return;
+    // Companion assist and skill VFX play sequentially: finish assist first,
+    // then start VFX so the assist overlay cannot cover the skill effect.
+    try {
+      await _companionAssistController.forward(from: 0).orCancel;
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    if (!await _advanceCompanionSkillToImpact(skill)) return;
 
-    final rolledDamage = skill.maxDamage > 0
-        ? _scalePlayerDamage(_rollBetween(skill.minDamage, skill.maxDamage))
-        : 0;
-    final actualDamage = math.min(_enemyHp, rolledDamage);
+    final starMultiplier = companion.skillEffectMultiplier;
+    final rolledDamage = _rollSkillDamage(
+      skill,
+      effectMultiplier: starMultiplier,
+    );
+    final actualDamage = math.min(_enemyHp, _scaleCompanionDamage(rolledDamage));
+    final directHeal = _skillHealAmount(
+      skill,
+      _playerMaxHp,
+      effectMultiplier: starMultiplier,
+    );
     final recovered = math.min(
-      skill.healAmount + (actualDamage * skill.lifestealPercent / 100).round(),
+      directHeal + (actualDamage * skill.lifestealPercent / 100).round(),
       _playerMaxHp - _playerHp,
     );
+    final energyGain = _skillEnergyGain(
+      skill,
+      _playerMaxQi,
+      effectMultiplier: starMultiplier,
+    );
     final beforeQi = _playerQi;
+    if (actualDamage > 0) {
+      if (!await _performSkillHitStop(
+        skill,
+        critical: false,
+        stopPlayerAttack: false,
+      )) return;
+    } else if (skill.hasVfx) {
+      unawaited(_skillImpactController.forward(from: 0));
+    }
     setState(() {
       _enemyHp = _clampEnemyHp(_enemyHp - actualDamage);
       _playerHp = _clampPlayerHp(_playerHp + recovered);
-      _playerQi = _clampPlayerQi(_playerQi + skill.energyGain);
-      if (skill.burnTurns > 0 && skill.burnDamage > 0) {
+      _playerQi = _clampPlayerQi(_playerQi + energyGain);
+      final burnBase = _skillBurnBaseDamage(
+        skill,
+        effectMultiplier: starMultiplier,
+      );
+      if (skill.burnTurns > 0 && burnBase > 0) {
         _enemyBurnTurns = math.max(_enemyBurnTurns, skill.burnTurns);
-        _enemyBurnDamage = math.max(_enemyBurnDamage, skill.burnDamage);
+        _enemyBurnDamage = math.max(
+          _enemyBurnDamage,
+          _scaleCompanionDamage(burnBase),
+        );
       }
       if (skill.guarding) {
         _playerGuarding = true;
@@ -2376,21 +3809,27 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       if (skill.exposes) {
         _enemyExposedTurns = math.max(_enemyExposedTurns, 1);
         _enemyExposedHitBonus = math.max(_enemyExposedHitBonus, skill.exposeHitBonus);
+        final extraPower =
+            (skill.exposeExtraPowerPercent * starMultiplier).round();
+        final extraMin = _powerDamageMin(extraPower);
+        final extraMax = _powerDamageMax(extraPower);
         _enemyExposedExtraDamageMin = math.max(
           _enemyExposedExtraDamageMin,
-          skill.exposeExtraDamageMin,
+          extraMin,
         );
         _enemyExposedExtraDamageMax = math.max(
           _enemyExposedExtraDamageMax,
-          skill.exposeExtraDamageMax,
+          extraMax,
         );
       }
       if (skill.stunTurns > 0) {
         _enemyStunnedByCompanion = math.max(_enemyStunnedByCompanion, 1);
       }
-      if (skill.counterMax > 0) {
-        _companionCounterMin = skill.counterMin;
-        _companionCounterMax = skill.counterMax;
+      if (skill.counterPowerPercent > 0) {
+        final counterPower =
+            (skill.counterPowerPercent * starMultiplier).round();
+        _companionCounterMin = _powerDamageMin(counterPower);
+        _companionCounterMax = _powerDamageMax(counterPower);
         _companionCounterName = companion.name;
       }
     });
@@ -2576,6 +4015,92 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   int _rollBetween(int min, int max) =>
       min + _random.nextInt(math.max(1, max - min + 1));
 
+  int _rollPowerDamage(int powerPercent, {double effectMultiplier = 1.0}) {
+    if (powerPercent <= 0) return 0;
+    final variance = 1 - _skillDamageVariance +
+        _random.nextDouble() * (_skillDamageVariance * 2);
+    return math.max(
+      1,
+      (_baseSkillPower * (powerPercent / 100) * effectMultiplier * variance)
+          .round(),
+    );
+  }
+
+  int _powerDamageMin(int powerPercent, {double effectMultiplier = 1.0}) {
+    if (powerPercent <= 0) return 0;
+    return math.max(
+      1,
+      (_baseSkillPower * (powerPercent / 100) * effectMultiplier *
+              (1 - _skillDamageVariance))
+          .round(),
+    );
+  }
+
+  int _powerDamageMax(int powerPercent, {double effectMultiplier = 1.0}) {
+    if (powerPercent <= 0) return 0;
+    return math.max(
+      1,
+      (_baseSkillPower * (powerPercent / 100) * effectMultiplier *
+              (1 + _skillDamageVariance))
+          .round(),
+    );
+  }
+
+  int _rollSkillDamage(YoranBattleSkill skill, {double effectMultiplier = 1.0}) {
+    return _rollPowerDamage(
+      skill.powerPercent,
+      effectMultiplier: effectMultiplier,
+    );
+  }
+
+  int _percentAmount(int maximum, int percent, {double effectMultiplier = 1.0}) {
+    if (maximum <= 0 || percent <= 0) return 0;
+    return math.max(
+      1,
+      (maximum * (percent / 100) * effectMultiplier).round(),
+    );
+  }
+
+  int _skillHealAmount(
+    YoranBattleSkill skill,
+    int maximum, {
+    double effectMultiplier = 1.0,
+  }) {
+    return _percentAmount(
+      maximum,
+      skill.healMaxHpPercent,
+      effectMultiplier: effectMultiplier,
+    );
+  }
+
+  int _skillEnergyGain(
+    YoranBattleSkill skill,
+    int maximum, {
+    double effectMultiplier = 1.0,
+  }) {
+    return _percentAmount(
+      maximum,
+      skill.energyMaxQiPercent,
+      effectMultiplier: effectMultiplier,
+    );
+  }
+
+  int _skillBurnBaseDamage(
+    YoranBattleSkill skill, {
+    double effectMultiplier = 1.0,
+  }) {
+    return _rollPowerDamage(
+      skill.burnPowerPercent,
+      effectMultiplier: effectMultiplier,
+    );
+  }
+
+  int _scaleCompanionDamage(int value) {
+    if (value <= 0) return 0;
+    // 伙伴吃敌我强弱修正，但不继承主角武器威力；角色星级单独作用于援战效果。
+    return math.max(1, (value * _playerDamageMultiplier).round());
+  }
+
   String _modifierLabel(int value, String label) {
     if (value == 0) return '';
     return ' ${value > 0 ? '+' : ''}$value$label';
@@ -2609,8 +4134,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       name: name.isEmpty ? '技能攻击' : name,
       detail: '暂无技能描述',
       quality: 3,
-      minDamage: 10,
-      maxDamage: 15,
+      powerPercent: 120,
       hitBonus: 4,
       energyCost: 12,
       cooldown: 1,
@@ -2740,6 +4264,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _selectedCompanionSkillId = null;
     _activeAssistCompanion = null;
     _activeAssistSkill = null;
+    _activeSkillVfx = null;
+    _skillVfxController.reset();
+    _skillImpactController.reset();
     _companionAssistController.reset();
     _usedCompanionSkillIds.clear();
     _companionAssistUsedThisRound = false;
@@ -2887,6 +4414,184 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     unawaited(_combatTextController.forward(from: 0));
   }
 
+
+  Map<String, dynamic> _effectiveVfxSpec(YoranBattleSkill skill) {
+    if (skill.vfxSpec.isNotEmpty) return _sanitizeBattleVfxSpec(skill.vfxSpec);
+    return const <String, dynamic>{};
+  }
+
+  int _skillVfxDurationMs(YoranBattleSkill skill) {
+    final spec = _effectiveVfxSpec(skill);
+    if (spec.isEmpty) return 0;
+    return YoranBattleSkill._asInt(spec['duration_ms'], 1100).clamp(550, 3000).toInt();
+  }
+
+  double _skillVfxImpactProgress(YoranBattleSkill skill) {
+    final spec = _effectiveVfxSpec(skill);
+    final rawSequence = spec['sequence'];
+    if (rawSequence is! List || rawSequence.isEmpty) return .52;
+
+    double? best;
+    for (final raw in rawSequence.take(10)) {
+      final item = YoranBattleSkill._stringMap(raw);
+      if (item.isEmpty) continue;
+      final type = '${item['type'] ?? ''}'.trim().toLowerCase();
+      final at = _battleVfxDouble(item['at']).clamp(0.0, .95).toDouble();
+      final duration = _battleVfxDouble(item['duration'], .3).clamp(.08, 1.0).toDouble();
+      double? candidate;
+      if (<String>{
+        'explosion', 'shockwave', 'space_crack', 'screen_flash',
+        'impact_lines', 'ground_crack', 'particle_burst', 'petal_burst',
+      }.contains(type)) {
+        candidate = at + math.min(.05, duration * .16);
+      } else if (<String>{
+        'slash', 'crescent_wave', 'projectile', 'projectile_swarm',
+        'beam', 'dragon_trail', 'lotus', 'meteor', 'trail',
+      }.contains(type)) {
+        candidate = at + duration * .70;
+      } else if (<String>{
+        'lightning', 'ice_shards', 'fire_particles', 'force_field',
+      }.contains(type)) {
+        candidate = at + duration * .42;
+      }
+      if (candidate != null && candidate >= .24) {
+        best = best == null ? candidate : math.min(best, candidate);
+      }
+    }
+    return (best ?? .52).clamp(.30, .82).toDouble();
+  }
+
+  bool _skillLooksLikeSlash(YoranBattleSkill skill) {
+    final spec = _effectiveVfxSpec(skill);
+    if ('${spec['style'] ?? ''}'.trim().toLowerCase() == 'slash' ||
+        '${spec['visual_identity'] ?? ''}'.trim().toLowerCase() == 'weapon_slash') {
+      return true;
+    }
+    final rawSequence = spec['sequence'];
+    if (rawSequence is List) {
+      return rawSequence.take(10).any((raw) {
+        final type = '${YoranBattleSkill._stringMap(raw)['type'] ?? ''}'.trim().toLowerCase();
+        return type == 'slash' ||
+            type == 'crescent_wave' ||
+            type == 'blade_manifest' ||
+            type == 'space_crack';
+      });
+    }
+    return RegExp(r'斩|刀|剑').hasMatch(skill.name);
+  }
+
+  int _skillHitStopMs(YoranBattleSkill? skill, bool critical) {
+    if (skill == null || !skill.hasVfx) return critical ? 120 : 60;
+    final style = '${skill.vfxSpec['style'] ?? ''}'.trim().toLowerCase();
+    var milliseconds = 48 + skill.quality.clamp(1, 10) * 4;
+    if (_skillLooksLikeSlash(skill)) milliseconds += 18;
+    final intensity = YoranBattleSkill._asInt(skill.vfxSpec['intensity'], skill.quality);
+    if (style == 'ultimate' || intensity >= 8) milliseconds += 14;
+    if (critical) milliseconds += 40;
+    return milliseconds.clamp(58, 150).toInt();
+  }
+
+  void _startSkillVfx(
+    YoranBattleSkill skill, {
+    required bool hit,
+    required bool critical,
+  }) {
+    final spec = _effectiveVfxSpec(skill);
+    if (spec.isEmpty || !mounted) return;
+    final duration = _skillVfxDurationMs(skill);
+    _skillVfxController
+      ..stop()
+      ..duration = Duration(milliseconds: duration)
+      ..value = 0;
+    _skillImpactController.reset();
+    setState(() {
+      _activeSkillVfx = skill;
+      _activeSkillVfxHit = hit;
+      _activeSkillVfxCritical = critical;
+    });
+    unawaited(_skillVfxController.forward());
+  }
+
+  Future<bool> _advancePlayerSkillToImpact(
+    YoranBattleSkill? skill, {
+    required bool hit,
+    required bool critical,
+  }) async {
+    if (skill == null || !skill.hasVfx) {
+      unawaited(_playerAttackController.forward(from: 0));
+      return _pause(245);
+    }
+
+    _startSkillVfx(skill, hit: hit, critical: critical);
+    final duration = _skillVfxDurationMs(skill);
+    final impactMs = math.max(245, (duration * _skillVfxImpactProgress(skill)).round());
+    const attackLeadMs = 245;
+    final chargeMs = math.max(0, impactMs - attackLeadMs);
+    if (chargeMs > 0 && !await _pause(chargeMs)) return false;
+    unawaited(_playerAttackController.forward(from: 0));
+    return _pause(attackLeadMs);
+  }
+
+  Future<bool> _advanceCompanionSkillToImpact(
+    YoranBattleSkill skill,
+  ) async {
+    if (!skill.hasVfx) return _pause(260);
+    _startSkillVfx(skill, hit: true, critical: false);
+    final duration = _skillVfxDurationMs(skill);
+    final impactMs = math.max(260, (duration * _skillVfxImpactProgress(skill)).round());
+    return _pause(impactMs);
+  }
+
+  Future<bool> _performSkillHitStop(
+    YoranBattleSkill? skill, {
+    required bool critical,
+    bool stopPlayerAttack = true,
+  }) async {
+    final stopMs = _skillHitStopMs(skill, critical);
+    if (stopPlayerAttack && _playerAttackController.isAnimating) {
+      _playerAttackController.stop(canceled: false);
+    }
+    final shouldFreezeVfx = skill != null && skill.hasVfx && _skillVfxController.isAnimating;
+    if (shouldFreezeVfx) _skillVfxController.stop(canceled: false);
+
+    unawaited(critical ? HapticFeedback.heavyImpact() : HapticFeedback.mediumImpact());
+    if (!await _pause(stopMs)) return false;
+
+    if (stopPlayerAttack && _playerAttackController.value < 1) {
+      unawaited(_playerAttackController.forward());
+    }
+    if (shouldFreezeVfx && _skillVfxController.value < 1) {
+      unawaited(_skillVfxController.forward());
+    }
+    unawaited(_skillImpactController.forward(from: 0));
+    return true;
+  }
+
+  Widget _buildSkillVfxOverlay() {
+    final skill = _activeSkillVfx;
+    if (skill == null || !skill.hasVfx) return const SizedBox.shrink();
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: AnimatedBuilder(
+          animation: _skillVfxController,
+          builder: (_, __) => AnimatedBuilder(
+            animation: _skillImpactController,
+            builder: (_, __) => CustomPaint(
+              painter: _BattleSkillVfxPainter(
+                spec: skill.vfxSpec,
+                progress: _skillVfxController.value,
+                impactProgress: _skillImpactController.value,
+                targetSelf: skill.isSelfAction,
+                hit: _activeSkillVfxHit,
+                critical: _activeSkillVfxCritical,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _useSkill([String skillName = '普通攻击']) async {
     if (!_canAct) return;
     final skill = _skillFor(skillName);
@@ -2942,13 +4647,14 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           )
         : 0;
     final damage = hit
-        ? _rollBetween(skill.minDamage, skill.maxDamage) + exposedExtraDamage
+        ? _rollSkillDamage(skill) + exposedExtraDamage
         : 0;
 
+    final skillEnergyGain = _skillEnergyGain(skill, _playerMaxQi);
     setState(() {
       _tickSkillCooldowns();
       _playerQi = _clampPlayerQi(
-        _playerQi - skill.energyCost + skill.energyGain,
+        _playerQi - skill.energyCost + skillEnergyGain,
       );
       if (skill.healthCost > 0) {
         _playerHp = _clampPlayerHp(_playerHp - skill.healthCost);
@@ -2960,18 +4666,19 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
     await _resolvePlayerAttack(
       actionName: skill.name,
+      skillVfx: skill,
       hit: hit,
       critical: critical,
       damage: damage,
       burnTurns: skill.burnTurns,
-      burnDamage: skill.burnDamage,
+      burnDamage: _skillBurnBaseDamage(skill),
       exposes: skill.exposes,
       exposeHitBonus: skill.exposeHitBonus,
-      exposeExtraDamageMin: skill.exposeExtraDamageMin,
-      exposeExtraDamageMax: skill.exposeExtraDamageMax,
+      exposeExtraDamageMin: _powerDamageMin(skill.exposeExtraPowerPercent),
+      exposeExtraDamageMax: _powerDamageMax(skill.exposeExtraPowerPercent),
       consumeExpose: exposed,
       piercesGuard: skill.piercesGuard,
-      healAmount: skill.healAmount,
+      healAmount: _skillHealAmount(skill, _playerMaxHp),
       lifestealPercent: skill.lifestealPercent,
       stunTurns: skill.stunTurns,
       successText: '攻击正中目标，',
@@ -2989,13 +4696,15 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   Future<void> _useSelfSkill(YoranBattleSkill skill) async {
     if (!_canAct) return;
     final healthAfterCost = _clampPlayerHp(_playerHp - skill.healthCost);
+    final healAmount = _skillHealAmount(skill, _playerMaxHp);
+    final energyGain = _skillEnergyGain(skill, _playerMaxQi);
     final recovered = math.min(
-      skill.healAmount,
+      healAmount,
       _playerMaxHp - healthAfterCost,
     );
     final qiBefore = _playerQi;
     final qiAfter = _clampPlayerQi(
-      _playerQi - skill.energyCost + skill.energyGain,
+      _playerQi - skill.energyCost + energyGain,
     );
     final restoredEnergy = math.max(0, qiAfter - qiBefore);
     setState(() {
@@ -3023,13 +4732,17 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       }
     });
     _actionFocus.unfocus();
+    if (skill.hasVfx) {
+      _startSkillVfx(skill, hit: true, critical: false);
+      unawaited(_skillImpactController.forward(from: 0));
+    }
     _addLog(
       _BattleLogEntry(
         label: skill.name,
         before: recovered > 0
             ? '你运转${skill.name}，恢复了 $recovered 点生命。'
             : skill.resting
-                ? '你放缓呼吸并调整状态，恢复了${skill.energyGain}点精力。'
+                ? '你放缓呼吸并调整状态，恢复了$restoredEnergy点精力。'
             : skill.guarding
             ? '你稳住重心并集中注意，准备承受${_enemyIntentTitle}。'
             : skill.dodging
@@ -3040,7 +4753,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             '下次伤害降低${_playerGuardReductionPercent}%',
           if (skill.dodging)
             '敌方命中难度提高至${11 + _playerDodgeDifficultyBonus}',
-          if (skill.energyGain > 0) '精力+${skill.energyGain}',
+          if (restoredEnergy > 0) '精力+$restoredEnergy',
           if (skill.healthCost > 0) '生命-${skill.healthCost}',
         ].join(' · '),
         tone: _BattleLogTone.success,
@@ -3139,11 +4852,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     final critical = baseCritical || accessoryCritical;
     final baseDamage = !success
         ? 0
-        : lethal
-            ? _rollBetween(18, 28)
-            : tactical
-                ? _rollBetween(7, 11)
-                : _rollBetween(5, 8);
+        : _rollPowerDamage(
+            lethal ? 230 : (tactical ? 90 : 65),
+          );
     final exposedExtraDamage = success && exposed && _enemyExposedExtraDamageMax > 0
         ? _rollBetween(
             _enemyExposedExtraDamageMin,
@@ -3163,8 +4874,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       damage: damage,
       exposes: tactical,
       exposeHitBonus: tactical ? 2 : 0,
-      exposeExtraDamageMin: tactical ? 3 : 0,
-      exposeExtraDamageMax: tactical ? 5 : 0,
+      exposeExtraDamageMin: tactical ? _powerDamageMin(40) : 0,
+      exposeExtraDamageMax: tactical ? _powerDamageMax(40) : 0,
       consumeExpose: exposed,
       piercesGuard: tactical,
       successText: tactical
@@ -3237,6 +4948,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
   Future<void> _resolvePlayerAttack({
     required String actionName,
+    YoranBattleSkill? skillVfx,
     required bool hit,
     required int damage,
     required String successText,
@@ -3262,22 +4974,18 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     });
     _actionFocus.unfocus();
 
-    unawaited(_playerAttackController.forward(from: 0));
-    // 这是攻击冲刺到“命中点”的时间
-    if (!await _pause(245)) return; 
+    // 有 vfx_spec 时，先按技能自己的时间轴蓄力/飞行，在真正的视觉命中点
+    // 再进入结算；没有 VFX 的普通攻击继续沿用原来的 245ms 冲刺命中点。
+    if (!await _advancePlayerSkillToImpact(
+      skillVfx,
+      hit: hit,
+      critical: critical,
+    )) return;
 
     if (hit) {
-      // ===== 新增：卡肉感 (Hit-Stop) =====
-      // 在武器接触的瞬间，先给一次短促震动反馈
-      if (critical) {
-        unawaited(HapticFeedback.heavyImpact());
-      } else {
-        unawaited(HapticFeedback.selectionClick()); // 轻微的接触感
-      }
-      
-      // 画面冻结：普通攻击卡顿 60ms，暴击卡顿 120ms (模拟武器陷入肉体或护甲的阻力)
-      if (!await _pause(critical ? 120 : 60)) return; 
-      // =================================
+      // 真正的“卡刀”：接触帧同时暂停角色攻击动画和技能 VFX。
+      // 斩击/终结技/高品质以及暴击会得到更明显但仍很短的 hit-stop。
+      if (!await _performSkillHitStop(skillVfx, critical: critical)) return;
 
       var resolvedDamage = critical ? (damage * 1.6).round() : damage;
       resolvedDamage = _scalePlayerDamage(resolvedDamage);
@@ -3759,8 +5467,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
 
     final healthAfterCost = _clampEnemyHp(_enemyHp - skill.healthCost);
+    final enemyEnergyGain = _skillEnergyGain(skill, 100);
     setState(() {
-      _enemyQi = _clampEnemyQi(_enemyQi - skill.energyCost + skill.energyGain);
+      _enemyQi = _clampEnemyQi(_enemyQi - skill.energyCost + enemyEnergyGain);
       _enemyHp = healthAfterCost;
       if (skill.cooldown > 0) {
         _enemySkillCooldowns[skill.name] = skill.cooldown;
@@ -3768,7 +5477,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     });
 
     if (skill.isSelfAction) {
-      final recovered = math.min(skill.healAmount, _enemyMaxHp - _enemyHp);
+      final recovered = math.min(
+        _skillHealAmount(skill, _enemyMaxHp),
+        _enemyMaxHp - _enemyHp,
+      );
       if (recovered > 0) {
         setState(() => _enemyHp = _clampEnemyHp(_enemyHp + recovered));
         _showCombatText(
@@ -3789,7 +5501,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                       : '$_enemyName发动了${skill.name}。',
           meta: <String>[
             if (skill.energyCost > 0) '精力-${skill.energyCost}',
-            if (skill.energyGain > 0) '精力+${skill.energyGain}',
+            if (enemyEnergyGain > 0) '精力+$enemyEnergyGain',
             if (skill.healthCost > 0) '生命-${skill.healthCost}',
             if (skill.cooldown > 0) 'CD${skill.cooldown}',
           ].join(' · '),
@@ -3847,7 +5559,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     if (!await _pause(critical ? 120 : 60)) return true;
     // =================================
 
-    final rolledDamage = _rollBetween(skill.minDamage, skill.maxDamage);
+    final rolledDamage = _rollSkillDamage(skill);
     var damage = _scaleOpponentDamage(
       critical ? (rolledDamage * 1.5).round() : rolledDamage,
     );
@@ -3858,17 +5570,19 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       damage = math.max(1, (damage * remainingPercent / 100).round());
     }
     final recovered = math.min(
-      skill.healAmount + (damage * skill.lifestealPercent / 100).round(),
+      _skillHealAmount(skill, _enemyMaxHp) +
+          (damage * skill.lifestealPercent / 100).round(),
       _enemyMaxHp - _enemyHp,
     );
     setState(() {
       _playerHp = _clampPlayerHp(_playerHp - damage);
       if (recovered > 0) _enemyHp = _clampEnemyHp(_enemyHp + recovered);
-      if (skill.burnTurns > 0 && skill.burnDamage > 0) {
+      final enemyBurnBase = _skillBurnBaseDamage(skill);
+      if (skill.burnTurns > 0 && enemyBurnBase > 0) {
         _playerBurnTurns = math.max(_playerBurnTurns, skill.burnTurns);
         _playerBurnDamage = math.max(
           _playerBurnDamage,
-          _scaleOpponentDamage(skill.burnDamage),
+          _scaleOpponentDamage(enemyBurnBase),
         );
       }
       if (skill.stunTurns > 0) {
@@ -3903,7 +5617,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         tone: _BattleLogTone.enemyDamage,
       ),
     );
-    if (skill.burnTurns > 0 && skill.burnDamage > 0) {
+    if (skill.burnTurns > 0 && _playerBurnDamage > 0) {
       _addLog(
         _BattleLogEntry(
           label: '持续伤害',
@@ -3942,7 +5656,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     final sourceName = _companionCounterName.isEmpty ? '支援角色' : _companionCounterName;
     final damage = math.min(
       _enemyHp,
-      _scalePlayerDamage(_rollBetween(_companionCounterMin, _companionCounterMax)),
+      _scaleCompanionDamage(_rollBetween(_companionCounterMin, _companionCounterMax)),
     );
     setState(() {
       _enemyHp = _clampEnemyHp(_enemyHp - damage);
@@ -4122,17 +5836,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     // =================================================
 
     // 5. 继续计算伤害并扣血
-    final baseMin = _currentEnemy.basicAttackMin.clamp(1, 25).toInt();
-    final baseMax = math
-        .max(baseMin, _currentEnemy.basicAttackMax)
-        .clamp(1, 25)
-        .toInt();
-    final rolledDamage = heavy
-        ? _rollBetween(
-            math.max(baseMin + 4, (baseMin * 1.8).round()),
-            math.max(baseMax + 8, (baseMax * 2.4).round()),
-          )
-        : _rollBetween(baseMin, baseMax);
+    final basicPower =
+        _currentEnemy.basicAttackPowerPercent.clamp(35, 220).toInt();
+    final rolledDamage = _rollPowerDamage(
+      heavy ? (basicPower * 1.9).round() : basicPower,
+    );
     var damage = _scaleOpponentDamage(
       critical ? (rolledDamage * 1.5).round() : rolledDamage,
     );
@@ -4525,6 +6233,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             ),
             child: _buildBattleBody(),
           ),
+          // 技能 VFX 位于战斗舞台之上、结算/入场遮罩之下。
+          // 它只读取已持久化的 vfx_spec，战斗过程中绝不请求 LLM。
+          _buildSkillVfxOverlay(),
           _buildCompanionAssistOverlay(),
           if (_entranceVisible)
             _BattleEntranceOverlay(

@@ -10,10 +10,58 @@ Future<void> showNovelStoreSheet(
   BuildContext context,
   NovelGameController controller,
 ) async {
-  await _showNovelSheet<void>(
-    context,
-    heightFactor: .78,
-    child: _StoreSheet(controller: controller),
+  await showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: '关闭道具兑换',
+    barrierColor: Colors.black.withOpacity(.28),
+    transitionDuration: const Duration(milliseconds: 180),
+    pageBuilder: (dialogContext, _, __) {
+      final media = MediaQuery.of(dialogContext);
+      final compact = media.size.width < 600;
+      final shortViewport = media.size.height < 620;
+      final heightFactor = shortViewport ? .94 : (compact ? .84 : .78);
+
+      return Material(
+        color: Colors.transparent,
+        child: SafeArea(
+          bottom: false,
+          child: Align(
+            alignment: compact ? Alignment.bottomCenter : Alignment.center,
+            child: FractionallySizedBox(
+              widthFactor: compact ? 1 : .88,
+              heightFactor: heightFactor,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFFFFFF),
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: _StoreSheet(controller: controller),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, .035),
+          end: Offset.zero,
+        ).animate(curved),
+        child: FadeTransition(opacity: curved, child: child),
+      );
+    },
   );
 }
 
@@ -49,86 +97,70 @@ class _StoreSheetState extends State<_StoreSheet> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
+        final viewportWidth = MediaQuery.of(context).size.width;
+        final horizontalPadding = viewportWidth >= 600 ? 22.0 : 12.0;
         return Stack(
-          children: [
-            _SheetScaffold(
-              title: '道具兑换',
-              subtitle: '用星块换取故事中的特殊机会',
-              trailing: Container(
-                padding: const EdgeInsets.fromLTRB(5, 3, 10, 3),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.14),
-                  borderRadius: BorderRadius.circular(7),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(.07),
-                    width: 0.5,
+          fit: StackFit.expand,
+          children: <Widget>[
+            ColoredBox(
+              color: const Color(0xFFFFFFFF),
+              child: Column(
+                children: <Widget>[
+                  _StoreHeader(
+                    score: widget.controller.score.total,
+                    onClose: () => Navigator.of(context).pop(),
                   ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: Image.asset(
-                        'assets/images/xing.webp',
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${widget.controller.score.total}',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.96),
-                        fontSize: 13.5,
-                        fontFamily: 'MiSans', // 推荐使用现代无衬线字体
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
-                ),
+                  Expanded(
+                    child: _loading
+                        ? const Center(
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: Color(0xFF7C8B96),
+                            ),
+                          )
+                        : widget.controller.shopItems.isEmpty
+                            ? const _EmptyState(text: '暂无可兑换物品')
+                            : ListView.separated(
+                                padding: EdgeInsets.fromLTRB(
+                                  horizontalPadding,
+                                  12,
+                                  horizontalPadding,
+                                  30,
+                                ),
+                                itemCount: widget.controller.shopItems.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 10),
+                                itemBuilder: (context, index) {
+                                  final item =
+                                      widget.controller.shopItems[index];
+                                  final affordable =
+                                      widget.controller.score.total >= item.price;
+                                  return _ItemCard(
+                                    iconUrl: item.imageUrl,
+                                    itemType: item.itemType,
+                                    fallback: _itemFallback(item.itemType),
+                                    name: item.name,
+                                    description: item.description,
+                                    badge: '已拥有 ${item.quantity}',
+                                    actionText: '${item.price}',
+                                    showPointIcon: true,
+                                    loading: busy == item.itemType,
+                                    enabled: affordable && busy.isEmpty,
+                                    onAction: () async {
+                                      if (busy.isNotEmpty) return;
+                                      setState(() => busy = item.itemType);
+                                      try {
+                                        await widget.controller.buyShopItem(item);
+                                      } finally {
+                                        if (mounted) setState(() => busy = '');
+                                      }
+                                    },
+                                  );
+                                },
+                              ),
+                  ),
+                ],
               ),
-              child: _loading 
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: Colors.white.withOpacity(.4),
-                      ),
-                    )
-                  : widget.controller.shopItems.isEmpty
-                  ? const _EmptyState(text: '暂无可兑换物品')
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 30),
-                      itemCount: widget.controller.shopItems.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final item = widget.controller.shopItems[index];
-                        final affordable =
-                            widget.controller.score.total >= item.price;
-                        return _ItemCard(
-                          iconUrl: item.imageUrl,
-                          itemType: item.itemType,
-                          fallback: _itemFallback(item.itemType),
-                          name: item.name,
-                          description: item.description,
-                          badge: '已拥有 ${item.quantity}',
-                          actionText: '${item.price}',
-                          showPointIcon: true,
-                          loading: busy == item.itemType,
-                          enabled: affordable && busy.isEmpty,
-                          onAction: () async {
-                            if (busy.isNotEmpty) return;
-                            setState(() => busy = item.itemType);
-                            try {
-                              await widget.controller.buyShopItem(item);
-                            } finally {
-                              if (mounted) setState(() => busy = '');
-                            }
-                          },
-                        );
-                      },
-                    ),
             ),
             if (widget.controller.hudEvent != null)
               Positioned.fill(
@@ -143,6 +175,107 @@ class _StoreSheetState extends State<_StoreSheet> {
     );
   }
 }
+
+class _StoreHeader extends StatelessWidget {
+  const _StoreHeader({
+    required this.score,
+    required this.onClose,
+  });
+
+  final int score;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 10, 12),
+      decoration: const BoxDecoration(
+        color: Color(0xFFFFFFFF),
+      ),
+      child: Row(
+        children: <Widget>[
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  '道具兑换',
+                  style: TextStyle(
+                    color: Color(0xFF1C2227),
+                    fontSize: 17,
+                    height: 1.1,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .8,
+                  ),
+                ),
+                SizedBox(height: 5),
+                Text(
+                  '用星块换取故事中的特殊机会',
+                  style: TextStyle(
+                    color: Color(0xFF7B848B),
+                    fontSize: 10.5,
+                    height: 1.2,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: .2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            height: 30,
+            padding: const EdgeInsets.symmetric(horizontal: 9),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF3F5F3),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                SizedBox(
+                  width: 17,
+                  height: 17,
+                  child: Image.asset(
+                    'assets/images/xing.webp',
+                    fit: BoxFit.contain,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '$score',
+                  style: const TextStyle(
+                    color: Color(0xFF283038),
+                    fontSize: 12.5,
+                    fontFamily: 'MiSans',
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onClose,
+              borderRadius: BorderRadius.zero,
+              child: const SizedBox(
+                width: 34,
+                height: 34,
+                child: Icon(
+                  Icons.close,
+                  size: 19,
+                  color: Color(0xFF59636B),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 class _ItemCard extends StatelessWidget {
   const _ItemCard({
@@ -175,28 +308,21 @@ class _ItemCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(11),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: Colors.white.withOpacity(.055),
-          width: 0.5,
-        ),
+      decoration: const BoxDecoration(
+        color: Color(0xFFFAFBFA),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          // 图标区域：增加黑底色托盘，让图片更聚焦
+          // 图标区域：纯白卡片中的浅灰图标托盘
           Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
               Container(
                 width: 54,
                 height: 54,
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.18),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white.withOpacity(.04)),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF0F3F0),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: NovelArtwork(
@@ -214,18 +340,13 @@ class _ItemCard extends StatelessWidget {
                   bottom: -6,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E201E),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: Colors.white.withOpacity(0.12), width: 0.5),
-                      boxShadow: const <BoxShadow>[
-                        BoxShadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 2)),
-                      ],
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF626A66),
                     ),
                     child: Text(
                       badge,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.9),
+                        color: Colors.white,
                         fontSize: 8.5,
                         fontWeight: FontWeight.w600,
                       ),
@@ -246,7 +367,7 @@ class _ItemCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.95),
+                    color: const Color(0xFF1C2227),
                     fontSize: 14.5,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.5,
@@ -258,7 +379,7 @@ class _ItemCard extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.55), // 提高描述的可读性
+                    color: const Color(0xFF6C747B),
                     fontSize: 11.5,
                     height: 1.4,
                   ),
@@ -267,35 +388,28 @@ class _ItemCard extends StatelessWidget {
             ),
           ),
           
-          // 按钮区域：采用具有真实点击欲望的立体悬浮按钮
+          // 购买按钮：只保留一个明确的主题色操作面，弱化其余结构线。
           if (actionText.isNotEmpty) ...<Widget>[
             const SizedBox(width: 12),
             AnimatedOpacity(
               duration: const Duration(milliseconds: 180),
-              opacity: enabled || loading ? 1 : .34,
+              opacity: 1,
               child: Material(
-                color: Colors.white.withOpacity(enabled ? .055 : .025),
-                borderRadius: BorderRadius.circular(7),
+                color: enabled ? NovelPalette.accent : const Color(0xFFE2E6E3),
+                borderRadius: BorderRadius.zero,
                 child: InkWell(
                   onTap: loading || !enabled ? null : onAction,
-                  borderRadius: BorderRadius.circular(7),
-                  splashColor: Colors.white.withOpacity(.04),
-                  highlightColor: Colors.white.withOpacity(.025),
+                  borderRadius: BorderRadius.zero,
+                  splashColor: Colors.white24,
+                  highlightColor: Colors.white10,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(7),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(enabled ? .10 : .045),
-                        width: 0.5,
-                      ),
-                    ),
                     child: loading
                       ? SizedBox.square(
                           dimension: 14,
                           child: CircularProgressIndicator(
-                            strokeWidth: 1.5, 
-                            color: Colors.white.withOpacity(.7)
+                            strokeWidth: 1.5,
+                            color: enabled ? NovelPalette.accentDark : const Color(0xFF7D8580),
                           ),
                         )
                       : Row(
@@ -314,10 +428,12 @@ class _ItemCard extends StatelessWidget {
                             ],
                             Text(
                               actionText,
-                              style: const TextStyle(
-                                color: Colors.white,
+                              style: TextStyle(
+                                color: enabled
+                                    ? NovelPalette.accentDark
+                                    : const Color(0xFF858C87),
                                 fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
                           ],
@@ -339,7 +455,7 @@ class _ItemCard extends StatelessWidget {
       'material' => '材料',
       'quest' => '任务道具',
       'gift' => '赠礼道具',
-      'blind_box' => '福袋',
+      'skill_book' => '技能道具',
       'lucky_card' => '特殊道具',
       _ => '故事物品',
     };
@@ -359,13 +475,13 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(Icons.inventory_2_outlined, size: 32, color: Colors.white.withOpacity(.15)),
+            const Icon(Icons.inventory_2_outlined, size: 32, color: Color(0xFFB2BAC0)),
             const SizedBox(height: 12),
             Text(
               text,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.white.withOpacity(.45),
+                color: const Color(0xFF7B848B),
                 fontSize: 13,
                 letterSpacing: 1.5,
               ),
@@ -382,7 +498,7 @@ String _itemFallback(String type) {
     'fate_card' => '命',
     'revert_card' => '溯',
     'gift' => '绊',
-    'blind_box' => '福',
+    'skill_book' => '技',
     'image_card' => '幻',
     'lucky_card' => '运',
     _ => '物',

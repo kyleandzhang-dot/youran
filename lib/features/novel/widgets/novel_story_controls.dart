@@ -681,12 +681,12 @@ class NovelBottomArchiveBar extends StatelessWidget {
   ];
 
   static const List<String> _iconAssets = <String>[
-    'assets/images/novel/nav_story.png',
-    'assets/images/novel/nav_character.png',
-    'assets/images/novel/nav_character_bond.png',
-    'assets/images/novel/nav_inventory.png',
-    'assets/images/novel/nav_journey.png',
-    'assets/images/novel/nav_world.png',
+    'assets/images/novel/nav_story.webp',
+    'assets/images/novel/nav_character.webp',
+    'assets/images/novel/nav_character_bond.webp',
+    'assets/images/novel/nav_inventory.webp',
+    'assets/images/novel/nav_journey.webp',
+    'assets/images/novel/nav_world.webp',
   ];
 
   static const List<IconData> _fallbackIcons = <IconData>[

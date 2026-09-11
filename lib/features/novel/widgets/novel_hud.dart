@@ -788,34 +788,187 @@ class NovelArchiveRail extends StatelessWidget {
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 390;
 
-    // 完全复用原来底部的 _StoryImageAction 美术：
-    // 原图片、原尺寸、原文字、原透明度、原点击效果都不改。
-    // 唯一变化只是从“底部横排”移动到“右侧竖排”。
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
+    // 右下角按钮统一放在一整片“可读性区域”上，而不是给每个按钮单独加黑底。
+    // 遮罩在按钮区域内保持足够深，向左、向上同时羽化到完全透明；
+    // 这样浅色剧情背景下白色 PNG 也能稳定看清，同时不会出现卡片边框。
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.centerRight,
       children: <Widget>[
-        _StoryImageAction(
-          asset: 'assets/images/relation.webp',
-          label: '人物',
-          compact: compact,
-          onTap: onCharacters,
+        Positioned(
+          left: compact ? -112 : -138,
+          right: compact ? -30 : -38,
+          top: compact ? -46 : -58,
+          bottom: compact ? -34 : -44,
+          child: const IgnorePointer(
+            child: CustomPaint(
+              painter: _BottomRightReadabilityMaskPainter(),
+              child: SizedBox.expand(),
+            ),
+          ),
         ),
-        SizedBox(height: compact ? 5 : 7),
-        _StoryImageAction(
-          asset: 'assets/images/journey.webp',
-          label: '经历',
-          compact: compact,
-          onTap: onJourney,
-        ),
-        SizedBox(height: compact ? 5 : 7),
-        _StoryImageAction(
-          asset: 'assets/images/inventory.webp',
-          label: '背包',
-          compact: compact,
-          onTap: onInventory,
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            _AlwaysWhiteStoryImageAction(
+              asset: 'assets/images/relation.webp',
+              label: '人物',
+              compact: compact,
+              onTap: onCharacters,
+            ),
+            SizedBox(height: compact ? 5 : 7),
+            _AlwaysWhiteStoryImageAction(
+              asset: 'assets/images/journey.webp',
+              label: '经历',
+              compact: compact,
+              onTap: onJourney,
+            ),
+            SizedBox(height: compact ? 5 : 7),
+            _AlwaysWhiteStoryImageAction(
+              asset: 'assets/images/inventory.webp',
+              label: '背包',
+              compact: compact,
+              onTap: onInventory,
+            ),
+          ],
         ),
       ],
+    );
+  }
+}
+
+/// 右下角 HUD 的二维羽化暗场。
+///
+/// 先铺一层较深的黑，再分别用纵向、横向 alpha 渐变相乘：
+/// 按钮所在的右下区域保持稳定暗度，左边和上边自然消失，没有可见矩形边缘。
+class _BottomRightReadabilityMaskPainter extends CustomPainter {
+  const _BottomRightReadabilityMaskPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bounds = Offset.zero & size;
+    canvas.saveLayer(bounds, Paint());
+
+    canvas.drawRect(
+      bounds,
+      Paint()..color = const Color(0xC7080A0E),
+    );
+
+    // 向上羽化：真正的按钮区域仍保持较深，只在区域上沿快速而柔和地消失。
+    canvas.drawRect(
+      bounds,
+      Paint()
+        ..blendMode = BlendMode.dstIn
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            Color(0x00FFFFFF),
+            Color(0x48FFFFFF),
+            Color(0xD8FFFFFF),
+            Color(0xFFFFFFFF),
+          ],
+          stops: <double>[0, .15, .34, .62],
+        ).createShader(bounds),
+    );
+
+    // 向左羽化：让遮罩像环境暗部一样融进画面，而不是一块黑色矩形。
+    canvas.drawRect(
+      bounds,
+      Paint()
+        ..blendMode = BlendMode.dstIn
+        ..shader = const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: <Color>[
+            Color(0x00FFFFFF),
+            Color(0x2AFFFFFF),
+            Color(0xC8FFFFFF),
+            Color(0xFFFFFFFF),
+          ],
+          stops: <double>[0, .20, .52, .76],
+        ).createShader(bounds),
+    );
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _BottomRightReadabilityMaskPainter oldDelegate) =>
+      false;
+}
+
+/// 固定白色的剧情入口按钮。
+/// 不读取任何“激活 / 未激活”视觉状态：PNG、文字始终按 100% 白色绘制。
+class _AlwaysWhiteStoryImageAction extends StatelessWidget {
+  const _AlwaysWhiteStoryImageAction({
+    required this.asset,
+    required this.label,
+    required this.compact,
+    required this.onTap,
+  });
+
+  final String asset;
+  final String label;
+  final bool compact;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconSize = compact ? 25.0 : 28.0;
+    final width = compact ? 48.0 : 54.0;
+    final height = compact ? 48.0 : 54.0;
+
+    return Tooltip(
+      message: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkResponse(
+          onTap: onTap,
+          radius: compact ? 27 : 30,
+          splashColor: Colors.white.withOpacity(.08),
+          highlightColor: Colors.white.withOpacity(.04),
+          child: SizedBox(
+            width: width,
+            height: height,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                Image.asset(
+                  asset,
+                  width: iconSize,
+                  height: iconSize,
+                  fit: BoxFit.contain,
+                  color: Colors.white,
+                  colorBlendMode: BlendMode.srcIn,
+                  filterQuality: FilterQuality.high,
+                  gaplessPlayback: true,
+                ),
+                SizedBox(height: compact ? 2 : 3),
+                Text(
+                  label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: compact ? 9.0 : 9.6,
+                    height: 1,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .45,
+                    shadows: const <Shadow>[
+                      Shadow(
+                        color: Color(0xE0000000),
+                        blurRadius: 6,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1319,7 +1472,7 @@ class _RailButton extends StatelessWidget {
         child: InkResponse(
           onTap: onTap,
           radius: 24,
-          child: SizedBox(width: 43, height: 42, child: Icon(icon, color: color ?? Colors.white.withOpacity(.58), size: 19)),
+          child: SizedBox(width: 43, height: 42, child: Icon(icon, color: color ?? Colors.white, size: 19)),
         ));
   }
 }

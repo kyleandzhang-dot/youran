@@ -1144,11 +1144,10 @@ class _NovelGamePageState extends State<NovelGamePage>
         .round()
         .clamp(12, 1000)
         .toInt();
-    final basicMin = (5 * attackRatio).round().clamp(1, 25).toInt();
-    final basicMax = math
-        .max(basicMin, (8 * attackRatio).round())
-        .clamp(1, 25)
-        .toInt();
+    // 百分比威力制：开发者探索预览与正式后端保持同一基准。
+    // 普通敌人以 65% 为基础威力，再由探索品质/装备评估得到 attackRatio。
+    final basicAttackPowerPercent =
+        (65 * attackRatio).round().clamp(35, 220).toInt();
     final difficulty = switch (normalizedQuality) {
       1 => ('轻松', '约为玩家当前战力的50%'),
       2 => ('略弱', '约为玩家当前战力的70%'),
@@ -1169,8 +1168,7 @@ class _NovelGamePageState extends State<NovelGamePage>
       realm: '探索品质 $normalizedQuality',
       difficultyLabel: difficulty.$1,
       openingEstimate: difficulty.$2,
-      basicAttackMin: basicMin,
-      basicAttackMax: basicMax,
+      basicAttackPowerPercent: basicAttackPowerPercent,
       hitBonus: (4 + normalizedQuality ~/ 2 + (elite ? 1 : 0))
           .clamp(2, 10)
           .toInt(),
@@ -2299,7 +2297,51 @@ class _NovelGamePageState extends State<NovelGamePage>
                           ),
                         ),
 
-                  // 底部导航栏
+                  // 六个右侧一级导航位于亮色剧情图之上时，只做一层轻柔的环境压暗。
+                  // 核心区域保持足够对比度，但扩大羽化范围，让遮罩向左、向上自然消失，
+                  // 避免出现明显的黑块或边缘。
+                  if (showBottomNav)
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      width: desktopMode ? 220.0 : 170.0,
+                      height: desktopMode ? 600.0 : 460.0,
+                      child: IgnorePointer(
+                        child: ShaderMask(
+                          blendMode: BlendMode.dstIn,
+                          shaderCallback: (bounds) => const LinearGradient(
+                            begin: Alignment.bottomCenter,
+                            end: Alignment.topCenter,
+                            colors: <Color>[
+                              Colors.white,
+                              Colors.white,
+                              Color(0xD9FFFFFF),
+                              Color(0x66FFFFFF),
+                              Color(0x00FFFFFF),
+                            ],
+                            stops: <double>[0, .44, .66, .85, 1],
+                          ).createShader(bounds),
+                          child: const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.centerRight,
+                                end: Alignment.centerLeft,
+                                colors: <Color>[
+                                  Color(0x90000000),
+                                  Color(0x6E000000),
+                                  Color(0x46000000),
+                                  Color(0x20000000),
+                                  Color(0x00000000),
+                                ],
+                                stops: <double>[0, .22, .48, .76, 1],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // 底部导航栏（实际为右下竖向六按钮）
                   if (showBottomNav)
                     Positioned(
                       left: 0,

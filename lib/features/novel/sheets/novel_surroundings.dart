@@ -7,10 +7,10 @@ part of '../novel_sheets.dart';
 
 // ============================================================================
 // 当前场景“周围”互动页
-// 走路探索版：格子仅作为后台坐标与事件数据，不绘制格子或雾霾遮罩。
+// 走路探索版：后台沿用事件数据，前台为放大后的不规则地形；角色在局部视野中自由移动并直接发现内容。
 // ============================================================================
 
-const Color _themeGreen = NovelPalette.accent;
+const Color _themeGreen = Colors.white;
 
 typedef NovelSurroundingsPreviewBattleLauncher = Future<String?> Function({
   required String enemyName,
@@ -97,7 +97,7 @@ class NovelSurroundingsInlineDock extends StatelessWidget {
   }
 }
 
-/// 剧情页的主舞台：直接复用探索页的可移动区域。
+/// 剧情页的主舞台：复用探索页的局部视野自由走路舞台。
 ///
 /// 与底部 InlineDock 不同，这里保留探索页的横向世界、镜头跟随与纵深移动，
 /// 只是去掉独立探索页的外壳，让对白/旁白由剧情阅读器叠在舞台上。
@@ -133,20 +133,8 @@ enum _SurroundNodeType {
 }
 
 Color _surroundQualityColor(int quality) {
-  const colors = <Color>[
-    Color(0xFFE5E7EB), // 1 白
-    Color(0xFFA7F3D0), // 2 浅绿
-    Color(0xFFF9A8D4), // 3 粉
-    Color(0xFF7DD3FC), // 4 天蓝
-    Color(0xFF3B82F6), // 5 深蓝
-    Color(0xFF5F7F6A), // 6 墨茶绿
-    Color(0xFFF59E0B), // 7 橙
-    Color(0xFFA855F7), // 8 紫
-    Color(0xFFEF4444), // 9 红
-    Color(0xFFF4C95D), // 10 金
-  ];
-  final index = quality.clamp(1, 10).toInt() - 1;
-  return colors[index];
+  final normalized = quality.clamp(1, 10).toInt();
+  return Colors.white.withOpacity(.40 + normalized * .055);
 }
 
 String _surroundRewardAsset(String itemType) {
@@ -1486,7 +1474,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
             : widget.controller.locationTitle.trim().isEmpty
                 ? '当前场景'
                 : widget.controller.locationTitle.trim();
-        final title = '探索 · $sceneTitle';
+        final title = sceneTitle;
         final closeAction = widget.onClose ??
             (widget.embedded ? null : () => Navigator.of(context).maybePop());
 
@@ -1519,7 +1507,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
                           center: Alignment(0, -.08),
                           radius: 1.08,
                           colors: <Color>[
-                            Color(0x164DA26A),
+                            Color(0x16FFFFFF),
                             Color(0x0FFFFFFF),
                             Color(0x05000000),
                           ],
@@ -1716,8 +1704,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   static const int _columns = 6;
   static const int _rows = 6;
   static const int _startIndex = 20;
-  static const Color _dangerRed = Color(0xFFD96F6F);
-  static const Color _rareGold = Color(0xFFD8BF7A);
+  static const Color _dangerRed = Colors.white;
+  static const Color _rareGold = Colors.white;
 
   Map<int, _FogTileDef> _tiles = <int, _FogTileDef>{};
   final Map<int, List<_FogDrop>> _lootByTile = <int, List<_FogDrop>>{};
@@ -1735,21 +1723,28 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   bool _developerBattleOpening = false;
   String _remoteSceneKey = '';
 
-  // 走路探索：格子仍作为后台数据坐标，但不再作为 UI 展示。
+  // 走路探索：后台仍使用 6×6 数据坐标，前台完全隐藏网格并以黑暗场景自由移动。
   late final AnimationController _walkTicker;
   Duration _walkLastElapsed = Duration.zero;
   Offset _walkInput = Offset.zero;
-  Offset? _walkTapTarget; // dx = 世界 X，dy = 纵深比例。
+  Offset? _walkJoystickCenter;
+  Offset _walkJoystickKnobOffset = Offset.zero;
   double _playerWorldX = 0;
   double _playerDepth = .74;
   double _walkWorldWidth = 900;
-  double _walkStageHeight = 420;
+  double _walkWorldHeight = 760;
+  double _walkViewportWidth = 390;
+  double _walkViewportHeight = 420;
+  List<_WalkTerrainBlob> _walkTerrain = const <_WalkTerrainBlob>[];
+  int _walkTerrainSeed = -1;
+  double _walkTerrainWidth = 0;
+  double _walkTerrainHeight = 0;
   bool _walkLayoutReady = false;
   bool _playerFacingLeft = false;
   bool _playerMoving = false;
   Uint8List? _previewBackgroundBytes;
   Uint8List? _previewPortraitBytes;
-  final Set<int> _walkPendingReveal = <int>{};
+  final Set<int> _walkSensed = <int>{};
 
   bool get _remote => !widget.developerPreview;
 
@@ -1816,8 +1811,10 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       _bagQuality.clear();
       _walkLayoutReady = false;
       _playerWorldX = 0;
-      _walkTapTarget = null;
       _walkInput = Offset.zero;
+      _walkJoystickCenter = null;
+      _walkJoystickKnobOffset = Offset.zero;
+      _walkSensed.clear();
     }
     _searched.clear();
     final resolved = (payload['resolved_encounters'] is List
@@ -1845,7 +1842,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     final eventText = stringValue(asJsonMap(payload['event'])['text']).trim();
     _message = eventText.isNotEmpty
         ? eventText
-        : stringValue(payload['goal'], '在场景中自由走动并调查周围。');
+        : stringValue(payload['goal'], '在场景中自由走动，靠近后直接发现周围内容。');
   }
 
   Map<int, _FogTileDef> _generateRemoteMap(JsonMap payload) {
@@ -1910,10 +1907,12 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     _completed = false;
     _walkLayoutReady = false;
     _playerWorldX = 0;
-    _walkTapTarget = null;
     _walkInput = Offset.zero;
+    _walkJoystickCenter = null;
+    _walkJoystickKnobOffset = Offset.zero;
+    _walkSensed.clear();
     _coconutBaseReward = 1 + math.Random(_seed ^ 0x5F3759DF).nextInt(2);
-    _message = '自由走动探索。走近区域会自动发现周围内容，发现目标后可直接调查。';
+    _message = '自由探索。走近后会直接看见物品、搜刮点、危险或敌人。';
   }
 
   int _quality(math.Random random, {int min = 1, int max = 6}) {
@@ -2335,7 +2334,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         final resultQuality = _craftedQuality('削尖长棍', '藤条', bonus: 1);
         if (_consumeItem('削尖长棍') && _consumeItem('藤条')) {
           _addItem('简易椰钩', quality: resultQuality);
-          _message = '制作完成：获得「简易椰钩」· ${_qualityLabel(resultQuality)}！地图上的椰子树现在可以调查。';
+          _message = '制作完成：获得「简易椰钩」· ${_qualityLabel(resultQuality)}！靠近椰子树后即可直接互动。';
         }
       }
     });
@@ -2361,8 +2360,10 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       return;
     }
     if (!_revealed.contains(index)) {
-      _revealTile(index);
-      return;
+      setState(() {
+        _revealed.add(index);
+        _walkSensed.add(index);
+      });
     }
     _interactWithRevealed(index);
   }
@@ -2433,18 +2434,26 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
 
   Future<void> _tapRemoteTile(int index) async {
     if (widget.controller.isSurroundingsActionRunning) return;
+
+    // 前台没有“调查”步骤。第一次点真实对象时，后台静默完成 investigate，
+    // 同一次点击继续执行拾取 / 搜刮 / 交战，不让玩家多点一次。
     if (!_revealed.contains(index)) {
       try {
         await widget.controller.investigateSurroundNode('grid_$index');
+        if (!mounted) return;
+        setState(() {
+          _revealed.add(index);
+          _walkSensed.add(index);
+        });
       } catch (_) {
         if (!mounted) return;
         setState(() {
           _message = widget.controller.surroundingsError.trim().isEmpty
-              ? '探索这片区域失败，请重试。'
+              ? '这里暂时无法处理，请重试。'
               : widget.controller.surroundingsError.trim();
         });
+        return;
       }
-      return;
     }
 
     if (index == _startIndex) {
@@ -2472,10 +2481,12 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     }
     if (_isRemoteRecipeInput(tile.nodeId)) {
       setState(() {
+        _searched.add(index);
         _message = _availableRemoteRecipe == null
-            ? '「${tile.label}」是可组合材料，已保留。继续寻找与其匹配的材料。'
-            : '合成材料已经凑齐，请使用下方的“制作”按钮。';
+            ? '已收集「${tile.label}」。继续寻找与其匹配的材料。'
+            : '已收集「${tile.label}」。材料已经凑齐，可以制作。';
       });
+      _showRemoteRewardToast(text: '收集 ${tile.label}');
       return;
     }
     if (!tile.collectible) {
@@ -2595,37 +2606,16 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   void _revealTile(int index) {
     if (_revealed.contains(index)) return;
     final tile = _tileAt(index);
+    final text = _walkRevealText(tile);
     setState(() {
       _revealed.add(index);
-
-      switch (tile.kind) {
-        case _FogTileKind.empty:
-          _message = '你走进一片安静区域，视野向前展开。';
-          break;
-        case _FogTileKind.hazard:
-          _searched.add(index);
-          _message = '${tile.text} 你及时避开了危险。';
-          break;
-        case _FogTileKind.coconutTree:
-          _message = _hasHook
-              ? '发现「${tile.label}」。简易椰钩可以处理这里。'
-              : '发现「${tile.label}」。${tile.text}';
-          break;
-        case _FogTileKind.scavenge:
-          _message = '发现搜刮点「${tile.label}」。靠近后调查可以翻找物资。';
-          break;
-        case _FogTileKind.cache:
-          _message = '发现稀有搜刮点「${tile.label}」！';
-          break;
-        case _FogTileKind.normalEnemy:
-        case _FogTileKind.eliteEnemy:
-          _message = '前方发现「${tile.label}」。继续靠近可以选择交战。';
-          break;
-        default:
-          _message = '发现「${tile.label}」· ${_qualityLabel(tile.quality)}。';
-          break;
+      _walkSensed.add(index);
+      if (tile.kind == _FogTileKind.hazard) {
+        _searched.add(index);
       }
+      _message = text;
     });
+    _showRemoteRewardToast(text: text);
   }
 
   int _cascadeReveal(int origin) {
@@ -2657,7 +2647,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
 
   void _interactWithRevealed(int index) {
     if (index == _startIndex) {
-      setState(() => _message = '这里是探索起点。继续走动即可调查周围，也可以随时安全撤离。');
+      setState(() => _message = '这里是探索起点。继续移动会直接发现周围内容，也可以随时返回。');
       return;
     }
 
@@ -2673,9 +2663,9 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         final danger = _nearbyDanger(index);
         setState(() {
           _message = danger > 0
-              ? '周围还有 $clue 个未探索目标，同时有 $danger 处隐藏危险。'
+              ? '周围还有 $clue 处未探索内容，同时有 $danger 处隐藏危险。'
               : clue > 0
-                  ? '周围还有 $clue 个未探索目标。'
+                  ? '周围还有 $clue 处未探索内容。'
                   : '这里没有更多发现。';
         });
         break;
@@ -2687,10 +2677,10 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           setState(() => _message = '椰子还在高处。需要一件能勾住树冠的长柄工具。');
           return;
         }
+        final qualityBonus = _hookQuality >= 6 ? 1 : 0;
+        final reward = _coconutBaseReward + qualityBonus;
         setState(() {
           _searched.add(index);
-          final qualityBonus = _hookQuality >= 6 ? 1 : 0;
-          final reward = _coconutBaseReward + qualityBonus;
           _addItem(
             '椰子',
             amount: reward,
@@ -2701,9 +2691,10 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
             if (qualityBonus > 0) '高品质工具 +1',
           ];
           _message = bonusText.isEmpty
-              ? '椰钩勾住果柄——获得「椰子 ×$reward」！核心目标完成，现在可以安全撤离。'
-              : '椰钩勾住果柄——获得「椰子 ×$reward」！${bonusText.join('、')}。可以现在撤离，也可以继续寻找稀有搜刮点。';
+              ? '椰钩勾住果柄——获得「椰子 ×$reward」！现在可以返回。'
+              : '椰钩勾住果柄——获得「椰子 ×$reward」！${bonusText.join('、')}。可以现在返回，也可以继续寻找稀有搜刮点。';
         });
+        _showRemoteRewardToast(text: '获得 椰子 ×$reward');
         break;
       case _FogTileKind.branch:
         _collect(index, '木枝', quality: tile.quality);
@@ -2751,6 +2742,10 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           ? '稀有搜刮：$summary。$craftHint'
           : '搜刮完成：$summary。$craftHint';
     });
+    final total = drops.fold<int>(0, (sum, drop) => sum + drop.amount);
+    _showRemoteRewardToast(
+      text: total > 0 ? '搜刮完成 · 获得 $total 件物资' : '这里没有找到可用物品',
+    );
   }
 
   void _collect(int index, String itemName, {required int quality}) {
@@ -2762,6 +2757,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           ? '获得「$itemName」· ${_qualityLabel(quality)}。'
           : '获得「$itemName」· ${_qualityLabel(quality)}。$craftHint';
     });
+    _showRemoteRewardToast(text: '获得 $itemName');
   }
 
   void _addItem(String name, {int amount = 1, int quality = 1}) {
@@ -2799,154 +2795,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   }
 
   Color _qualityColor(int quality) {
-    if (quality >= 9) return _rareGold.withOpacity(.96);
-    if (quality >= 7) return const Color(0xFFC58AF9).withOpacity(.94);
-    if (quality >= 5) return const Color(0xFF74A8F7).withOpacity(.92);
-    if (quality >= 3) return _themeGreen.withOpacity(.90);
-    return Colors.white.withOpacity(.50);
-  }
-
-  int _withdrawBonus() => 0;
-
-  Future<void> _showWithdrawDialog() async {
-    final bonus = _withdrawBonus();
-    final entries = _bag.entries.toList();
-    await showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withOpacity(.42),
-      builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 390),
-            child: ClipRect(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(16, 15, 16, 14),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(.075),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(.11),
-                      width: .8,
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: Text(
-                              _completed ? '安全撤离 · 目标已完成' : '提前撤离 · 保留当前战利品',
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(.94),
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          Text(
-                            '自由探索',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(.40),
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 11),
-                      Container(height: 1, color: Colors.white.withOpacity(.07)),
-                      const SizedBox(height: 11),
-                      Text(
-                        entries.isEmpty
-                            ? '本轮还没有获得战利品。'
-                            : entries
-                                .map((entry) {
-                                  final q = _bagQuality[entry.key] ?? 1;
-                                  return '${entry.key}${entry.value > 1 ? ' ×${entry.value}' : ''} · ${_qualityLabel(q)}';
-                                })
-                                .join('\n'),
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(.72),
-                          fontSize: 10,
-                          height: 1.6,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: SizedBox(
-                              height: 38,
-                              child: OutlinedButton(
-                                onPressed: () => Navigator.of(dialogContext).pop(),
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(
-                                    color: Colors.white.withOpacity(.11),
-                                    width: .8,
-                                  ),
-                                  shape: const RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.zero,
-                                  ),
-                                ),
-                                child: Text(
-                                  '继续探索',
-                                  style: TextStyle(
-                                    color: Colors.white.withOpacity(.62),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 9),
-                          Expanded(
-                            child: SizedBox(
-                              height: 38,
-                              child: TextButton(
-                                onPressed: () {
-                                  Navigator.of(dialogContext).pop();
-                                  if (bonus > 0) {
-                                    setState(() {
-                                      _addItem('新鲜椰肉', amount: bonus, quality: 4);
-                                    });
-                                  }
-                                  widget.onClose?.call();
-                                },
-                                style: TextButton.styleFrom(
-                                  backgroundColor: _themeGreen,
-                                  shape: const RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.zero,
-                                  ),
-                                ),
-                                child: Text(
-                                  '确定带走并离开',
-                                  style: TextStyle(
-                                    color: Colors.black.withOpacity(.78),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
+    final normalized = quality.clamp(1, 10).toInt();
+    return Colors.white.withOpacity(.42 + normalized * .05);
   }
 
   Future<void> _pickWalkPreviewImage({required bool portrait}) async {
@@ -2981,80 +2831,267 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     }
   }
 
-  void _ensureWalkLayout(double worldWidth, double stageHeight) {
+  double _walkPlayerBaseHeight(double viewportHeight) {
+    // 局部镜头探索：角色在屏幕里更大，让视角真正贴近人物。
+    return widget.storyStage
+        ? (viewportHeight * .245).clamp(88.0, 126.0).toDouble()
+        : widget.embedded
+            ? (viewportHeight * .23).clamp(82.0, 118.0).toDouble()
+            : (viewportHeight * .255).clamp(94.0, 138.0).toDouble();
+  }
+
+  double _walkPlayerBaseWidth(double viewportHeight) {
+    final height = _walkPlayerBaseHeight(viewportHeight);
+    return widget.storyStage
+        ? height * .55
+        : widget.embedded
+            ? height * .62
+            : height * .58;
+  }
+
+  double _walkDepthScale(double depth) {
+    // 只保留很轻的纵深缩放，避免人物走到上方突然缩得太小。
+    return .98 + ((depth - .18) / .66).clamp(0.0, 1.0) * .08;
+  }
+
+  double _walkMinDepth(double worldHeight) {
+    if (worldHeight <= 0) return .5;
+    final visualHeight = _walkPlayerBaseHeight(_walkViewportHeight) * 1.06;
+    return ((visualHeight + 8.0) / worldHeight).clamp(0.0, .88).toDouble();
+  }
+
+  double _walkMaxDepth(double worldHeight) {
+    if (worldHeight <= 0) return .5;
+    return ((worldHeight - 8.0) / worldHeight).clamp(.12, 1.0).toDouble();
+  }
+
+  double _walkHorizontalMargin(double viewportHeight) {
+    return _walkPlayerBaseWidth(viewportHeight) * 1.06 / 2 + 8.0;
+  }
+
+  void _ensureWalkTerrain(double worldWidth, double worldHeight) {
+    if (_walkTerrainSeed == _seed &&
+        (_walkTerrainWidth - worldWidth).abs() < .5 &&
+        (_walkTerrainHeight - worldHeight).abs() < .5 &&
+        _walkTerrain.isNotEmpty) {
+      return;
+    }
+
+    final random = math.Random((_seed ^ 0x61C88647) & 0x7fffffff);
+    final phase = random.nextDouble() * math.pi * 2;
+    final main = <_WalkTerrainBlob>[];
+    const mainCount = 8;
+
+    for (var i = 0; i < mainCount; i++) {
+      final t = i / (mainCount - 1);
+      final xWave = math.sin(phase + t * math.pi * 2.15) * .15;
+      final xJitter = (random.nextDouble() - .5) * .08;
+      final yJitter = (random.nextDouble() - .5) * .035;
+      final center = Offset(
+        worldWidth * (.50 + xWave + xJitter).clamp(.20, .80),
+        worldHeight * (.82 - t * .64 + yJitter).clamp(.14, .86),
+      );
+      final blob = _WalkTerrainBlob(
+        center: center,
+        radiusX: worldWidth * (.175 + random.nextDouble() * .035),
+        radiusY: worldHeight * (.105 + random.nextDouble() * .028),
+        rotation: (random.nextDouble() - .5) * .42,
+        seed: random.nextInt(0x7fffffff),
+      );
+      main.add(blob);
+    }
+
+    final blobs = <_WalkTerrainBlob>[...main];
+    for (final i in <int>[2, 4, 6]) {
+      final source = main[i];
+      final direction = random.nextBool() ? 1.0 : -1.0;
+      blobs.add(
+        _WalkTerrainBlob(
+          center: Offset(
+            (source.center.dx + direction * worldWidth * (.12 + random.nextDouble() * .05))
+                .clamp(worldWidth * .11, worldWidth * .89),
+            (source.center.dy + (random.nextDouble() - .5) * worldHeight * .055)
+                .clamp(worldHeight * .10, worldHeight * .90),
+          ),
+          radiusX: worldWidth * (.115 + random.nextDouble() * .03),
+          radiusY: worldHeight * (.075 + random.nextDouble() * .022),
+          rotation: (random.nextDouble() - .5) * .55,
+          seed: random.nextInt(0x7fffffff),
+        ),
+      );
+    }
+
+    _walkTerrain = blobs;
+    _walkTerrainSeed = _seed;
+    _walkTerrainWidth = worldWidth;
+    _walkTerrainHeight = worldHeight;
+  }
+
+  bool _walkPointInsideTerrain(Offset point, {double inset = .90}) {
+    for (final blob in _walkTerrain) {
+      final dx = point.dx - blob.center.dx;
+      final dy = point.dy - blob.center.dy;
+      final cosA = math.cos(-blob.rotation);
+      final sinA = math.sin(-blob.rotation);
+      final localX = dx * cosA - dy * sinA;
+      final localY = dx * sinA + dy * cosA;
+      final rx = math.max(1.0, blob.radiusX * inset);
+      final ry = math.max(1.0, blob.radiusY * inset);
+      final value = (localX * localX) / (rx * rx) +
+          (localY * localY) / (ry * ry);
+      if (value <= 1.0) return true;
+    }
+    return false;
+  }
+
+  void _ensureWalkLayout(
+    double worldWidth,
+    double worldHeight,
+    double viewportWidth,
+    double viewportHeight,
+  ) {
     final oldWidth = _walkWorldWidth;
+    final oldHeight = _walkWorldHeight;
     _walkWorldWidth = worldWidth;
-    _walkStageHeight = stageHeight;
+    _walkWorldHeight = worldHeight;
+    _walkViewportWidth = viewportWidth;
+    _walkViewportHeight = viewportHeight;
+    _ensureWalkTerrain(worldWidth, worldHeight);
+
+    final minDepth = _walkMinDepth(worldHeight);
+    final maxDepth = math.max(minDepth, _walkMaxDepth(worldHeight));
+    final horizontalMargin = _walkHorizontalMargin(viewportHeight);
+    final maxX = math.max(horizontalMargin, worldWidth - horizontalMargin);
+
     if (!_walkLayoutReady) {
-      final start = _walkTilePoint(_startIndex, worldWidth, stageHeight);
-      _playerWorldX = start.dx;
-      _playerDepth = (start.dy / stageHeight)
-          .clamp(widget.embedded ? .58 : .50, .91)
-          .toDouble();
+      final start = _walkTilePoint(_startIndex, worldWidth, worldHeight);
+      _playerWorldX = start.dx.clamp(horizontalMargin, maxX).toDouble();
+      _playerDepth = (start.dy / worldHeight).clamp(minDepth, maxDepth).toDouble();
       _walkLayoutReady = true;
       return;
     }
-    if (oldWidth > 0 && (oldWidth - worldWidth).abs() > .5) {
+
+    if (oldWidth > 0 && oldHeight > 0 &&
+        ((oldWidth - worldWidth).abs() > .5 || (oldHeight - worldHeight).abs() > .5)) {
       _playerWorldX = (_playerWorldX * worldWidth / oldWidth)
-          .clamp(32.0, math.max(32.0, worldWidth - 32.0))
+          .clamp(horizontalMargin, maxX)
           .toDouble();
+      _playerDepth = (_playerDepth * oldHeight / worldHeight)
+          .clamp(minDepth, maxDepth)
+          .toDouble();
+    } else {
+      _playerWorldX = _playerWorldX.clamp(horizontalMargin, maxX).toDouble();
+      _playerDepth = _playerDepth.clamp(minDepth, maxDepth).toDouble();
+    }
+
+    final current = Offset(_playerWorldX, _playerDepth * worldHeight);
+    if (!_walkPointInsideTerrain(current)) {
+      final nearest = _walkTerrain.reduce((a, b) =>
+          (a.center - current).distanceSquared <= (b.center - current).distanceSquared ? a : b);
+      _playerWorldX = nearest.center.dx.clamp(horizontalMargin, maxX).toDouble();
+      _playerDepth = (nearest.center.dy / worldHeight).clamp(minDepth, maxDepth).toDouble();
     }
   }
 
-  Offset _walkTilePoint(int index, double worldWidth, double stageHeight) {
-    final row = _rowOf(index);
-    final col = _columnOf(index);
-    final x = (col + .5) / _columns * worldWidth;
-    final depth = .50 + (row / math.max(1, _rows - 1)) * .40;
-    return Offset(x, stageHeight * depth);
+  Offset _walkTilePoint(int index, double worldWidth, double worldHeight) {
+    _ensureWalkTerrain(worldWidth, worldHeight);
+    if (_walkTerrain.isEmpty) return Offset(worldWidth * .5, worldHeight * .5);
+    if (index == _startIndex) return _walkTerrain.first.center;
+
+    final random = math.Random((_seed ^ ((index + 1) * 0x45D9F3B)) & 0x7fffffff);
+    final firstUsable = math.min(1, _walkTerrain.length - 1);
+    final usableCount = math.max(1, _walkTerrain.length - firstUsable);
+    final blobIndex = firstUsable + ((index * 5 + random.nextInt(usableCount)) % usableCount);
+    final blob = _walkTerrain[blobIndex];
+    final angle = random.nextDouble() * math.pi * 2;
+    final radial = math.sqrt(random.nextDouble()) * .56;
+    final localX = math.cos(angle) * blob.radiusX * radial;
+    final localY = math.sin(angle) * blob.radiusY * radial;
+    final cosA = math.cos(blob.rotation);
+    final sinA = math.sin(blob.rotation);
+    final rotated = Offset(
+      localX * cosA - localY * sinA,
+      localX * sinA + localY * cosA,
+    );
+    return blob.center + rotated;
   }
 
   double _walkDistanceToIndex(int index) {
-    final point = _walkTilePoint(index, _walkWorldWidth, _walkStageHeight);
-    final playerY = _walkStageHeight * _playerDepth;
+    final point = _walkTilePoint(index, _walkWorldWidth, _walkWorldHeight);
+    final playerY = _walkWorldHeight * _playerDepth;
     final dx = point.dx - _playerWorldX;
-    final dy = (point.dy - playerY) * 1.75;
+    final dy = (point.dy - playerY) * 1.18;
     return math.sqrt(dx * dx + dy * dy);
   }
 
-  void _setWalkInput(Offset value) {
+  // 黑暗探索：只给角色脚边一小圈可辨认空间，避免远处背景提前看清。
+  double get _walkVisionRadius =>
+      (math.min(_walkViewportWidth, _walkViewportHeight) * .23)
+          .clamp(76.0, 108.0)
+          .toDouble();
+
+  // 物品 / 敌人 / 搜刮点只有贴得很近才进入可见范围。
+  double get _walkInteractRadius =>
+      (_walkVisionRadius * .48).clamp(34.0, 46.0).toDouble();
+
+  double get _walkObjectRevealRadius =>
+      (_walkInteractRadius * 1.22).clamp(42.0, 56.0).toDouble();
+
+  // 感知和实际显示使用同一近距离阈值，避免先弹“发现”却还看不到目标。
+  double get _walkSenseRadius => _walkObjectRevealRadius;
+
+  double get _walkJoystickSize =>
+      widget.storyStage ? 72.0 : (widget.embedded ? 64.0 : 86.0);
+
+  double get _walkJoystickTravel => _walkJoystickSize * .31;
+
+  void _beginFloatingWalkJoystick(DragDownDetails details) {
     if (!widget.movementEnabled) return;
-    final length = value.distance;
-    final normalized = length > 1 ? value / length : value;
     setState(() {
-      _walkInput = normalized;
-      if (normalized.distanceSquared > .002) _walkTapTarget = null;
+      _walkJoystickCenter = details.localPosition;
+      _walkJoystickKnobOffset = Offset.zero;
+      _walkInput = Offset.zero;
     });
   }
 
-  void _stopWalkInput() {
-    if (_walkInput == Offset.zero) return;
-    setState(() => _walkInput = Offset.zero);
+  void _updateFloatingWalkJoystick(DragUpdateDetails details) {
+    if (!widget.movementEnabled || _walkJoystickCenter == null) return;
+
+    // 一次触摸周期内，摇杆底座永远固定在第一次按下的位置。
+    // 手指拖多远都只移动摇杆帽；松手后整个摇杆消失，下一次按下再重新定中心。
+    final center = _walkJoystickCenter!;
+    final delta = details.localPosition - center;
+    final travel = _walkJoystickTravel;
+    final distance = delta.distance;
+    final knob = distance > travel && distance > 0
+        ? delta / distance * travel
+        : delta;
+    final input = travel <= 0 ? Offset.zero : knob / travel;
+
+    setState(() {
+      _walkJoystickKnobOffset = knob;
+      _walkInput = input;
+    });
   }
 
-  void _setWalkTapTarget(TapDownDetails details, double cameraX) {
-    if (!widget.movementEnabled) return;
-    final local = details.localPosition;
-    final targetDepth = (local.dy / math.max(1.0, _walkStageHeight))
-        .clamp(widget.embedded ? .58 : .50, .91)
-        .toDouble();
+  void _endFloatingWalkJoystick() {
+    if (_walkJoystickCenter == null && _walkInput == Offset.zero) return;
     setState(() {
-      _walkTapTarget = Offset(
-        (cameraX + local.dx)
-            .clamp(32.0, math.max(32.0, _walkWorldWidth - 32.0))
-            .toDouble(),
-        targetDepth,
-      );
+      _walkJoystickCenter = null;
+      _walkJoystickKnobOffset = Offset.zero;
+      _walkInput = Offset.zero;
+      _playerMoving = false;
     });
   }
 
   void _tickWalk() {
     if (!mounted || !_walkLayoutReady) return;
     if (!widget.movementEnabled) {
-      if (_walkInput != Offset.zero || _walkTapTarget != null || _playerMoving) {
+      if (_walkInput != Offset.zero || _walkJoystickCenter != null || _playerMoving) {
         setState(() {
           _walkInput = Offset.zero;
-          _walkTapTarget = null;
+          _walkJoystickCenter = null;
+          _walkJoystickKnobOffset = Offset.zero;
           _playerMoving = false;
         });
       }
@@ -3070,34 +3107,40 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     if (rawDt <= 0) return;
     final dt = rawDt.clamp(0.0, .05).toDouble();
 
-    var input = _walkInput;
-    final target = _walkTapTarget;
-    if (input.distanceSquared <= .002 && target != null) {
-      final dx = target.dx - _playerWorldX;
-      final dyPx = (target.dy - _playerDepth) * _walkStageHeight;
-      final distance = math.sqrt(dx * dx + dyPx * dyPx);
-      if (distance < 8) {
-        _walkTapTarget = null;
-        input = Offset.zero;
-      } else {
-        input = Offset(dx / distance, dyPx / distance);
-      }
-    }
-
+    final input = _walkInput;
     final moving = input.distanceSquared > .002;
     if (!moving) {
       if (_playerMoving) setState(() => _playerMoving = false);
       return;
     }
 
-    const speed = 235.0;
-    final nextX = (_playerWorldX + input.dx * speed * dt)
-        .clamp(32.0, math.max(32.0, _walkWorldWidth - 32.0))
+    const speed = 132.0;
+    final horizontalMargin = _walkHorizontalMargin(_walkViewportHeight);
+    final maxX = math.max(horizontalMargin, _walkWorldWidth - horizontalMargin);
+    final minDepth = _walkMinDepth(_walkWorldHeight);
+    final maxDepth = math.max(minDepth, _walkMaxDepth(_walkWorldHeight));
+    final currentY = _walkWorldHeight * _playerDepth;
+    final candidateX = (_playerWorldX + input.dx * speed * dt)
+        .clamp(horizontalMargin, maxX)
         .toDouble();
-    final nextDepth = (_playerDepth +
-            input.dy * speed * dt / math.max(1.0, _walkStageHeight))
-        .clamp(widget.embedded ? .58 : .50, .91)
+    final candidateY = (currentY + input.dy * speed * dt)
+        .clamp(minDepth * _walkWorldHeight, maxDepth * _walkWorldHeight)
         .toDouble();
+
+    var nextX = _playerWorldX;
+    var nextY = currentY;
+    final fullCandidate = Offset(candidateX, candidateY);
+    if (_walkPointInsideTerrain(fullCandidate)) {
+      nextX = candidateX;
+      nextY = candidateY;
+    } else {
+      // 撞到不规则地形边缘时沿边滑动，不会突然卡死或走进黑色虚空。
+      final xOnly = Offset(candidateX, currentY);
+      final yOnly = Offset(_playerWorldX, candidateY);
+      if (_walkPointInsideTerrain(xOnly)) nextX = candidateX;
+      if (_walkPointInsideTerrain(yOnly)) nextY = candidateY;
+    }
+
     final facingLeft = input.dx < -.05
         ? true
         : input.dx > .05
@@ -3106,66 +3149,37 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
 
     setState(() {
       _playerWorldX = nextX;
-      _playerDepth = nextDepth;
+      _playerDepth = (nextY / _walkWorldHeight).clamp(minDepth, maxDepth).toDouble();
       _playerFacingLeft = facingLeft;
-      _playerMoving = true;
+      _playerMoving = moving;
     });
     _discoverByWalking();
   }
 
   void _discoverByWalking() {
-    int? nearest;
-    var best = double.infinity;
+    final newlySensed = <int>[];
     for (var index = 0; index < _rows * _columns; index++) {
-      if (_revealed.contains(index) || _walkPendingReveal.contains(index)) continue;
-      final distance = _walkDistanceToIndex(index);
-      if (distance < 68 && distance < best) {
-        best = distance;
-        nearest = index;
-      }
-    }
-    if (nearest == null) return;
-    if (_remote) {
-      unawaited(_revealRemoteByWalking(nearest));
-    } else {
-      _revealTile(nearest);
-    }
-  }
-
-  Future<void> _revealRemoteByWalking(int index) async {
-    if (_walkPendingReveal.contains(index) || _revealed.contains(index)) return;
-    if (widget.controller.isSurroundingsActionRunning) return;
-    _walkPendingReveal.add(index);
-    try {
-      await widget.controller.investigateSurroundNode('grid_$index');
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _message = widget.controller.surroundingsError.trim().isEmpty
-            ? '这片区域暂时无法调查，请继续走动或稍后重试。'
-            : widget.controller.surroundingsError.trim();
-      });
-    } finally {
-      _walkPendingReveal.remove(index);
-    }
-  }
-
-  int? _nearestWalkInteractableIndex({double maxDistance = 86}) {
-    int? nearest;
-    var best = maxDistance;
-    for (var index = 0; index < _rows * _columns; index++) {
-      if (index == _startIndex || !_revealed.contains(index) || _searched.contains(index)) {
+      if (index == _startIndex ||
+          _searched.contains(index) ||
+          _walkSensed.contains(index)) {
         continue;
       }
       final tile = _tileAt(index);
-      if (tile.kind == _FogTileKind.empty || tile.kind == _FogTileKind.hazard) continue;
-      final distance = _walkDistanceToIndex(index);
-      if (distance < best) {
-        best = distance;
-        nearest = index;
+      if (tile.kind == _FogTileKind.empty) continue;
+      if (_walkDistanceToIndex(index) <= _walkSenseRadius) {
+        newlySensed.add(index);
       }
     }
-    return nearest;
+    if (newlySensed.isEmpty) return;
+    setState(() {
+      _walkSensed.addAll(newlySensed);
+      // 开发者预览没有远端“调查”状态，进入视野就直接视为已经发现。
+      if (!_remote) _revealed.addAll(newlySensed);
+      final first = _tileAt(newlySensed.first);
+      _message = newlySensed.length == 1
+          ? '发现「${first.label}」。'
+          : '前方出现了新的探索目标。';
+    });
   }
 
   IconData _walkTileIcon(_FogTileKind kind) {
@@ -3185,83 +3199,158 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   }
 
   Color _walkTileColor(_FogTileDef tile) {
-    if (tile.kind == _FogTileKind.normalEnemy || tile.kind == _FogTileKind.eliteEnemy) {
-      return _dangerRed;
+    // 危险、稀有、普通都只用白色，通过透明度和图标区分。
+    if (tile.kind == _FogTileKind.normalEnemy ||
+        tile.kind == _FogTileKind.eliteEnemy) {
+      return Colors.white.withOpacity(.90);
     }
-    if (tile.rare || tile.kind == _FogTileKind.cache) return _rareGold;
-    return _themeGreen;
+    if (tile.rare || tile.kind == _FogTileKind.cache) {
+      return Colors.white.withOpacity(.82);
+    }
+    return Colors.white.withOpacity(.72);
   }
 
-  Widget _buildWalkObject(int index, double cameraX) {
+  String _walkRevealText(_FogTileDef tile) {
+    if (tile.kind == _FogTileKind.normalEnemy ||
+        tile.kind == _FogTileKind.eliteEnemy) {
+      return '遭遇「${tile.label}」！';
+    }
+    if (tile.kind == _FogTileKind.scavenge ||
+        tile.kind == _FogTileKind.cache) {
+      return '发现「${tile.label}」。';
+    }
+    if (tile.kind == _FogTileKind.hazard) {
+      return tile.text.isEmpty ? '前方出现危险。' : tile.text;
+    }
+    if (tile.kind == _FogTileKind.empty) return '这里没有更多发现。';
+    return '发现「${tile.label}」。';
+  }
+
+  String _walkActionLabel(_FogTileDef tile) {
+    if (_isRemoteRecipeInput(tile.nodeId)) return '收集';
+    if (tile.kind == _FogTileKind.normalEnemy ||
+        tile.kind == _FogTileKind.eliteEnemy) {
+      return '交战';
+    }
+    if (tile.kind == _FogTileKind.scavenge ||
+        tile.kind == _FogTileKind.cache) {
+      return '搜刮';
+    }
+    if (tile.kind == _FogTileKind.genericItem ||
+        tile.kind == _FogTileKind.branch ||
+        tile.kind == _FogTileKind.stone ||
+        tile.kind == _FogTileKind.vine ||
+        tile.kind == _FogTileKind.bottle ||
+        tile.collectible) {
+      return '拾取';
+    }
+    return '互动';
+  }
+
+  Widget _buildWalkObject(int index, double cameraX, double cameraY) {
     final tile = _tileAt(index);
-    if (!_revealed.contains(index) || tile.kind == _FogTileKind.empty || index == _startIndex) {
+    if (tile.kind == _FogTileKind.empty ||
+        index == _startIndex ||
+        _searched.contains(index)) {
       return const SizedBox.shrink();
     }
-    final point = _walkTilePoint(index, _walkWorldWidth, _walkStageHeight);
-    final searched = _searched.contains(index);
-    final accent = _walkTileColor(tile);
-    final near = _walkDistanceToIndex(index) < 90;
+
+    final known = _revealed.contains(index) || _walkSensed.contains(index);
+    if (!known) return const SizedBox.shrink();
+
+    final distance = _walkDistanceToIndex(index);
+    // 即使以前发现过，走远后也立刻重新藏进黑暗里；必须再次靠近才显示。
+    if (distance > _walkObjectRevealRadius) return const SizedBox.shrink();
+
+    final point = _walkTilePoint(index, _walkWorldWidth, _walkWorldHeight);
+    final near = distance <= _walkInteractRadius;
+    final width = (_walkViewportWidth * .24).clamp(72.0, 112.0).toDouble();
+    final height = (_walkViewportHeight * .115).clamp(58.0, 86.0).toDouble();
+    final opacity = near ? 1.0 : .52;
+    final enemy = tile.kind == _FogTileKind.normalEnemy ||
+        tile.kind == _FogTileKind.eliteEnemy;
+    final iconSize = near ? (enemy ? 40.0 : 36.0) : (enemy ? 34.0 : 30.0);
+
     return Positioned(
-      left: point.dx - cameraX - 46,
-      top: point.dy - 66,
-      width: 92,
-      height: 62,
+      left: point.dx - cameraX - width / 2,
+      top: point.dy - cameraY - height / 2,
+      width: width,
+      height: height,
       child: IgnorePointer(
-        ignoring: searched,
+        ignoring: !near,
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 180),
-          opacity: searched ? .24 : 1,
+          opacity: opacity,
           child: GestureDetector(
             onTap: () => _tapTile(index),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  width: near ? 34 : 30,
-                  height: near ? 34 : 30,
+                  duration: const Duration(milliseconds: 180),
+                  width: iconSize,
+                  height: iconSize,
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(.42),
+                    color: Colors.black.withOpacity(enemy ? .76 : .62),
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: accent.withOpacity(near ? .86 : .46),
-                      width: near ? 1.2 : .8,
+                      color: Colors.white.withOpacity(
+                        near ? (enemy ? .95 : .84) : (enemy ? .58 : .34),
+                      ),
+                      width: near ? (enemy ? 1.5 : 1.1) : .8,
                     ),
                     boxShadow: <BoxShadow>[
-                      if (near)
-                        BoxShadow(
-                          color: accent.withOpacity(.18),
-                          blurRadius: 14,
-                          spreadRadius: 2,
-                        ),
+                      BoxShadow(
+                        color: Colors.black.withOpacity(.52),
+                        blurRadius: 12,
+                        spreadRadius: 1,
+                      ),
                     ],
                   ),
                   child: Icon(
                     _walkTileIcon(tile.kind),
-                    size: near ? 17 : 15,
-                    color: accent.withOpacity(.94),
+                    size: near ? 20 : 17,
+                    color: _walkTileColor(tile),
                   ),
                 ),
                 const SizedBox(height: 4),
-                Container(
-                  constraints: const BoxConstraints(maxWidth: 88),
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(.48),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    searched ? '已调查' : tile.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(searched ? .38 : .86),
-                      fontSize: 8.2,
-                      fontWeight: FontWeight.w700,
-                    ),
+                Text(
+                  tile.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(near ? .92 : .66),
+                    fontSize: near ? 9.2 : 8.3,
+                    fontWeight: FontWeight.w700,
+                    shadows: const <Shadow>[
+                      Shadow(color: Colors.black, blurRadius: 6),
+                    ],
                   ),
                 ),
+                if (near) ...<Widget>[
+                  const SizedBox(height: 3),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(.72),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(.28),
+                        width: .7,
+                      ),
+                    ),
+                    child: Text(
+                      _walkActionLabel(tile),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9.2,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -3303,7 +3392,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         width: widget.embedded ? 36 : 42,
         height: widget.embedded ? 70 : 82,
         decoration: BoxDecoration(
-          color: const Color(0xFF182428).withOpacity(.96),
+          color: Colors.black.withOpacity(.92),
           borderRadius: const BorderRadius.vertical(
             top: Radius.circular(18),
             bottom: Radius.circular(7),
@@ -3333,36 +3422,38 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     );
   }
 
-  Widget _buildWalkPlayer(double cameraX) {
-    final playerY = _walkStageHeight * _playerDepth;
-    final depthScale = .86 + ((_playerDepth - .50) / .41).clamp(0.0, 1.0) * .18;
+  Widget _buildWalkPlayer(double cameraX, double cameraY) {
+    final playerY = _walkWorldHeight * _playerDepth;
+    final depthScale = _walkDepthScale(_playerDepth);
     final portraitBytes = _previewPortraitBytes;
     final protagonist = widget.controller.protagonist;
-    // 正文底部探索优先使用玩家已经创建好的“主角立绘”。
-    // 只有立绘 URL 为空时才退回头像，避免正常情况下显示成头像小圆图。
+
+    // 立绘优先级：开发预览手动立绘 > protagonist.portraitUrl > avatarUrl > 黑白占位。
+    // portraitUrl 加载失败时继续回退 avatar，而不是直接丢成占位图。
     final protagonistPortrait = protagonist?.portraitUrl.trim() ?? '';
     final protagonistAvatar = protagonist?.avatarUrl.trim() ?? '';
-    final portraitSource = protagonistPortrait.isNotEmpty
-        ? protagonistPortrait
-        : protagonistAvatar;
-    // 嵌入正文底部时，人物不能沿用独立探索页的大尺寸。
-    // 按当前舞台高度动态缩放，让完整立绘（尤其头部/脚部）更容易留在画面内。
-    // 高度倍率降到 0.35，最大高度限制在 160 像素，这对于半身/全身立绘是一个比较舒服的比例
-    final playerHeight = widget.storyStage
-        ? (_walkStageHeight * .35).clamp(100.0, 160.0).toDouble()
-        : widget.embedded
-            ? (_walkStageHeight * .42).clamp(72.0, 96.0).toDouble()
-            : 132.0;
+    final playerHeight = _walkPlayerBaseHeight(_walkViewportHeight);
+    final playerWidth = _walkPlayerBaseWidth(_walkViewportHeight);
 
-    // 宽度同步收缩，保持原图比例不被挤压
-    final playerWidth = widget.storyStage
-        ? (playerHeight * .50).clamp(50.0, 80.0).toDouble()
-        : widget.embedded
-            ? (playerHeight * .64).clamp(46.0, 62.0).toDouble()
-            : 88.0;
+    final avatarFallback = protagonistAvatar.isNotEmpty
+        ? _walkImageSource(
+            protagonistAvatar,
+            fit: BoxFit.contain,
+            alignment: Alignment.bottomCenter,
+            fallback: _walkPlayerFallback(),
+          )
+        : _walkPlayerFallback();
+    final bestPortrait = protagonistPortrait.isNotEmpty
+        ? _walkImageSource(
+            protagonistPortrait,
+            fit: BoxFit.contain,
+            alignment: Alignment.bottomCenter,
+            fallback: avatarFallback,
+          )
+        : avatarFallback;
     return Positioned(
       left: _playerWorldX - cameraX - playerWidth / 2,
-      top: playerY - playerHeight,
+      top: playerY - cameraY - playerHeight,
       width: playerWidth,
       height: playerHeight,
       child: IgnorePointer(
@@ -3374,7 +3465,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
             builder: (context, child) {
               final seconds = (_walkTicker.lastElapsedDuration?.inMilliseconds ?? 0) / 1000.0;
               final bob = _playerMoving
-                  ? math.sin(seconds * 11.5) * 2.0
+                  ? math.sin(seconds * 7.2) * 1.5
                   : math.sin(seconds * 2.2) * 1.0;
               final breath = _playerMoving ? 1.0 : 1.0 + math.sin(seconds * 2.2) * .008;
               return Transform.translate(
@@ -3393,15 +3484,9 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     fit: BoxFit.contain,
                     alignment: Alignment.bottomCenter,
                     filterQuality: FilterQuality.high,
+                    errorBuilder: (_, __, ___) => bestPortrait,
                   )
-                : portraitSource.isNotEmpty
-                    ? _walkImageSource(
-                        portraitSource,
-                        fit: BoxFit.contain,
-                        alignment: Alignment.bottomCenter,
-                        fallback: _walkPlayerFallback(),
-                      )
-                    : _walkPlayerFallback(),
+                : bestPortrait,
           ),
         ),
       ),
@@ -3409,53 +3494,42 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   }
 
   Widget _buildWalkJoystick() {
-    final size = widget.storyStage ? 70.0 : (widget.embedded ? 58.0 : 82.0);
+    final size = _walkJoystickSize;
+    final knobSize = size * .42;
     return SizedBox(
       width: size,
       height: size,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onPanStart: (details) {
-          final delta = details.localPosition - Offset(size / 2, size / 2);
-          _setWalkInput(delta / (size / 2));
-        },
-        onPanUpdate: (details) {
-          final delta = details.localPosition - Offset(size / 2, size / 2);
-          _setWalkInput(delta / (size / 2));
-        },
-        onPanEnd: (_) => _stopWalkInput(),
-        onPanCancel: _stopWalkInput,
-        child: Stack(
-          alignment: Alignment.center,
-          children: <Widget>[
-            Container(
-              width: size,
-              height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(.24),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withOpacity(.22),
+                width: .8,
+              ),
+            ),
+          ),
+          Transform.translate(
+            offset: _walkJoystickKnobOffset,
+            child: Container(
+              width: knobSize,
+              height: knobSize,
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(.18),
+                color: Colors.white.withOpacity(.14),
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withOpacity(.10), width: .8),
-              ),
-            ),
-            Transform.translate(
-              offset: _walkInput * 20,
-              child: Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withOpacity(.22), width: .8),
-                ),
-                child: Icon(
-                  Icons.control_camera_rounded,
-                  size: 15,
-                  color: Colors.white.withOpacity(.62),
+                border: Border.all(
+                  color: Colors.white.withOpacity(.48),
+                  width: .9,
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -3464,217 +3538,116 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     return LayoutBuilder(
       builder: (context, constraints) {
         final viewportWidth = math.max(1.0, constraints.maxWidth);
-        final stageHeight = math.max(170.0, constraints.maxHeight);
-        // 正文底部是“单屏横版舞台”，不再强行做 1.9 屏的超宽世界。
-        // 原来把一张 16:9 场景硬撑到近两屏宽，再用 cover，会把上下裁掉很多。
-        // 嵌入模式保持接近当前可视宽度，人物仍可左右走动；独立探索页继续保留横向卷轴。
-        // 正文舞台不再自己绘制/拉伸一张“探索背景”。
-        // 它只是覆盖在原 NovelWorldBackground 上面的透明可移动坐标层，
-        // 所以正文舞台使用当前可视宽度，不做横向相机卷动。
-        final worldWidth = widget.storyStage
-            ? viewportWidth
+        final viewportHeight = math.max(170.0, constraints.maxHeight);
+
+        // 真正的局部镜头：世界明显大于屏幕，玩家永远只能看到其中一小块。
+        final zoom = widget.storyStage
+            ? 1.82
             : widget.embedded
-                ? viewportWidth
-                : math.max(
-                    viewportWidth * 1.90,
-                    stageHeight * (16 / 9),
-                  ).toDouble();
-        _ensureWalkLayout(worldWidth, stageHeight);
-        final cameraX = widget.storyStage
-            ? 0.0
-            : (_playerWorldX - viewportWidth * .5)
-                .clamp(0.0, math.max(0.0, worldWidth - viewportWidth))
-                .toDouble();
-        final nearest = widget.storyStage ? null : _nearestWalkInteractableIndex();
-        final goal = _remote
-            ? stringValue(widget.controller.surroundingsData['goal'], '调查当前场景')
-            : '自由探索海滩，收集材料并寻找目标';
+                ? 1.74
+                : 1.90;
+        final worldWidth = math.max(viewportWidth * zoom, viewportWidth + 260.0);
+        final worldHeight = math.max(viewportHeight * zoom, viewportHeight + 320.0);
+        _ensureWalkLayout(
+          worldWidth,
+          worldHeight,
+          viewportWidth,
+          viewportHeight,
+        );
+
+        final playerWorldY = _walkWorldHeight * _playerDepth;
+        final cameraX = (_playerWorldX - viewportWidth * .50)
+            .clamp(0.0, math.max(0.0, worldWidth - viewportWidth))
+            .toDouble();
+        final cameraY = (playerWorldY - viewportHeight * .58)
+            .clamp(0.0, math.max(0.0, worldHeight - viewportHeight))
+            .toDouble();
+        final visionCenter = Offset(
+          _playerWorldX - cameraX,
+          playerWorldY - cameraY - _walkPlayerBaseHeight(viewportHeight) * .30,
+        );
 
         return ClipRect(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: (details) => _setWalkTapTarget(details, cameraX),
+            onPanDown: _beginFloatingWalkJoystick,
+            onPanUpdate: _updateFloatingWalkJoystick,
+            onPanEnd: (_) => _endFloatingWalkJoystick(),
+            onPanCancel: _endFloatingWalkJoystick,
             child: Stack(
               fit: StackFit.expand,
               children: <Widget>[
-                // 正文舞台完全透明：底下就是原来的 NovelWorldBackground。
-                // 只有独立/嵌入探索页才自己绘制探索背景。
-                if (!widget.storyStage)
-                  Positioned(
-                    left: -cameraX,
-                    top: 0,
-                    width: worldWidth,
-                    height: stageHeight,
-                    child: _previewBackgroundBytes != null
-                        ? Image.memory(
-                            _previewBackgroundBytes!,
-                            fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
-                            alignment: widget.embedded
-                                ? Alignment.bottomCenter
-                                : Alignment.center,
-                            filterQuality: FilterQuality.high,
-                          )
-                        : widget.controller.world.backgroundUrl.trim().isNotEmpty
-                            ? _walkImageSource(
-                                widget.controller.world.backgroundUrl.trim(),
-                                fit: widget.embedded ? BoxFit.fitWidth : BoxFit.cover,
-                                alignment: widget.embedded
-                                    ? Alignment.bottomCenter
-                                    : Alignment.center,
-                                fallback: const SizedBox.expand(),
-                              )
-                            : const SizedBox.expand(),
-                  ),
-                // 正文舞台只借用“走路坐标系”，不把探索节点图标叠到剧情背景上。
-                if (!widget.storyStage)
-                  ...List<Widget>.generate(
-                    _rows * _columns,
-                    (index) => _buildWalkObject(index, cameraX),
-                  ),
-                _buildWalkPlayer(cameraX),
-                if (!widget.storyStage)
-                  Positioned(
-                  left: widget.embedded ? 9 : 12,
-                  top: widget.embedded ? 7 : 11,
-                  right: widget.embedded
-                      ? 94
-                      : (widget.developerPreview ? 116 : 9),
-                  child: IgnorePointer(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(.36),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.white.withOpacity(.08), width: .6),
-                          ),
-                          child: Text(
-                            goal,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(.82),
-                              fontSize: 9.2,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          widget.movementEnabled
-                              ? '拖动摇杆或点击地面移动 · 走近自动探索'
-                              : '剧情输出中 · 移动暂时锁定',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(.42),
-                            fontSize: 7.7,
-                            fontWeight: FontWeight.w600,
-                            shadows: const <Shadow>[Shadow(color: Colors.black, blurRadius: 4)],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                if (widget.embedded && !widget.storyStage)
-                  Positioned(
-                    right: 8,
-                    top: 8,
-                    child: _walkInlineBackgroundButton(),
-                  )
-                else if (widget.developerPreview)
-                  Positioned(
-                    right: 8,
-                    top: 8,
-                    child: Row(
-                      children: <Widget>[
-                        _walkToolButton(
-                          icon: Icons.image_outlined,
-                          tooltip: '选择场景背景图',
-                          onTap: () => unawaited(_pickWalkPreviewImage(portrait: false)),
-                        ),
-                        const SizedBox(width: 5),
-                        _walkToolButton(
-                          icon: Icons.person_outline_rounded,
-                          tooltip: '选择主角立绘',
-                          onTap: () => unawaited(_pickWalkPreviewImage(portrait: true)),
-                        ),
-                      ],
-                    ),
-                  ),
+                // 背景跟随世界一起放大/移动，形成真正的“镜头在地图里走”而不是人物贴在静态图上。
                 Positioned(
-                  left: 0,
-                  right: 0,
-                  // 【修改 3】：增加针对 storyStage（剧情舞台）的底边距判定
-                  // 这里的 65.0 可以根据你的实际情况微调（如果还重叠就改到 80.0）
-                  bottom: widget.storyStage ? 65.0 : (widget.embedded ? 8.0 : 12.0),
-                  child: Align(
-                    alignment: Alignment.bottomCenter, 
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 160),
-                      opacity: widget.movementEnabled ? 1 : .34,
-                      child: IgnorePointer(
-                        ignoring: !widget.movementEnabled,
-                        child: _buildWalkJoystick(),
+                  left: -cameraX,
+                  top: -cameraY,
+                  width: worldWidth,
+                  height: worldHeight,
+                  child: _previewBackgroundBytes != null
+                      ? Image.memory(
+                          _previewBackgroundBytes!,
+                          fit: BoxFit.cover,
+                          alignment: Alignment.center,
+                          filterQuality: FilterQuality.high,
+                        )
+                      : widget.controller.world.backgroundUrl.trim().isNotEmpty
+                          ? _walkImageSource(
+                              widget.controller.world.backgroundUrl.trim(),
+                              fit: BoxFit.cover,
+                              alignment: Alignment.center,
+                              fallback: const SizedBox.expand(),
+                            )
+                          : const SizedBox.expand(),
+                ),
+                // 只做雾化和轻压暗，不制造明显的白色“光圈”。
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ClipRect(
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(widget.storyStage ? .30 : .26),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-                if (nearest != null)
-                  Positioned(
-                    left: 104,
-                    right: 12,
-                    bottom: 15,
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: widget.movementEnabled
-                              ? () => _tapTile(nearest)
-                              : null,
-                          borderRadius: BorderRadius.circular(18),
-                          child: Container(
-                            constraints: const BoxConstraints(maxWidth: 260),
-                            height: 38,
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(.56),
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(
-                                color: _walkTileColor(_tileAt(nearest)).withOpacity(.48),
-                                width: .8,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                Icon(
-                                  _walkTileIcon(_tileAt(nearest).kind),
-                                  size: 14,
-                                  color: _walkTileColor(_tileAt(nearest)).withOpacity(.92),
-                                ),
-                                const SizedBox(width: 7),
-                                Flexible(
-                                  child: Text(
-                                    '${_tileAt(nearest).kind == _FogTileKind.normalEnemy || _tileAt(nearest).kind == _FogTileKind.eliteEnemy ? '交战' : '调查'} · ${_tileAt(nearest).label}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.88),
-                                      fontSize: 9.4,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
+                // 随机场景地形：不是方形地图，而是连通的自然板块；板块之外压入黑暗。
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _WalkTerrainPainter(
+                        terrain: _walkTerrain,
+                        cameraX: cameraX,
+                        cameraY: cameraY,
                       ),
+                    ),
+                  ),
+                ),
+                // 小范围视野：中心只是“少遮一点”，不是人物周围发白光。
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _WalkDarknessPainter(
+                        player: visionCenter,
+                        visionRadius: _walkVisionRadius,
+                      ),
+                    ),
+                  ),
+                ),
+                ...List<Widget>.generate(
+                  _rows * _columns,
+                  (index) => _buildWalkObject(index, cameraX, cameraY),
+                ),
+                _buildWalkPlayer(cameraX, cameraY),
+                if (_walkJoystickCenter != null && widget.movementEnabled)
+                  Positioned(
+                    left: _walkJoystickCenter!.dx - _walkJoystickSize / 2,
+                    top: _walkJoystickCenter!.dy - _walkJoystickSize / 2,
+                    child: IgnorePointer(
+                      child: _buildWalkJoystick(),
                     ),
                   ),
               ],
@@ -3751,6 +3724,21 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _backButton() {
+    return _walkToolButton(
+      icon: Icons.arrow_back_rounded,
+      tooltip: '返回',
+      onTap: () {
+        final onClose = widget.onClose;
+        if (onClose != null) {
+          onClose();
+        } else {
+          Navigator.of(context).maybePop();
+        }
+      },
     );
   }
 
@@ -3880,7 +3868,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                   child: const Text(
                     '制作',
                     style: TextStyle(
-                      color: Color(0xFF0F172A),
+                      color: Color(0xFF000000),
                       fontSize: 9,
                       fontWeight: FontWeight.w900,
                     ),
@@ -3893,207 +3881,35 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       );
     }
 
-    if (_completed) {
-      return _contextHint(
-        icon: Icons.flag_outlined,
-        text: '核心目标已完成。本轮收获已经可以结算。',
-        accent: _themeGreen,
-      );
-    }
-
-    if (_hasHook) {
-      return _contextHint(
-        icon: Icons.park_outlined,
-        text: '简易椰钩已完成。找到椰树后可以直接调查。',
-        accent: _themeGreen,
-      );
-    }
-
     return null;
   }
 
-  Widget _contextHint({
-    required IconData icon,
-    required String text,
-    required Color accent,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(.018),
-        border: Border(
-          left: BorderSide(color: accent.withOpacity(.38), width: 2),
-        ),
+  Widget _floatingCraftButton() {
+    final result = _availableCraftResult;
+    if (result == null) return const SizedBox.shrink();
+    return Material(
+      color: Colors.black.withOpacity(.58),
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: Colors.white.withOpacity(.34), width: .8),
+        borderRadius: BorderRadius.zero,
       ),
-      child: Row(
-        children: <Widget>[
-          Icon(icon, size: 13, color: accent.withOpacity(.76)),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Colors.white.withOpacity(.46),
-                fontSize: 8.2,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _withdrawButton({bool expanded = false}) {
-    final completed = _completed;
-    final backgroundColor = completed
-        ? _themeGreen.withOpacity(.16)
-        : Colors.white.withOpacity(.035);
-    final foregroundColor = completed
-        ? _themeGreen.withOpacity(.95)
-        : Colors.white.withOpacity(.62);
-    final button = Material(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(7),
       child: InkWell(
-        onTap: _showWithdrawDialog,
-        borderRadius: BorderRadius.circular(7),
-        child: Container(
-          height: 36,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(7),
-            border: Border.all(
-              color: completed
-                  ? _themeGreen.withOpacity(.32)
-                  : Colors.white.withOpacity(.09),
-              width: .6,
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: expanded ? MainAxisSize.max : MainAxisSize.min,
-              children: <Widget>[
-                Icon(
-                  Icons.exit_to_app_rounded,
-                  size: 14,
-                  color: foregroundColor,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '撤离',
-                  style: TextStyle(
-                    color: foregroundColor,
-                    fontSize: 9.4,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
+        onTap: _craftAvailableRecipe,
+        borderRadius: BorderRadius.zero,
+        child: const SizedBox(
+          height: 34,
+          width: 58,
+          child: Center(
+            child: Text(
+              '制作',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 9.2,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
         ),
-      ),
-    );
-
-    return Tooltip(
-      message: completed ? '目标已完成，结束探索并结算' : '提前结束探索并结算',
-      child: expanded ? SizedBox(width: double.infinity, child: button) : button,
-    );
-  }
-
-  Widget _buildGoalBar({required bool compact}) {
-    final bonus = _withdrawBonus();
-    final remoteGoal = stringValue(
-      widget.controller.surroundingsData['goal'],
-      '调查当前场景',
-    );
-
-    final title = _remote
-        ? (_completed ? '探索完成' : remoteGoal)
-        : (_completed ? '目标完成' : '想办法摘到椰子');
-
-    final subtitle = _remote
-        ? (_completed
-            ? '当前区域已处理完毕'
-            : _availableCraftResult != null
-                ? '材料已齐 · 可以制作'
-                : '走近区域自动探索，发现后调查目标')
-        : (_completed
-            ? (bonus > 0 ? '当前撤离奖励 ×$bonus' : '当前撤离奖励已耗尽')
-            : _hasHook
-                ? '椰钩已完成 · 寻找椰树'
-                : _availableCraftResult != null
-                    ? '材料已齐 · 可以制作'
-                    : '自由走动，收集并组合材料');
-
-    return SizedBox(
-      height: compact ? 46 : 48,
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(.92),
-                    fontSize: compact ? 11.2 : 12.5,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(.34),
-                    fontSize: compact ? 8.1 : 8.7,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (!compact) ...<Widget>[
-            const SizedBox(width: 10),
-            Text(
-              '发现 $_foundCount',
-              style: TextStyle(
-                color: Colors.white.withOpacity(.30),
-                fontSize: 8.2,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-          const SizedBox(width: 10),
-          Container(
-            height: 26,
-            padding: const EdgeInsets.symmetric(horizontal: 9),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(.035),
-              borderRadius: BorderRadius.circular(13),
-              border: Border.all(color: Colors.white.withOpacity(.07), width: .6),
-            ),
-            child: Text(
-              '自由探索',
-              style: TextStyle(
-                color: Colors.white.withOpacity(.58),
-                fontSize: 8.2,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -4171,7 +3987,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         Row(
           children: <Widget>[
             Text(
-              '本轮收获',
+              '探索收获',
               style: TextStyle(
                 color: Colors.white.withOpacity(.84),
                 fontSize: 10.5,
@@ -4234,8 +4050,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                _buildGoalBar(compact: false),
-                const SizedBox(height: 12),
                 Expanded(child: _buildMapPanel()),
               ],
             ),
@@ -4252,7 +4066,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                 const SizedBox(height: 10),
                 Text(
                   _remote
-                      ? '提示 · 靠近危险目标可进入战斗，材料齐全后自动出现制作入口'
+                      ? '提示 · 靠近危险点可进入战斗，材料齐全后自动出现制作入口'
                       : '提示 · 微红代表危险，材料齐全后自动出现制作入口',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -4261,11 +4075,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     fontSize: 7.9,
                     fontWeight: FontWeight.w600,
                   ),
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: _withdrawButton(),
                 ),
               ],
             ),
@@ -4292,35 +4101,27 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
             SizedBox(height: 48, child: action),
           ],
           const SizedBox(height: 7),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Container(
-                  height: 34,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  alignment: Alignment.centerLeft,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(.022),
-                    borderRadius: BorderRadius.circular(7),
-                    border: Border.all(color: Colors.white.withOpacity(.055), width: .6),
-                  ),
-                  child: Text(
-                    _bag.isEmpty
-                        ? '本轮收获 · 暂无'
-                        : '本轮收获 · ${_bag.values.fold<int>(0, (sum, value) => sum + value)} 件',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(.46),
-                      fontSize: 8.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
+          Container(
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            alignment: Alignment.centerLeft,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.022),
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(color: Colors.white.withOpacity(.055), width: .6),
+            ),
+            child: Text(
+              _bag.isEmpty
+                  ? '探索收获 · 暂无'
+                  : '探索收获 · ${_bag.values.fold<int>(0, (sum, value) => sum + value)} 件',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withOpacity(.46),
+                fontSize: 8.5,
+                fontWeight: FontWeight.w700,
               ),
-              const SizedBox(width: 7),
-              _withdrawButton(),
-            ],
+            ),
           ),
         ],
       ),
@@ -4330,196 +4131,236 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   @override
   Widget build(BuildContext context) {
     if (widget.embedded) {
-      // 主页底部常驻版本：不再套独立页面的毛玻璃、标题栏和背包面板，
-      // 只保留清晰场景与实际走路交互。
       return Material(
         color: Colors.transparent,
-        // 不再画顶部白色分割线，让底部场景更像正文背景自然延伸。
         child: _buildWalkStage(),
       );
     }
 
     return Material(
-      color: NovelPalette.background.withOpacity(.72),
-      child: ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: <Color>[
-                      Color(0x12000000),
-                      Color(0x28101718),
-                      Color(0x52080B0D),
-                    ],
-                    stops: <double>[0, .48, 1],
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          _buildWalkStage(),
+          SafeArea(
+            child: Stack(
+              children: <Widget>[
+                Positioned(
+                  left: 10,
+                  top: 10,
+                  child: _backButton(),
+                ),
+                if (_availableCraftResult != null)
+                  Positioned(
+                    right: 10,
+                    top: 52,
+                    child: _floatingCraftButton(),
                   ),
-                ),
-              ),
-              SafeArea(
-                child: Column(
-                  children: <Widget>[
-                    SizedBox(
-                      height: 54,
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 16, right: 8),
-                        child: Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  Text(
-                                    _remote
-                                        ? '探索 · ${widget.controller.locationTitle.trim().isEmpty ? '当前场景' : widget.controller.locationTitle.trim()}'
-                                        : '探索 · 海滩边缘',
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.95),
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 1.1,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    _completed
-                                        ? '现场调查完成'
-                                        : (widget.developerPreview
-                                            ? '走路探索测试 · 可上传背景与主角立绘'
-                                            : '自由走动，走到哪里就探索到哪里'),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.38),
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (widget.developerPreview) ...<Widget>[
-                              Tooltip(
-                                message: '选择场景背景图',
-                                child: IconButton(
-                                  onPressed: () => unawaited(
-                                    _pickWalkPreviewImage(portrait: false),
-                                  ),
-                                  icon: Icon(
-                                    Icons.image_outlined,
-                                    size: 17,
-                                    color: Colors.white.withOpacity(.52),
-                                  ),
-                                ),
-                              ),
-                              Tooltip(
-                                message: '选择主角立绘',
-                                child: IconButton(
-                                  onPressed: () => unawaited(
-                                    _pickWalkPreviewImage(portrait: true),
-                                  ),
-                                  icon: Icon(
-                                    Icons.person_outline_rounded,
-                                    size: 17,
-                                    color: Colors.white.withOpacity(.52),
-                                  ),
-                                ),
-                              ),
-                            ],
-                            if (!_remote)
-                              Tooltip(
-                                message: '生成新地图',
-                                child: IconButton(
-                                  onPressed: _reset,
-                                  icon: Icon(
-                                    Icons.refresh_rounded,
-                                    size: 18,
-                                    color: Colors.white.withOpacity(.46),
-                                  ),
-                                ),
-                              ),
-                            Container(
-                              height: 28,
-                              padding: const EdgeInsets.fromLTRB(4, 3, 9, 3),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(.12),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(.065),
-                                  width: .5,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: <Widget>[
-                                  Image.asset(
-                                    'assets/images/xing.webp',
-                                    width: 20,
-                                    height: 20,
-                                    fit: BoxFit.contain,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '${_scoreOverride ?? widget.controller.score.total}',
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.78),
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            if (widget.onClose != null)
-                              Tooltip(
-                                message: '关闭',
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(21),
-                                  child: BackdropFilter(
-                                    filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                                    child: Container(
-                                      color: Colors.black.withOpacity(0.08),
-                                      child: IconButton(
-                                        onPressed: widget.onClose,
-                                        icon: const Icon(
-                                          Icons.close_rounded,
-                                          size: 20,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
+                if (widget.developerPreview)
+                  Positioned(
+                    left: 50,
+                    top: 10,
+                    child: Row(
+                      children: <Widget>[
+                        _walkToolButton(
+                          icon: Icons.image_outlined,
+                          tooltip: '选择场景背景图',
+                          onTap: () => unawaited(
+                            _pickWalkPreviewImage(portrait: false),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 5),
+                        _walkToolButton(
+                          icon: Icons.person_outline_rounded,
+                          tooltip: '选择主角立绘',
+                          onTap: () => unawaited(
+                            _pickWalkPreviewImage(portrait: true),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        _walkToolButton(
+                          icon: Icons.refresh_rounded,
+                          tooltip: '生成新地图',
+                          onTap: _reset,
+                        ),
+                      ],
                     ),
-                    Container(height: .5, color: Colors.white.withOpacity(.055)),
-                    Expanded(
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final wide = constraints.maxWidth >= 760 &&
-                              constraints.maxHeight >= 500;
-                          return wide ? _buildWideBody() : _buildCompactBody();
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+                  ),
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
+  }
+}
+
+
+class _WalkTerrainBlob {
+  const _WalkTerrainBlob({
+    required this.center,
+    required this.radiusX,
+    required this.radiusY,
+    required this.rotation,
+    required this.seed,
+  });
+
+  final Offset center;
+  final double radiusX;
+  final double radiusY;
+  final double rotation;
+  final int seed;
+}
+
+Path _walkTerrainBlobPath(_WalkTerrainBlob blob, {double scale = 1.0}) {
+  const pointCount = 22;
+  final random = math.Random(blob.seed);
+  final points = <Offset>[];
+  final cosA = math.cos(blob.rotation);
+  final sinA = math.sin(blob.rotation);
+
+  for (var i = 0; i < pointCount; i++) {
+    final angle = i / pointCount * math.pi * 2;
+    final wave = math.sin(angle * 3 + blob.seed * .0001) * .055 +
+        math.sin(angle * 5 + blob.seed * .00003) * .035;
+    final noise = (random.nextDouble() - .5) * .11;
+    final radius = (1.0 + wave + noise).clamp(.80, 1.16).toDouble();
+    final localX = math.cos(angle) * blob.radiusX * scale * radius;
+    final localY = math.sin(angle) * blob.radiusY * scale * radius;
+    points.add(
+      blob.center +
+          Offset(
+            localX * cosA - localY * sinA,
+            localX * sinA + localY * cosA,
+          ),
+    );
+  }
+
+  if (points.isEmpty) return Path();
+  Offset midpoint(Offset a, Offset b) => Offset((a.dx + b.dx) / 2, (a.dy + b.dy) / 2);
+  final path = Path();
+  final firstMid = midpoint(points.last, points.first);
+  path.moveTo(firstMid.dx, firstMid.dy);
+  for (var i = 0; i < points.length; i++) {
+    final current = points[i];
+    final next = points[(i + 1) % points.length];
+    final mid = midpoint(current, next);
+    path.quadraticBezierTo(current.dx, current.dy, mid.dx, mid.dy);
+  }
+  path.close();
+  return path;
+}
+
+class _WalkTerrainPainter extends CustomPainter {
+  const _WalkTerrainPainter({
+    required this.terrain,
+    required this.cameraX,
+    required this.cameraY,
+  });
+
+  final List<_WalkTerrainBlob> terrain;
+  final double cameraX;
+  final double cameraY;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty || terrain.isEmpty) return;
+
+    Path? land;
+    for (final blob in terrain) {
+      final path = _walkTerrainBlobPath(blob);
+      land = land == null ? path : Path.combine(PathOperation.union, land, path);
+    }
+    if (land == null) return;
+
+    canvas.save();
+    canvas.translate(-cameraX, -cameraY);
+
+    final viewRect = Rect.fromLTWH(cameraX, cameraY, size.width, size.height).inflate(3);
+    final outside = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(viewRect)
+      ..addPath(land, Offset.zero);
+    canvas.drawPath(
+      outside,
+      Paint()
+        ..color = Colors.black.withOpacity(.82)
+        ..style = PaintingStyle.fill,
+    );
+
+    canvas.drawPath(
+      land,
+      Paint()
+        ..color = Colors.white.withOpacity(.025)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawPath(
+      land,
+      Paint()
+        ..color = Colors.white.withOpacity(.075)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0,
+    );
+
+    // 类似真实地形图的弱等高线，只提供板块层次，不抢物品和人物。
+    for (final blob in terrain) {
+      for (final scale in <double>[.72, .48]) {
+        canvas.drawPath(
+          _walkTerrainBlobPath(blob, scale: scale),
+          Paint()
+            ..color = Colors.white.withOpacity(scale > .6 ? .032 : .022)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = .7,
+        );
+      }
+    }
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _WalkTerrainPainter oldDelegate) {
+    return oldDelegate.terrain != terrain ||
+        oldDelegate.cameraX != cameraX ||
+        oldDelegate.cameraY != cameraY;
+  }
+}
+
+class _WalkDarknessPainter extends CustomPainter {
+  const _WalkDarknessPainter({
+    required this.player,
+    required this.visionRadius,
+  });
+
+  final Offset player;
+  final double visionRadius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty || visionRadius <= 0) return;
+    final shader = const RadialGradient(
+      colors: <Color>[
+        // 人物身边也保留明显黑幕，只让近处轮廓勉强可辨。
+        Color(0x52000000),
+        Color(0x8C000000),
+        Color(0xE6000000),
+        Color(0xFA000000),
+      ],
+      stops: <double>[0, .30, .70, 1],
+    ).createShader(
+      Rect.fromCircle(center: player, radius: visionRadius),
+    );
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..shader = shader,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _WalkDarknessPainter oldDelegate) {
+    return oldDelegate.player != player ||
+        oldDelegate.visionRadius != visionRadius;
   }
 }
 
@@ -4570,10 +4411,10 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
     if (widget.tile.kind == _FogTileKind.hazard ||
         widget.tile.kind == _FogTileKind.normalEnemy ||
         widget.tile.kind == _FogTileKind.eliteEnemy) {
-      return const Color(0xFFD96F6F).withOpacity(.46);
+      return const Color(0xFFFFFFFF).withOpacity(.46);
     }
     if (widget.tile.kind == _FogTileKind.cache) {
-      return const Color(0xFFD8BF7A).withOpacity(.62);
+      return const Color(0xFFFFFFFF).withOpacity(.62);
     }
     if (widget.tile.kind == _FogTileKind.coconutTree && widget.hasHook) {
       return _themeGreen.withOpacity(.86);
@@ -4619,9 +4460,9 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
   }
 
   Color _qualityColor(int quality) {
-    if (quality >= 9) return const Color(0xFFD8BF7A).withOpacity(.96);
-    if (quality >= 7) return const Color(0xFFC58AF9).withOpacity(.94);
-    if (quality >= 5) return const Color(0xFF74A8F7).withOpacity(.92);
+    if (quality >= 9) return const Color(0xFFFFFFFF).withOpacity(.96);
+    if (quality >= 7) return const Color(0xFFFFFFFF).withOpacity(.94);
+    if (quality >= 5) return const Color(0xFFFFFFFF).withOpacity(.92);
     if (quality >= 3) return _themeGreen.withOpacity(.90);
     return Colors.white.withOpacity(.50);
   }
@@ -4635,10 +4476,10 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
     final isEnemy = widget.tile.kind == _FogTileKind.normalEnemy || widget.tile.kind == _FogTileKind.eliteEnemy;
     
     if (widget.revealed && (widget.tile.kind == _FogTileKind.hazard || isEnemy)) {
-      background = const Color(0xFFD96F6F).withOpacity(.045);
+      background = const Color(0xFFFFFFFF).withOpacity(.045);
     }
     if (widget.revealed && widget.tile.kind == _FogTileKind.cache && !widget.searched) {
-      background = const Color(0xFFD8BF7A).withOpacity(.045);
+      background = const Color(0xFFFFFFFF).withOpacity(.045);
     }
     if (widget.revealed && widget.tile.kind == _FogTileKind.coconutTree && widget.hasHook && !widget.searched) {
       background = _themeGreen.withOpacity(.075);
@@ -4730,13 +4571,13 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
                       Icon(
                         Icons.warning_amber_rounded,
                         size: 10,
-                        color: const Color(0xFFD96F6F).withOpacity(.78),
+                        color: const Color(0xFFFFFFFF).withOpacity(.78),
                       ),
                       const SizedBox(width: 1),
                       Text(
                         '${widget.nearbyDanger}',
                         style: TextStyle(
-                          color: const Color(0xFFD96F6F).withOpacity(.82),
+                          color: const Color(0xFFFFFFFF).withOpacity(.82),
                           fontSize: 8.5,
                           fontWeight: FontWeight.w800,
                         ),
@@ -4756,9 +4597,9 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
           widget.tile.kind == _FogTileKind.eliteEnemy ||
           widget.tile.rare;
       final iconColor = isDanger
-          ? const Color(0xFFD96F6F).withOpacity(.88)
+          ? const Color(0xFFFFFFFF).withOpacity(.88)
           : isRare
-              ? const Color(0xFFD8BF7A).withOpacity(.92)
+              ? const Color(0xFFFFFFFF).withOpacity(.92)
               : actionable && widget.remote
                   ? _qualityColor(widget.tile.quality)
                   : actionable
@@ -4805,7 +4646,7 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: isDanger && !widget.searched
-                        ? const Color(0xFFD96F6F).withOpacity(.88)
+                        ? const Color(0xFFFFFFFF).withOpacity(.88)
                         : Colors.white.withOpacity(widget.searched ? .28 : .90),
                     fontSize: 7.8,
                     height: 1.0,
@@ -4821,9 +4662,9 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: isDanger
-                          ? const Color(0xFFD96F6F).withOpacity(.66)
+                          ? const Color(0xFFFFFFFF).withOpacity(.66)
                           : isRare
-                              ? const Color(0xFFD8BF7A).withOpacity(.86)
+                              ? const Color(0xFFFFFFFF).withOpacity(.86)
                               : actionable
                                   ? _themeGreen.withOpacity(.80)
                                   : Colors.white.withOpacity(.32),
@@ -4843,7 +4684,7 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
               child: Icon(
                 Icons.star_rounded,
                 size: 7,
-                color: const Color(0xFFD8BF7A).withOpacity(.92),
+                color: const Color(0xFFFFFFFF).withOpacity(.92),
               ),
             ),
         ],
@@ -4885,7 +4726,7 @@ class _FogTileWidgetState extends State<_FogTileWidget> {
                   ? <BoxShadow>[
                       BoxShadow(
                         color: widget.tile.kind == _FogTileKind.cache
-                            ? const Color(0xFFD8BF7A).withOpacity(.08)
+                            ? const Color(0xFFFFFFFF).withOpacity(.08)
                             : _themeGreen.withOpacity(.09),
                         blurRadius: 10,
                       ),
@@ -5899,22 +5740,22 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
 
     if (widget.active && !collectible && !widget.mergeReady) {
       bgColor = Colors.white.withOpacity(0.1);
-      borderColor = const Color(0xFF8BD7A2).withOpacity(0.8);
+      borderColor = const Color(0xFFFFFFFF).withOpacity(0.8);
       textColor = Colors.white;
     }
 
     if (widget.mergeReady && !collectible) {
-      bgColor = const Color(0xFF8BD7A2).withOpacity(0.08 + 0.05 * pulse);
-      borderColor = const Color(0xFF8BD7A2).withOpacity(0.4 + 0.2 * pulse);
+      bgColor = const Color(0xFFFFFFFF).withOpacity(0.08 + 0.05 * pulse);
+      borderColor = const Color(0xFFFFFFFF).withOpacity(0.4 + 0.2 * pulse);
     }
 
     if (collectible) {
       bgColor = Colors.white.withOpacity(0.075);
       textColor = Colors.white.withOpacity(0.94);
-      borderColor = const Color(0xFF8BD7A2).withOpacity(0.88);
+      borderColor = const Color(0xFFFFFFFF).withOpacity(0.88);
       glow = [
         BoxShadow(
-          color: const Color(0xFF8BD7A2).withOpacity(0.10 + 0.08 * pulse),
+          color: const Color(0xFFFFFFFF).withOpacity(0.10 + 0.08 * pulse),
           blurRadius: 14,
           spreadRadius: 0.6,
         ),
@@ -5922,7 +5763,7 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
     }
 
     if (encounter) {
-      bgColor = const Color(0xFFB44747).withOpacity(0.10 + 0.03 * pulse);
+      bgColor = const Color(0xFFFFFFFF).withOpacity(0.10 + 0.03 * pulse);
       borderColor = encounterQualityColor.withOpacity(0.72 + 0.16 * pulse);
       textColor = Colors.white;
       glow = <BoxShadow>[
@@ -6007,9 +5848,9 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                                     height: 18,
                                     alignment: Alignment.center,
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF8BD7A2).withOpacity(0.14),
+                                      color: const Color(0xFFFFFFFF).withOpacity(0.14),
                                       border: Border.all(
-                                        color: const Color(0xFF8BD7A2).withOpacity(0.34),
+                                        color: const Color(0xFFFFFFFF).withOpacity(0.34),
                                         width: .7,
                                       ),
                                     ),
@@ -6019,13 +5860,13 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                                             height: 10,
                                             child: CircularProgressIndicator(
                                               strokeWidth: 1.4,
-                                              color: Color(0xFF8BD7A2),
+                                              color: Color(0xFFFFFFFF),
                                             ),
                                           )
                                         : const Icon(
                                             Icons.inventory_2_outlined,
                                             size: 11.5,
-                                            color: Color(0xFF8BD7A2),
+                                            color: Color(0xFFFFFFFF),
                                           ),
                                   ),
                                   const SizedBox(width: 6),
@@ -6050,16 +5891,16 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                                       vertical: 2,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF8BD7A2).withOpacity(0.10 + 0.04 * pulse),
+                                      color: const Color(0xFFFFFFFF).withOpacity(0.10 + 0.04 * pulse),
                                       border: Border.all(
-                                        color: const Color(0xFF8BD7A2).withOpacity(0.34 + 0.12 * pulse),
+                                        color: const Color(0xFFFFFFFF).withOpacity(0.34 + 0.12 * pulse),
                                         width: .7,
                                       ),
                                     ),
                                     child: const Text(
                                       '可拾取',
                                       style: TextStyle(
-                                        color: Color(0xFF8BD7A2),
+                                        color: Color(0xFFFFFFFF),
                                         fontSize: 7.8,
                                         height: 1,
                                         fontWeight: FontWeight.w700,
@@ -6136,7 +5977,7 @@ class _SurroundNodeButtonState extends State<_SurroundNodeButton>
                                 const Text(
                                   '+',
                                   style: TextStyle(
-                                    color: Color(0xFF8BD7A2),
+                                    color: Color(0xFFFFFFFF),
                                     fontSize: 13,
                                     height: 1.1,
                                     fontWeight: FontWeight.w800,

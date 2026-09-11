@@ -1635,7 +1635,7 @@ class NovelGameController extends ChangeNotifier {
         if (battleId.isEmpty || asJsonMap(payload['battle_opponent']).isEmpty) {
           throw const NovelBackendException('后端没有返回完整的探索战斗快照');
         }
-        return payload;
+        return await _attachNovelCompanionStarsToBattle(payload);
       },
     );
     isStartingBattle = true;
@@ -1848,7 +1848,7 @@ class NovelGameController extends ChangeNotifier {
             asJsonMap(payload['battle_opponent']).isEmpty) {
           throw const NovelBackendException('后端没有返回完整的战斗快照');
         }
-        return payload;
+        return await _attachNovelCompanionStarsToBattle(payload);
       },
     );
     isStartingBattle = true;
@@ -2691,6 +2691,41 @@ class NovelGameController extends ChangeNotifier {
       };
     }
     novelCharacterRoster = next;
+  }
+
+  Future<JsonMap> _attachNovelCompanionStarsToBattle(JsonMap payload) async {
+    // 角色星级的权威来源是 /chat/novel-character/roster。
+    // Novel Router 只拥有援战阵容/技能，因此在进入战斗前做一次轻量 join，
+    // 不把结缘系统的存储细节复制进第二套后端状态。
+    try {
+      final rosterPayload = await backend.fetchNovelCharacterRoster(sessionId);
+      _applyNovelCharacterRosterPayload(rosterPayload);
+    } catch (error) {
+      debugPrint('refresh companion stars before battle skipped: $error');
+    }
+
+    final next = <String, dynamic>{...payload};
+    final player = asJsonMap(next['player_snapshot']);
+    if (player.isEmpty) return next;
+
+    final companions = asJsonList(player['companions']).map((raw) {
+      final item = asJsonMap(raw);
+      final id = stringValue(
+        item['character_instance_id'] ?? item['character_id'] ?? item['id'],
+      ).trim();
+      final star = id.isEmpty ? 0 : novelCharacterStar(id);
+      return <String, dynamic>{
+        ...item,
+        'star': star,
+        'skill_effect_multiplier': 1.0 + star * .03,
+      };
+    }).toList(growable: false);
+
+    next['player_snapshot'] = <String, dynamic>{
+      ...player,
+      'companions': companions,
+    };
+    return next;
   }
 
   Future<void> refreshNovelCharacterRoster({bool notify = true}) async {
