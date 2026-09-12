@@ -19,6 +19,7 @@ class NovelInputBar extends StatefulWidget {
     this.targetActorAvatarUrl = '',
     this.targetActorPlaceholder = '',
     this.onClearTargetActor,
+    this.onLayoutHeightChanged,
   });
 
   final TextEditingController controller;
@@ -34,6 +35,9 @@ class NovelInputBar extends StatefulWidget {
   final String targetActorAvatarUrl;
   final String targetActorPlaceholder;
   final VoidCallback? onClearTargetActor;
+  /// 可选：输入区总高度发生变化时通知宿主。
+  /// 宿主可据此同步增加剧情正文 / 选项区的 bottom inset，避免引用物品后发生遮挡。
+  final ValueChanged<double>? onLayoutHeightChanged;
 
   @override
   State<NovelInputBar> createState() => _NovelInputBarState();
@@ -61,6 +65,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
   bool _inventoryRefreshing = false;
   String _inventoryCategory = '物品';
   final Set<String> _referencedItemNames = <String>{};
+  final GlobalKey _layoutMeasureKey = GlobalKey();
+  double _lastReportedLayoutHeight = -1;
 
   @override
   void initState() {
@@ -256,198 +262,196 @@ class _NovelInputBarState extends State<NovelInputBar> {
               offset: const Offset(-10, -8),
               child: Material(
                 color: Colors.transparent,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.zero,
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(
-                      sigmaX: 46,
-                      sigmaY: 46,
-                      tileMode: TileMode.clamp,
-                    ),
-                    child: Container(
-                      width: panelWidth,
-                      constraints: const BoxConstraints(maxHeight: 310),
-                      decoration: BoxDecoration(
-                        color: const Color(0x66121513),
-                        borderRadius: BorderRadius.zero,
-                        border: Border.all(
-                          color: Colors.white.withOpacity(.12),
-                          width: .65,
-                        ),
-                        boxShadow: const <BoxShadow>[
-                          BoxShadow(
-                            color: Color(0x16000000),
-                            blurRadius: 12,
-                            offset: Offset(0, 5),
-                          ),
-                        ],
+                child: Container(
+                  width: panelWidth,
+                  constraints: const BoxConstraints(maxHeight: 300),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFFFFFF),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color: Color(0x1F000000),
+                        blurRadius: 18,
+                        offset: Offset(0, 8),
                       ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          SizedBox(
-                            height: 48,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 0, 11, 0),
-                              child: Row(
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(13, 11, 9, 8),
+                        child: Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: <Widget>[
-                                  Expanded(
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: <Widget>[
-                                        Text(
-                                          '引用物品',
-                                          style: TextStyle(
-                                            color: Colors.white.withOpacity(.94),
-                                            fontSize: 12.3,
-                                            fontWeight: FontWeight.w800,
-                                            letterSpacing: .12,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 3),
-                                        Text(
-                                          items.isEmpty
-                                              ? '当前没有可引用物品'
-                                              : selectedCount > 0
-                                                  ? '已选择 $selectedCount 件 · 再次点击取消'
-                                                  : '点击物品即可引用',
-                                          style: TextStyle(
-                                            color: Colors.white.withOpacity(.46),
-                                            fontSize: 9.4,
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                      ],
+                                  const Text(
+                                    '引用物品',
+                                    style: TextStyle(
+                                      color: Color(0xFF1C2227),
+                                      fontSize: 14.5,
+                                      height: 1.1,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: .35,
                                     ),
                                   ),
-                                  if (_inventoryRefreshing) ...<Widget>[
-                                    SizedBox.square(
-                                      dimension: 12,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.3,
-                                        color: Colors.white.withOpacity(.72),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                  ],
-                                  Material(
-                                    color: Colors.transparent,
-                                    child: InkWell(
-                                      onTap: _closeInventoryPicker,
-                                      splashColor: Colors.white.withOpacity(.06),
-                                      highlightColor: Colors.white.withOpacity(.03),
-                                      child: SizedBox(
-                                        width: 28,
-                                        height: 28,
-                                        child: Center(
-                                          child: Icon(
-                                            Icons.close_rounded,
-                                            size: 17,
-                                            color: Colors.white.withOpacity(.78),
-                                          ),
-                                        ),
-                                      ),
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    items.isEmpty
+                                        ? '当前没有可引用物品'
+                                        : selectedCount > 0
+                                            ? '已选择 $selectedCount 件 · 再次点击取消'
+                                            : '选择要在本次行动中使用的物品',
+                                    style: const TextStyle(
+                                      color: Color(0xFF7B848B),
+                                      fontSize: 10.2,
+                                      height: 1.2,
+                                      fontWeight: FontWeight.w500,
+                                      letterSpacing: .1,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                          ),
-                          Container(
-                            height: .65,
-                            color: Colors.white.withOpacity(.075),
-                          ),
-                          if (categoryLabels.length > 1) ...<Widget>[
-                            SizedBox(
-                              height: 35,
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(10, 6, 10, 5),
-                                child: Row(
-                                  children: <Widget>[
-                                    for (var index = 0; index < categoryLabels.length; index++) ...<Widget>[
-                                      if (index > 0) const SizedBox(width: 16),
-                                      Builder(
-                                        builder: (context) {
-                                          final label = categoryLabels[index];
-                                          final selected = label == _inventoryCategory;
-                                          return InkWell(
-                                            onTap: () {
-                                              if (_inventoryCategory == label) return;
-                                              setState(() => _inventoryCategory = label);
-                                              _inventoryOverlay?.markNeedsBuild();
-                                            },
-                                            splashColor: Colors.white.withOpacity(.05),
-                                            highlightColor: Colors.white.withOpacity(.025),
-                                            child: Padding(
-                                              padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 4),
-                                              child: Text(
-                                                label,
-                                                style: TextStyle(
-                                                  color: Colors.white.withOpacity(selected ? .96 : .43),
-                                                  fontSize: 10.2,
-                                                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                                                ),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ],
-                                  ],
+                            if (_inventoryRefreshing) ...<Widget>[
+                              const SizedBox.square(
+                                dimension: 13,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.4,
+                                  color: Color(0xFF7C8B96),
                                 ),
                               ),
-                            ),
-                            Container(
-                              height: .55,
-                              color: Colors.white.withOpacity(.055),
+                              const SizedBox(width: 8),
+                            ],
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _closeInventoryPicker,
+                                borderRadius: BorderRadius.zero,
+                                splashColor: const Color(0x0A000000),
+                                highlightColor: const Color(0x05000000),
+                                child: const SizedBox(
+                                  width: 32,
+                                  height: 32,
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.close,
+                                      size: 18,
+                                      color: Color(0xFF59636B),
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
-                          if (items.isEmpty && !_inventoryRefreshing)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 24),
-                              child: Text(
-                                '背包里暂无可引用物品',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(.42),
-                                  fontSize: 10.8,
-                                ),
-                              ),
-                            )
-                          else if (visibleItems.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 20),
-                              child: Text(
-                                '该分类暂无可引用物品',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(.38),
-                                  fontSize: 10.6,
-                                ),
-                              ),
-                            )
-                          else
-                            Flexible(
-                              child: ListView.separated(
-                                shrinkWrap: true,
-                                physics: const BouncingScrollPhysics(),
-                                padding: const EdgeInsets.fromLTRB(7, 7, 7, 8),
-                                itemCount: visibleItems.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 3),
-                                itemBuilder: (context, index) {
-                                  final item = visibleItems[index];
-                                  return _InventoryReferenceTile(
-                                    name: item.name,
-                                    typeLabel: _referenceItemTypeLabel(item),
-                                    description: item.description,
-                                    referenced: _isItemReferenced(item),
-                                    onTap: () => _insertInventoryReference(item),
-                                  );
-                                },
-                              ),
-                            ),
-                        ],
+                        ),
                       ),
-                    ),
+                      if (categoryLabels.length > 1)
+                        SizedBox(
+                          height: 38,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Row(
+                              children: <Widget>[
+                                for (var index = 0;
+                                    index < categoryLabels.length;
+                                    index++) ...<Widget>[
+                                  if (index > 0) const SizedBox(width: 22),
+                                  Builder(
+                                    builder: (context) {
+                                      final label = categoryLabels[index];
+                                      final selected = label == _inventoryCategory;
+                                      return InkWell(
+                                        onTap: () {
+                                          if (_inventoryCategory == label) return;
+                                          setState(() => _inventoryCategory = label);
+                                          _inventoryOverlay?.markNeedsBuild();
+                                        },
+                                        borderRadius: BorderRadius.zero,
+                                        splashColor: const Color(0x08000000),
+                                        highlightColor: const Color(0x04000000),
+                                        child: SizedBox(
+                                          height: 38,
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.end,
+                                            children: <Widget>[
+                                              Text(
+                                                label,
+                                                style: TextStyle(
+                                                  color: selected
+                                                      ? const Color(0xFF1C2227)
+                                                      : const Color(0xFF9AA2A8),
+                                                  fontSize: 11,
+                                                  fontWeight: selected
+                                                      ? FontWeight.w700
+                                                      : FontWeight.w500,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 7),
+                                              AnimatedContainer(
+                                                duration: const Duration(milliseconds: 140),
+                                                width: selected ? 22 : 0,
+                                                height: 2,
+                                                color: selected
+                                                    ? NovelPalette.accent
+                                                    : Colors.transparent,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      if (items.isEmpty && !_inventoryRefreshing)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 28),
+                          child: Text(
+                            '背包里暂无可引用物品',
+                            style: TextStyle(
+                              color: Color(0xFF8B949B),
+                              fontSize: 11,
+                            ),
+                          ),
+                        )
+                      else if (visibleItems.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Text(
+                            '该分类暂无可引用物品',
+                            style: TextStyle(
+                              color: Color(0xFF8B949B),
+                              fontSize: 11,
+                            ),
+                          ),
+                        )
+                      else
+                        Flexible(
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            physics: const BouncingScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+                            itemCount: visibleItems.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 4),
+                            itemBuilder: (context, index) {
+                              final item = visibleItems[index];
+                              return _InventoryReferenceTile(
+                                name: item.name,
+                                typeLabel: _referenceItemTypeLabel(item),
+                                description: item.description,
+                                referenced: _isItemReferenced(item),
+                                onTap: () => _insertInventoryReference(item),
+                              );
+                            },
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -817,6 +821,25 @@ class _NovelInputBarState extends State<NovelInputBar> {
     super.dispose();
   }
 
+  void _reportLayoutHeight() {
+    if (widget.onLayoutHeightChanged == null) return;
+
+    void measure() {
+      if (!mounted) return;
+      final renderObject = _layoutMeasureKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) return;
+      final height = renderObject.size.height;
+      if ((_lastReportedLayoutHeight - height).abs() < .5) return;
+      _lastReportedLayoutHeight = height;
+      widget.onLayoutHeightChanged?.call(height);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => measure());
+    // 上下文行用 AnimatedContainer 改变高度；动画结束后再量一次最终值，
+    // 让 Stack/Positioned 宿主拿到稳定的 bottom inset。
+    Future<void>.delayed(const Duration(milliseconds: 180), measure);
+  }
+
   @override
   Widget build(BuildContext context) {
     final speaking = _micHeld || _isListening || _speechStarting;
@@ -851,8 +874,10 @@ class _NovelInputBarState extends State<NovelInputBar> {
         ),
       for (final item in referencedItems) _buildReferencedItemChip(item),
     ];
+    _reportLayoutHeight();
 
     return AnimatedOpacity(
+        key: _layoutMeasureKey,
         opacity: widget.enabled ? 1 : .50,
         duration: const Duration(milliseconds: 160),
         child: Row(
@@ -912,20 +937,28 @@ class _NovelInputBarState extends State<NovelInputBar> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  if (contextChips.isNotEmpty) ...<Widget>[
-                    // 对话目标和引用物品是同一层“输入上下文”：角色优先，其后是物品引用。
-                    SizedBox(
-                      height: shortViewport ? 26 : 30,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        itemCount: contextChips.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 5),
-                        itemBuilder: (context, index) => contextChips[index],
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                  ],
+                  // 上下文行出现 / 消失时让输入区自身平滑改变高度。
+                  // 正常流式布局下，宿主会自然把剧情正文和选项区往上推；
+                  // 若宿主使用 Stack/Positioned，则配合 onLayoutHeightChanged 同步 bottom inset。
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeOutCubic,
+                    height: contextChips.isEmpty
+                        ? 0
+                        : (shortViewport ? 30 : 34),
+                    child: contextChips.isEmpty
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              physics: const BouncingScrollPhysics(),
+                              itemCount: contextChips.length,
+                              separatorBuilder: (_, __) => const SizedBox(width: 5),
+                              itemBuilder: (context, index) => contextChips[index],
+                            ),
+                          ),
+                  ),
                   ClipRRect(
                     borderRadius: BorderRadius.zero,
                     child: _AdaptiveBackdropBlur(
@@ -1197,19 +1230,12 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
     final active = widget.referenced;
     final description = widget.description.trim();
     final background = _pressed
-        ? Colors.white.withOpacity(.070)
+        ? const Color(0xFFEEF1EE)
         : active
-            ? Colors.white.withOpacity(.085)
+            ? NovelPalette.accent.withOpacity(.10)
             : _hovered
-                ? Colors.white.withOpacity(.040)
-                : Colors.transparent;
-    final border = active
-        ? Colors.white.withOpacity(.30)
-        : _pressed
-            ? Colors.white.withOpacity(.24)
-            : _hovered
-                ? Colors.white.withOpacity(.12)
-                : Colors.white.withOpacity(.055);
+                ? const Color(0xFFF5F7F5)
+                : const Color(0xFFFAFBFA);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -1219,17 +1245,13 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
         waitDuration: const Duration(milliseconds: 320),
         preferBelow: false,
         child: AnimatedScale(
-          scale: _pressed ? .985 : 1,
+          scale: _pressed ? .99 : 1,
           duration: const Duration(milliseconds: 90),
           curve: Curves.easeOutCubic,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
             curve: Curves.easeOutCubic,
-            decoration: BoxDecoration(
-              color: background,
-              borderRadius: BorderRadius.zero,
-              border: Border.all(color: border, width: .8),
-            ),
+            color: background,
             child: Material(
               color: Colors.transparent,
               child: InkWell(
@@ -1238,21 +1260,12 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
                   if (mounted) setState(() => _pressed = value);
                 },
                 borderRadius: BorderRadius.zero,
-                splashColor: Colors.white.withOpacity(.055),
-                highlightColor: Colors.white.withOpacity(.03),
+                splashColor: const Color(0x0A000000),
+                highlightColor: const Color(0x05000000),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
+                  padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
                   child: Row(
                     children: <Widget>[
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 140),
-                        width: 2,
-                        height: 25,
-                        color: active
-                            ? Colors.white.withOpacity(.86)
-                            : Colors.white.withOpacity(_hovered ? .24 : .07),
-                      ),
-                      const SizedBox(width: 9),
                       Expanded(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
@@ -1261,14 +1274,13 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
                             AnimatedDefaultTextStyle(
                               duration: const Duration(milliseconds: 120),
                               style: TextStyle(
-                                color: Colors.white.withOpacity(
-                                  active ? .96 : (_hovered ? .90 : .78),
-                                ),
-                                fontSize: 11.7,
-                                height: 1.1,
+                                color: const Color(0xFF1C2227),
+                                fontSize: 12.2,
+                                height: 1.15,
                                 fontWeight: active
                                     ? FontWeight.w700
                                     : FontWeight.w600,
+                                letterSpacing: .2,
                               ),
                               child: Text(
                                 widget.name,
@@ -1276,23 +1288,49 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: 5),
                             Text(
-                              active
-                                  ? '${widget.typeLabel} · 已引用'
-                                  : widget.typeLabel,
+                              widget.typeLabel,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: active
-                                    ? Colors.white.withOpacity(.70)
-                                    : Colors.white.withOpacity(_hovered ? .44 : .31),
-                                fontSize: 9.2,
+                              style: const TextStyle(
+                                color: Color(0xFF7B848B),
+                                fontSize: 9.8,
+                                height: 1.1,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
                           ],
                         ),
+                      ),
+                      const SizedBox(width: 8),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 140),
+                        child: active
+                            ? Row(
+                                key: const ValueKey<String>('active'),
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.check_rounded,
+                                    size: 14,
+                                    color: NovelPalette.accentDark,
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    '已引用',
+                                    style: TextStyle(
+                                      color: NovelPalette.accentDark,
+                                      fontSize: 9.6,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : const SizedBox(
+                                key: ValueKey<String>('inactive'),
+                                width: 1,
+                              ),
                       ),
                     ],
                   ),

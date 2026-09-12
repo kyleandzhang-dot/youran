@@ -6,7 +6,6 @@ part of '../novel_sheets.dart';
 //   - showNovelCharacterSetupDialog(...)
 //   - showNovelOpeningDialog(...)
 //   - showNovelFateRevertDialog(...)
-//   - showDefaultNovelEnding(...)
 // 其余以下划线 `_` 开头的类型/方法均为该页面内部实现或共享私有实现。
 // ============================================================================
 
@@ -826,119 +825,169 @@ Future<void> showNovelFateRevertDialog(
   FateRevertData? previewData,
 }) async {
   final data = previewData ?? controller.fateRevert;
-  // 使用一种苍白、冰冷且易碎的紫色，更符合意识消散的氛围
-  final glowColor = const Color(0xFFA89CB8);
+  // 死亡页只把苍白紫留作氛围色；真正的操作入口使用纯白，拉开层级。
+  const glowColor = Color(0xFFA8A1B3);
 
   await showGeneralDialog<void>(
     context: context,
     barrierDismissible: false,
     barrierLabel: '意识沉沦',
-    // 背景压得更暗一些，模拟死亡时的视觉剥夺
-    barrierColor: Colors.black.withOpacity(.75),
-    // 死亡的转场时间应该拉长，给人沉重感
-    transitionDuration: const Duration(milliseconds: 1200),
+    barrierColor: Colors.black.withOpacity(.82),
+    transitionDuration: const Duration(milliseconds: 1050),
     pageBuilder: (dialogContext, _, __) {
       return Material(
         color: Colors.transparent,
-        child: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-            child: ColoredBox(
-              color: Colors.transparent,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+        child: SafeArea(
+          child: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 520;
+                  return Stack(
+                    fit: StackFit.expand,
                     children: <Widget>[
-                      // 使用模糊/消散意象的图标
-                      Icon(
-                        Icons.lens_blur_rounded,
-                        size: 42,
-                        color: Colors.white.withOpacity(.78),
-                        shadows: <Shadow>[
-                          Shadow(color: glowColor.withOpacity(.6), blurRadius: 24)
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Container(width: 48, height: 1, color: glowColor.withOpacity(.2)),
-                          const SizedBox(width: 14),
-                          Text(
-                            '意 识 沉 沦',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(.65),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w400,
-                              letterSpacing: 6.0,
-                            ),
+                      // 中央仅保留一层极弱的冷色呼吸区，避免整页被紫色染满。
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: const Alignment(0, -.08),
+                            radius: .72,
+                            colors: <Color>[
+                              glowColor.withOpacity(.055),
+                              Colors.transparent,
+                              Colors.black.withOpacity(.16),
+                            ],
+                            stops: const <double>[0, .58, 1],
                           ),
-                          const SizedBox(width: 8),
-                          Container(width: 48, height: 1, color: glowColor.withOpacity(.2)),
-                        ],
-                      ),
-                      const SizedBox(height: 32),
-                      Text(
-                        data.message.isEmpty ? '你的意识在无边的黑暗中逐渐涣散……' : data.message,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: NovelPalette.text.withOpacity(.85),
-                          fontSize: 15.5,
-                          height: 1.8,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: 1.2,
-                          shadows: const <Shadow>[
-                            Shadow(color: Colors.black, blurRadius: 8, offset: Offset(0, 2))
-                          ],
                         ),
                       ),
-                      const SizedBox(height: 24),
-                      // 将游戏数据（死亡次数、扣分）做弱化处理
-                      Text(
-                        '死亡次数 ${data.deathCount}   /   法则损耗 ${data.scoreDeduct}',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(.38),
-                          fontSize: 10.5,
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                      const SizedBox(height: 72),
-                      // 幽灵感交互按钮，去掉现代UI的实心背景和圆角
-                      Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () {
-                            Navigator.of(dialogContext).pop();
-                            if (!previewOnly) {
-                              controller.acceptFateRevert();
-                            }
-                          },
-                          splashColor: glowColor.withOpacity(.15),
-                          highlightColor: Colors.transparent,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(.3),
-                              border: Border.all(color: glowColor.withOpacity(.25), width: 1),
-                            ),
-                            child: Row(
+                      Center(
+                        child: SingleChildScrollView(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: compact ? 24 : 40,
+                            vertical: compact ? 24 : 34,
+                          ),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 620),
+                            child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: <Widget>[
                                 Icon(
-                                  Icons.remove_red_eye_outlined,
-                                  size: 16,
-                                  color: glowColor.withOpacity(.75),
+                                  Icons.lens_blur_rounded,
+                                  size: compact ? 38 : 42,
+                                  color: Colors.white.withOpacity(.80),
+                                  shadows: <Shadow>[
+                                    Shadow(
+                                      color: glowColor.withOpacity(.52),
+                                      blurRadius: 26,
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 14),
+                                SizedBox(height: compact ? 16 : 19),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    Container(
+                                      width: compact ? 34 : 46,
+                                      height: 1,
+                                      color: glowColor.withOpacity(.22),
+                                    ),
+                                    SizedBox(width: compact ? 11 : 14),
+                                    Text(
+                                      '意 识 沉 沦',
+                                      style: TextStyle(
+                                        color: Colors.white.withOpacity(.68),
+                                        fontSize: compact ? 11 : 12,
+                                        fontWeight: FontWeight.w400,
+                                        letterSpacing: compact ? 4.8 : 6.0,
+                                      ),
+                                    ),
+                                    SizedBox(width: compact ? 6 : 8),
+                                    Container(
+                                      width: compact ? 34 : 46,
+                                      height: 1,
+                                      color: glowColor.withOpacity(.22),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: compact ? 27 : 32),
                                 Text(
-                                  '睁 开 双 眼',
+                                  data.message.isEmpty
+                                      ? '你的意识在无边的黑暗中逐渐涣散……'
+                                      : data.message,
+                                  textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: glowColor.withOpacity(.9),
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w600,
-                                    letterSpacing: 4.0,
+                                    color: NovelPalette.text.withOpacity(.88),
+                                    fontSize: compact ? 14.5 : 15.5,
+                                    height: 1.82,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: compact ? .8 : 1.2,
+                                    shadows: const <Shadow>[
+                                      Shadow(
+                                        color: Colors.black,
+                                        blurRadius: 10,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                SizedBox(height: compact ? 20 : 23),
+                                Text(
+                                  '死亡次数 ${data.deathCount}   /   法则损耗 ${data.scoreDeduct}',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(.34),
+                                    fontSize: compact ? 9.8 : 10.5,
+                                    letterSpacing: compact ? 1.1 : 1.5,
+                                  ),
+                                ),
+                                SizedBox(height: compact ? 48 : 58),
+
+                                // 唯一的高亮操作：白色实体按钮像黑暗中的出口。
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    minWidth: compact ? 210 : 238,
+                                    minHeight: compact ? 46 : 50,
+                                  ),
+                                  child: Material(
+                                    color: Colors.white.withOpacity(.95),
+                                    child: InkWell(
+                                      onTap: () {
+                                        Navigator.of(dialogContext).pop();
+                                        if (!previewOnly) {
+                                          controller.acceptFateRevert();
+                                        }
+                                      },
+                                      splashColor: Colors.black.withOpacity(.08),
+                                      highlightColor: Colors.black.withOpacity(.035),
+                                      child: Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal: compact ? 26 : 32,
+                                          vertical: compact ? 13 : 14,
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: <Widget>[
+                                            Icon(
+                                              Icons.remove_red_eye_outlined,
+                                              size: compact ? 15 : 16,
+                                              color: Colors.black.withOpacity(.78),
+                                            ),
+                                            SizedBox(width: compact ? 11 : 14),
+                                            Text(
+                                              '睁 开 双 眼',
+                                              style: TextStyle(
+                                                color: Colors.black.withOpacity(.88),
+                                                fontSize: compact ? 12.5 : 13.5,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: compact ? 3.2 : 4.0,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ],
@@ -947,8 +996,8 @@ Future<void> showNovelFateRevertDialog(
                         ),
                       ),
                     ],
-                  ),
-                ),
+                  );
+                },
               ),
             ),
           ),
@@ -956,81 +1005,20 @@ Future<void> showNovelFateRevertDialog(
       );
     },
     transitionBuilder: (context, animation, secondaryAnimation, child) {
-      // 改为缓慢浮现+轻微下坠的动画，不再使用弹簧效果
-      final curvedAnimation = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      final curvedAnimation = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+      );
       return FadeTransition(
         opacity: curvedAnimation,
         child: SlideTransition(
-          position: Tween<Offset>(begin: const Offset(0, -0.05), end: Offset.zero).animate(curvedAnimation),
+          position: Tween<Offset>(
+            begin: const Offset(0, -.035),
+            end: Offset.zero,
+          ).animate(curvedAnimation),
           child: child,
         ),
       );
     },
-  );
-}
-
-Future<void> showDefaultNovelEnding(
-  BuildContext context,
-  NovelGameController controller, {
-  NovelEnding? endingOverride,
-}) async {
-  final ending = endingOverride ?? controller.ending;
-  await Navigator.of(context).push<void>(
-    PageRouteBuilder<void>(
-      transitionDuration: const Duration(milliseconds: 800),
-      pageBuilder: (_, animation, secondaryAnimation) => Scaffold(
-        backgroundColor: NovelPalette.background,
-        body: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            NovelWorldBackground(url: ending.backgroundUrl.isEmpty ? controller.world.backgroundUrl : ending.backgroundUrl),
-            ColoredBox(color: Colors.black.withOpacity(.58)),
-            SafeArea(
-              child: CustomScrollView(
-                slivers: <Widget>[
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(24, 80, 24, 50),
-                    sliver: SliverList(
-                      delegate: SliverChildListDelegate(<Widget>[
-                        Text(ending.code, style: const TextStyle(color: NovelPalette.accent, fontSize: 11, letterSpacing: 2)),
-                        const SizedBox(height: 14),
-                        Text(ending.title, style: const TextStyle(color: NovelPalette.text, fontSize: 44, height: 1.05, fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 24),
-                        Text(ending.text, style: const TextStyle(color: NovelPalette.text, fontSize: 15.5, height: 1.95)),
-                        if (ending.milestones.isNotEmpty) ...<Widget>[
-                          const SizedBox(height: 42),
-                          const Text('共同记忆', style: TextStyle(color: NovelPalette.text, fontSize: 20, fontWeight: FontWeight.w700)),
-                          const SizedBox(height: 14),
-                          ...ending.milestones.map((item) => Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: Text('· $item', style: const TextStyle(color: NovelPalette.muted, height: 1.6)),
-                              )),
-                        ],
-                        if (ending.triggeredEvents.isNotEmpty) ...<Widget>[
-                          const SizedBox(height: 34),
-                          const Text('命运轨迹', style: TextStyle(color: NovelPalette.text, fontSize: 20, fontWeight: FontWeight.w700)),
-                          const SizedBox(height: 14),
-                          ...ending.triggeredEvents.map((item) => Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: Text('· $item', style: const TextStyle(color: NovelPalette.muted, height: 1.6)),
-                              )),
-                        ],
-                        const SizedBox(height: 48),
-                        FilledButton(
-                          style: FilledButton.styleFrom(backgroundColor: NovelPalette.accent, foregroundColor: NovelPalette.accentDark, padding: const EdgeInsets.symmetric(vertical: 15)),
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('返回世界'),
-                        ),
-                      ]),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-      transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
-    ),
   );
 }

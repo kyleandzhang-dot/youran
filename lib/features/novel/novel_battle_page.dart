@@ -6112,15 +6112,18 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
           if (landscapePhone) {
             final veryShort = constraints.maxHeight < 360;
-            final controlWidth = (constraints.maxWidth * .40)
-                .clamp(300.0, 410.0)
+            // 横屏控制区放在屏幕正中，并给触控按钮/文字更充足的宽度。
+            final controlWidth = math
+                .min(
+                  constraints.maxWidth - 20.0,
+                  (constraints.maxWidth * .68).clamp(460.0, 680.0),
+                )
                 .toDouble();
-            final historyWidth = math
-                .max(190.0, constraints.maxWidth - controlWidth - 42.0)
-                .toDouble();
-            final historyHeight = (constraints.maxHeight * .14)
-                .clamp(42.0, 62.0)
-                .toDouble();
+            final historyHeight = veryShort
+                ? 28.0
+                : (constraints.maxHeight * .14)
+                    .clamp(42.0, 62.0)
+                    .toDouble();
 
             return Stack(
               fit: StackFit.expand,
@@ -6143,18 +6146,21 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                   height: veryShort ? 50 : 58,
                   child: _buildStatusBars(landscape: true),
                 ),
-                Positioned(
-                  left: 14,
-                  bottom: veryShort ? 5 : 10,
-                  width: historyWidth,
-                  height: historyHeight,
-                  child: _buildHistory(compact: true),
-                ),
-                Positioned(
-                  right: 6,
-                  bottom: 0,
-                  width: controlWidth,
-                  child: _buildControls(compact: true),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: SizedBox(
+                    width: controlWidth,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        SizedBox(
+                          height: historyHeight,
+                          child: _buildHistory(compact: true),
+                        ),
+                        _buildControls(compact: true, landscape: true),
+                      ],
+                    ),
+                  ),
                 ),
                 _buildSkillDropTarget(landscape: true),
               ],
@@ -6809,7 +6815,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     unawaited(HapticFeedback.selectionClick());
   }
 
-  Widget _buildCompanionAvatarStrip() {
+  Widget _buildCompanionAvatarStrip({bool large = false}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: _battleCompanions.map((companion) {
@@ -6846,8 +6852,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               onTap: _canAct ? () => _openCompanionSkills(companion) : null,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                width: 38,
-                height: 38,
+                width: large ? 42 : 38,
+                height: large ? 42 : 38,
                 decoration: const BoxDecoration(
                   color: Colors.transparent,
                 ),
@@ -6864,8 +6870,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                             : _BattleImage(
                                 source: source,
                                 fallback: fallback,
-                                logicalWidth: 38,
-                                maxCacheWidth: 152,
+                                logicalWidth: large ? 42 : 38,
+                                maxCacheWidth: large ? 168 : 152,
                                 fit: BoxFit.cover,
                               ),
                       ),
@@ -6921,7 +6927,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
-  Widget _buildControls({required bool compact}) {
+  Widget _buildControls({required bool compact, bool landscape = false}) {
     // skills 是战斗页的默认模式。某些短暂状态（敌方行动、眩晕）
     // 会把 _activeCategory 暂时置空，但视觉上不应该让用户误以为切到了别的模式。
     final bool isItems = _activeCategory == _BattleCommandCategory.items;
@@ -6970,9 +6976,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         ),
       ),
       padding: EdgeInsets.only(
-        top: compact ? 7 : 10,
+        top: landscape ? 6 : (compact ? 7 : 10),
         bottom: math.max(
-          compact ? 4.0 : 10.0,
+          landscape ? 4.0 : (compact ? 4.0 : 10.0),
           MediaQuery.viewPaddingOf(context).bottom,
         ).toDouble(),
       ),
@@ -6980,7 +6986,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 16),
+            padding: EdgeInsets.symmetric(horizontal: landscape ? 12 : (compact ? 8 : 16)),
             child: Row(
               children: <Widget>[
                 Expanded(
@@ -6996,6 +7002,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                             label: '行动',
                             symbol: '01',
                             isSelected: isSkills,
+                            large: landscape,
                             onTap: () {
                               if (_canAct) {
                                 _toggleCategory(_BattleCommandCategory.skills);
@@ -7007,6 +7014,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                             label: '道具',
                             symbol: '02',
                             isSelected: isItems,
+                            large: landscape,
                             onTap: () {
                               if (_canAct) {
                                 _toggleCategory(_BattleCommandCategory.items);
@@ -7014,10 +7022,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                             },
                           ),
                           const SizedBox(width: 6),
-                          _buildEscapeAction(),
+                          _buildEscapeAction(large: landscape),
                           if (_battleCompanions.isNotEmpty) ...<Widget>[
                             const SizedBox(width: 7),
-                            _buildCompanionAvatarStrip(),
+                            _buildCompanionAvatarStrip(large: landscape),
                           ],
                         ],
                       ),
@@ -7036,15 +7044,19 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         backgroundColor: const Color(0xFFF2F0EA),
                         foregroundColor: const Color(0xFF0B0C0E),
                         elevation: 0,
-                        minimumSize: const Size(72, 34),
-                        padding: const EdgeInsets.symmetric(horizontal: 15),
+                        minimumSize: landscape
+                            ? const Size(88, 42)
+                            : const Size(72, 34),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: landscape ? 20 : 15,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(6),
                         ),
-                        textStyle: const TextStyle(
-                          fontSize: 11.5,
+                        textStyle: TextStyle(
+                          fontSize: landscape ? 13.5 : 11.5,
                           fontWeight: FontWeight.w900,
-                          letterSpacing: 1.0,
+                          letterSpacing: landscape ? 1.2 : 1.0,
                         ),
                       ),
                       child: const Text('执行'),
@@ -7212,6 +7224,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     required String symbol,
     required bool isSelected,
     required VoidCallback onTap,
+    bool large = false,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -7219,8 +7232,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         curve: Curves.easeOutCubic,
-        height: 36,
-        padding: const EdgeInsets.symmetric(horizontal: 11),
+        height: large ? 42 : 36,
+        padding: EdgeInsets.symmetric(horizontal: large ? 15 : 11),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: isSelected
@@ -7243,7 +7256,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 color: isSelected
                     ? const Color(0xFF0B0C0E)
                     : Colors.white.withOpacity(.52),
-                fontSize: 8.5,
+                fontSize: large ? 9.6 : 8.5,
                 height: 1,
                 fontWeight: FontWeight.w900,
                 letterSpacing: .3,
@@ -7256,7 +7269,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 color: isSelected
                     ? const Color(0xFF0B0C0E)
                     : Colors.white.withOpacity(.80),
-                fontSize: 12.2,
+                fontSize: large ? 14.0 : 12.2,
                 height: 1,
                 fontWeight: FontWeight.w800,
                 letterSpacing: .8,
@@ -7268,7 +7281,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
-  Widget _buildEscapeAction() {
+  Widget _buildEscapeAction({bool large = false}) {
     return GestureDetector(
       onTap: _canAct ? () => unawaited(_confirmEscape()) : null,
       behavior: HitTestBehavior.opaque,
@@ -7278,8 +7291,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           curve: Curves.easeOutCubic,
-          height: 36,
-          padding: const EdgeInsets.symmetric(horizontal: 11),
+          height: large ? 42 : 36,
+          padding: EdgeInsets.symmetric(horizontal: large ? 15 : 11),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(.025),
@@ -7296,7 +7309,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 '03',
                 style: TextStyle(
                   color: Colors.white.withOpacity(.52),
-                  fontSize: 8.5,
+                  fontSize: large ? 9.6 : 8.5,
                   height: 1,
                   fontWeight: FontWeight.w900,
                   letterSpacing: .3,
@@ -7307,7 +7320,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 '逃跑',
                 style: TextStyle(
                   color: Colors.white.withOpacity(.80),
-                  fontSize: 12.2,
+                  fontSize: large ? 14.0 : 12.2,
                   height: 1,
                   fontWeight: FontWeight.w800,
                   letterSpacing: .8,
@@ -7937,8 +7950,9 @@ class _BattleStatusBar extends StatelessWidget {
         Widget content = Row(
           mainAxisAlignment:
               alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
+          // 右上角敌方头像在横/竖屏都隐藏；左上角玩家头像保留。
           children: alignEnd
-              ? <Widget>[infoWidget, const SizedBox(width: 10), avatarWidget]
+              ? <Widget>[infoWidget]
               : <Widget>[avatarWidget, const SizedBox(width: 10), infoWidget],
         );
 

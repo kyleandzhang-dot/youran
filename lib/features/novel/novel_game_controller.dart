@@ -394,6 +394,9 @@ class NovelGameController extends ChangeNotifier {
   int novelCharacterFlowers = 0;
   Map<String, JsonMap> novelCharacterRoster = <String, JsonMap>{};
   bool isNovelCharacterRosterLoading = false;
+  // 区分“后端权威 roster 尚未读取”和“角色真实为 0 星”。
+  // UI 不应在首次请求完成前把未知星级当成 0 星展示。
+  bool hasLoadedNovelCharacterRoster = false;
   /// 正在自动生成立绘的角色 id 集合（素材库未命中时后端触发），供 UI 显示"生成中"占位
   final Set<String> generatingPortraitCharacterIds = <String>{};
 
@@ -2627,9 +2630,95 @@ class NovelGameController extends ChangeNotifier {
     }
   }
 
+  Set<String> _novelCharacterRosterIds(JsonMap item) {
+    final ids = <String>{};
+    for (final value in <dynamic>[
+      item['character_instance_id'],
+      item['character_id'],
+      item['id'],
+    ]) {
+      final id = stringValue(value).trim();
+      if (id.isNotEmpty) ids.add(id);
+    }
+    return ids;
+  }
+
+  String _novelCharacterRosterName(JsonMap item) {
+    return stringValue(
+      item['character_name'] ?? item['name'] ?? item['display_name'],
+    ).trim();
+  }
+
+  String? _findNovelCharacterRosterKey(
+    Map<String, JsonMap> source,
+    JsonMap item,
+  ) {
+    final ids = _novelCharacterRosterIds(item);
+    String? matchedKey;
+
+    if (ids.isNotEmpty) {
+      for (final entry in source.entries) {
+        final existingIds = _novelCharacterRosterIds(entry.value);
+        final matches = ids.contains(entry.key) ||
+            existingIds.any((candidate) => ids.contains(candidate));
+        if (!matches) continue;
+        matchedKey ??= entry.key;
+        // roster 返回的条目带 star，是结缘系统的权威角色条目。
+        // companion payload 只负责技能/出战状态，应合并到这里而不是另起一条。
+        if (entry.value.containsKey('star')) return entry.key;
+      }
+    }
+
+    final name = _novelCharacterRosterName(item);
+    if (name.isNotEmpty) {
+      for (final entry in source.entries) {
+        if (_novelCharacterRosterName(entry.value) != name) continue;
+        matchedKey ??= entry.key;
+        if (entry.value.containsKey('star')) return entry.key;
+      }
+    }
+    return matchedKey;
+  }
+
   JsonMap novelCharacterRosterEntry(String characterInstanceId) {
-    return novelCharacterRoster[characterInstanceId.trim()] ??
-        const <String, dynamic>{};
+    final lookup = characterInstanceId.trim();
+    if (lookup.isEmpty) return const <String, dynamic>{};
+
+    final direct = novelCharacterRoster[lookup];
+    final probe = <String, dynamic>{'character_id': lookup};
+    final matchedKey = _findNovelCharacterRosterKey(novelCharacterRoster, probe);
+    final matched = matchedKey == null ? null : novelCharacterRoster[matchedKey];
+
+    if (direct != null || matched != null) {
+      final merged = <String, dynamic>{
+        ...?matched,
+        ...?direct,
+      };
+      // 如果旧缓存里曾经因为两种 ID 分裂成两条，优先保留带 star 的权威值。
+      if (matched != null && matched.containsKey('star')) {
+        merged['star'] = matched['star'];
+      }
+      return merged;
+    }
+
+    // 极少数旧数据只在 roster 中保留实例 ID，而场景角色只保留名称。
+    // 最后按角色名兜底，避免展示层因为 ID 版本差异误判为 0 星。
+    NovelCharacter? scenarioCharacter;
+    for (final character in scenario?.characters.values ?? const <NovelCharacter>[]) {
+      if (character.id.trim() == lookup || character.name.trim() == lookup) {
+        scenarioCharacter = character;
+        break;
+      }
+    }
+    final lookupName = scenarioCharacter?.name.trim() ?? lookup;
+    if (lookupName.isNotEmpty) {
+      for (final entry in novelCharacterRoster.entries) {
+        if (_novelCharacterRosterName(entry.value) == lookupName) {
+          return entry.value;
+        }
+      }
+    }
+    return const <String, dynamic>{};
   }
 
   bool isNovelCharacterOwned(String characterInstanceId) {
@@ -2655,24 +2744,30 @@ class NovelGameController extends ChangeNotifier {
       payload['flowers'],
       novelCharacterFlowers,
     );
+    final previousRoster = novelCharacterRoster;
     final next = <String, JsonMap>{};
     for (final raw in asJsonList(payload['characters'] ?? payload['roster'])) {
       final item = asJsonMap(raw);
       final id = stringValue(
         item['character_instance_id'] ?? item['character_id'] ?? item['id'],
       ).trim();
-      if (id.isNotEmpty) {
-        final previous = novelCharacterRoster[id];
-        next[id] = <String, dynamic>{
-          ...item,
-          if (previous != null && previous.containsKey('deployed'))
-            'deployed': previous['deployed'],
-          if (previous != null && previous.containsKey('skills'))
-            'skills': previous['skills'],
-        };
-      }
+      if (id.isEmpty) continue;
+
+      final previousKey = _findNovelCharacterRosterKey(previousRoster, item);
+      final previous =
+          previousKey == null ? null : previousRoster[previousKey];
+      next[id] = <String, dynamic>{
+        ...?previous,
+        ...item,
+        if (previous != null && previous.containsKey('deployed'))
+          'deployed': previous['deployed'],
+        if (previous != null && previous.containsKey('skills'))
+          'skills': previous['skills'],
+      };
     }
-    if (next.isNotEmpty || payload.containsKey('characters')) {
+    if (next.isNotEmpty ||
+        payload.containsKey('characters') ||
+        payload.containsKey('roster')) {
       novelCharacterRoster = next;
     }
   }
@@ -2685,9 +2780,19 @@ class NovelGameController extends ChangeNotifier {
         item['character_instance_id'] ?? item['character_id'] ?? item['id'],
       ).trim();
       if (id.isEmpty) continue;
-      next[id] = <String, dynamic>{
-        ...?next[id],
+
+      // companion 与 roster 可能分别使用 character_id / character_instance_id。
+      // 先按所有别名寻找已有权威条目，再合并技能与 deployed，禁止生成重复角色。
+      final targetKey = _findNovelCharacterRosterKey(next, item) ?? id;
+      final existing = next[targetKey];
+      next[targetKey] = <String, dynamic>{
+        ...?existing,
         ...item,
+        // /chat/novel-character/roster 才是星级权威来源。
+        // /novel/companions 的 star 仅为兼容/战斗快照字段，可能来自旧存储并返回 0。
+        // 已经有 roster 星级时，绝不能让 companion payload 把它覆盖掉。
+        if (existing != null && existing.containsKey('star'))
+          'star': existing['star'],
       };
     }
     novelCharacterRoster = next;
@@ -2700,6 +2805,7 @@ class NovelGameController extends ChangeNotifier {
     try {
       final rosterPayload = await backend.fetchNovelCharacterRoster(sessionId);
       _applyNovelCharacterRosterPayload(rosterPayload);
+      hasLoadedNovelCharacterRoster = true;
     } catch (error) {
       debugPrint('refresh companion stars before battle skipped: $error');
     }
@@ -2734,6 +2840,8 @@ class NovelGameController extends ChangeNotifier {
     try {
       final payload = await backend.fetchNovelCharacterRoster(sessionId);
       _applyNovelCharacterRosterPayload(payload);
+      // 即使 roster 合法为空，也代表“星级已经从后端确认过”，不能再当未知状态。
+      hasLoadedNovelCharacterRoster = true;
       final companionPayload = await backend.fetchNovelCompanions(sessionId);
       _applyNovelCompanionPayload(companionPayload);
       await refreshInventory(notify: false);

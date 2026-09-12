@@ -315,6 +315,11 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
   String selectedCharacterKey = '';
   List<_CharacterDrawResult> lastDrawResults = <_CharacterDrawResult>[];
 
+  // 角色主页的大立绘使用 1280px CDN 版本；左侧 140px 头像与它不是同一个
+  // ImageProvider key。进入页面后主动预热常用大图，切换角色时才能直接命中缓存。
+  final Set<String> _heroPortraitPrecacheStarted = <String>{};
+  static const int _heroPortraitPrecacheLimit = 6;
+
   @override
   void initState() {
     super.initState();
@@ -351,7 +356,78 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
         );
       }
     } finally {
-      if (mounted) setState(() => loading = false);
+      if (mounted) {
+        setState(() => loading = false);
+        // 先让角色页完成这一帧，再在后台预热大立绘；不阻塞页面进入。
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_precacheOwnedHeroPortraits());
+        });
+      }
+    }
+  }
+
+  String _heroPortraitSource(NovelCharacter character) {
+    final portrait = character.portraitUrl.trim();
+    if (portrait.isNotEmpty) return portrait;
+    return character.avatarUrl.trim();
+  }
+
+  String _heroPortraitResolvedUrl(NovelCharacter character) {
+    final source = _heroPortraitSource(character);
+    if (source.isEmpty || source.startsWith('data:image/')) return '';
+    // 必须与 _CharacterHeroStage 中 NovelArtwork 的 URL 完全一致，
+    // precacheImage 才能复用同一个网络图片缓存条目。
+    return CdnUtil.resize(source, width: 1280).trim();
+  }
+
+  Future<void> _precacheHeroPortrait(NovelCharacter character) async {
+    if (!mounted) return;
+    final resolved = _heroPortraitResolvedUrl(character);
+    if (resolved.isEmpty || !_heroPortraitPrecacheStarted.add(resolved)) return;
+
+    final ImageProvider<Object> provider =
+        resolved.startsWith('http://') || resolved.startsWith('https://')
+            ? NetworkImage(resolved)
+            : AssetImage(resolved);
+    try {
+      await precacheImage(provider, context);
+    } catch (_) {
+      // 失败后允许下次点击再次尝试；正式 NovelArtwork 仍会按原逻辑加载/fallback。
+      _heroPortraitPrecacheStarted.remove(resolved);
+    }
+  }
+
+  Future<void> _precacheOwnedHeroPortraits() async {
+    if (!mounted) return;
+    final all = widget.controller.scenario?.characters.values
+            .where((character) => !character.isMain && _isOwned(character))
+            .toList(growable: false) ??
+        const <NovelCharacter>[];
+    if (all.isEmpty) return;
+
+    // 优先当前选中的角色，然后按角色栏顺序预热其余角色。
+    final ordered = <NovelCharacter>[];
+    final selectedKey = selectedCharacterKey.trim();
+    if (selectedKey.isNotEmpty) {
+      for (final character in all) {
+        if (_keyOf(character) == selectedKey) {
+          ordered.add(character);
+          break;
+        }
+      }
+    }
+    for (final character in all) {
+      if (!ordered.contains(character)) ordered.add(character);
+    }
+
+    // 大图解码后的内存占用远高于 140px 头像，因此只预热最常用的一小批，
+    // 并以 2 张一组加载，避免进入角色页时瞬间抢满带宽/解码线程。
+    final targets = ordered.take(_heroPortraitPrecacheLimit).toList(growable: false);
+    for (var i = 0; i < targets.length && mounted; i += 2) {
+      final end = (i + 2).clamp(0, targets.length).toInt();
+      await Future.wait(
+        targets.sublist(i, end).map(_precacheHeroPortrait),
+      );
     }
   }
 
@@ -442,6 +518,9 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
   }
 
   void _selectHero(NovelCharacter character) {
+    // 正常情况下页面进入后已经预热；若用户点到预热批次之外的角色，
+    // 这里也立即启动同一个 1280px 请求，不等待任何业务接口。
+    unawaited(_precacheHeroPortrait(character));
     setState(() {
       selectedCharacterKey = _keyOf(character);
       showingSummon = false;
@@ -505,6 +584,7 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
           }
         }
       }
+      if (mounted) unawaited(_precacheOwnedHeroPortraits());
     }
   }
 
@@ -514,13 +594,18 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
   ) async {
     var draftName = '';
     while (mounted) {
+      final canDiscard = _canDiscardCompanionSkill(
+        widget.controller,
+        character.id,
+        skill,
+      );
       var latestDraft = draftName;
       final name = await _showCompanionSkillNamingDialog(
         context,
         skill,
         title: '${character.name}获得新技能',
         initialName: draftName,
-        allowDiscard: true,
+        allowDiscard: canDiscard,
         onDraftChanged: (value) => latestDraft = value,
         confirmLabel: '命名并领悟',
       );
@@ -528,6 +613,10 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
       if (name == null || !mounted) return;
 
       if (name == _companionSkillDiscardToken) {
+        if (!_canDiscardCompanionSkill(widget.controller, character.id, skill)) {
+          _message('首个援战技能必须保留，学习其他技能后才可舍弃');
+          continue;
+        }
         final skillName = stringValue(skill['name'], '该技能');
         final confirmed = await _confirmDiscardCompanionSkill(context, skillName);
         if (!mounted) return;
@@ -560,8 +649,8 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
         clean,
         excludeSkillId: stringValue(skill['id']),
       )) {
-        draftName = '';
-        _message('技能名称已存在，请重新填写');
+        draftName = clean;
+        _message('技能名称已存在，请修改后重新提交');
         continue;
       }
       final finalizeResult = await _finalizeCompanionSkillWithPreview(
@@ -573,8 +662,8 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
       );
       if (!mounted) return;
       if (finalizeResult == _CompanionSkillFinalizeResult.renameRequired) {
-        draftName = '';
-        _message('技能名称已存在，请重新填写');
+        draftName = clean;
+        _message('技能名称已存在，请修改后重新提交');
         continue;
       }
       return;
@@ -621,6 +710,10 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
         final hero = selected != null && _isOwned(selected!)
             ? selected
             : firstOwnedNpc;
+        // 第一次进入角色页时 roster 是异步读取的。此时星级是“未知”，不是 0。
+        // 在权威 roster 完成前显示加载态，避免先画 0 星再跳到真实星级。
+        final waitingForRoster =
+            loading && !widget.controller.hasLoadedNovelCharacterRoster;
 
         Widget buildBody(_CharacterViewportMode mode) {
           final desktop = mode == _CharacterViewportMode.desktop;
@@ -659,27 +752,32 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
                         onDrawOne: () => _draw(allCharacters, 1),
                         onDrawFive: () => _draw(allCharacters, 5),
                       )
-                    : tab == 0 && hero != null
-                        ? _CharacterHeroStage(
-                            controller: widget.controller,
-                            character: hero,
-                            characters: ownedCharacters,
-                            star: _starOf(hero),
-                            fragments: _fragmentsOf(hero),
-                            onSelect: _selectHero,
+                    : waitingForRoster
+                        ? _CharacterEmptyTeamState(
+                            loading: true,
+                            onSummon: _openSummon,
                           )
-                        : tab == 0
-                            ? _CharacterEmptyTeamState(
-                                loading: loading,
-                                onSummon: _openSummon,
+                        : tab == 0 && hero != null
+                            ? _CharacterHeroStage(
+                                controller: widget.controller,
+                                character: hero,
+                                characters: ownedCharacters,
+                                star: _starOf(hero),
+                                fragments: _fragmentsOf(hero),
+                                onSelect: _selectHero,
                               )
-                            : _CharacterGridPage(
-                                desktopMode: desktop,
-                                landscapeMode: landscape,
-                                characters: allCharacters,
-                                loading: loading,
-                                starOf: _starOf,
-                              ),
+                            : tab == 0
+                                ? _CharacterEmptyTeamState(
+                                    loading: false,
+                                    onSummon: _openSummon,
+                                  )
+                                : _CharacterGridPage(
+                                    desktopMode: desktop,
+                                    landscapeMode: landscape,
+                                    characters: allCharacters,
+                                    loading: false,
+                                    starOf: _starOf,
+                                  ),
               ),
             ],
           );
@@ -2268,37 +2366,64 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
     if (_companionBusy || widget.character.isMain) return;
     final customNamed = boolValue(skill['custom_named']);
 
-    // 已经领悟的技能改名：只做 rename，不再复用“首次领悟 + 推演预览”的流程。
+    // 已经领悟的技能改名：重名时不关闭流程，也不清空刚才输入的名字。
     if (customNamed) {
       final oldName = stringValue(skill['name']).trim();
-      final name = await _showCompanionSkillNamingDialog(
-        context,
-        skill,
-        title: '修改技能名称',
-        initialName: oldName,
-        allowCancel: true,
-        allowDiscard: false,
-        confirmLabel: '确认修改',
-      );
-      final clean = name?.trim() ?? '';
-      if (clean.isEmpty || !mounted || clean == oldName) return;
-
-      setState(() => _companionBusy = true);
-      try {
-        await widget.controller.renameNovelCompanionSkill(
-          characterInstanceId: widget.character.id,
-          skillId: stringValue(skill['id']),
-          name: clean,
+      var draftName = oldName;
+      while (mounted) {
+        var latestDraft = draftName;
+        final name = await _showCompanionSkillNamingDialog(
+          context,
+          skill,
+          title: '修改技能名称',
+          initialName: draftName,
+          allowCancel: true,
+          allowDiscard: false,
+          onDraftChanged: (value) => latestDraft = value,
+          confirmLabel: '确认修改',
         );
-        if (mounted) _showCompanionMessage('技能已更名为「$clean」');
-      } catch (error) {
-        if (mounted) {
-          _showCompanionMessage(
-            error is NovelBackendException ? error.message : '技能改名失败：$error',
-          );
+        draftName = latestDraft;
+        if (name == null || !mounted) return;
+
+        final clean = name.trim();
+        if (clean.isEmpty || clean == oldName) return;
+        if (_companionSkillNameExists(
+          widget.controller,
+          widget.character.id,
+          clean,
+          excludeSkillId: stringValue(skill['id']),
+        )) {
+          draftName = clean;
+          _showCompanionMessage('技能名称已存在，请修改后重新提交');
+          continue;
         }
-      } finally {
-        if (mounted) setState(() => _companionBusy = false);
+
+        var retryRename = false;
+        setState(() => _companionBusy = true);
+        try {
+          await widget.controller.renameNovelCompanionSkill(
+            characterInstanceId: widget.character.id,
+            skillId: stringValue(skill['id']),
+            name: clean,
+          );
+          if (mounted) _showCompanionMessage('技能已更名为「$clean」');
+        } catch (error) {
+          if (!mounted) return;
+          if (_isCompanionSkillNameConflict(error)) {
+            draftName = clean;
+            retryRename = true;
+            _showCompanionMessage('技能名称已存在，请修改后重新提交');
+          } else {
+            _showCompanionMessage(
+              error is NovelBackendException ? error.message : '技能改名失败：$error',
+            );
+            return;
+          }
+        } finally {
+          if (mounted) setState(() => _companionBusy = false);
+        }
+        if (retryRename) continue;
+        return;
       }
       return;
     }
@@ -2307,6 +2432,11 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
     // 若误点舍弃后选择返回，则回到命名框并保留刚才的草稿。
     var draftName = '';
     while (mounted) {
+      final canDiscard = _canDiscardCompanionSkill(
+        widget.controller,
+        widget.character.id,
+        skill,
+      );
       var latestDraft = draftName;
       final name = await _showCompanionSkillNamingDialog(
         context,
@@ -2314,7 +2444,7 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
         title: '学习到新技能',
         initialName: draftName,
         allowCancel: false,
-        allowDiscard: true,
+        allowDiscard: canDiscard,
         onDraftChanged: (value) => latestDraft = value,
         confirmLabel: '命名并领悟',
       );
@@ -2322,6 +2452,14 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
       if (name == null || !mounted) return;
 
       if (name == _companionSkillDiscardToken) {
+        if (!_canDiscardCompanionSkill(
+          widget.controller,
+          widget.character.id,
+          skill,
+        )) {
+          _showCompanionMessage('首个援战技能必须保留，学习其他技能后才可舍弃');
+          continue;
+        }
         final skillName = stringValue(skill['name'], '该技能');
         final confirmed = await _confirmDiscardCompanionSkill(context, skillName);
         if (!mounted) return;
@@ -2340,8 +2478,8 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
         clean,
         excludeSkillId: stringValue(skill['id']),
       )) {
-        draftName = '';
-        _showCompanionMessage('技能名称已存在，请重新填写');
+        draftName = clean;
+        _showCompanionMessage('技能名称已存在，请修改后重新提交');
         continue;
       }
       setState(() => _companionBusy = true);
@@ -2355,8 +2493,8 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
         );
         if (!mounted) return;
         if (finalizeResult == _CompanionSkillFinalizeResult.renameRequired) {
-          draftName = '';
-          _showCompanionMessage('技能名称已存在，请重新填写');
+          draftName = clean;
+          _showCompanionMessage('技能名称已存在，请修改后重新提交');
           continue;
         }
       } finally {
@@ -2396,6 +2534,14 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
 
   Future<void> _discardCompanionSkill(JsonMap skill) async {
     if (_companionBusy || widget.character.isMain) return;
+    if (!_canDiscardCompanionSkill(
+      widget.controller,
+      widget.character.id,
+      skill,
+    )) {
+      _showCompanionMessage('首个援战技能必须保留，学习其他技能后才可舍弃');
+      return;
+    }
     final skillName = stringValue(skill['name'], '该技能');
     final confirmed = await _confirmDiscardCompanionSkill(context, skillName);
     if (confirmed != true || !mounted) return;
@@ -2404,6 +2550,14 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
 
   Future<void> _discardCompanionSkillConfirmed(JsonMap skill) async {
     if (_companionBusy || widget.character.isMain || !mounted) return;
+    if (!_canDiscardCompanionSkill(
+      widget.controller,
+      widget.character.id,
+      skill,
+    )) {
+      _showCompanionMessage('首个援战技能必须保留，学习其他技能后才可舍弃');
+      return;
+    }
     final skillName = stringValue(skill['name'], '该技能');
     setState(() => _companionBusy = true);
     try {
@@ -2427,7 +2581,15 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
 
   Future<void> _openCompanionSkill(JsonMap skill) async {
     if (_companionBusy) return;
-    final action = await _showCompanionSkillDetails(context, skill);
+    final action = await _showCompanionSkillDetails(
+      context,
+      skill,
+      allowDiscard: _canDiscardCompanionSkill(
+        widget.controller,
+        widget.character.id,
+        skill,
+      ),
+    );
     if (!mounted) return;
     if (action == 'rename') {
       await _nameCompanionSkill(skill);
@@ -3150,6 +3312,7 @@ Future<String?> _showCompanionSkillNamingDialog(
   String? confirmLabel,
 }) async {
   final editor = TextEditingController(text: initialName);
+  editor.selection = TextSelection.collapsed(offset: editor.text.length);
   final type = _companionSkillTypeOf(skill);
   final typeName = _companionSkillTypeName(type);
   final quality = intValue(skill['quality']).clamp(1, 10).toInt();
@@ -3166,18 +3329,65 @@ Future<String?> _showCompanionSkillNamingDialog(
         1.0,
         media.size.height -
             media.viewInsets.bottom -
-            (landscape ? 20.0 : 48.0),
+            (landscape ? 12.0 : 48.0),
       );
       final dialogWidth = landscape
-          ? math.min(430.0, media.size.width - 32.0)
+          ? math.min(560.0, media.size.width - 28.0)
           : math.min(350.0, media.size.width - 52.0);
+      final contentPadding = landscape
+          ? const EdgeInsets.fromLTRB(20, 14, 20, 14)
+          : const EdgeInsets.fromLTRB(24, 22, 24, 20);
+      final iconSize = landscape ? 22.0 : 26.0;
+
+      Widget actionStrip() {
+        return Wrap(
+          alignment: WrapAlignment.end,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: landscape ? 8 : 10,
+          runSpacing: 8,
+          children: <Widget>[
+            if (allowDiscard)
+              _CharacterSkillDialogAction(
+                label: '舍弃',
+                foreground: _characterTextMuted.withOpacity(.88),
+                fillColor: Colors.white.withOpacity(.018),
+                borderColor: Colors.white.withOpacity(.10),
+                onTap: () => Navigator.of(dialogContext).pop(
+                  _companionSkillDiscardToken,
+                ),
+              ),
+            if (allowCancel)
+              _CharacterSkillDialogAction(
+                label: '取消',
+                foreground: _characterTextMuted.withOpacity(.92),
+                fillColor: Colors.white.withOpacity(.025),
+                borderColor: Colors.white.withOpacity(.10),
+                onTap: () => Navigator.of(dialogContext).pop(),
+              ),
+            _CharacterSkillDialogAction(
+              label: confirmLabel ??
+                  (initialName.trim().isEmpty ? '命名并领悟' : '确认修改'),
+              foreground: _characterText,
+              fillColor: color.withOpacity(.13),
+              borderColor: color.withOpacity(.42),
+              onTap: () {
+                final clean = editor.text.trim();
+                if (clean.isNotEmpty) {
+                  Navigator.of(dialogContext).pop(clean);
+                }
+              },
+            ),
+          ],
+        );
+      }
+
       return _CharacterDialogBackdrop(
         child: Dialog(
           elevation: 0,
           backgroundColor: Colors.transparent,
           insetPadding: EdgeInsets.symmetric(
-            horizontal: landscape ? 16 : 26,
-            vertical: landscape ? 10 : 24,
+            horizontal: landscape ? 14 : 26,
+            vertical: landscape ? 6 : 24,
           ),
           shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
           child: _CharacterGlassDialogFrame(
@@ -3188,180 +3398,174 @@ Future<String?> _showCompanionSkillNamingDialog(
                   constraints: BoxConstraints(maxHeight: maxDialogHeight),
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+                    padding: contentPadding,
                     child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Padding(
-                    padding: EdgeInsets.only(right: allowCancel ? 30 : 0),
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: _characterText,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: .35,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 15),
-                  Row(
-                    children: <Widget>[
-                      Image.asset(
-                        _companionSkillTypeAsset(type),
-                        width: 26,
-                        height: 26,
-                        color: color,
-                        semanticLabel: typeName,
-                        errorBuilder: (_, __, ___) => Icon(
-                          _companionSkillFallbackIcon(type),
-                          size: 26,
-                          color: color,
-                          semanticLabel: typeName,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Container(
-                        width: 14,
-                        height: 1,
-                        color: color.withOpacity(.58),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '$typeName · $quality 品',
-                          style: TextStyle(
-                            color: _characterTextSoft.withOpacity(.86),
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: .7,
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Padding(
+                          padding: EdgeInsets.only(right: allowCancel ? 30 : 0),
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _characterText,
+                              fontSize: landscape ? 14.5 : 16,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: .35,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  if (effectText.trim().isNotEmpty) ...<Widget>[
-                    const SizedBox(height: 12),
-                    Text(
-                      effectText,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _characterTextMuted.withOpacity(.84),
-                        fontSize: 10.5,
-                        height: 1.58,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 18),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(0, 6, 0, 4),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(.028),
-                      border: Border(
-                        bottom: BorderSide(
-                          color: color.withOpacity(.62),
-                          width: .9,
+                        SizedBox(height: landscape ? 9 : 15),
+                        Row(
+                          children: <Widget>[
+                            Image.asset(
+                              _companionSkillTypeAsset(type),
+                              width: iconSize,
+                              height: iconSize,
+                              color: color,
+                              semanticLabel: typeName,
+                              errorBuilder: (_, __, ___) => Icon(
+                                _companionSkillFallbackIcon(type),
+                                size: iconSize,
+                                color: color,
+                                semanticLabel: typeName,
+                              ),
+                            ),
+                            SizedBox(width: landscape ? 8 : 10),
+                            Container(
+                              width: landscape ? 10 : 14,
+                              height: 1,
+                              color: color.withOpacity(.58),
+                            ),
+                            SizedBox(width: landscape ? 8 : 10),
+                            Expanded(
+                              child: Text(
+                                '$typeName · $quality 品',
+                                style: TextStyle(
+                                  color: _characterTextSoft.withOpacity(.86),
+                                  fontSize: landscape ? 10 : 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: .7,
+                                ),
+                              ),
+                            ),
+                            if (landscape && effectText.trim().isNotEmpty)
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  effectText,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.right,
+                                  style: TextStyle(
+                                    color: _characterTextMuted.withOpacity(.84),
+                                    fontSize: 9.8,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                      ),
-                    ),
-                    child: TextField(
-                      controller: editor,
-                      autofocus: true,
-                      maxLength: 7,
-                      cursorColor: color,
-                      style: const TextStyle(
-                        color: _characterText,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: .5,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: '输入技能名称',
-                        hintStyle: TextStyle(
-                          color: _characterTextMuted.withOpacity(.62),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        counterText: '',
-                        isDense: true,
-                        filled: false,
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.fromLTRB(0, 4, 0, 8),
-                      ),
-                      onChanged: onDraftChanged,
-                      onSubmitted: (value) {
-                        final clean = value.trim();
-                        if (clean.isNotEmpty) Navigator.of(dialogContext).pop(clean);
-                      },
-                    ),
-                  ),
-                  if (allowDiscard) ...<Widget>[
-                    const SizedBox(height: 10),
-                    Text(
-                      '不想保留这次技能可以直接舍弃；已消耗的技能书不会返还。',
-                      style: TextStyle(
-                        color: _characterTextMuted.withOpacity(.70),
-                        fontSize: 9.8,
-                        height: 1.45,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 13),
-                  Row(
-                    children: <Widget>[
-                      if (allowDiscard) ...<Widget>[
-                        _CharacterSkillDialogAction(
-                          label: '舍弃',
-                          foreground: _characterTextMuted.withOpacity(.88),
-                          fillColor: Colors.white.withOpacity(.018),
-                          borderColor: Colors.white.withOpacity(.10),
-                          onTap: () => Navigator.of(dialogContext).pop(
-                            _companionSkillDiscardToken,
+                        if (!landscape && effectText.trim().isNotEmpty) ...<Widget>[
+                          const SizedBox(height: 12),
+                          Text(
+                            effectText,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _characterTextMuted.withOpacity(.84),
+                              fontSize: 10.5,
+                              height: 1.58,
+                            ),
+                          ),
+                        ],
+                        SizedBox(height: landscape ? 10 : 18),
+                        Container(
+                          width: double.infinity,
+                          padding: EdgeInsets.fromLTRB(
+                            0,
+                            landscape ? 3 : 6,
+                            0,
+                            landscape ? 2 : 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(.028),
+                            border: Border(
+                              bottom: BorderSide(
+                                color: color.withOpacity(.62),
+                                width: .9,
+                              ),
+                            ),
+                          ),
+                          child: TextField(
+                            controller: editor,
+                            autofocus: true,
+                            maxLength: 7,
+                            cursorColor: color,
+                            style: TextStyle(
+                              color: _characterText,
+                              fontSize: landscape ? 14 : 15,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: .5,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: '输入技能名称',
+                              hintStyle: TextStyle(
+                                color: _characterTextMuted.withOpacity(.62),
+                                fontSize: landscape ? 12 : 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              counterText: '',
+                              isDense: true,
+                              filled: false,
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.fromLTRB(
+                                0,
+                                landscape ? 2 : 4,
+                                0,
+                                landscape ? 5 : 8,
+                              ),
+                            ),
+                            onChanged: onDraftChanged,
+                            onSubmitted: (value) {
+                              final clean = value.trim();
+                              if (clean.isNotEmpty) {
+                                Navigator.of(dialogContext).pop(clean);
+                              }
+                            },
                           ),
                         ),
-                        const Spacer(),
-                      ] else
-                        const Spacer(),
-                      if (allowCancel) ...<Widget>[
-                        _CharacterSkillDialogAction(
-                          label: '取消',
-                          foreground: _characterTextMuted.withOpacity(.92),
-                          fillColor: Colors.white.withOpacity(.025),
-                          borderColor: Colors.white.withOpacity(.10),
-                          onTap: () => Navigator.of(dialogContext).pop(),
+                        if (allowDiscard) ...<Widget>[
+                          SizedBox(height: landscape ? 6 : 10),
+                          Text(
+                            '不想保留这次技能可以直接舍弃；已消耗的技能书不会返还。',
+                            maxLines: landscape ? 1 : 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _characterTextMuted.withOpacity(.70),
+                              fontSize: landscape ? 9.2 : 9.8,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                        SizedBox(height: landscape ? 8 : 13),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: actionStrip(),
                         ),
-                        const SizedBox(width: 14),
-                      ],
-                      _CharacterSkillDialogAction(
-                        label: confirmLabel ?? (initialName.trim().isEmpty ? '命名并领悟' : '确认修改'),
-                        foreground: _characterText,
-                        fillColor: color.withOpacity(.13),
-                        borderColor: color.withOpacity(.42),
-                        onTap: () {
-                          final clean = editor.text.trim();
-                          if (clean.isNotEmpty) {
-                            Navigator.of(dialogContext).pop(clean);
-                          }
-                        },
-                      ),
-                    ],
-                  ),
                       ],
                     ),
                   ),
                 ),
                 if (allowCancel)
                   Positioned(
-                right: 0,
-                top: 0,
-                child: _CharacterDialogCloseButton(
-                  onTap: () => Navigator.of(dialogContext).pop(),
-                ),
+                    right: 0,
+                    top: 0,
+                    child: _CharacterDialogCloseButton(
+                      onTap: () => Navigator.of(dialogContext).pop(),
+                    ),
                   ),
               ],
             ),
@@ -3374,6 +3578,24 @@ Future<String?> _showCompanionSkillNamingDialog(
   return result;
 }
 
+bool _canDiscardCompanionSkill(
+  NovelGameController controller,
+  String characterId,
+  JsonMap skill,
+) {
+  final id = characterId.trim();
+  if (id.isEmpty) return false;
+
+  final currentSkillId = stringValue(skill['id']).trim();
+  for (final candidate in controller.novelCompanionSkills(id)) {
+    final candidateId = stringValue(candidate['id']).trim();
+    if (currentSkillId.isNotEmpty && candidateId == currentSkillId) continue;
+    return true;
+  }
+
+  // 至少保留 1 个援战技能：没有其他技能时，当前技能就是首个/唯一技能。
+  return false;
+}
 
 bool _companionSkillNameExists(
   NovelGameController controller,
@@ -3551,7 +3773,9 @@ class _CompanionSkillEvolutionDialogState
     final color = _companionSkillQualityColor(quality);
     final media = MediaQuery.sizeOf(context);
     final landscape = media.width > media.height;
-    final width = math.min(430.0, media.width - 30);
+    final width = landscape
+        ? math.min(600.0, media.width - 28.0)
+        : math.min(430.0, media.width - 30.0);
     final maxDialogHeight = math.max(
       1.0,
       media.height - MediaQuery.viewInsetsOf(context).bottom -
@@ -3580,7 +3804,12 @@ class _CompanionSkillEvolutionDialogState
                   ? _buildLoading(color)
                   : _error.isNotEmpty
                       ? _buildError(color)
-                      : _buildPreview(skill, quality, color),
+                      : _buildPreview(
+                          skill,
+                          quality,
+                          color,
+                          landscape: landscape,
+                        ),
             ),
           ),
         ),
@@ -3714,12 +3943,22 @@ class _CompanionSkillEvolutionDialogState
     );
   }
 
-  Widget _buildPreview(JsonMap skill, int quality, Color color) {
+  Widget _buildPreview(
+    JsonMap skill,
+    int quality,
+    Color color, {
+    required bool landscape,
+  }) {
     final type = _companionSkillTypeOf(skill);
     final typeName = _companionSkillTypeName(type);
     return Padding(
       key: const ValueKey<String>('vfx-preview'),
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+      padding: EdgeInsets.fromLTRB(
+        landscape ? 18 : 20,
+        landscape ? 14 : 20,
+        landscape ? 18 : 20,
+        landscape ? 12 : 18,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3772,10 +4011,10 @@ class _CompanionSkillEvolutionDialogState
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: landscape ? 9 : 16),
           Container(
             width: double.infinity,
-            height: 218,
+            height: landscape ? 126 : 218,
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               color: const Color(0xFF050711),
@@ -3795,38 +4034,43 @@ class _CompanionSkillEvolutionDialogState
               skill: skill,
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: landscape ? 8 : 12),
           Text(
             _companionSkillEffectText(skill),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: _characterTextMuted.withOpacity(.86),
-              fontSize: 10.5,
-              height: 1.55,
+              fontSize: landscape ? 10 : 10.5,
+              height: landscape ? 1.4 : 1.55,
             ),
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: <Widget>[
-              _CharacterSkillDialogAction(
-                label: '再看一次',
-                foreground: _characterTextSoft,
-                fillColor: Colors.white.withOpacity(.025),
-                borderColor: Colors.white.withOpacity(.10),
-                onTap: () => setState(() => _replayToken++),
-              ),
-              const Spacer(),
-              _CharacterSkillDialogAction(
-                label: '确定',
-                foreground: _characterText,
-                fillColor: color.withOpacity(.14),
-                borderColor: color.withOpacity(.48),
-                onTap: () => Navigator.of(context).pop(
-                  _CompanionSkillFinalizeResult.completed,
+          SizedBox(height: landscape ? 9 : 16),
+          SizedBox(
+            width: double.infinity,
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              spacing: 12,
+              runSpacing: 8,
+              children: <Widget>[
+                _CharacterSkillDialogAction(
+                  label: '再看一次',
+                  foreground: _characterTextSoft,
+                  fillColor: Colors.white.withOpacity(.025),
+                  borderColor: Colors.white.withOpacity(.10),
+                  onTap: () => setState(() => _replayToken++),
                 ),
-              ),
-            ],
+                _CharacterSkillDialogAction(
+                  label: '确定',
+                  foreground: _characterText,
+                  fillColor: color.withOpacity(.14),
+                  borderColor: color.withOpacity(.48),
+                  onTap: () => Navigator.of(context).pop(
+                    _CompanionSkillFinalizeResult.completed,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -5272,8 +5516,9 @@ class _CompanionVfxGraphRenderer {
 
 Future<String?> _showCompanionSkillDetails(
   BuildContext context,
-  JsonMap skill,
-) {
+  JsonMap skill, {
+  required bool allowDiscard,
+}) {
   final type = _companionSkillTypeOf(skill);
   final typeName = _companionSkillTypeName(type);
   final quality = intValue(skill['quality']).clamp(1, 10).toInt();
@@ -5283,186 +5528,288 @@ Future<String?> _showCompanionSkillDetails(
   return showDialog<String>(
     context: context,
     barrierColor: Colors.black.withOpacity(.20),
-    builder: (dialogContext) => _CharacterDialogBackdrop(child: Dialog(
-      elevation: 0,
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      child: _CharacterGlassDialogFrame(
-        width: 370,
-        child: Stack(
+    builder: (dialogContext) {
+      final media = MediaQuery.of(dialogContext);
+      final landscape = media.size.width > media.size.height;
+      final maxDialogHeight = math.max(
+        1.0,
+        media.size.height -
+            media.viewInsets.bottom -
+            (landscape ? 12.0 : 48.0),
+      );
+      final dialogWidth = landscape
+          ? math.min(640.0, media.size.width - 28.0)
+          : math.min(370.0, media.size.width - 48.0);
+      final previewHeight = landscape
+          ? (maxDialogHeight * .42).clamp(94.0, 138.0).toDouble()
+          : 176.0;
+
+      final header = Padding(
+        padding: const EdgeInsets.only(right: 30),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+            Image.asset(
+              _companionSkillTypeAsset(type),
+              width: landscape ? 27 : 32,
+              height: landscape ? 27 : 32,
+              color: color,
+              semanticLabel: typeName,
+              errorBuilder: (_, __, ___) => Icon(
+                _companionSkillFallbackIcon(type),
+                size: landscape ? 27 : 32,
+                color: color,
+                semanticLabel: typeName,
+              ),
+            ),
+            SizedBox(width: landscape ? 10 : 12),
+            Expanded(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Padding(
-                    padding: const EdgeInsets.only(right: 30),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: <Widget>[
-                        Image.asset(
-                          _companionSkillTypeAsset(type),
-                          width: 32,
-                          height: 32,
-                          color: color,
-                          semanticLabel: typeName,
-                          errorBuilder: (_, __, ___) => Icon(
-                            _companionSkillFallbackIcon(type),
-                            size: 32,
-                            color: color,
-                            semanticLabel: typeName,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(
-                                skillName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: _characterText,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: .42,
-                                ),
-                              ),
-                              const SizedBox(height: 5),
-                              Row(
-                                children: <Widget>[
-                                  Container(
-                                    width: 12,
-                                    height: 1,
-                                    color: color.withOpacity(.62),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    typeName,
-                                    style: TextStyle(
-                                      color: color.withOpacity(.94),
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: .75,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '$quality 品',
-                                    style: TextStyle(
-                                      color: _characterTextMuted.withOpacity(.84),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: .55,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    width: double.infinity,
-                    height: 176,
-                    clipBehavior: Clip.antiAlias,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF050711),
-                      border: Border.all(color: color.withOpacity(.24), width: .8),
-                      boxShadow: <BoxShadow>[
-                        BoxShadow(
-                          color: color.withOpacity(.07),
-                          blurRadius: 16,
-                          spreadRadius: 0,
-                        ),
-                      ],
-                    ),
-                    child: _CompanionSkillVfxPreview(
-                      key: ValueKey<String>('detail-${stringValue(skill['id'])}-$skillName'),
-                      skill: skill,
-                      tapToReplay: true,
-                      showReplayHint: true,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
                   Text(
-                    '技能效果',
+                    skillName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: _characterTextMuted.withOpacity(.82),
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.35,
+                      color: _characterText,
+                      fontSize: landscape ? 15 : 17,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .42,
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(0, 10, 0, 0),
-                    decoration: BoxDecoration(
-                      border: Border(
-                        top: BorderSide(
-                          color: Colors.white.withOpacity(.06),
-                          width: .8,
-                        ),
-                      ),
-                    ),
-                    child: Text(
-                      _companionSkillEffectText(skill),
-                      style: TextStyle(
-                        color: _characterTextSoft.withOpacity(.95),
-                        fontSize: 12.5,
-                        height: 1.72,
-                        letterSpacing: .12,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 22),
-                  Container(
-                    width: double.infinity,
-                    height: .8,
-                    color: Colors.white.withOpacity(.06),
-                  ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: landscape ? 3 : 5),
                   Row(
                     children: <Widget>[
-                      _CharacterSkillDialogAction(
-                        label: '舍弃技能',
-                        foreground: _characterTextSoft.withOpacity(.86),
-                        fillColor: Colors.white.withOpacity(.018),
-                        borderColor: Colors.white.withOpacity(.10),
-                        onTap: () => Navigator.of(dialogContext).pop('discard'),
+                      Container(
+                        width: 12,
+                        height: 1,
+                        color: color.withOpacity(.62),
                       ),
-                      const Spacer(),
-                      _CharacterSkillDialogAction(
-                        label: '修改名称',
-                        foreground: _characterText,
-                        fillColor: color.withOpacity(.12),
-                        borderColor: color.withOpacity(.40),
-                        onTap: () => Navigator.of(dialogContext).pop('rename'),
+                      const SizedBox(width: 8),
+                      Text(
+                        typeName,
+                        style: TextStyle(
+                          color: color.withOpacity(.94),
+                          fontSize: landscape ? 10 : 10.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: .75,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '$quality 品',
+                        style: TextStyle(
+                          color: _characterTextMuted.withOpacity(.84),
+                          fontSize: landscape ? 9.5 : 10,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .55,
+                        ),
                       ),
                     ],
                   ),
                 ],
               ),
             ),
-            Positioned(
-              right: 0,
-              top: 0,
-              child: _CharacterDialogCloseButton(
-                onTap: () => Navigator.of(dialogContext).pop(),
-              ),
+          ],
+        ),
+      );
+
+      final preview = Container(
+        width: double.infinity,
+        height: previewHeight,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: const Color(0xFF050711),
+          border: Border.all(color: color.withOpacity(.24), width: .8),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: color.withOpacity(.07),
+              blurRadius: 16,
+              spreadRadius: 0,
             ),
           ],
         ),
-      ),
-    )),
+        child: _CompanionSkillVfxPreview(
+          key: ValueKey<String>(
+            'detail-${stringValue(skill['id'])}-$skillName',
+          ),
+          skill: skill,
+          tapToReplay: true,
+          showReplayHint: true,
+        ),
+      );
+
+      final effectPanel = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            '技能效果',
+            style: TextStyle(
+              color: _characterTextMuted.withOpacity(.82),
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.35,
+            ),
+          ),
+          SizedBox(height: landscape ? 7 : 10),
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.fromLTRB(0, landscape ? 7 : 10, 0, 0),
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(
+                  color: Colors.white.withOpacity(.06),
+                  width: .8,
+                ),
+              ),
+            ),
+            child: Text(
+              _companionSkillEffectText(skill),
+              style: TextStyle(
+                color: _characterTextSoft.withOpacity(.95),
+                fontSize: landscape ? 11.2 : 12.5,
+                height: landscape ? 1.5 : 1.72,
+                letterSpacing: .12,
+              ),
+            ),
+          ),
+        ],
+      );
+
+      final actions = Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 8,
+        children: <Widget>[
+          if (allowDiscard)
+            _CharacterSkillDialogAction(
+              label: '舍弃技能',
+              foreground: _characterTextSoft.withOpacity(.86),
+              fillColor: Colors.white.withOpacity(.018),
+              borderColor: Colors.white.withOpacity(.10),
+              onTap: () => Navigator.of(dialogContext).pop('discard'),
+            )
+          else
+            Container(
+              constraints: const BoxConstraints(minHeight: 34),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    Icons.lock_outline_rounded,
+                    size: 12.5,
+                    color: _characterTextMuted.withOpacity(.72),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    '首个技能不可舍弃',
+                    style: TextStyle(
+                      color: _characterTextMuted.withOpacity(.72),
+                      fontSize: 10.2,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: .4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          _CharacterSkillDialogAction(
+            label: '修改名称',
+            foreground: _characterText,
+            fillColor: color.withOpacity(.12),
+            borderColor: color.withOpacity(.40),
+            onTap: () => Navigator.of(dialogContext).pop('rename'),
+          ),
+        ],
+      );
+
+      return _CharacterDialogBackdrop(
+        child: Dialog(
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: landscape ? 14 : 24,
+            vertical: landscape ? 6 : 24,
+          ),
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          child: _CharacterGlassDialogFrame(
+            width: dialogWidth,
+            child: Stack(
+              children: <Widget>[
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxDialogHeight),
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      landscape ? 18 : 24,
+                      landscape ? 14 : 22,
+                      landscape ? 18 : 24,
+                      landscape ? 12 : 18,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        header,
+                        SizedBox(height: landscape ? 10 : 16),
+                        if (landscape)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Expanded(flex: 5, child: preview),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                flex: 4,
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    minHeight: previewHeight,
+                                    maxHeight: previewHeight,
+                                  ),
+                                  child: SingleChildScrollView(
+                                    physics: const BouncingScrollPhysics(),
+                                    child: effectPanel,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        else ...<Widget>[
+                          preview,
+                          const SizedBox(height: 18),
+                          effectPanel,
+                        ],
+                        SizedBox(height: landscape ? 10 : 22),
+                        Container(
+                          width: double.infinity,
+                          height: .8,
+                          color: Colors.white.withOpacity(.06),
+                        ),
+                        SizedBox(height: landscape ? 8 : 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: actions,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: _CharacterDialogCloseButton(
+                    onTap: () => Navigator.of(dialogContext).pop(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
   );
 }
 
@@ -5473,76 +5820,106 @@ Future<bool?> _confirmDiscardCompanionSkill(
   return showDialog<bool>(
     context: context,
     barrierColor: Colors.black.withOpacity(.22),
-    builder: (dialogContext) => _CharacterDialogBackdrop(child: Dialog(
-      elevation: 0,
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      child: _CharacterGlassDialogFrame(
-        width: 332,
-        child: Stack(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(23, 22, 23, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  const Padding(
-                    padding: EdgeInsets.only(right: 28),
-                    child: Text(
-                      '舍弃技能',
-                      style: TextStyle(
-                        color: _characterText,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: .35,
-                      ),
+    builder: (dialogContext) {
+      final media = MediaQuery.of(dialogContext);
+      final landscape = media.size.width > media.size.height;
+      final maxDialogHeight = math.max(
+        1.0,
+        media.size.height - media.viewInsets.bottom - (landscape ? 12.0 : 48.0),
+      );
+      final dialogWidth = landscape
+          ? math.min(430.0, media.size.width - 28.0)
+          : math.min(332.0, media.size.width - 56.0);
+      return _CharacterDialogBackdrop(
+        child: Dialog(
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: landscape ? 14 : 28,
+            vertical: landscape ? 6 : 24,
+          ),
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          child: _CharacterGlassDialogFrame(
+            width: dialogWidth,
+            child: Stack(
+              children: <Widget>[
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxDialogHeight),
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      landscape ? 20 : 23,
+                      landscape ? 15 : 22,
+                      landscape ? 20 : 23,
+                      landscape ? 13 : 16,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        const Padding(
+                          padding: EdgeInsets.only(right: 28),
+                          child: Text(
+                            '舍弃技能',
+                            style: TextStyle(
+                              color: _characterText,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: .35,
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: landscape ? 7 : 11),
+                        Text(
+                          '「$skillName」舍弃后无法恢复。之后学习新的援战技能会消耗 1 本技能书。',
+                          style: TextStyle(
+                            color: _characterTextSoft.withOpacity(.86),
+                            fontSize: landscape ? 10.8 : 11.5,
+                            height: landscape ? 1.5 : 1.68,
+                          ),
+                        ),
+                        SizedBox(height: landscape ? 10 : 18),
+                        SizedBox(
+                          width: double.infinity,
+                          child: Wrap(
+                            alignment: WrapAlignment.spaceBetween,
+                            spacing: 12,
+                            runSpacing: 8,
+                            children: <Widget>[
+                              _CharacterSkillDialogAction(
+                                label: '返回',
+                                foreground: _characterTextMuted.withOpacity(.92),
+                                fillColor: Colors.white.withOpacity(.025),
+                                borderColor: Colors.white.withOpacity(.10),
+                                onTap: () => Navigator.of(dialogContext).pop(false),
+                              ),
+                              _CharacterSkillDialogAction(
+                                label: '确认舍弃',
+                                foreground: _characterText,
+                                fillColor: _characterGoldSoft.withOpacity(.09),
+                                borderColor: _characterGoldSoft.withOpacity(.30),
+                                onTap: () => Navigator.of(dialogContext).pop(true),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 11),
-                  Text(
-                    '「$skillName」舍弃后无法恢复。之后学习新的援战技能会消耗 1 本技能书。',
-                    style: TextStyle(
-                      color: _characterTextSoft.withOpacity(.86),
-                      fontSize: 11.5,
-                      height: 1.68,
-                    ),
+                ),
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: _CharacterDialogCloseButton(
+                    onTap: () => Navigator.of(dialogContext).pop(false),
                   ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: <Widget>[
-                      _CharacterSkillDialogAction(
-                        label: '返回',
-                        foreground: _characterTextMuted.withOpacity(.92),
-                        fillColor: Colors.white.withOpacity(.025),
-                        borderColor: Colors.white.withOpacity(.10),
-                        onTap: () => Navigator.of(dialogContext).pop(false),
-                      ),
-                      const Spacer(),
-                      _CharacterSkillDialogAction(
-                        label: '确认舍弃',
-                        foreground: _characterText,
-                        fillColor: _characterGoldSoft.withOpacity(.09),
-                        borderColor: _characterGoldSoft.withOpacity(.30),
-                        onTap: () => Navigator.of(dialogContext).pop(true),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            Positioned(
-              right: 0,
-              top: 0,
-              child: _CharacterDialogCloseButton(
-                onTap: () => Navigator.of(dialogContext).pop(false),
-              ),
-            ),
-          ],
+          ),
         ),
-      ),
-    )),
+      );
+    },
   );
 }
 
