@@ -67,6 +67,7 @@ flutter:
     - assets/animations/meru_book_story_continuing.json
     - assets/images/world_map/
     - assets/images/companion_skill_icons/
+    - assets/images/battle/status/
     - assets/models/
 
   fonts:

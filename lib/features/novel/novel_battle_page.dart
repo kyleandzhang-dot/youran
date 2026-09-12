@@ -1946,6 +1946,7 @@ class YoranBattleEquipment {
     required this.name,
     required this.slot,
     required this.quality,
+    this.enhancementLevel = 0,
     this.affixes = const <String, int>{},
   });
 
@@ -1953,6 +1954,7 @@ class YoranBattleEquipment {
   final String name;
   final String slot;
   final int quality;
+  final int enhancementLevel;
   final Map<String, int> affixes;
 
   static const Map<String, int> _affixCaps = <String, int>{
@@ -2103,6 +2105,12 @@ class YoranBattleEquipment {
         .clamp(1, 10)
         .toInt();
     final id = '${raw['id'] ?? raw['item_id'] ?? ''}'.trim();
+    final enhancementLevel = _asInt(
+      raw['enhancement_level'] ??
+          raw['enhancementLevel'] ??
+          raw['enhance_level'] ??
+          raw['upgrade_level'],
+    ).clamp(0, 10).toInt();
     final affixes = _normalizeAffixes(
       raw['affixes'] ?? raw['affix_stats'] ?? raw['affixStats'],
     );
@@ -2111,6 +2119,7 @@ class YoranBattleEquipment {
       name: name,
       slot: slot,
       quality: quality,
+      enhancementLevel: enhancementLevel,
       affixes: affixes,
     );
   }
@@ -3013,6 +3022,23 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     return qualities.take(3).fold<int>(0, (sum, quality) => sum + quality);
   }
 
+  int _enhancementForSlot(String slot) {
+    var level = 0;
+    for (final item in _playerEquipment) {
+      if (item.slot == slot) level = math.max(level, item.enhancementLevel);
+    }
+    return level.clamp(0, 10).toInt();
+  }
+
+  int _accessoryEnhancementTotal() {
+    final levels = _playerEquipment
+        .where((item) => item.slot == 'accessory')
+        .map((item) => item.enhancementLevel)
+        .toList(growable: false)
+      ..sort((a, b) => b.compareTo(a));
+    return levels.take(3).fold<int>(0, (sum, level) => sum + level);
+  }
+
   int _equipmentAffixTotal(String key, {required int cap}) {
     var total = 0;
     for (final item in _playerEquipment) {
@@ -3069,6 +3095,14 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     final handheldQuality = _qualityForSlot('handheld');
     final lowerQuality = _qualityForSlot('lower');
     final backQuality = _qualityForSlot('back');
+    final upperEnhancement = _enhancementForSlot('upper');
+    final faceEnhancement = _enhancementForSlot('face');
+    final handheldEnhancement = _enhancementForSlot('handheld');
+    final lowerEnhancement = _enhancementForSlot('lower');
+    final headEnhancement = _enhancementForSlot('head');
+    final feetEnhancement = _enhancementForSlot('feet');
+    final backEnhancement = _enhancementForSlot('back');
+    final accessoryEnhancementTotal = _accessoryEnhancementTotal();
     final hpAffix = _equipmentAffixTotal('max_hp_percent', cap: 40);
     final energyAffix = _equipmentAffixTotal('max_energy_percent', cap: 40);
     final attackAffix = _equipmentAffixTotal('attack_percent', cap: 40);
@@ -3077,24 +3111,46 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     final dodgeAffix = _equipmentAffixTotal('dodge_percent', cap: 16);
     final criticalAffix = _equipmentAffixTotal('critical_percent', cap: 24);
 
-    _playerMaxHp =
-        (_baseMaxHp * (1 + upperQuality * .10 + hpAffix / 100)).round();
-    _playerMaxQi =
-        (_baseMaxQi * (1 + faceQuality * .10 + energyAffix / 100)).round();
-    _equipmentAttackMultiplier = 1 + handheldQuality * .10 + attackAffix / 100;
-    // 下装提供固定减伤，词条最多再补15%；总减伤封顶65%。
-    final defenseReduction =
-        (lowerQuality * .05 + defenseAffix / 100).clamp(0.0, .65).toDouble();
+    // 强化最高+10；成功率由后端结算。攻击/生命/精力每级+3%；其余主属性采用较小增幅并继续受原硬上限约束。
+    _playerMaxHp = (_baseMaxHp *
+            (1 + upperQuality * .10 + upperEnhancement * .03 + hpAffix / 100))
+        .round();
+    _playerMaxQi = (_baseMaxQi *
+            (1 + faceQuality * .10 + faceEnhancement * .03 + energyAffix / 100))
+        .round();
+    _equipmentAttackMultiplier = 1 +
+        handheldQuality * .10 +
+        handheldEnhancement * .03 +
+        attackAffix / 100;
+    // 下装强化每级额外1%减伤；总减伤仍封顶65%。
+    final defenseReduction = (lowerQuality * .05 +
+            lowerEnhancement * .01 +
+            defenseAffix / 100)
+        .clamp(0.0, .65)
+        .toDouble();
     _equipmentDefenseMultiplier = 1 - defenseReduction;
-    _equipmentHitPercent =
-        (_qualityForSlot('head') * 3 + hitAffix).clamp(0, 45).toInt();
-    _equipmentDodgePercent =
-        (_qualityForSlot('feet') + dodgeAffix).clamp(0, 25).toInt();
-    _equipmentCriticalPercent =
-        (_accessoryQualityTotal() + criticalAffix).clamp(0, 50).toInt();
-    // 整场战斗共享道具次数：基础2次，背包每1点品质额外增加1次。
-    // 未装备背包为2次，Q1为3次，Q10为12次；跨回合、连续敌人均不重置。
-    _maxItemUsesPerBattle = 2 + backQuality;
+    // 头部强化每级+1%装备命中，仍封顶45%。
+    _equipmentHitPercent = (_qualityForSlot('head') * 3 +
+            headEnhancement +
+            hitAffix)
+        .clamp(0, 45)
+        .toInt();
+    // 足部强化每2级+1%装备闪避，+10共+5%，仍封顶25%。
+    _equipmentDodgePercent = (_qualityForSlot('feet') +
+            (feetEnhancement ~/ 2) +
+            dodgeAffix)
+        .clamp(0, 25)
+        .toInt();
+    // 饰品强化总等级每约3.33级提供1%暴击；三件+10合计+9%，最终仍封顶50%。
+    final accessoryEnhancementCritical =
+        (accessoryEnhancementTotal * .30).round();
+    _equipmentCriticalPercent = (_accessoryQualityTotal() +
+            accessoryEnhancementCritical +
+            criticalAffix)
+        .clamp(0, 50)
+        .toInt();
+    // 背包+5/+10各额外增加1次道具使用；整场战斗共享次数。
+    _maxItemUsesPerBattle = 2 + backQuality + (backEnhancement ~/ 5);
     _playerHp = _playerMaxHp;
     _playerQi = (_playerMaxQi * .40).round();
     for (final item in _battleItems) {

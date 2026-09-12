@@ -45,18 +45,27 @@ Future<void> showNovelSettingsSheet(
         alignment: Alignment.centerRight,
         child: Material(
           color: Colors.transparent,
-          child: SafeArea(
-            left: false,
-            child: SizedBox(
-              width: drawerWidth,
-              height: double.infinity,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF171717).withOpacity(.96),
-                  border: Border(
-                    left: BorderSide(color: Colors.white.withOpacity(.055)),
-                  ),
+          child: SizedBox(
+            width: drawerWidth,
+            height: double.infinity,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xFF171717).withOpacity(.96),
+                border: Border(
+                  left: BorderSide(color: Colors.white.withOpacity(.055)),
                 ),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withOpacity(.34),
+                    blurRadius: 22,
+                    offset: const Offset(-8, 0),
+                  ),
+                ],
+              ),
+              // 抽屉背景必须铺到屏幕右侧和底部；只让内部内容避开
+              // 刘海 / Home Indicator 等系统安全区，避免出现透明空边。
+              child: SafeArea(
+                left: false,
                 child: panel,
               ),
             ),
@@ -65,13 +74,17 @@ Future<void> showNovelSettingsSheet(
       );
     },
     transitionBuilder: (dialogContext, animation, secondaryAnimation, child) {
-      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      final slide = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
       return SlideTransition(
         position: Tween<Offset>(
           begin: const Offset(1, 0),
           end: Offset.zero,
-        ).animate(curved),
-        child: FadeTransition(opacity: curved, child: child),
+        ).animate(slide),
+        child: child,
       );
     },
   );

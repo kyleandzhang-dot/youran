@@ -3104,6 +3104,36 @@ class NovelGameController extends ChangeNotifier {
     await refreshInventory();
   }
 
+  /// 消耗玄石尝试强化装备。成功率、保底、材料扣除与最终等级均以后端为准。
+  ///
+  /// Controller 只负责把装备和当前 scenario instance 转发给 NovelBackend，
+  /// 然后重新拉取一次权威背包，让强化等级、失败保底与玄石数量同步到所有页面。
+  Future<JsonMap> enhanceNovelEquipment(NovelInventoryItem item) async {
+    // 优先发送后端原始装备 ID；兼容旧存档 item_id / itemId 别名。
+    // NovelInventoryItem.id 可能经过前端归一化，不能在这里反过来覆盖后端真 ID。
+    final rawItemId = stringValue(
+      item.raw['id'] ?? item.raw['item_id'] ?? item.raw['itemId'],
+    ).trim();
+    final itemId = rawItemId.isNotEmpty ? rawItemId : item.id.trim();
+    if (itemId.isEmpty) {
+      throw const NovelBackendException('装备ID不能为空');
+    }
+    if (scenario == null) {
+      throw const NovelBackendException('剧本数据尚未加载');
+    }
+
+    final payload = await backend.enhanceEquipment(
+      sessionId: sessionId,
+      scenarioInstanceId: scenarioInstanceId,
+      itemId: itemId,
+    );
+
+    // 强化失败同样会消耗玄石并推进保底，因此成功/失败都必须刷新背包。
+    await refreshInventory(notify: false);
+    _notify();
+    return payload;
+  }
+
   Future<NovelGiftResult> giveGift(NovelCharacter character) async {
     if (scenario == null) return const NovelGiftResult();
     final result = await backend.useGift(

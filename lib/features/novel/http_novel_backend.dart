@@ -56,6 +56,7 @@ class NovelEndpointConfig {
     this.inventory = '/novel/inventory/{sessionId}',
     this.battleItemSettlement = '/novel/battle/items/settle',
     this.equipItem = '/novel/inventory/{scenarioInstanceId}/equip',
+    this.enhanceEquipment = '/novel/inventory/{scenarioInstanceId}/enhance',
     this.useGift = '/novel/use-gift',
     this.useBlindBox = '/novel/use-blind-box',
     this.shopItems = '/novel/shop/items',
@@ -100,6 +101,7 @@ class NovelEndpointConfig {
   final String inventory;
   final String battleItemSettlement;
   final String equipItem;
+  final String enhanceEquipment;
   final String useGift;
   final String useBlindBox;
   final String shopItems;
@@ -1345,6 +1347,35 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
       'item_id': itemId,
       'equipped': equipped,
     });
+  }
+
+  @override
+  Future<JsonMap> enhanceEquipment({
+    required String sessionId,
+    required String scenarioInstanceId,
+    required String itemId,
+  }) async {
+    final cleanItemId = itemId.trim();
+    if (cleanItemId.isEmpty) {
+      throw const NovelBackendException('装备ID不能为空');
+    }
+    final numericSessionId = int.tryParse(sessionId.trim());
+    if (numericSessionId == null || numericSessionId <= 0) {
+      throw const NovelBackendException('当前会话ID无效，无法强化装备');
+    }
+    final path = endpoints.resolve(
+      endpoints.enhanceEquipment,
+      scenarioInstanceId: scenarioInstanceId,
+    );
+    final response = await _send(
+      'POST',
+      path,
+      body: <String, dynamic>{
+        'session_id': numericSessionId,
+        'item_id': cleanItemId,
+      },
+    );
+    return asJsonMap(_dataOf(response));
   }
 
   @override

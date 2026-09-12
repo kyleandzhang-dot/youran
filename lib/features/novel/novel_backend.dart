@@ -189,6 +189,13 @@ abstract class NovelBackend {
     required bool equipped,
   });
 
+  /// 消耗 1 颗玄石尝试强化装备；成功率、保底与材料扣除均由后端权威判定。
+  Future<JsonMap> enhanceEquipment({
+    required String sessionId,
+    required String scenarioInstanceId,
+    required String itemId,
+  });
+
   Future<NovelGiftResult> useGift({
     required String sessionId,
     required String scenarioInstanceId,

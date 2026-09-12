@@ -62,6 +62,11 @@ class _NovelGamePageState extends State<NovelGamePage>
     with WidgetsBindingObserver {
   static const Duration _sceneArrivalDuration =
       Duration(milliseconds: 2800);
+  static const List<Duration> _sceneRecoveryBackoff = <Duration>[
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+  ];
   static const String _displayModePreferenceKey =
       'novel_display_mode_preference';
   // 世界地图已有右侧独立入口，主页左上角旧地图 / 地点面板先隐藏。
@@ -84,6 +89,11 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool _balanceOpen = false;
   bool _battleOpen = false;
   bool _loadFailureHandled = false;
+  Timer? _sceneRecoveryTimer;
+  bool _sceneRecoveryInFlight = false;
+  bool _sceneRecoveryExhausted = false;
+  int _sceneRecoveryAttempt = 0;
+  String _sceneRecoveryOriginalError = '';
   bool _isAdmin = false;
   NovelWeatherEffect? _weatherPreviewOverride;
   String? _backgroundPreviewOverride;
@@ -208,6 +218,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     if (!mounted) return;
 
     _syncSceneArrival();
+    _syncSceneRecovery();
 
     // 初始化失败时由页面自动打开菜单，不再继续预加载剧情音频。
     if (!controller.isInitialized) return;
@@ -233,8 +244,19 @@ class _NovelGamePageState extends State<NovelGamePage>
     }
     if (state == AppLifecycleState.resumed && controller.isInitialized) {
       // 恢复前台时不能只重连 WebSocket；后台期间可能错过任意推送。
-      // 统一通过 HTTP 重读剧情、目标、场景、调查资格和背包权威状态。
-      unawaited(controller.recoverAfterResume());
+      // 如果运行中已经进入自动恢复流程，就把待执行的退避重试提前到现在，
+      // 避免与 recoverAfterResume() 再并发发起一套重复恢复请求。
+      if (_sceneRecoveryInFlight) {
+        // 当前恢复请求已经在跑，等待它自行收敛。
+      } else if (_sceneRecoveryOriginalError.isNotEmpty ||
+          controller.lastError.trim().isNotEmpty) {
+        _sceneRecoveryTimer?.cancel();
+        _sceneRecoveryTimer = null;
+        _syncSceneRecovery(immediate: true);
+      } else {
+        // 没有已知错误时仍执行原有的前台权威状态刷新。
+        unawaited(controller.recoverAfterResume());
+      }
       unawaited(controller.bgm.init(
         controller.bgm.currentIntensity,
         controller.bgm.currentSceneMode,
@@ -246,11 +268,179 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _onControllerChanged() {
     if (!mounted) return;
     _syncSceneArrival();
+    _syncSceneRecovery();
     _syncSceneBarksAfterControllerChange();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _processOverlayRequests();
       unawaited(_syncActiveWeatherAudio());
+    });
+  }
+
+  bool get _sceneRecoveryActive => _sceneRecoveryOriginalError.isNotEmpty;
+
+  String get _sceneRecoveryStatusMessage {
+    final total = _sceneRecoveryBackoff.length;
+    if (_sceneRecoveryExhausted) {
+      return '场景自动重连失败，请返回首页后重试';
+    }
+    if (_sceneRecoveryInFlight) {
+      final attempt = _sceneRecoveryAttempt.clamp(1, total);
+      return '场景连接异常，正在自动恢复（$attempt/$total）…';
+    }
+    if (_sceneRecoveryTimer != null) {
+      final nextAttempt = (_sceneRecoveryAttempt + 1).clamp(1, total);
+      return '场景连接异常，将自动重连（$nextAttempt/$total）…';
+    }
+    return '场景载入异常，正在自动恢复…';
+  }
+
+  void _clearSceneRecoveryState({bool cancelTimer = true}) {
+    if (cancelTimer) {
+      _sceneRecoveryTimer?.cancel();
+      _sceneRecoveryTimer = null;
+    }
+    _sceneRecoveryExhausted = false;
+    _sceneRecoveryAttempt = 0;
+    _sceneRecoveryOriginalError = '';
+  }
+
+  void _dismissSceneRecoveryStatus() {
+    _sceneRecoveryTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _sceneRecoveryTimer = null;
+        _sceneRecoveryExhausted = false;
+        _sceneRecoveryAttempt = 0;
+        _sceneRecoveryOriginalError = '';
+      });
+    } else {
+      _sceneRecoveryTimer = null;
+      _sceneRecoveryExhausted = false;
+      _sceneRecoveryAttempt = 0;
+      _sceneRecoveryOriginalError = '';
+    }
+    controller.clearMessages();
+  }
+
+  void _syncSceneRecovery({bool immediate = false}) {
+    if (!mounted) return;
+
+    final error = controller.lastError.trim();
+
+    // 初始化阶段的失败继续交给 _handleLoadFailure()；这里只接管已经成功
+    // 进入世界之后发生的瞬时网络/场景同步错误。
+    if (!controller.isInitialized || controller.isInitializing) {
+      if (!_sceneRecoveryInFlight) {
+        _clearSceneRecoveryState();
+      }
+      return;
+    }
+
+    if (_sceneRecoveryInFlight) return;
+
+    // 错误已经被其他成功请求清掉，说明无需继续等待下一次退避重试。
+    if (error.isEmpty) {
+      if (_sceneRecoveryActive) {
+        _clearSceneRecoveryState();
+      }
+      return;
+    }
+
+    if (!_sceneRecoveryActive) {
+      _sceneRecoveryOriginalError = error;
+      _sceneRecoveryAttempt = 0;
+      _sceneRecoveryExhausted = false;
+    }
+
+    if (_sceneRecoveryExhausted || _sceneRecoveryTimer != null) return;
+    _scheduleSceneRecovery(immediate: immediate);
+  }
+
+  void _scheduleSceneRecovery({bool immediate = false}) {
+    if (!mounted ||
+        !_sceneRecoveryActive ||
+        _sceneRecoveryInFlight ||
+        _sceneRecoveryTimer != null ||
+        _sceneRecoveryExhausted) {
+      return;
+    }
+
+    if (_sceneRecoveryAttempt >= _sceneRecoveryBackoff.length) {
+      setState(() => _sceneRecoveryExhausted = true);
+      return;
+    }
+
+    final delay = immediate
+        ? Duration.zero
+        : _sceneRecoveryBackoff[_sceneRecoveryAttempt];
+    _sceneRecoveryTimer = Timer(delay, () {
+      _sceneRecoveryTimer = null;
+      unawaited(_attemptSceneRecovery());
+    });
+  }
+
+  Future<void> _attemptSceneRecovery() async {
+    if (!mounted ||
+        !_sceneRecoveryActive ||
+        _sceneRecoveryInFlight ||
+        !controller.isInitialized) {
+      return;
+    }
+
+    setState(() {
+      _sceneRecoveryInFlight = true;
+      _sceneRecoveryAttempt++;
+    });
+
+    // lastError 是上一次失败留下的旧状态。先清掉它，之后即可用
+    // recoverAfterResume() 是否重新写入 lastError 来判断本轮恢复是否成功。
+    controller.clearMessages();
+
+    Object? thrownError;
+    StackTrace? thrownStack;
+    try {
+      await controller.recoverAfterResume();
+    } catch (error, stackTrace) {
+      thrownError = error;
+      thrownStack = stackTrace;
+    }
+
+    if (!mounted) return;
+
+    _sceneRecoveryInFlight = false;
+
+    // 用户可能在请求期间主动关闭了错误提示，此时不再继续自动重试。
+    if (!_sceneRecoveryActive) {
+      setState(() {});
+      return;
+    }
+
+    final failed = thrownError != null ||
+        !controller.isInitialized ||
+        controller.lastError.trim().isNotEmpty;
+
+    if (!failed) {
+      setState(() {
+        _clearSceneRecoveryState();
+      });
+      return;
+    }
+
+    if (thrownError != null) {
+      debugPrint('场景自动恢复失败：$thrownError');
+      if (kDebugMode && thrownStack != null) {
+        debugPrintStack(stackTrace: thrownStack);
+      }
+    }
+
+    if (_sceneRecoveryAttempt >= _sceneRecoveryBackoff.length) {
+      setState(() => _sceneRecoveryExhausted = true);
+      return;
+    }
+
+    setState(() {
+      _scheduleSceneRecovery();
     });
   }
 
@@ -602,6 +792,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     controller.removeListener(_onControllerChanged);
     _sceneArrivalTimer?.cancel();
     _sceneBarkRefreshTimer?.cancel();
+    _sceneRecoveryTimer?.cancel();
     _inputController.dispose();
     _inputFocusNode.dispose();
     if (widget.disposeController) controller.dispose();
@@ -1826,6 +2017,8 @@ class _NovelGamePageState extends State<NovelGamePage>
             final loadFailed = !controller.isInitializing &&
                 !controller.isInitialized &&
                 controller.lastError.isNotEmpty;
+            final hasRuntimeSceneError = !loadFailed &&
+                (controller.lastError.isNotEmpty || _sceneRecoveryActive);
 
             if (controller.isInitialized) {
               _loadFailureHandled = false;
@@ -2464,11 +2657,13 @@ class _NovelGamePageState extends State<NovelGamePage>
                     ),
                   if (!loadFailed)
                     NovelStatusBanner(
-                      message: controller.lastError.isNotEmpty
-                          ? '场景载入异常，请返回首页' 
+                      message: hasRuntimeSceneError
+                          ? _sceneRecoveryStatusMessage
                           : controller.infoMessage,
-                      isError: controller.lastError.isNotEmpty,
-                      onDismiss: controller.clearMessages,
+                      isError: hasRuntimeSceneError,
+                      onDismiss: hasRuntimeSceneError
+                          ? _dismissSceneRecoveryStatus
+                          : controller.clearMessages,
                     ),
                 ],
               ),
