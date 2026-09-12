@@ -75,14 +75,17 @@ class YoranBattleSkill {
     this.cooldown = 0,
     this.burnTurns = 0,
     this.burnPowerPercent = 0,
+    this.dotStatusKind = 'generic',
     this.healMaxHpPercent = 0,
     this.lifestealPercent = 0,
     this.healthCost = 0,
     this.stunTurns = 0,
     this.guardReductionPercent = 0,
     this.enemyHitDifficultyBonus = 0,
-    this.exposeHitBonus = 0,
-    this.exposeExtraPowerPercent = 0,
+    this.exposeDefenseReductionPercent = 0,
+    this.exposeTurns = 0,
+    this.nextAttackHitBonus = 0,
+    this.nextAttackExtraPowerPercent = 0,
     this.exposes = false,
     this.guarding = false,
     this.dodging = false,
@@ -107,14 +110,17 @@ class YoranBattleSkill {
   final int cooldown;
   final int burnTurns;
   final int burnPowerPercent;
+  final String dotStatusKind;
   final int healMaxHpPercent;
   final int lifestealPercent;
   final int healthCost;
   final int stunTurns;
   final int guardReductionPercent;
   final int enemyHitDifficultyBonus;
-  final int exposeHitBonus;
-  final int exposeExtraPowerPercent;
+  final int exposeDefenseReductionPercent;
+  final int exposeTurns;
+  final int nextAttackHitBonus;
+  final int nextAttackExtraPowerPercent;
   final bool exposes;
   final bool guarding;
   final bool dodging;
@@ -178,14 +184,17 @@ class YoranBattleSkill {
 
     var burnTurns = 0;
     var burnPowerPercent = 0;
+    var dotStatusKind = 'generic';
     var healMaxHpPercent = 0;
     var energyMaxQiPercent = 0;
     var lifestealPercent = 0;
     var stunTurns = 0;
     var guardReductionPercent = 0;
     var enemyHitDifficultyBonus = 0;
-    var exposeHitBonus = 0;
-    var exposeExtraPowerPercent = 0;
+    var exposeDefenseReductionPercent = 0;
+    var exposeTurns = 0;
+    var nextAttackHitBonus = 0;
+    var nextAttackExtraPowerPercent = 0;
     var guarding = false;
     var dodging = false;
     var exposes = false;
@@ -200,6 +209,10 @@ class YoranBattleSkill {
             burnTurns = _asInt(effect['duration']).clamp(0, 3).toInt();
             burnPowerPercent =
                 _asInt(effect['power_percent']).clamp(0, 120).toInt();
+            dotStatusKind = _battleNormalizeDotKind(
+              '${effect['status_kind'] ?? ''}',
+              fallbackText: '$name ${skill['description'] ?? ''}',
+            );
             break;
           case 'evade':
             dodging = true;
@@ -228,10 +241,16 @@ class YoranBattleSkill {
             stunTurns = _asInt(effect['duration'], 1).clamp(0, 1).toInt();
             break;
           case 'next_attack_bonus':
-            exposes = true;
-            exposeHitBonus = _asInt(effect['hit_bonus'], 2).clamp(0, 4).toInt();
-            exposeExtraPowerPercent =
+            nextAttackHitBonus =
+                _asInt(effect['hit_bonus'], 1).clamp(0, 4).toInt();
+            nextAttackExtraPowerPercent =
                 _asInt(effect['extra_power_percent']).clamp(0, 140).toInt();
+            break;
+          case 'expose':
+            exposes = true;
+            exposeTurns = _asInt(effect['duration'], 1).clamp(1, 2).toInt();
+            exposeDefenseReductionPercent =
+                _asInt(effect['reduction_percent'], 18).clamp(5, 40).toInt();
             break;
           case 'counter':
             counterPowerPercent =
@@ -249,15 +268,17 @@ class YoranBattleSkill {
     final effectLabels = <String>[
       if (powerPercent > 0) '威力 $powerPercent%',
       if (burnPowerPercent > 0 && burnTurns > 0)
-        '持续$burnTurns回合 · 每回合威力$burnPowerPercent%',
+        '${_battleDotName(dotStatusKind)}$burnTurns回合 · 每回合威力$burnPowerPercent%',
       if (healMaxHpPercent > 0) '恢复最大生命$healMaxHpPercent%',
       if (energyMaxQiPercent > 0) '恢复最大精力$energyMaxQiPercent%',
       if (lifestealPercent > 0) '吸血$lifestealPercent%',
       if (guardReductionPercent > 0) '减伤$guardReductionPercent%',
       if (enemyHitDifficultyBonus > 0) '敌方命中难度+$enemyHitDifficultyBonus',
       if (stunTurns > 0) '压制1回合',
-      if (exposes && exposeExtraPowerPercent > 0)
-        '下一击命中+$exposeHitBonus · 额外威力$exposeExtraPowerPercent%',
+      if (exposes && exposeDefenseReductionPercent > 0)
+        '破绽$exposeTurns回合 · 防御-$exposeDefenseReductionPercent%',
+      if (nextAttackHitBonus > 0 || nextAttackExtraPowerPercent > 0)
+        '下一击命中+$nextAttackHitBonus · 额外威力$nextAttackExtraPowerPercent%',
       if (counterPowerPercent > 0) '受击反击 · 威力$counterPowerPercent%',
     ];
     final gameplayDetail = effectLabels.join(' · ');
@@ -270,7 +291,9 @@ class YoranBattleSkill {
         guardReductionPercent <= 0 &&
         enemyHitDifficultyBonus <= 0 &&
         stunTurns <= 0 &&
-        exposeExtraPowerPercent <= 0 &&
+        exposeDefenseReductionPercent <= 0 &&
+        nextAttackHitBonus <= 0 &&
+        nextAttackExtraPowerPercent <= 0 &&
         counterPowerPercent <= 0) {
       return null;
     }
@@ -292,14 +315,17 @@ class YoranBattleSkill {
       cooldown: cooldown,
       burnTurns: burnTurns,
       burnPowerPercent: burnPowerPercent,
+      dotStatusKind: dotStatusKind,
       healMaxHpPercent: healMaxHpPercent,
       lifestealPercent: lifestealPercent,
       healthCost: _asInt(spec['health_cost']).clamp(0, 100).toInt(),
       stunTurns: stunTurns,
       guardReductionPercent: guardReductionPercent,
       enemyHitDifficultyBonus: enemyHitDifficultyBonus,
-      exposeHitBonus: exposeHitBonus,
-      exposeExtraPowerPercent: exposeExtraPowerPercent,
+      exposeDefenseReductionPercent: exposeDefenseReductionPercent,
+      exposeTurns: exposeTurns,
+      nextAttackHitBonus: nextAttackHitBonus,
+      nextAttackExtraPowerPercent: nextAttackExtraPowerPercent,
       exposes: exposes,
       guarding: guarding,
       dodging: dodging,
@@ -310,6 +336,103 @@ class YoranBattleSkill {
       vfxSpec: Map<String, dynamic>.unmodifiable(_stringMap(skill['vfx_spec'])),
     );
   }
+}
+
+String _battleNormalizeDotKind(String raw, {String fallbackText = ''}) {
+  final value = raw.trim().toLowerCase();
+  if (value == 'generic' || value == 'burn' || value == 'bleed' || value == 'poison') return value;
+  final text = fallbackText.trim().toLowerCase();
+  if (<String>[
+    '中毒', '毒', '蛊', '瘴', '毒雾', '毒液', '腐毒',
+    'poison', 'venom', 'toxin',
+  ].any((word) => text.contains(word))) {
+    return 'poison';
+  }
+  if (<String>[
+    '流血', '出血', '割裂', '撕裂', '裂伤', '血刃', '血痕',
+    'bleed', 'bleeding', 'hemorrhage',
+  ].any((word) => text.contains(word))) {
+    return 'bleed';
+  }
+  if (<String>[
+    '灼烧', '燃烧', '火', '炎', '焰', '灼', '烧', '烬',
+    'fire', 'flame', 'burn', 'scorch',
+  ].any((word) => text.contains(word))) {
+    return 'burn';
+  }
+  return 'generic';
+}
+
+String _battleDotName(String kind) => switch (_battleNormalizeDotKind(kind)) {
+      'bleed' => '流血',
+      'poison' => '中毒',
+      'burn' => '灼烧',
+      _ => '持续伤害',
+    };
+
+Color _battleDotColor(String kind) => switch (_battleNormalizeDotKind(kind)) {
+      'bleed' => const Color(0xFFD85A5A),
+      'poison' => const Color(0xFF8FCB6B),
+      'burn' => const Color(0xFFFF7A45),
+      _ => const Color(0xFFB8BEC8),
+    };
+
+// 状态图标预留 WebP 路径。图片未放入 assets 时会自动回退到 Material 线性图标。
+// 建议在 pubspec.yaml 中声明 assets/images/battle/status/ 目录。
+String _battleStatusAssetPath(String kind) => switch (kind) {
+      'stun' => 'assets/images/battle/status/stun.webp',
+      'burn' => 'assets/images/battle/status/burn.webp',
+      'bleed' => 'assets/images/battle/status/bleed.webp',
+      'poison' => 'assets/images/battle/status/poison.webp',
+      'expose' => 'assets/images/battle/status/expose.webp',
+      _ => 'assets/images/battle/status/dot.webp',
+    };
+
+IconData _battleStatusFallbackIcon(String kind) => switch (kind) {
+      'stun' => Icons.flash_on,
+      'burn' => Icons.whatshot,
+      'bleed' => Icons.opacity,
+      'poison' => Icons.science,
+      'expose' => Icons.gps_fixed,
+      _ => Icons.blur_on,
+    };
+
+Color _battleStatusColor(String kind) => switch (kind) {
+      'stun' => const Color(0xFFF2C94C),
+      'expose' => const Color(0xFF67C7E8),
+      _ => _battleDotColor(kind),
+    };
+
+int _battleDotOrder(String kind) => switch (_battleNormalizeDotKind(kind)) {
+      'burn' => 0,
+      'bleed' => 1,
+      'poison' => 2,
+      _ => 3,
+    };
+
+class _BattleDotRuntime {
+  _BattleDotRuntime({required this.damage, required this.turns});
+
+  int damage;
+  int turns;
+}
+
+void _mergeBattleDot(
+  Map<String, _BattleDotRuntime> dots, {
+  required String kind,
+  required int damage,
+  required int turns,
+}) {
+  if (damage <= 0 || turns <= 0) return;
+  final normalized = _battleNormalizeDotKind(kind);
+  final current = dots[normalized];
+  if (current == null) {
+    dots[normalized] = _BattleDotRuntime(damage: damage, turns: turns);
+    return;
+  }
+  // 同类 DOT 不无限叠层：保留较高单跳伤害，并刷新到较长剩余回合。
+  current.damage = math.max(current.damage, damage);
+  current.turns = math.max(current.turns, turns);
 }
 
 double _battleVfxDouble(dynamic value, [double fallback = 0]) {
@@ -2950,15 +3073,17 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   String _companionCounterName = '';
   late int _playerQi;
   int _enemyQi = 100;
-  int _enemyBurnTurns = 0;
-  int _enemyBurnDamage = 0;
-  int _playerBurnTurns = 0;
-  int _playerBurnDamage = 0;
+  // 不同 DOT 类型独立保存：灼烧 / 流血 / 中毒 / 通用持续伤害可同时存在。
+  // 同类型由 _mergeBattleDot 负责取较强伤害并刷新剩余回合。
+  final Map<String, _BattleDotRuntime> _enemyDots = <String, _BattleDotRuntime>{};
+  final Map<String, _BattleDotRuntime> _playerDots = <String, _BattleDotRuntime>{};
   int _playerStunnedTurns = 0;
   int _enemyExposedTurns = 0;
-  int _enemyExposedHitBonus = 0;
-  int _enemyExposedExtraDamageMin = 0;
-  int _enemyExposedExtraDamageMax = 0;
+  int _enemyExposedDefenseReductionPercent = 0;
+  int _playerNextAttackHitBonus = 0;
+  int _playerNextAttackExtraPowerPercent = 0;
+  int _enemyNextAttackHitBonus = 0;
+  int _enemyNextAttackExtraPowerPercent = 0;
   int _round = 1;
   bool _playerGuarding = false;
   bool _playerDodging = false;
@@ -3769,7 +3894,17 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       skill,
       effectMultiplier: starMultiplier,
     );
-    final actualDamage = math.min(_enemyHp, _scaleCompanionDamage(rolledDamage));
+    // 援助角色继承主角 50% 的装备攻击/暴击收益。
+    // HP / SP 上限不在这里额外继承，治疗与回能仍按原有规则结算。
+    final companionCritical = rolledDamage > 0 &&
+        _companionEquipmentCriticalPercent > 0 &&
+        _random.nextInt(100) < _companionEquipmentCriticalPercent;
+    final companionDamageBeforeScale =
+        companionCritical ? (rolledDamage * 1.6).round() : rolledDamage;
+    final actualDamage = math.min(
+      _enemyHp,
+      _scaleCompanionDamage(companionDamageBeforeScale),
+    );
     final directHeal = _skillHealAmount(
       skill,
       _playerMaxHp,
@@ -3788,7 +3923,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     if (actualDamage > 0) {
       if (!await _performSkillHitStop(
         skill,
-        critical: false,
+        critical: companionCritical,
         stopPlayerAttack: false,
       )) return;
     } else if (skill.hasVfx) {
@@ -3803,10 +3938,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         effectMultiplier: starMultiplier,
       );
       if (skill.burnTurns > 0 && burnBase > 0) {
-        _enemyBurnTurns = math.max(_enemyBurnTurns, skill.burnTurns);
-        _enemyBurnDamage = math.max(
-          _enemyBurnDamage,
-          _scaleCompanionDamage(burnBase),
+        _mergeBattleDot(
+          _enemyDots,
+          kind: skill.dotStatusKind,
+          damage: _scaleCompanionDamage(burnBase),
+          turns: skill.burnTurns,
         );
       }
       if (skill.guarding) {
@@ -3824,19 +3960,20 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         );
       }
       if (skill.exposes) {
-        _enemyExposedTurns = math.max(_enemyExposedTurns, 1);
-        _enemyExposedHitBonus = math.max(_enemyExposedHitBonus, skill.exposeHitBonus);
-        final extraPower =
-            (skill.exposeExtraPowerPercent * starMultiplier).round();
-        final extraMin = _powerDamageMin(extraPower);
-        final extraMax = _powerDamageMax(extraPower);
-        _enemyExposedExtraDamageMin = math.max(
-          _enemyExposedExtraDamageMin,
-          extraMin,
+        _enemyExposedTurns = math.max(_enemyExposedTurns, skill.exposeTurns);
+        _enemyExposedDefenseReductionPercent = math.max(
+          _enemyExposedDefenseReductionPercent,
+          skill.exposeDefenseReductionPercent,
         );
-        _enemyExposedExtraDamageMax = math.max(
-          _enemyExposedExtraDamageMax,
-          extraMax,
+      }
+      if (skill.nextAttackHitBonus > 0 || skill.nextAttackExtraPowerPercent > 0) {
+        _playerNextAttackHitBonus = math.max(
+          _playerNextAttackHitBonus,
+          skill.nextAttackHitBonus,
+        );
+        _playerNextAttackExtraPowerPercent = math.max(
+          _playerNextAttackExtraPowerPercent,
+          (skill.nextAttackExtraPowerPercent * starMultiplier).round(),
         );
       }
       if (skill.stunTurns > 0) {
@@ -3852,15 +3989,26 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     });
     if (actualDamage > 0) {
       unawaited(_enemyDamageController.forward(from: 0));
-      _showCombatText('-$actualDamage', onEnemy: true, color: _BattleColors.player);
+      _showCombatText(
+        '-$actualDamage',
+        onEnemy: true,
+        color: _BattleColors.player,
+        critical: companionCritical,
+      );
     }
     if (recovered > 0) unawaited(_playerHealController.forward(from: 0));
     _addLog(
       _BattleLogEntry(
-        label: '${companion.name} · ${skill.name}',
+        label: companionCritical
+            ? '${companion.name} · ${skill.name} · 暴击'
+            : '${companion.name} · ${skill.name}',
         before: '${companion.name}发动援战技能。',
         meta: <String>[
           '${skill.quality}品',
+          if (_companionEquipmentAttackMultiplier > 1.0)
+            '继承50%装备威力×${_companionEquipmentAttackMultiplier.toStringAsFixed(2)}',
+          if (_companionEquipmentCriticalPercent > 0)
+            '援助暴击${_companionEquipmentCriticalPercent}%',
           if (actualDamage > 0) '伤害$actualDamage',
           if (recovered > 0) '生命+$recovered',
           if (_playerQi > beforeQi) '精力+${_playerQi - beforeQi}',
@@ -3991,15 +4139,94 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
+  // 援助只继承主角装备攻击加成的 50%，而不是直接拿主角最终倍率。
+  // 例：主角装备威力 x1.80 -> 援助装备威力 x1.40。
+  double get _companionEquipmentAttackMultiplier =>
+      1.0 + ((_equipmentAttackMultiplier - 1.0) * .50);
+
+  // 援助继承主角装备暴击率的 50%。主角 20% -> 援助 10%。
+  int get _companionEquipmentCriticalPercent =>
+      (_equipmentCriticalPercent * .50).round().clamp(0, 100).toInt();
+
   int _scaleCompanionDamage(int value) {
     if (value <= 0) return 0;
-    // 伙伴吃敌我强弱修正，但不继承主角武器威力；角色星级单独作用于援战效果。
-    return math.max(1, (value * _playerDamageMultiplier).round());
+    // 星级先作用于技能基础效果；这里再叠加敌我强弱修正与 50% 装备攻击继承。
+    return math.max(
+      1,
+      (value * _playerDamageMultiplier * _companionEquipmentAttackMultiplier)
+          .round(),
+    );
   }
 
   String _modifierLabel(int value, String label) {
     if (value == 0) return '';
     return ' ${value > 0 ? '+' : ''}$value$label';
+  }
+
+  // 战斗场景中的状态提示只展示真实生效的状态。
+  // 不展示 guard / dodge 等敌方意图，也不显示状态名称或文字说明。
+  // 不同 DOT 可并存；视觉仅显示图标 + 对应状态色 + 1~3 个回合圆点。
+  List<_BattleEffectStatusVisual> get _enemyVisibleStatuses {
+    final statuses = <_BattleEffectStatusVisual>[];
+    if (_enemyStunnedByCompanion > 0) {
+      statuses.add(
+        _BattleEffectStatusVisual(
+          kind: 'stun',
+          color: _battleStatusColor('stun'),
+          turns: _enemyStunnedByCompanion,
+        ),
+      );
+    }
+    final dotKinds = _enemyDots.keys.toList(growable: false)
+      ..sort((a, b) => _battleDotOrder(a).compareTo(_battleDotOrder(b)));
+    for (final kind in dotKinds) {
+      final dot = _enemyDots[kind];
+      if (dot == null || dot.turns <= 0 || dot.damage <= 0) continue;
+      statuses.add(
+        _BattleEffectStatusVisual(
+          kind: kind,
+          color: _battleStatusColor(kind),
+          turns: dot.turns,
+        ),
+      );
+    }
+    if (_enemyExposedTurns > 0) {
+      statuses.add(
+        _BattleEffectStatusVisual(
+          kind: 'expose',
+          color: _battleStatusColor('expose'),
+          turns: _enemyExposedTurns,
+        ),
+      );
+    }
+    return statuses;
+  }
+
+  List<_BattleEffectStatusVisual> get _playerVisibleStatuses {
+    final statuses = <_BattleEffectStatusVisual>[];
+    if (_playerStunnedTurns > 0) {
+      statuses.add(
+        _BattleEffectStatusVisual(
+          kind: 'stun',
+          color: _battleStatusColor('stun'),
+          turns: _playerStunnedTurns,
+        ),
+      );
+    }
+    final dotKinds = _playerDots.keys.toList(growable: false)
+      ..sort((a, b) => _battleDotOrder(a).compareTo(_battleDotOrder(b)));
+    for (final kind in dotKinds) {
+      final dot = _playerDots[kind];
+      if (dot == null || dot.turns <= 0 || dot.damage <= 0) continue;
+      statuses.add(
+        _BattleEffectStatusVisual(
+          kind: kind,
+          color: _battleStatusColor(kind),
+          turns: dot.turns,
+        ),
+      );
+    }
+    return statuses;
   }
 
   List<YoranBattleSkill> _collectAvailableSkills() {
@@ -4070,40 +4297,141 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
   }
 
-  String get _enemyIntentTitle => switch (_enemyIntent) {
-        _EnemyIntentKind.claw => '快速攻击',
-        _EnemyIntentKind.heavy => '强力攻击',
-        _EnemyIntentKind.guard => '防御姿态',
-        _EnemyIntentKind.recover => '恢复状态',
-        _EnemyIntentKind.skill => _enemyIntentSkill?.name ?? '特殊技能',
-      };
+  bool _enemySkillWouldBeUseful(YoranBattleSkill skill) {
+    final hpMissing = math.max(0, _enemyMaxHp - _enemyHp);
+    final qiMissing = math.max(0, 100 - _enemyQi);
+    final hasHealing = skill.healMaxHpPercent > 0;
+    final hasEnergyRestore = skill.energyMaxQiPercent > 0 || skill.resting;
+    final hasDefense = skill.guarding || skill.dodging;
+    final hasNextAttackBuff =
+        skill.nextAttackHitBonus > 0 || skill.nextAttackExtraPowerPercent > 0;
+    final hasSupportedOffense = skill.powerPercent > 0 ||
+        (skill.burnTurns > 0 && skill.burnPowerPercent > 0) ||
+        skill.stunTurns > 0;
+
+    // 敌方 AI 不再浪费资源做“看起来行动了、实际上没有收益”的技能。
+    // 满血不纯治疗，满精力不纯回能；未被前端实现的纯自用效果也不选。
+    if (skill.isSelfAction) {
+      if (hasDefense) return true;
+      if (hasHealing && hpMissing > 0) return true;
+      if (hasEnergyRestore && qiMissing > 0) return true;
+      if (hasNextAttackBuff &&
+          (_enemyNextAttackHitBonus <= 0 && _enemyNextAttackExtraPowerPercent <= 0)) {
+        return true;
+      }
+      return false;
+    }
+    return hasSupportedOffense;
+  }
+
+  double _enemySkillScore(YoranBattleSkill skill) {
+    final hpRatio = _enemyHp / math.max(1, _enemyMaxHp);
+    final playerHpRatio = _playerHp / math.max(1, _playerMaxHp);
+    final hpMissing = math.max(0, _enemyMaxHp - _enemyHp);
+    final qiMissing = math.max(0, 100 - _enemyQi);
+    var score = 0.0;
+
+    if (!skill.isSelfAction) {
+      score += skill.powerPercent * 1.25;
+      score += skill.burnPowerPercent * skill.burnTurns * .70;
+      if (skill.stunTurns > 0) score += 105;
+      if (playerHpRatio < .35 && skill.powerPercent > 0) {
+        score += 40 + skill.powerPercent * .30;
+      }
+      if (skill.lifestealPercent > 0 && hpMissing > 0) {
+        score += skill.lifestealPercent * (1 - hpRatio) * .65;
+      }
+    }
+
+    if (skill.healMaxHpPercent > 0 && hpMissing > 0) {
+      final expectedHeal = math.min(
+        hpMissing,
+        _percentAmount(_enemyMaxHp, skill.healMaxHpPercent),
+      );
+      score += expectedHeal / math.max(1, _enemyMaxHp) *
+          (hpRatio < .35 ? 270 : 165);
+    }
+
+    if ((skill.energyMaxQiPercent > 0 || skill.resting) && qiMissing > 0) {
+      final expectedEnergy = math.min(
+        qiMissing,
+        _percentAmount(100, skill.energyMaxQiPercent),
+      );
+      score += expectedEnergy * 1.35;
+      if (_enemyQi < 25) score += 42;
+    }
+
+    if (skill.guarding) score += 34 + (1 - hpRatio) * 72;
+    if (skill.dodging) score += 30 + (1 - hpRatio) * 58;
+    if (skill.nextAttackHitBonus > 0 || skill.nextAttackExtraPowerPercent > 0) {
+      score += skill.nextAttackHitBonus * 18 +
+          skill.nextAttackExtraPowerPercent * .75;
+    }
+    score -= skill.energyCost * .55;
+    return score;
+  }
+
+  YoranBattleSkill _pickEnemySkill(List<YoranBattleSkill> skills) {
+    final ranked = List<YoranBattleSkill>.from(skills)
+      ..sort((a, b) => _enemySkillScore(b).compareTo(_enemySkillScore(a)));
+    if (ranked.length == 1) return ranked.first;
+
+    final best = ranked[0];
+    final second = ranked[1];
+    final bestScore = math.max(1.0, _enemySkillScore(best));
+    final secondScore = _enemySkillScore(second);
+    // 大多数时候选最优解，少量选择接近最优的第二方案，避免 AI 机械重复。
+    if (secondScore >= bestScore * .72 && _random.nextInt(100) < 22) {
+      return second;
+    }
+    return best;
+  }
 
   void _chooseNextEnemyIntent() {
-    final roll = _random.nextInt(100);
     final availableSkills = _currentEnemy.skills.where((skill) {
       final cooldown = _enemySkillCooldowns[skill.name] ?? 0;
       return cooldown <= 0 &&
           _enemyQi >= skill.energyCost &&
-          (skill.canSelfKill || _enemyHp > skill.healthCost);
+          (skill.canSelfKill || _enemyHp > skill.healthCost) &&
+          _enemySkillWouldBeUseful(skill);
     }).toList(growable: false);
-    if (availableSkills.isNotEmpty && roll < 68) {
-      _enemyIntentSkill = availableSkills[_random.nextInt(availableSkills.length)];
-      _enemyIntent = _EnemyIntentKind.skill;
-      return;
+
+    if (availableSkills.isNotEmpty) {
+      final selected = _pickEnemySkill(availableSkills);
+      final score = _enemySkillScore(selected);
+      final useSkillChance = score >= 160
+          ? 92
+          : score >= 95
+              ? 86
+              : 78;
+      if (_random.nextInt(100) < useSkillChance) {
+        _enemyIntentSkill = selected;
+        _enemyIntent = _EnemyIntentKind.skill;
+        return;
+      }
     }
+
     _enemyIntentSkill = null;
-    if (_enemyHp / _enemyMaxHp < .38 && roll < 25) {
+    final hpRatio = _enemyHp / math.max(1, _enemyMaxHp);
+    final missingHp = math.max(0, _enemyMaxHp - _enemyHp);
+    final recoverThreshold =
+        math.max(6, (_enemyMaxHp * .06).round()).toInt();
+    final canRecover = missingHp >= recoverThreshold;
+    final roll = _random.nextInt(100);
+
+    // 没有技能可用时也优先保持压迫感：重击占比提高；防御/恢复都不再是空回合。
+    if (hpRatio < .42 && canRecover && roll < 14) {
       _enemyIntent = _EnemyIntentKind.recover;
-    } else if (roll < 50) {
+    } else if (roll < 34) {
       _enemyIntent = _EnemyIntentKind.claw;
-    } else if (roll < 75) {
+    } else if (roll < 76) {
       _enemyIntent = _EnemyIntentKind.heavy;
     } else if (roll < 90) {
       _enemyIntent = _EnemyIntentKind.guard;
+    } else if (canRecover && hpRatio < .72) {
+      _enemyIntent = _EnemyIntentKind.recover;
     } else {
-      _enemyIntent = _enemyHp / _enemyMaxHp < .88
-          ? _EnemyIntentKind.recover
-          : _EnemyIntentKind.claw;
+      _enemyIntent = _EnemyIntentKind.heavy;
     }
   }
 
@@ -4166,15 +4494,15 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _settlementError = '';
     _playerQi = (_playerMaxQi * .40).round();
     _enemyQi = _enemyStartingQi;
-    _enemyBurnTurns = 0;
-    _enemyBurnDamage = 0;
-    _playerBurnTurns = 0;
-    _playerBurnDamage = 0;
+    _enemyDots.clear();
+    _playerDots.clear();
     _playerStunnedTurns = 0;
     _enemyExposedTurns = 0;
-    _enemyExposedHitBonus = 0;
-    _enemyExposedExtraDamageMin = 0;
-    _enemyExposedExtraDamageMax = 0;
+    _enemyExposedDefenseReductionPercent = 0;
+    _playerNextAttackHitBonus = 0;
+    _playerNextAttackExtraPowerPercent = 0;
+    _enemyNextAttackHitBonus = 0;
+    _enemyNextAttackExtraPowerPercent = 0;
     _round = 1;
     _playerGuarding = false;
     _playerDodging = false;
@@ -4231,14 +4559,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                   : _BattleLogTone.neutral,
             ),
         ],
-      )
-      ..add(
-        _BattleLogEntry(
-          label: '敌方意图',
-          before: _enemyIntentTitle,
-          meta: '第1回合',
-          tone: _BattleLogTone.enemy,
-        ),
       );
     if (startEntrance) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -4612,7 +4932,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
 
     final exposed = _enemyExposedTurns > 0;
-    final exposedHitBonus = exposed ? _enemyExposedHitBonus : 0;
+    final exposedDefenseReductionPercent =
+        exposed ? _enemyExposedDefenseReductionPercent : 0;
+    final nextAttackHitBonus = _playerNextAttackHitBonus;
+    final nextAttackExtraPowerPercent = _playerNextAttackExtraPowerPercent;
     final roll = _d20();
     final enemyDodgeBonus = _enemyIntent == _EnemyIntentKind.skill &&
             (_enemyIntentSkill?.dodging ?? false)
@@ -4620,27 +4943,24 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         : 0;
     final hitDifficulty = 11 + enemyDodgeBonus;
     final total =
-        roll + skill.hitBonus + exposedHitBonus + _playerHitBonusShift;
+        roll + skill.hitBonus + nextAttackHitBonus + _playerHitBonusShift;
     final baseHit = roll != 1 && (roll == 20 || total >= hitDifficulty);
     final equipmentHit = roll != 1 &&
         !baseHit &&
         _equipmentHitPercent > 0 &&
         _random.nextInt(100) < _equipmentHitPercent;
     final hit = baseHit || equipmentHit;
-    final baseCritical = hit && (roll == 20 || (exposed && roll >= 19));
+    final baseCritical = hit && roll == 20;
     final accessoryCritical = hit &&
         !baseCritical &&
         _equipmentCriticalPercent > 0 &&
         _random.nextInt(100) < _equipmentCriticalPercent;
     final critical = baseCritical || accessoryCritical;
-    final exposedExtraDamage = hit && exposed && _enemyExposedExtraDamageMax > 0
-        ? _rollBetween(
-            _enemyExposedExtraDamageMin,
-            _enemyExposedExtraDamageMax,
-          )
+    final nextAttackExtraDamage = hit && nextAttackExtraPowerPercent > 0
+        ? _rollPowerDamage(nextAttackExtraPowerPercent)
         : 0;
     final damage = hit
-        ? _rollSkillDamage(skill) + exposedExtraDamage
+        ? _rollSkillDamage(skill) + nextAttackExtraDamage
         : 0;
 
     final skillEnergyGain = _skillEnergyGain(skill, _playerMaxQi);
@@ -4655,6 +4975,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       if (skill.cooldown > 0) {
         _skillCooldowns[skill.name] = skill.cooldown;
       }
+      if (nextAttackHitBonus > 0 || nextAttackExtraPowerPercent > 0) {
+        _playerNextAttackHitBonus = 0;
+        _playerNextAttackExtraPowerPercent = 0;
+      }
     });
 
     await _resolvePlayerAttack(
@@ -4665,11 +4989,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       damage: damage,
       burnTurns: skill.burnTurns,
       burnDamage: _skillBurnBaseDamage(skill),
+      dotStatusKind: skill.dotStatusKind,
       exposes: skill.exposes,
-      exposeHitBonus: skill.exposeHitBonus,
-      exposeExtraDamageMin: _powerDamageMin(skill.exposeExtraPowerPercent),
-      exposeExtraDamageMax: _powerDamageMax(skill.exposeExtraPowerPercent),
+      exposeTurns: skill.exposeTurns,
+      exposeDefenseReductionPercent: skill.exposeDefenseReductionPercent,
       consumeExpose: exposed,
+      activeExposeDefenseReductionPercent: exposedDefenseReductionPercent,
       piercesGuard: skill.piercesGuard,
       healAmount: _skillHealAmount(skill, _playerMaxHp),
       lifestealPercent: skill.lifestealPercent,
@@ -4677,11 +5002,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       successText: '攻击正中目标，',
       failureText: '你的招式被$_enemyName敏捷地避开，未能命中。',
       meta: 'D20：$roll + ${skill.hitBonus}'
+          '${nextAttackHitBonus > 0 ? ' + $nextAttackHitBonus强化' : ''}'
           '${_modifierLabel(_playerHitBonusShift, '阶位')}'
-          '${exposedHitBonus > 0 ? ' + $exposedHitBonus破绽' : ''}'
           '${equipmentHit ? '  ·  装备命中修正' : ''}'
           '${accessoryCritical ? '  ·  饰品暴击' : ''}'
-          '${exposedExtraDamage > 0 ? '  ·  破绽伤害+$exposedExtraDamage' : ''}'
+          '${nextAttackExtraDamage > 0 ? '  ·  强化伤害+$nextAttackExtraDamage' : ''}'
+          '${exposedDefenseReductionPercent > 0 ? '  ·  破绽防御-${exposedDefenseReductionPercent}%' : ''}'
           '  ·  难度：$hitDifficulty',
     );
   }
@@ -4723,6 +5049,16 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           math.max(1, skill.enemyHitDifficultyBonus),
         );
       }
+      if (skill.nextAttackHitBonus > 0 || skill.nextAttackExtraPowerPercent > 0) {
+        _playerNextAttackHitBonus = math.max(
+          _playerNextAttackHitBonus,
+          skill.nextAttackHitBonus,
+        );
+        _playerNextAttackExtraPowerPercent = math.max(
+          _playerNextAttackExtraPowerPercent,
+          skill.nextAttackExtraPowerPercent,
+        );
+      }
     });
     if (skill.hasVfx) {
       _startSkillVfx(skill, hit: true, critical: false);
@@ -4736,7 +5072,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             : skill.resting
                 ? '你放缓呼吸并调整状态，恢复了$restoredEnergy点精力。'
             : skill.guarding
-            ? '你稳住重心并集中注意，准备承受${_enemyIntentTitle}。'
+            ? '你稳住重心并集中注意，准备承受敌方接下来的攻势。'
             : skill.dodging
                 ? '你放轻脚步，将注意力锁定在敌人的肩胯变化上。'
                 : '你发动了${skill.name}。',
@@ -4745,6 +5081,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             '下次伤害降低${_playerGuardReductionPercent}%',
           if (skill.dodging)
             '敌方命中难度提高至${11 + _playerDodgeDifficultyBonus}',
+          if (skill.nextAttackHitBonus > 0)
+            '下一击命中+${skill.nextAttackHitBonus}',
+          if (skill.nextAttackExtraPowerPercent > 0)
+            '下一击额外威力${skill.nextAttackExtraPowerPercent}%',
           if (restoredEnergy > 0) '精力+$restoredEnergy',
           if (skill.healthCost > 0) '生命-${skill.healthCost}',
         ].join(' · '),
@@ -4790,11 +5130,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     bool critical = false,
     int burnTurns = 0,
     int burnDamage = 0,
+    String dotStatusKind = 'burn',
     bool exposes = false,
-    int exposeHitBonus = 0,
-    int exposeExtraDamageMin = 0,
-    int exposeExtraDamageMax = 0,
+    int exposeTurns = 0,
+    int exposeDefenseReductionPercent = 0,
     bool consumeExpose = false,
+    int activeExposeDefenseReductionPercent = 0,
     bool piercesGuard = false,
     int healAmount = 0,
     int lifestealPercent = 0,
@@ -4821,6 +5162,15 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
       var resolvedDamage = critical ? (damage * 1.6).round() : damage;
       resolvedDamage = _scalePlayerDamage(resolvedDamage);
+      if (activeExposeDefenseReductionPercent > 0) {
+        resolvedDamage = math.max(
+          1,
+          (resolvedDamage *
+                  (100 + activeExposeDefenseReductionPercent.clamp(0, 40)) /
+                  100)
+              .round(),
+        );
+      }
     
       final intentSkill = _enemyIntent == _EnemyIntentKind.skill
           ? _enemyIntentSkill
@@ -4846,24 +5196,20 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         }
         if (consumeExpose) {
           _enemyExposedTurns = 0;
-          _enemyExposedHitBonus = 0;
-          _enemyExposedExtraDamageMin = 0;
-          _enemyExposedExtraDamageMax = 0;
+          _enemyExposedDefenseReductionPercent = 0;
         }
         if (exposes) {
-          _enemyExposedTurns = 1;
-          _enemyExposedHitBonus = exposeHitBonus.clamp(0, 4).toInt();
-          _enemyExposedExtraDamageMin =
-              exposeExtraDamageMin.clamp(0, 10).toInt();
-          _enemyExposedExtraDamageMax = math
-              .max(_enemyExposedExtraDamageMin, exposeExtraDamageMax)
-              .clamp(0, 12)
-              .toInt();
+          _enemyExposedTurns = math.max(1, exposeTurns);
+          _enemyExposedDefenseReductionPercent =
+              exposeDefenseReductionPercent.clamp(5, 40).toInt();
         }
         if (burnTurns > 0) {
-          _enemyBurnTurns = math.max(_enemyBurnTurns, burnTurns);
-          _enemyBurnDamage =
-              math.max(_enemyBurnDamage, _scalePlayerDamage(burnDamage));
+          _mergeBattleDot(
+            _enemyDots,
+            kind: dotStatusKind,
+            damage: _scalePlayerDamage(burnDamage),
+            turns: burnTurns,
+          );
         }
         _enemyDamageCritical = critical;
       });
@@ -4906,24 +5252,21 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         _addLog(
           _BattleLogEntry(
             label: '破绽',
-            before: '敌人的重心被扯乱。下一次攻击命中提高，掷出19也会暴击。',
-            meta: <String>[
-              if (_enemyExposedHitBonus > 0)
-                '命中+$_enemyExposedHitBonus',
-              if (_enemyExposedExtraDamageMax > 0)
-                '额外伤害$_enemyExposedExtraDamageMin–$_enemyExposedExtraDamageMax',
-              '持续至下一次攻击',
-            ].join(' · '),
+            before: '敌人的防御被撕开，受到直接攻击时伤害提高。',
+            meta: '防御-${_enemyExposedDefenseReductionPercent}% · 持续${_enemyExposedTurns}回合',
             tone: _BattleLogTone.success,
           ),
         );
       }
       if (burnTurns > 0) {
+        final normalizedDotKind = _battleNormalizeDotKind(dotStatusKind);
+        final dotName = _battleDotName(normalizedDotKind);
+        final activeDot = _enemyDots[normalizedDotKind];
         _addLog(
           _BattleLogEntry(
-            label: '持续伤害',
-            before: '效果附着在目标身上，将在敌方行动前持续造成伤害。',
-            meta: '$burnTurns回合 · 每回合$burnDamage伤害',
+            label: dotName,
+            before: '$dotName效果附着在目标身上，将在敌方行动前持续造成伤害。',
+            meta: '$burnTurns回合 · 每回合${activeDot?.damage ?? _scalePlayerDamage(burnDamage)}伤害',
             tone: _BattleLogTone.damage,
           ),
         );
@@ -4942,9 +5285,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       if (consumeExpose) {
         setState(() {
           _enemyExposedTurns = 0;
-          _enemyExposedHitBonus = 0;
-          _enemyExposedExtraDamageMin = 0;
-          _enemyExposedExtraDamageMax = 0;
+          _enemyExposedDefenseReductionPercent = 0;
         });
       }
       unawaited(_enemyDodgeController.forward(from: 0));
@@ -4992,14 +5333,13 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         _enemyIndex++;
         _enemyHp = _enemyStartingHp;
         _enemyQi = _enemyStartingQi;
-        _enemyBurnTurns = 0;
-        _enemyBurnDamage = 0;
+        _enemyDots.clear();
         _enemyIntentSkill = null;
         _enemySkillCooldowns.clear();
         _enemyExposedTurns = 0;
-        _enemyExposedHitBonus = 0;
-        _enemyExposedExtraDamageMin = 0;
-        _enemyExposedExtraDamageMax = 0;
+        _enemyExposedDefenseReductionPercent = 0;
+        _enemyNextAttackHitBonus = 0;
+        _enemyNextAttackExtraPowerPercent = 0;
         _playerGuarding = false;
         _playerDodging = false;
         _playerGuardReductionPercent = 0;
@@ -5284,14 +5624,21 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
   Future<bool> _useEnemySkill(YoranBattleSkill skill) async {
     if (_enemyQi < skill.energyCost ||
-        (!skill.canSelfKill && _enemyHp <= skill.healthCost)) {
+        (!skill.canSelfKill && _enemyHp <= skill.healthCost) ||
+        !_enemySkillWouldBeUseful(skill)) {
       return false;
     }
 
     final healthAfterCost = _clampEnemyHp(_enemyHp - skill.healthCost);
-    final enemyEnergyGain = _skillEnergyGain(skill, 100);
+    final nominalEnergyGain = _skillEnergyGain(skill, 100);
+    final qiAfterCost = _clampEnemyQi(_enemyQi - skill.energyCost);
+    final actualEnergyGain = math.min(
+      nominalEnergyGain,
+      math.max(0, 100 - qiAfterCost),
+    ).toInt();
+    final qiAfter = _clampEnemyQi(qiAfterCost + actualEnergyGain);
     setState(() {
-      _enemyQi = _clampEnemyQi(_enemyQi - skill.energyCost + enemyEnergyGain);
+      _enemyQi = qiAfter;
       _enemyHp = healthAfterCost;
       if (skill.cooldown > 0) {
         _enemySkillCooldowns[skill.name] = skill.cooldown;
@@ -5303,6 +5650,18 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         _skillHealAmount(skill, _enemyMaxHp),
         _enemyMaxHp - _enemyHp,
       );
+      if (skill.nextAttackHitBonus > 0 || skill.nextAttackExtraPowerPercent > 0) {
+        setState(() {
+          _enemyNextAttackHitBonus = math.max(
+            _enemyNextAttackHitBonus,
+            skill.nextAttackHitBonus,
+          );
+          _enemyNextAttackExtraPowerPercent = math.max(
+            _enemyNextAttackExtraPowerPercent,
+            skill.nextAttackExtraPowerPercent,
+          );
+        });
+      }
       if (recovered > 0) {
         setState(() => _enemyHp = _clampEnemyHp(_enemyHp + recovered));
         _showCombatText(
@@ -5323,7 +5682,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                       : '$_enemyName发动了${skill.name}。',
           meta: <String>[
             if (skill.energyCost > 0) '精力-${skill.energyCost}',
-            if (enemyEnergyGain > 0) '精力+$enemyEnergyGain',
+            if (actualEnergyGain > 0) '精力+$actualEnergyGain',
             if (skill.healthCost > 0) '生命-${skill.healthCost}',
             if (skill.cooldown > 0) 'CD${skill.cooldown}',
           ].join(' · '),
@@ -5334,15 +5693,31 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         await _finishVictory();
         return true;
       }
-      await _openNextPlayerTurn();
+      if (!await _pause(180)) return true;
+      await _performEnemyBasicAttack(
+        powerMultiplier: skill.guarding || skill.dodging ? .82 : .74,
+        actionLabel: skill.guarding
+            ? '守势追击'
+            : skill.dodging
+                ? '闪身追击'
+                : recovered > 0
+                    ? '恢复后追击'
+                    : '调息追击',
+        actionBefore: '$_enemyName在${skill.name}后立即衔接攻势，造成 ',
+        qiGain: 8,
+      );
       return true;
     }
 
     unawaited(_enemyAttackController.forward(from: 0));
     if (!await _pause(255)) return true;
     final roll = _d20();
+    final nextAttackHitBonus = _enemyNextAttackHitBonus;
+    final nextAttackExtraPowerPercent = _enemyNextAttackExtraPowerPercent;
     final hitBonus =
-        (skill.hitBonus + _opponentHitBonusShift).clamp(-10, 20).toInt();
+        (skill.hitBonus + nextAttackHitBonus + _opponentHitBonusShift)
+            .clamp(-10, 20)
+            .toInt();
     final dc = 11 + (_playerDodging ? _playerDodgeDifficultyBonus : 0);
     final baseHit = roll != 1 && (roll == 20 || roll + hitBonus >= dc);
     final equipmentDodge = baseHit &&
@@ -5351,6 +5726,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         _random.nextInt(100) < _equipmentDodgePercent;
     final hit = baseHit && !equipmentDodge;
     final critical = hit && roll == 20;
+    if (nextAttackHitBonus > 0 || nextAttackExtraPowerPercent > 0) {
+      setState(() {
+        _enemyNextAttackHitBonus = 0;
+        _enemyNextAttackExtraPowerPercent = 0;
+      });
+    }
     
     if (!hit) {
       unawaited(_playerDodgeController.forward(from: 0));
@@ -5381,7 +5762,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     if (!await _pause(critical ? 120 : 60)) return true;
     // =================================
 
-    final rolledDamage = _rollSkillDamage(skill);
+    final rolledDamage = _rollSkillDamage(skill) +
+        (nextAttackExtraPowerPercent > 0
+            ? _rollPowerDamage(nextAttackExtraPowerPercent)
+            : 0);
     var damage = _scaleOpponentDamage(
       critical ? (rolledDamage * 1.5).round() : rolledDamage,
     );
@@ -5401,10 +5785,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       if (recovered > 0) _enemyHp = _clampEnemyHp(_enemyHp + recovered);
       final enemyBurnBase = _skillBurnBaseDamage(skill);
       if (skill.burnTurns > 0 && enemyBurnBase > 0) {
-        _playerBurnTurns = math.max(_playerBurnTurns, skill.burnTurns);
-        _playerBurnDamage = math.max(
-          _playerBurnDamage,
-          _scaleOpponentDamage(enemyBurnBase),
+        _mergeBattleDot(
+          _playerDots,
+          kind: skill.dotStatusKind,
+          damage: _scaleOpponentDamage(enemyBurnBase),
+          turns: skill.burnTurns,
         );
       }
       if (skill.stunTurns > 0) {
@@ -5439,15 +5824,20 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         tone: _BattleLogTone.enemyDamage,
       ),
     );
-    if (skill.burnTurns > 0 && _playerBurnDamage > 0) {
-      _addLog(
-        _BattleLogEntry(
-          label: '持续伤害',
-          before: '${skill.name}留下了持续伤害效果。',
-          meta: '${skill.burnTurns}回合 · 每回合$_playerBurnDamage伤害',
-          tone: _BattleLogTone.enemy,
-        ),
-      );
+    if (skill.burnTurns > 0) {
+      final normalizedDotKind = _battleNormalizeDotKind(skill.dotStatusKind);
+      final activeDot = _playerDots[normalizedDotKind];
+      if (activeDot != null && activeDot.damage > 0) {
+        final dotName = _battleDotName(normalizedDotKind);
+        _addLog(
+          _BattleLogEntry(
+            label: dotName,
+            before: '${skill.name}留下了$dotName效果。',
+            meta: '${skill.burnTurns}回合 · 每回合${activeDot.damage}伤害',
+            tone: _BattleLogTone.enemy,
+          ),
+        );
+      }
     }
     if (skill.stunTurns > 0) {
       _addLog(
@@ -5506,40 +5896,224 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     return false;
   }
 
-  Future<void> _enemyAction() async {
-    if (!mounted || _enemyHp <= 0 || _outcome != null) return;
-    _tickEnemySkillCooldowns();
-    if (_enemyBurnTurns > 0) {
-      final burnDamage = _enemyBurnDamage;
+  Future<void> _performEnemyBasicAttack({
+    bool heavy = false,
+    double powerMultiplier = 1.0,
+    String? actionLabel,
+    String? actionBefore,
+    int qiGain = 10,
+  }) async {
+    if (!mounted || _enemyHp <= 0 || _playerHp <= 0 || _outcome != null) return;
+
+    unawaited(_enemyAttackController.forward(from: 0));
+    if (!await _pause(255)) return;
+
+    final roll = _d20();
+    final nextAttackHitBonus = _enemyNextAttackHitBonus;
+    final nextAttackExtraPowerPercent = _enemyNextAttackExtraPowerPercent;
+    final hitBonus = (_currentEnemy.hitBonus +
+            (heavy ? 1 : 0) +
+            nextAttackHitBonus +
+            _opponentHitBonusShift)
+        .clamp(-10, 20)
+        .toInt();
+    final dc = 11 + (_playerDodging ? _playerDodgeDifficultyBonus : 0);
+    final baseHit = roll != 1 && (roll == 20 || roll + hitBonus >= dc);
+    final equipmentDodge = baseHit &&
+        roll != 20 &&
+        _equipmentDodgePercent > 0 &&
+        _random.nextInt(100) < _equipmentDodgePercent;
+    final hit = baseHit && !equipmentDodge;
+    final critical = hit && roll == 20;
+    if (nextAttackHitBonus > 0 || nextAttackExtraPowerPercent > 0) {
       setState(() {
-        _enemyHp = _clampEnemyHp(_enemyHp - burnDamage);
-        _enemyBurnTurns--;
-        if (_enemyBurnTurns <= 0) _enemyBurnDamage = 0;
+        _enemyNextAttackHitBonus = 0;
+        _enemyNextAttackExtraPowerPercent = 0;
+      });
+    }
+
+    if (!hit) {
+      unawaited(_playerDodgeController.forward(from: 0));
+      unawaited(HapticFeedback.selectionClick());
+      _showCombatText('闪避', onEnemy: false, color: _BattleColors.text);
+      _addLog(
+        _BattleLogEntry(
+          label: _playerDodging || equipmentDodge
+              ? '闪避成功'
+              : actionLabel == null
+                  ? '攻击落空'
+                  : '$actionLabel落空',
+          before: _playerDodging || equipmentDodge
+              ? '你提前捕捉到发力方向，侧身让攻击擦肩而过。'
+              : '$_enemyName的攻击从你身侧掠过，没有命中。',
+          meta: 'D20：$roll + $hitBonus  ·  难度：$dc'
+              '${equipmentDodge ? '  ·  装备闪避' : ''}',
+          tone: _playerDodging || equipmentDodge
+              ? _BattleLogTone.success
+              : _BattleLogTone.enemy,
+        ),
+      );
+      await _openNextPlayerTurn();
+      return;
+    }
+
+    if (critical || heavy) {
+      unawaited(HapticFeedback.heavyImpact());
+    } else {
+      unawaited(HapticFeedback.selectionClick());
+    }
+    if (!await _pause(critical || heavy ? 120 : 60)) return;
+
+    final basicPower =
+        _currentEnemy.basicAttackPowerPercent.clamp(35, 220).toInt();
+    final attackScale =
+        heavy ? 1.9 : powerMultiplier.clamp(.35, 2.2).toDouble();
+    final rolledDamage = _rollPowerDamage((basicPower * attackScale).round()) +
+        (nextAttackExtraPowerPercent > 0
+            ? _rollPowerDamage(nextAttackExtraPowerPercent)
+            : 0);
+    var damage = _scaleOpponentDamage(
+      critical ? (rolledDamage * 1.5).round() : rolledDamage,
+    );
+    final guarded = _playerGuarding;
+    if (guarded) {
+      final remainingPercent =
+          (100 - _playerGuardReductionPercent).clamp(10, 100).toInt();
+      damage = math.max(1, (damage * remainingPercent / 100).round());
+    }
+    setState(() {
+      _playerHp = _clampPlayerHp(_playerHp - damage);
+      if (qiGain > 0 && _enemyQi < 100) {
+        _enemyQi = _clampEnemyQi(_enemyQi + qiGain);
+      }
+      _playerDamageCritical = critical;
+    });
+    if (guarded) {
+      unawaited(_playerGuardImpactController.forward(from: 0));
+    }
+    unawaited(_playerDamageController.forward(from: 0));
+    unawaited(
+      critical ? HapticFeedback.heavyImpact() : HapticFeedback.mediumImpact(),
+    );
+    _showCombatText(
+      '-$damage',
+      onEnemy: false,
+      color: _BattleColors.enemy,
+      critical: critical,
+    );
+
+    final baseLabel = actionLabel ?? (heavy ? '蓄力重击' : '快速攻击');
+    _addLog(
+      _BattleLogEntry(
+        label: critical ? '$baseLabel · 暴击' : baseLabel,
+        before: actionBefore ??
+            (heavy
+                ? '$_enemyName积蓄的力量瞬间释放，发动强力攻击，造成 '
+                : '$_enemyName抓住空隙迅速进攻，造成 '),
+        emphasis: '$damage',
+        after: guarded
+            ? ' 点伤害。你的防御化解了$_playerGuardReductionPercent%冲击。'
+            : ' 点伤害。',
+        meta: 'D20：$roll + $hitBonus  ·  难度：$dc',
+        tone: _BattleLogTone.enemyDamage,
+      ),
+    );
+
+    if (_playerHp <= 0) {
+      await _finishBattle(YoranBattleOutcome.defeat);
+      return;
+    }
+    if (await _triggerCompanionCounter(damage)) return;
+    await _openNextPlayerTurn();
+  }
+
+  Future<bool> _tickEnemyDotsBeforeAction() async {
+    final kinds = _enemyDots.keys.toList(growable: false)
+      ..sort((a, b) => _battleDotOrder(a).compareTo(_battleDotOrder(b)));
+    for (final kind in kinds) {
+      final dot = _enemyDots[kind];
+      if (dot == null || dot.turns <= 0 || dot.damage <= 0) continue;
+      final damage = dot.damage;
+      var remainingTurns = dot.turns;
+      setState(() {
+        _enemyHp = _clampEnemyHp(_enemyHp - damage);
+        dot.turns--;
+        remainingTurns = dot.turns;
+        if (dot.turns <= 0) _enemyDots.remove(kind);
         _enemyDamageCritical = false;
       });
       unawaited(_enemyDamageController.forward(from: 0));
       _showCombatText(
-        '-$burnDamage',
+        '-$damage',
         onEnemy: true,
-        color: const Color(0xFFFF9B56),
+        color: _battleDotColor(kind),
       );
+      final dotName = _battleDotName(kind);
       _addLog(
         _BattleLogEntry(
-          label: '持续伤害',
-          before: '附着的效果再次生效，造成 ',
-          emphasis: '$burnDamage',
+          label: dotName,
+          before: '$dotName效果再次生效，造成 ',
+          emphasis: '$damage',
           after: ' 点持续伤害。',
-          meta: _enemyBurnTurns > 0 ? '剩余$_enemyBurnTurns回合' : '效果结束',
+          meta: remainingTurns > 0 ? '剩余$remainingTurns回合' : '效果结束',
           tone: _BattleLogTone.damage,
         ),
       );
       if (_enemyHp <= 0) {
-        if (!await _pause(520)) return;
+        if (!await _pause(520)) return false;
         await _finishVictory();
-        return;
+        return false;
       }
-      if (!await _pause(360)) return;
+      if (!await _pause(220)) return false;
     }
+    return mounted && _outcome == null && _enemyHp > 0;
+  }
+
+  Future<bool> _tickPlayerDotsBeforeTurn() async {
+    final kinds = _playerDots.keys.toList(growable: false)
+      ..sort((a, b) => _battleDotOrder(a).compareTo(_battleDotOrder(b)));
+    for (final kind in kinds) {
+      final dot = _playerDots[kind];
+      if (dot == null || dot.turns <= 0 || dot.damage <= 0) continue;
+      final damage = dot.damage;
+      var remainingTurns = dot.turns;
+      setState(() {
+        _playerHp = _clampPlayerHp(_playerHp - damage);
+        dot.turns--;
+        remainingTurns = dot.turns;
+        if (dot.turns <= 0) _playerDots.remove(kind);
+        _playerDamageCritical = false;
+      });
+      unawaited(_playerDamageController.forward(from: 0));
+      _showCombatText(
+        '-$damage',
+        onEnemy: false,
+        color: _battleDotColor(kind),
+      );
+      final dotName = _battleDotName(kind);
+      _addLog(
+        _BattleLogEntry(
+          label: dotName,
+          before: '$dotName效果再次生效，造成 ',
+          emphasis: '$damage',
+          after: ' 点伤害。',
+          meta: remainingTurns > 0 ? '剩余$remainingTurns回合' : '效果结束',
+          tone: _BattleLogTone.enemyDamage,
+        ),
+      );
+      if (_playerHp <= 0) {
+        await _finishBattle(YoranBattleOutcome.defeat);
+        return false;
+      }
+      if (!await _pause(220)) return false;
+    }
+    return mounted && _outcome == null && _playerHp > 0;
+  }
+
+  Future<void> _enemyAction() async {
+    if (!mounted || _enemyHp <= 0 || _outcome != null) return;
+    _tickEnemySkillCooldowns();
+    if (!await _tickEnemyDotsBeforeAction()) return;
 
     if (_enemyStunnedByCompanion > 0) {
       setState(() => _enemyStunnedByCompanion--);
@@ -5565,189 +6139,62 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     if (_enemyIntent == _EnemyIntentKind.guard) {
       _addLog(
         _BattleLogEntry(
-          label: '防御姿态',
-          before: '$_enemyName没有贸然追击，而是稳住姿态，等待你的下次动作。',
-          meta: '敌方本回合不攻击',
+          label: '防御反击',
+          before: '$_enemyName稳住架势化解攻势，随即寻找反击空隙。',
+          meta: '防御后追击',
           tone: _BattleLogTone.enemy,
         ),
       );
-      await _openNextPlayerTurn();
+      if (!await _pause(180)) return;
+      await _performEnemyBasicAttack(
+        powerMultiplier: .82,
+        actionLabel: '守势反击',
+        actionBefore: '$_enemyName从守势中骤然反击，造成 ',
+        qiGain: 8,
+      );
       return;
     }
 
     if (_enemyIntent == _EnemyIntentKind.recover) {
       final recovered = math.min(16, _enemyMaxHp - _enemyHp);
-      setState(() {
-        _enemyHp = _clampEnemyHp(_enemyHp + recovered);
-      });
-      _showCombatText(
-        '+$recovered',
-        onEnemy: true,
-        color: _BattleColors.player,
+      if (recovered > 0) {
+        setState(() {
+          _enemyHp = _clampEnemyHp(_enemyHp + recovered);
+        });
+        _showCombatText(
+          '+$recovered',
+          onEnemy: true,
+          color: _BattleColors.player,
+        );
+        _addLog(
+          _BattleLogEntry(
+            label: '恢复状态',
+            before: '$_enemyName短暂调整状态，恢复了 ',
+            emphasis: '$recovered',
+            after: ' 点生命，并立刻重新压上。',
+            meta: '恢复后追击',
+            tone: _BattleLogTone.enemy,
+          ),
+        );
+      }
+      if (!await _pause(180)) return;
+      await _performEnemyBasicAttack(
+        powerMultiplier: .74,
+        actionLabel: '调整后追击',
+        actionBefore: '$_enemyName调整气息后没有停手，紧接着发动攻击，造成 ',
+        qiGain: 8,
       );
-      _addLog(
-        _BattleLogEntry(
-          label: '恢复状态',
-          before: '$_enemyName短暂调整状态，恢复了 ',
-          emphasis: '$recovered',
-          after: ' 点生命。',
-          meta: '敌方恢复效果',
-          tone: _BattleLogTone.enemy,
-        ),
-      );
-      await _openNextPlayerTurn();
       return;
     }
 
-    // 1. 敌方开始冲刺攻击
-    unawaited(_enemyAttackController.forward(from: 0));
-    if (!await _pause(255)) return;
-
-    // 2. 计算命中与暴击结果
-    final heavy = _enemyIntent == _EnemyIntentKind.heavy;
-    final roll = _d20();
-    final hitBonus = (_currentEnemy.hitBonus +
-            (heavy ? 1 : 0) +
-            _opponentHitBonusShift)
-        .clamp(-10, 20)
-        .toInt();
-    final dc = 11 + (_playerDodging ? _playerDodgeDifficultyBonus : 0);
-    final baseHit = roll != 1 && (roll == 20 || roll + hitBonus >= dc);
-    final equipmentDodge = baseHit &&
-        roll != 20 &&
-        _equipmentDodgePercent > 0 &&
-        _random.nextInt(100) < _equipmentDodgePercent;
-    final hit = baseHit && !equipmentDodge;
-    final critical = hit && roll == 20;
-
-    // 3. 处理未命中（闪避）
-    if (!hit) {
-      unawaited(_playerDodgeController.forward(from: 0));
-      unawaited(HapticFeedback.selectionClick());
-      _showCombatText(
-        '闪避',
-        onEnemy: false,
-        color: _BattleColors.text,
-      );
-      _addLog(
-        _BattleLogEntry(
-          label: _playerDodging || equipmentDodge ? '闪避成功' : '攻击落空',
-          before: _playerDodging || equipmentDodge
-              ? '你提前捕捉到发力方向，侧身让攻击擦肩而过。'
-              : '$_enemyName的攻击从你身侧掠过，没有命中。',
-          meta: 'D20：$roll + $hitBonus  ·  难度：$dc'
-              '${equipmentDodge ? '  ·  装备闪避' : ''}',
-          tone: _playerDodging || equipmentDodge
-              ? _BattleLogTone.success
-              : _BattleLogTone.enemy,
-        ),
-      );
-      await _openNextPlayerTurn();
-      return;
-    }
-
-    // ===== 4. 新增：正确的卡肉感 (Hit-Stop) 位置 =====
-    // 此时已经确认 hit 为 true，且我们已经知道了是否 critical 和 heavy
-    if (critical || heavy) {
-      unawaited(HapticFeedback.heavyImpact()); // 重击震动
-    } else {
-      unawaited(HapticFeedback.selectionClick()); // 轻度命中反馈
-    }
-    // 冻结画面：重击/暴击卡顿 120ms，普通攻击卡顿 60ms
-    if (!await _pause(critical || heavy ? 120 : 60)) return;
-    // =================================================
-
-    // 5. 继续计算伤害并扣血
-    final basicPower =
-        _currentEnemy.basicAttackPowerPercent.clamp(35, 220).toInt();
-    final rolledDamage = _rollPowerDamage(
-      heavy ? (basicPower * 1.9).round() : basicPower,
+    await _performEnemyBasicAttack(
+      heavy: _enemyIntent == _EnemyIntentKind.heavy,
     );
-    var damage = _scaleOpponentDamage(
-      critical ? (rolledDamage * 1.5).round() : rolledDamage,
-    );
-    final guarded = _playerGuarding;
-    if (guarded) {
-      final remainingPercent =
-          (100 - _playerGuardReductionPercent).clamp(10, 100).toInt();
-      damage = math.max(1, (damage * remainingPercent / 100).round());
-    }
-    setState(() {
-      _playerHp = _clampPlayerHp(_playerHp - damage);
-      _enemyQi = _clampEnemyQi(_enemyQi + 10);
-      _playerDamageCritical = critical;
-    });
-    if (guarded) {
-      unawaited(_playerGuardImpactController.forward(from: 0));
-    }
-    unawaited(_playerDamageController.forward(from: 0));
-    unawaited(
-      critical ? HapticFeedback.heavyImpact() : HapticFeedback.mediumImpact(),
-    );
-    _showCombatText(
-      '-$damage',
-      onEnemy: false,
-      color: _BattleColors.enemy,
-      critical: critical,
-    );
-    _addLog(
-      _BattleLogEntry(
-        label: critical
-            ? '敌方暴击'
-            : heavy
-                ? '蓄力重击'
-                : '快速攻击',
-        before: heavy
-            ? '$_enemyName积蓄的力量瞬间释放，发动强力攻击，造成 '
-            : '$_enemyName抓住空隙迅速进攻，造成 ',
-        emphasis: '$damage',
-        after: guarded
-            ? ' 点伤害。你的防御化解了$_playerGuardReductionPercent%冲击。'
-            : ' 点伤害。',
-        meta: 'D20：$roll + $hitBonus  ·  难度：$dc',
-        tone: _BattleLogTone.enemyDamage,
-      ),
-    );
-
-    if (_playerHp <= 0) {
-      await _finishBattle(YoranBattleOutcome.defeat);
-      return;
-    }
-    if (await _triggerCompanionCounter(damage)) return;
-    await _openNextPlayerTurn();
   }
 
   Future<void> _openNextPlayerTurn() async {
     if (!await _pause(520)) return;
-    if (_playerBurnTurns > 0) {
-      final damage = _playerBurnDamage;
-      setState(() {
-        _playerHp = _clampPlayerHp(_playerHp - damage);
-        _playerBurnTurns--;
-        if (_playerBurnTurns <= 0) _playerBurnDamage = 0;
-        _playerDamageCritical = false;
-      });
-      unawaited(_playerDamageController.forward(from: 0));
-      _showCombatText(
-        '-$damage',
-        onEnemy: false,
-        color: const Color(0xFFFF9B56),
-      );
-      _addLog(
-        _BattleLogEntry(
-          label: '持续伤害',
-          before: '敌方技能留下的效果再次生效，造成 ',
-          emphasis: '$damage',
-          after: ' 点伤害。',
-          meta: _playerBurnTurns > 0 ? '剩余$_playerBurnTurns回合' : '效果结束',
-          tone: _BattleLogTone.enemyDamage,
-        ),
-      );
-      if (_playerHp <= 0) {
-        await _finishBattle(YoranBattleOutcome.defeat);
-        return;
-      }
-    }
+    if (!await _tickPlayerDotsBeforeTurn()) return;
     final stunned = _playerStunnedTurns > 0;
     setState(() {
       _round++;
@@ -5775,14 +6222,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       await _enemyAction();
       return;
     }
-    _addLog(
-      _BattleLogEntry(
-        label: '敌方意图',
-        before: _enemyIntentTitle,
-        meta: '第$_round回合',
-        tone: _BattleLogTone.enemy,
-      ),
-    );
   }
 
   Future<void> _finishBattle(YoranBattleOutcome outcome) async {
@@ -6453,9 +6892,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               enemyIndex: _enemyIndex,
               enemyCount: _battleEnemies.length,
               damageAnimation: _enemyDamageController,
-              isGuarding: _enemyIntent == _EnemyIntentKind.guard ||
-                  (_enemyIntent == _EnemyIntentKind.skill &&
-                      (_enemyIntentSkill?.guarding ?? false)),
+              // 敌方防御仍参与真实结算，但不提前给 HUD 预告。
+              isGuarding: false,
             ),
           ),
         ],
@@ -6676,6 +7114,31 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     ),
                   ),
                 ),
+                if (_playerVisibleStatuses.isNotEmpty)
+                  Positioned(
+                    left: math.max(0.0, playerLeft + cameraX * .82 - playerWidth * .12),
+                    bottom: playerBottom + playerHeight + 3 + cameraY * .72,
+                    width: playerWidth * 1.24,
+                    child: IgnorePointer(
+                      child: _BattleEffectStatusStrip(
+                        statuses: _playerVisibleStatuses,
+                        compact: compactLandscape || stageHeight < 390,
+                      ),
+                    ),
+                  ),
+                if (_enemyVisibleStatuses.isNotEmpty)
+                  Positioned(
+                    right: math.max(0.0, enemyRight - cameraX * .34 - enemyWidth * .12),
+                    bottom: enemyBottom + enemyHeight + 3 + cameraY * .28,
+                    width: enemyWidth * 1.24,
+                    child: IgnorePointer(
+                      child: _BattleEffectStatusStrip(
+                        statuses: _enemyVisibleStatuses,
+                        alignEnd: true,
+                        compact: compactLandscape || stageHeight < 390,
+                      ),
+                    ),
+                  ),
                 _buildCombatFeedback(),
               ],
             );
@@ -6788,8 +7251,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             builder: (context, _, __) {
               if (_logs.isEmpty) return const SizedBox.shrink();
               final latest = _logs.last;
-              final latestIsIntent = latest.label == '敌方意图';
-
               if (veryTight) {
                 return Align(
                   alignment: Alignment.centerLeft,
@@ -6820,22 +7281,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                             height: 1,
                           ),
                         ),
-                        const Spacer(),
-                        if (!latestIsIntent)
-                          Flexible(
-                            child: Text(
-                              'NEXT · $_enemyIntentTitle',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: _BattleColors.enemy.withOpacity(.66),
-                                fontSize: tight ? 8.1 : 8.7,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: .7,
-                                height: 1,
-                              ),
-                            ),
-                          ),
                       ],
                     ),
                   SizedBox(height: tight ? 3 : 5),
@@ -8286,6 +8731,150 @@ class _BattleSceneBackground extends StatelessWidget {
   }
 }
 
+class _BattleEffectStatusVisual {
+  const _BattleEffectStatusVisual({
+    required this.kind,
+    required this.color,
+    required this.turns,
+  });
+
+  final String kind;
+  final Color color;
+  final int turns;
+}
+
+class _BattleEffectStatusStrip extends StatelessWidget {
+  const _BattleEffectStatusStrip({
+    required this.statuses,
+    this.alignEnd = false,
+    this.compact = false,
+  });
+
+  final List<_BattleEffectStatusVisual> statuses;
+  final bool alignEnd;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    if (statuses.isEmpty) return const SizedBox.shrink();
+    final key = statuses
+        .map((status) => '${status.kind}:${status.color.value}:${status.turns}')
+        .join('|');
+    final rows = <List<_BattleEffectStatusVisual>>[];
+    for (var start = 0; start < statuses.length; start += 5) {
+      rows.add(statuses.sublist(start, math.min(start + 5, statuses.length)));
+    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 180),
+      child: Column(
+        key: ValueKey<String>(key),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment:
+            alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: <Widget>[
+          for (var rowIndex = 0; rowIndex < rows.length; rowIndex++) ...<Widget>[
+            Wrap(
+              alignment: alignEnd ? WrapAlignment.end : WrapAlignment.start,
+              runAlignment: alignEnd ? WrapAlignment.end : WrapAlignment.start,
+              spacing: compact ? 5 : 6,
+              runSpacing: 4,
+              children: rows[rowIndex]
+                  .map(
+                    (status) => _BattleEffectStatusBadge(
+                      status: status,
+                      compact: compact,
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+            if (rowIndex != rows.length - 1) const SizedBox(height: 4),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _BattleEffectStatusBadge extends StatelessWidget {
+  const _BattleEffectStatusBadge({
+    required this.status,
+    required this.compact,
+  });
+
+  final _BattleEffectStatusVisual status;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    // 状态只靠图标识别，所以图标本体保持足够大：竖屏 28，紧凑模式 24。
+    // 外层状态槽稍大于图标，既保证轮廓清晰，也给 WebP 留出安全边距。
+    final badgeSize = compact ? 30.0 : 34.0;
+    final iconSize = compact ? 24.0 : 28.0;
+    final pipSize = compact ? 3.0 : 3.5;
+    final pipCount = status.turns.clamp(1, 3).toInt();
+    return SizedBox(
+      width: badgeSize,
+      height: badgeSize + (compact ? 5 : 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: badgeSize,
+            height: badgeSize,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: status.color.withOpacity(.17),
+              borderRadius: BorderRadius.circular(badgeSize * .30),
+              border: Border.all(
+                color: status.color.withOpacity(.72),
+                width: compact ? .85 : 1.0,
+              ),
+              boxShadow: const <BoxShadow>[
+                BoxShadow(
+                  color: Color(0x72000000),
+                  blurRadius: 3,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            ),
+            child: SizedBox(
+              width: iconSize,
+              height: iconSize,
+              child: Image.asset(
+                _battleStatusAssetPath(status.kind),
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.high,
+                errorBuilder: (context, error, stackTrace) => Icon(
+                  _battleStatusFallbackIcon(status.kind),
+                  size: compact ? 20.0 : 23.0,
+                  color: status.color,
+                ),
+              ),
+            ),
+          ),
+          SizedBox(height: compact ? 1 : 2),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: List<Widget>.generate(
+              pipCount,
+              (_) => Container(
+                width: pipSize,
+                height: pipSize,
+                margin: EdgeInsets.symmetric(horizontal: compact ? .7 : .8),
+                decoration: BoxDecoration(
+                  color: status.color.withOpacity(.90),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              growable: false,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BattleStatusBar extends StatelessWidget {
   const _BattleStatusBar({
     required this.name,
@@ -9057,7 +9646,6 @@ class _BattleCurrentStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isIntent = entry.label == '敌方意图';
     final enemy = entry.tone == _BattleLogTone.enemy ||
         entry.tone == _BattleLogTone.enemyDamage;
     final emphasisColor = switch (entry.tone) {
@@ -9065,45 +9653,6 @@ class _BattleCurrentStatus extends StatelessWidget {
       _BattleLogTone.damage || _BattleLogTone.enemyDamage => _BattleColors.enemy,
       _ => Colors.white,
     };
-
-    if (isIntent) {
-      return Row(
-        children: <Widget>[
-          Icon(
-            Icons.visibility_outlined,
-            size: compact ? 11.5 : 12.5,
-            color: _BattleColors.enemy.withOpacity(.68),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            '敌方意图',
-            style: TextStyle(
-              color: Colors.white.withOpacity(.46),
-              fontSize: compact ? 8.8 : 9.5,
-              fontWeight: FontWeight.w600,
-              letterSpacing: .4,
-              height: 1.1,
-            ),
-          ),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              entry.before,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              softWrap: false,
-              style: TextStyle(
-                color: _BattleColors.enemy.withOpacity(.90),
-                fontSize: compact ? 11.6 : 12.8,
-                fontWeight: FontWeight.w700,
-                letterSpacing: .2,
-                height: 1.15,
-              ),
-            ),
-          ),
-        ],
-      );
-    }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
