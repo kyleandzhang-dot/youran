@@ -224,7 +224,7 @@ class _StoreHeader extends StatelessWidget {
             ),
           ),
           Container(
-            height: 30,
+            height: 34,
             padding: const EdgeInsets.symmetric(horizontal: 9),
             decoration: const BoxDecoration(
               color: Color(0xFFF3F5F3),
@@ -233,8 +233,8 @@ class _StoreHeader extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 SizedBox(
-                  width: 17,
-                  height: 17,
+                  width: 32,
+                  height: 32,
                   child: Image.asset(
                     'assets/images/xing.webp',
                     fit: BoxFit.contain,
@@ -403,7 +403,9 @@ class _ItemCard extends StatelessWidget {
                   splashColor: Colors.white24,
                   highlightColor: Colors.white10,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    width: 88,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
                     child: loading
                       ? SizedBox.square(
                           dimension: 14,
@@ -417,14 +419,14 @@ class _ItemCard extends StatelessWidget {
                           children: <Widget>[
                             if (showPointIcon) ...<Widget>[
                               SizedBox(
-                                width: 14,
-                                height: 14,
+                                width: 26,
+                                height: 26,
                                 child: Image.asset(
                                   'assets/images/xing.webp', 
                                   fit: BoxFit.contain,
                                 ),
                               ),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: 5),
                             ],
                             Text(
                               actionText,

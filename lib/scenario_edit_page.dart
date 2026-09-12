@@ -1162,7 +1162,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                             SliverToBoxAdapter(child: _buildHero()),
                             SliverToBoxAdapter(child: _buildSectionTabs()),
                             SliverPadding(
-                              padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+                              padding: EdgeInsets.fromLTRB(20, 16, 20, _dirty ? 120 : 28),
                               sliver: SliverToBoxAdapter(
                                 child: _buildCurrentSection(),
                               ),
@@ -1220,7 +1220,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     ),
                     child: ListView(
                       physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(14, 10, 14, 92),
+                      padding: EdgeInsets.fromLTRB(14, 10, 14, _dirty ? 92 : 20),
                       children: [
                         _buildLandscapeHero(),
                         const SizedBox(height: 18),
@@ -1243,7 +1243,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                           horizontalPadding,
                           18,
                           horizontalPadding,
-                          94,
+                          _dirty ? 94 : 24,
                         ),
                         child: Align(
                           alignment: Alignment.topCenter,
@@ -2393,6 +2393,9 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     double rightInset = 0,
     bool compact = false,
   }) {
+    // 只有发生未保存修改时才显示底部保存栏；保存成功后自动隐藏。
+    if (!_dirty && !_saving) return const SizedBox.shrink();
+
     return Positioned(
       left: leftInset,
       right: rightInset,
@@ -2416,10 +2419,10 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               : null,
         ),
         child: Material(
-          color: _dirty ? AppColors.accent : Colors.white.withOpacity(0.06),
+          color: AppColors.accent,
           borderRadius: BorderRadius.circular(compact ? 10 : 12),
           child: InkWell(
-            onTap: _saving ? null : (_dirty ? _save : widget.onPublish),
+            onTap: _saving ? null : _save,
             borderRadius: BorderRadius.circular(compact ? 10 : 12),
             child: Container(
               height: compact ? 42 : 52,
@@ -2437,29 +2440,17 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          _dirty
-                              ? Icons.save_outlined
-                              : widget.onPublish != null
-                                  ? Icons.rocket_launch_outlined
-                                  : Icons.check_rounded,
+                          Icons.save_outlined,
                           size: compact ? 16 : 18,
-                          color: _dirty
-                              ? const Color(0xFF0C0C0C)
-                              : AppColors.textOnDarkMuted,
+                          color: const Color(0xFF0C0C0C),
                         ),
                         SizedBox(width: compact ? 7 : 8),
                         Text(
-                          _dirty
-                              ? '保存修改'
-                              : widget.onPublish != null
-                                  ? '发布剧本'
-                                  : '已保存',
+                          '保存修改',
                           style: TextStyle(
                             fontSize: compact ? 13.2 : 14.5,
                             fontWeight: FontWeight.w700,
-                            color: _dirty
-                                ? const Color(0xFF0C0C0C)
-                                : AppColors.textOnDarkMuted,
+                            color: const Color(0xFF0C0C0C),
                           ),
                         ),
                       ],

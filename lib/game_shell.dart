@@ -49,6 +49,10 @@ class GameShell extends StatefulWidget {
 }
 
 class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
+  static const int _maxCreationConnectionErrors = 6;
+  static const Duration _maxCreationDisconnect =
+      Duration(seconds: 45);
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   UserSession? _session;
@@ -564,6 +568,16 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     unawaited(_startPollingCreation(taskId));
   }
 
+  dynamic _unwrapApiData(dynamic response) {
+    if (response is Map) {
+      if (response.containsKey('data')) {
+        return response['data'];
+      }
+      return response;
+    }
+    return null;
+  }
+
   Future<void> _recoverCreationTask() async {
     if (!mounted ||
         !_isLoggedIn ||
@@ -580,18 +594,39 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       );
       if (!mounted || !_appInForeground) return;
 
-      final raw = response['data'];
-      if (raw is! Map) return;
-      final taskId = raw['task_id']?.toString().trim() ?? '';
-      if (taskId.isEmpty) return;
+      final raw = _unwrapApiData(response);
+      if (raw is! Map) {
+        debugPrint('[CreationRecovery] /active returned no recoverable task');
+        _clearLocalCreationState();
+        return;
+      }
 
+      final taskId = raw['task_id']?.toString().trim() ?? '';
+      if (taskId.isEmpty) {
+        _clearLocalCreationState();
+        return;
+      }
+
+      debugPrint('[CreationRecovery] restoring task=$taskId');
       unawaited(_startPollingCreation(taskId, recovered: true));
     } catch (error) {
-      // 恢复查询失败不能伪装成“生成失败”；下次回前台或刷新时会再次查询。
+      // active 查询失败时不能武断判定任务失败：可能只是手机暂时断网。
+      // 真正开始轮询后会有连续失联上限，不会无限等待。
       debugPrint('GameShell restore creation task failed: $error');
     } finally {
       _recoveringCreation = false;
     }
+  }
+
+  void _clearLocalCreationState() {
+    if (!mounted) return;
+    setState(() {
+      _isCreatingWorld = false;
+      _createWorldProgress = 0;
+      _createWorldStep = '';
+      _createWorldError = false;
+      _activeCreationTaskId = null;
+    });
   }
 
   Future<void> _acknowledgeCreationTask(String taskId) async {
@@ -605,16 +640,27 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _showCreationFailure(String taskId, String message) async {
+  Future<void> _showCreationFailure(
+    String taskId,
+    String message, {
+    bool acknowledge = true,
+  }) async {
     if (!mounted) return;
     setState(() {
       _createWorldError = true;
       _createWorldStep = message;
       _activeCreationTaskId = null;
     });
+
     AppNotice.error(context, message);
-    await _acknowledgeCreationTask(taskId);
-    await Future<void>.delayed(const Duration(seconds: 4));
+
+    // 只有后端已经给出终态时才确认清理。
+    // 单纯“客户端暂时连接不上”不能 ack 一个可能仍在运行的任务。
+    if (acknowledge) {
+      await _acknowledgeCreationTask(taskId);
+    }
+
+    await Future<void>.delayed(const Duration(seconds: 3));
     if (mounted) {
       setState(() {
         _isCreatingWorld = false;
@@ -646,6 +692,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     var currentInterval = 2000;
     var consecutiveErrors = 0;
     var missingTaskErrors = 0;
+    DateTime? firstConnectionErrorAt;
 
     try {
       // 只要 App 在前台且任务未结束就持续查询；进入后台时由 epoch 立即失效。
@@ -658,7 +705,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
           consecutiveErrors = 0;
           missingTaskErrors = 0;
-          final rawStatusData = statusResponse['data'];
+          firstConnectionErrorAt = null;
+          final rawStatusData = _unwrapApiData(statusResponse);
           final statusData = rawStatusData is Map
               ? rawStatusData
               : <String, dynamic>{};
@@ -715,13 +763,24 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
             return;
           }
 
-          if (status == 'failed') {
-            final message = statusData['error']?.toString().trim();
+          if (status == 'failed' ||
+              status == 'stale' ||
+              status == 'superseded' ||
+              status == 'cancelled') {
+            final backendMessage = statusData['error']?.toString().trim();
+            var fallbackMessage = '世界创建失败，请稍后重试';
+            if (status == 'stale') {
+              fallbackMessage = '上次创建任务已失效，请重新创建';
+            } else if (status == 'superseded') {
+              fallbackMessage = '上次创建任务已被新的创建请求替代';
+            } else if (status == 'cancelled') {
+              fallbackMessage = '世界创建已取消';
+            }
             await _showCreationFailure(
               normalizedTaskId,
-              message == null || message.isEmpty
-                  ? '世界创建失败，请稍后重试'
-                  : message,
+              backendMessage == null || backendMessage.isEmpty
+                  ? fallbackMessage
+                  : backendMessage,
             );
             return;
           }
@@ -734,12 +793,26 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           }
         } on ApiException catch (error) {
           consecutiveErrors++;
+          firstConnectionErrorAt ??= DateTime.now();
           if (error.statusCode == 404) missingTaskErrors++;
 
           if (missingTaskErrors >= 3) {
             await _showCreationFailure(
               normalizedTaskId,
               '创建任务记录已失效，请重新创建',
+              acknowledge: false,
+            );
+            return;
+          }
+
+          final disconnectedFor =
+              DateTime.now().difference(firstConnectionErrorAt!);
+          if (consecutiveErrors >= _maxCreationConnectionErrors ||
+              disconnectedFor >= _maxCreationDisconnect) {
+            await _showCreationFailure(
+              normalizedTaskId,
+              '暂时无法连接创建服务，已停止等待。重新进入 App 会再次检查仍在运行的任务。',
+              acknowledge: false,
             );
             return;
           }
@@ -753,7 +826,21 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
           currentInterval = math.min(10000, 1500 * (consecutiveErrors + 1));
         } catch (error) {
           consecutiveErrors++;
+          firstConnectionErrorAt ??= DateTime.now();
           debugPrint('GameShell creation polling retry: $error');
+
+          final disconnectedFor =
+              DateTime.now().difference(firstConnectionErrorAt!);
+          if (consecutiveErrors >= _maxCreationConnectionErrors ||
+              disconnectedFor >= _maxCreationDisconnect) {
+            await _showCreationFailure(
+              normalizedTaskId,
+              '暂时无法连接创建服务，已停止等待。重新进入 App 会再次检查仍在运行的任务。',
+              acknowledge: false,
+            );
+            return;
+          }
+
           if (mounted && pollEpoch == _creationPollEpoch) {
             setState(() {
               _createWorldStep = '连接暂时中断，正在恢复进度...';

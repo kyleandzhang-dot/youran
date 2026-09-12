@@ -3204,8 +3204,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
 
   // 渲染技能卡片
-  Widget _buildSkillCards() {
+  Widget _buildSkillCards({bool compact = false}) {
     return _BattleCardHand(
+      compact: compact,
       skills: _availableSkills,
       cooldowns: _skillCooldowns,
       playerQi: _playerQi,
@@ -3248,7 +3249,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   }
 
   // 渲染道具卡片
-  Widget _buildItemCards() {
+  Widget _buildItemCards({bool compact = false}) {
     if (_battleItems.isEmpty) {
       return const Center(
         child: Text(
@@ -3269,10 +3270,15 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         clipBehavior: Clip.none,
-        padding: const EdgeInsets.fromLTRB(24, 7, 24, 4),
+        padding: EdgeInsets.fromLTRB(
+          compact ? 10 : 24,
+          compact ? 3 : 7,
+          compact ? 10 : 24,
+          compact ? 2 : 4,
+        ),
         physics: const BouncingScrollPhysics(),
         itemCount: _battleItems.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 10),
+        separatorBuilder: (context, index) => SizedBox(width: compact ? 7 : 10),
         itemBuilder: (context, index) {
           final item = _battleItems[index];
           final count = _itemCounts[item.id] ?? 0;
@@ -3309,15 +3315,15 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     : null,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 170),
-                  width: 92,
-                  height: 122,
+                  width: compact ? 76 : 92,
+                  height: compact ? 100 : 122,
                   decoration: BoxDecoration(
                     color: isEmpty
                         ? const Color(0x8A0A0B0D)
                         : (isSelected
                             ? const Color(0xD9181A1D)
                             : const Color(0x99121416)),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(compact ? 8 : 10),
                     border: Border.all(
                       color: isSelected
                           ? Colors.white.withOpacity(.82)
@@ -3337,8 +3343,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                   child: Stack(
                     children: <Widget>[
                       Positioned(
-                        left: 9,
-                        right: 9,
+                        left: compact ? 7 : 9,
+                        right: compact ? 7 : 9,
                         top: 0,
                         child: Container(
                           height: 2,
@@ -3348,33 +3354,38 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         ),
                       ),
                       Positioned(
-                        top: 9,
-                        left: 9,
+                        top: compact ? 7 : 9,
+                        left: compact ? 7 : 9,
                         child: Text(
                           'Q${item.quality}',
                           style: TextStyle(
                             color: isEmpty ? Colors.white24 : Colors.white54,
-                            fontSize: 8.5,
+                            fontSize: compact ? 7.5 : 8.5,
                             fontWeight: FontWeight.w800,
                             letterSpacing: .5,
                           ),
                         ),
                       ),
                       Positioned(
-                        top: 8,
-                        right: 9,
+                        top: compact ? 6 : 8,
+                        right: compact ? 7 : 9,
                         child: Text(
                           '×$count',
                           style: TextStyle(
                             color: isEmpty ? Colors.white24 : Colors.white70,
-                            fontSize: 10,
+                            fontSize: compact ? 8.8 : 10,
                             fontWeight: FontWeight.w900,
                           ),
                         ),
                       ),
                       Center(
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 2, 8, 14),
+                          padding: EdgeInsets.fromLTRB(
+                            compact ? 6 : 8,
+                            2,
+                            compact ? 6 : 8,
+                            compact ? 12 : 14,
+                          ),
                           child: Text(
                             item.name,
                             maxLines: 2,
@@ -3383,7 +3394,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                             style: TextStyle(
                               color: isEmpty ? Colors.white30 : _BattleColors.text,
                               fontFamily: 'WenJinMinchoP0',
-                              fontSize: 14,
+                              fontSize: compact ? 11.8 : 14,
                               height: 1.15,
                               fontWeight: FontWeight.w700,
                             ),
@@ -3391,9 +3402,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         ),
                       ),
                       Positioned(
-                        left: 7,
-                        right: 7,
-                        bottom: 8,
+                        left: compact ? 5 : 7,
+                        right: compact ? 5 : 7,
+                        bottom: compact ? 6 : 8,
                         child: Text(
                           item.effectLabel,
                           maxLines: 1,
@@ -3401,7 +3412,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: isEmpty ? Colors.white24 : accent.withOpacity(.78),
-                            fontSize: 8.5,
+                            fontSize: compact ? 7.4 : 8.5,
                             fontWeight: FontWeight.w700,
                             letterSpacing: .2,
                           ),
@@ -3589,7 +3600,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
-  Widget _buildCompanionCards() {
+  Widget _buildCompanionCards({bool compact = false}) {
     YoranBattleCompanion? activeCompanion;
     for (final companion in _battleCompanions) {
       if (companion.id == _selectedCompanionId) {
@@ -3618,10 +3629,12 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 520 ? 4 : 2;
+        final columns = compact
+            ? entries.length.clamp(1, 4).toInt()
+            : (constraints.maxWidth >= 520 ? 4 : 2);
         final rowCount = (entries.length / columns).ceil();
-        const gap = 8.0;
-        final compact = rowCount > 1;
+        final gap = compact ? 6.0 : 8.0;
+        final denseCards = compact || rowCount > 1;
         final rows = <Widget>[];
         for (var row = 0; row < rowCount; row++) {
           final cells = <Widget>[];
@@ -3633,18 +3646,23 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     ? _buildCompanionSkillCard(
                         entries[index].key,
                         entries[index].value,
-                        compact: compact,
+                        compact: denseCards,
                       )
                     : const SizedBox.shrink(),
               ),
             );
-            if (column < columns - 1) cells.add(const SizedBox(width: gap));
+            if (column < columns - 1) cells.add(SizedBox(width: gap));
           }
           rows.add(Expanded(child: Row(children: cells)));
-          if (row < rowCount - 1) rows.add(const SizedBox(height: gap));
+          if (row < rowCount - 1) rows.add(SizedBox(height: gap));
         }
         return Padding(
-          padding: const EdgeInsets.fromLTRB(18, 4, 18, 0),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 8 : 18,
+            compact ? 2 : 4,
+            compact ? 8 : 18,
+            0,
+          ),
           child: Column(children: rows),
         );
       },
@@ -4125,13 +4143,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         _BattleLogEntry(
           label: '遭遇',
           before: '你遭遇了【$_enemyName】。对方已经摆出战斗姿态。',
-          meta: widget.sceneTitle.trim().isEmpty
-              ? '遭遇战'
-              : <String>[
-                  widget.sceneTitle.trim(),
-                  if (widget.sceneSubtitle.trim().isNotEmpty)
-                    widget.sceneSubtitle.trim(),
-                ].join(' · '),
+          // 战斗 HUD 不再展示场景名称，遭遇日志也保持纯战斗信息。
+          meta: '遭遇战',
           ),
       )
       ..addAll(
@@ -6106,59 +6119,85 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compactHeight = constraints.maxHeight < 720;
-          final landscapePhone = constraints.maxWidth > constraints.maxHeight &&
-              constraints.maxHeight <= 560 &&
-              constraints.maxWidth <= 1100;
+          final landscapeMode =
+              constraints.maxWidth > constraints.maxHeight * 1.12;
 
-          if (landscapePhone) {
+          if (landscapeMode) {
             final veryShort = constraints.maxHeight < 360;
-            // 横屏控制区放在屏幕正中，并给触控按钮/文字更充足的宽度。
-            final controlWidth = math
-                .min(
-                  constraints.maxWidth - 20.0,
-                  (constraints.maxWidth * .68).clamp(460.0, 680.0),
-                )
-                .toDouble();
-            final historyHeight = veryShort
-                ? 28.0
-                : (constraints.maxHeight * .14)
-                    .clamp(42.0, 62.0)
-                    .toDouble();
+            final roomyLandscape = constraints.maxHeight > 560;
+            final statusHeight =
+                veryShort ? 48.0 : (roomyLandscape ? 64.0 : 56.0);
+            final historyHeight =
+                veryShort ? 26.0 : (roomyLandscape ? 38.0 : 32.0);
+            final commandRailWidth =
+                veryShort ? 70.0 : (roomyLandscape ? 88.0 : 78.0);
+            final companionRailWidth = _battleCompanions.isEmpty
+                ? 8.0
+                : (veryShort ? 46.0 : (roomyLandscape ? 60.0 : 54.0));
+            final trayHeight =
+                veryShort ? 128.0 : (roomyLandscape ? 152.0 : 136.0);
+            final stageBottom = trayHeight -
+                (veryShort ? 12.0 : (roomyLandscape ? 28.0 : 16.0));
 
             return Stack(
               fit: StackFit.expand,
               children: <Widget>[
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      0,
-                      veryShort ? 38 : 46,
-                      0,
-                      0,
-                    ),
-                    child: _buildStage(landscape: true),
-                  ),
+                // 中央舞台明确避开左右操作栏和底部手牌区，横屏不再依赖互相覆盖。
+                Positioned(
+                  left: commandRailWidth + 6,
+                  right: companionRailWidth + 6,
+                  top: statusHeight + historyHeight - 2,
+                  bottom: stageBottom,
+                  child: _buildStage(landscape: true),
                 ),
                 Positioned(
                   left: 8,
                   right: 8,
                   top: 0,
-                  height: veryShort ? 50 : 58,
+                  height: statusHeight,
                   child: _buildStatusBars(landscape: true),
                 ),
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: SizedBox(
-                    width: controlWidth,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        SizedBox(
-                          height: historyHeight,
-                          child: _buildHistory(compact: true),
-                        ),
-                        _buildControls(compact: true, landscape: true),
-                      ],
+                Positioned(
+                  left: commandRailWidth + 12,
+                  right: companionRailWidth + 12,
+                  top: statusHeight - 2,
+                  height: historyHeight,
+                  child: _buildHistory(compact: true),
+                ),
+                Positioned(
+                  left: 5,
+                  top: statusHeight + historyHeight + 3,
+                  bottom: 6,
+                  width: commandRailWidth - 9,
+                  child: _buildActionUiVisibility(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: _buildLandscapeCommandRail(
+                        veryShort: veryShort,
+                      ),
+                    ),
+                  ),
+                ),
+                if (_battleCompanions.isNotEmpty)
+                  Positioned(
+                    right: 4,
+                    top: statusHeight + historyHeight + 3,
+                    bottom: 6,
+                    width: companionRailWidth - 6,
+                    child: _buildActionUiVisibility(
+                      child: _buildLandscapeCompanionRail(
+                        veryShort: veryShort,
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: commandRailWidth + 4,
+                  right: companionRailWidth + 4,
+                  bottom: 0,
+                  height: trayHeight,
+                  child: _buildActionUiVisibility(
+                    child: _buildLandscapeCenterTray(
+                      veryShort: veryShort,
                     ),
                   ),
                 ),
@@ -6184,7 +6223,9 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     height: historyHeight,
                     child: _buildHistory(compact: compactHeight),
                   ),
-                  _buildControls(compact: compactHeight),
+                  _buildActionUiVisibility(
+                    child: _buildControls(compact: compactHeight),
+                  ),
                 ],
               ),
               _buildSkillDropTarget(landscape: false),
@@ -6366,81 +6407,67 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     );
   }
 
-  Widget _buildSceneCaption() {
-    final title = widget.sceneTitle.trim();
-    final subtitle = widget.sceneSubtitle.trim();
-    if (title.isEmpty && subtitle.isEmpty) return const SizedBox.shrink();
-    return IgnorePointer(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          if (title.isNotEmpty)
-            Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: _BattleColors.text,
-                fontFamily: 'WenJinMinchoP0',
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 2.2,
-              ),
-            ),
-          if (title.isNotEmpty && subtitle.isNotEmpty)
-            const SizedBox(height: 4),
-          if (subtitle.isNotEmpty)
-            Text(
-              subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: _BattleColors.mutedLight,
-                fontSize: 8,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 1.1,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildStage({bool landscape = false}) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final stageWidth = constraints.maxWidth;
         final stageHeight = constraints.maxHeight;
         final wide = landscape || stageWidth > stageHeight * 1.25;
+        final compactLandscape = landscape && stageHeight < 340;
+        final roomyLandscape = landscape && stageHeight > 430;
 
-        // 角色不要“抱在一起”：按屏幕比例主动留出中间战斗空间。
-        // 横屏留更大的中央空场，竖屏也保证两张立绘之间至少有明显呼吸区。
+        // 横屏把人物主动缩小并上提，把底部中央完整留给技能手牌。
+        // 竖屏仍沿用原本较饱满的构图。
         final narrow = stageWidth < 430;
-        final playerHeight = (stageHeight * (wide ? .90 : (narrow ? .82 : .86)))
-            .clamp(140.0, wide ? 365.0 : 335.0)
+        final playerHeight = (stageHeight * (landscape
+                ? (compactLandscape ? .74 : .80)
+                : (wide ? .86 : (narrow ? .82 : .86))))
+            .clamp(
+              landscape ? 118.0 : 140.0,
+              landscape
+                  ? (roomyLandscape ? 390.0 : 320.0)
+                  : (wide ? 365.0 : 335.0),
+            )
             .toDouble();
-        final enemyHeight = (stageHeight * (wide ? .80 : (narrow ? .72 : .76)))
-            .clamp(128.0, wide ? 320.0 : 295.0)
+        final enemyHeight = (stageHeight * (landscape
+                ? (compactLandscape ? .66 : .72)
+                : (wide ? .76 : (narrow ? .72 : .76))))
+            .clamp(
+              landscape ? 108.0 : 128.0,
+              landscape
+                  ? (roomyLandscape ? 345.0 : 285.0)
+                  : (wide ? 320.0 : 295.0),
+            )
             .toDouble();
-        // 画布稍微给宽一点，但立绘本身使用 contain；这样宽构图素材不会被横向裁掉。
+        // 横屏两侧还有操作栏/援助栏，因此人物画布再收窄一点。
         final playerWidth = math
             .min(
-              stageWidth * (wide ? .36 : (narrow ? .42 : .43)),
+              stageWidth *
+                  (landscape ? .32 : (wide ? .36 : (narrow ? .42 : .43))),
               playerHeight * .90,
             )
             .toDouble();
         final enemyWidth = math
             .min(
-              stageWidth * (wide ? .34 : (narrow ? .40 : .41)),
+              stageWidth *
+                  (landscape ? .30 : (wide ? .34 : (narrow ? .40 : .41))),
               enemyHeight * .90,
             )
             .toDouble();
 
-        // 双方都向屏幕边缘退，让中央真正留出“交战区”，不再像贴在一起。
-        final playerLeft = wide ? -playerWidth * .08 : -playerWidth * .10;
-        final playerBottom = wide ? -playerHeight * .045 : -playerHeight * .03;
-        final enemyRight = wide ? -enemyWidth * .05 : -enemyWidth * .075;
-        final enemyBottom = wide ? stageHeight * .07 : stageHeight * .08;
+        // 横屏不再把我方脚底压在屏幕外：双方整体上移，避免与手牌重叠。
+        final playerLeft = landscape
+            ? -playerWidth * .02
+            : (wide ? -playerWidth * .08 : -playerWidth * .10);
+        final playerBottom = landscape
+            ? stageHeight * (compactLandscape ? .10 : .08)
+            : (wide ? -playerHeight * .045 : -playerHeight * .03);
+        final enemyRight = landscape
+            ? -enemyWidth * .01
+            : (wide ? -enemyWidth * .05 : -enemyWidth * .075);
+        final enemyBottom = landscape
+            ? stageHeight * (compactLandscape ? .16 : .12)
+            : (wide ? stageHeight * .07 : stageHeight * .08);
 
         final cameraAnimation = Listenable.merge(<Listenable>[
           _playerAttackController,
@@ -6591,17 +6618,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         entrance: _entranceController,
                       ),
                     ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.topCenter,
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      top: wide ? 2 : 4,
-                      left: wide ? 120 : 70,
-                      right: wide ? 120 : 70,
-                    ),
-                    child: _buildSceneCaption(),
                   ),
                 ),
                 _buildCombatFeedback(),
@@ -6815,8 +6831,14 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     unawaited(HapticFeedback.selectionClick());
   }
 
-  Widget _buildCompanionAvatarStrip({bool large = false}) {
-    return Row(
+  Widget _buildCompanionAvatarStrip({
+    bool large = false,
+    bool vertical = false,
+    bool dense = false,
+  }) {
+    final avatarSize = dense ? 32.0 : (large ? 42.0 : 38.0);
+    return Flex(
+      direction: vertical ? Axis.vertical : Axis.horizontal,
       mainAxisSize: MainAxisSize.min,
       children: _battleCompanions.map((companion) {
         final selected =
@@ -6836,13 +6858,16 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 : String.fromCharCode(companion.name.runes.first),
             style: TextStyle(
               color: allUsed ? Colors.white30 : _BattleColors.energy,
-              fontSize: 12,
+              fontSize: dense ? 10.5 : 12,
               fontWeight: FontWeight.w900,
             ),
           ),
         );
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2),
+          padding: EdgeInsets.symmetric(
+            horizontal: vertical ? 0 : 2,
+            vertical: vertical ? (dense ? 2 : 3) : 0,
+          ),
           child: Tooltip(
             message: _companionAssistUsedThisRound && !allUsed
                 ? '${companion.name} · 本回合已援助，下一回合恢复'
@@ -6850,80 +6875,568 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _canAct ? () => _openCompanionSkills(companion) : null,
-              child: AnimatedContainer(
+              child: AnimatedScale(
                 duration: const Duration(milliseconds: 160),
-                width: large ? 42 : 38,
-                height: large ? 42 : 38,
-                decoration: const BoxDecoration(
-                  color: Colors.transparent,
-                ),
-                child: Stack(
-                  fit: StackFit.expand,
-                  clipBehavior: Clip.none,
-                  children: <Widget>[
-                    Opacity(
-                      opacity: allUsed ? .30 : 1,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(7),
-                        child: source.isEmpty
-                            ? fallback
-                            : _BattleImage(
-                                source: source,
-                                fallback: fallback,
-                                logicalWidth: large ? 42 : 38,
-                                maxCacheWidth: large ? 168 : 152,
-                                fit: BoxFit.cover,
-                              ),
-                      ),
+                curve: Curves.easeOutCubic,
+                scale: selected ? 1.06 : 1.0,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  curve: Curves.easeOutCubic,
+                  width: avatarSize,
+                  height: avatarSize,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected
+                          ? Colors.white.withOpacity(.94)
+                          : Colors.white.withOpacity(allUsed ? .08 : .18),
+                      width: selected ? 1.7 : .7,
                     ),
-                    if (selected)
+                    boxShadow: selected
+                        ? <BoxShadow>[
+                            BoxShadow(
+                              color: Colors.white.withOpacity(.16),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            ),
+                          ]
+                        : const <BoxShadow>[],
+                  ),
+                  padding: const EdgeInsets.all(1.5),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    clipBehavior: Clip.none,
+                    children: <Widget>[
+                      Opacity(
+                        opacity: allUsed ? .30 : 1,
+                        child: ClipOval(
+                          child: source.isEmpty
+                              ? fallback
+                              : _BattleImage(
+                                  source: source,
+                                  fallback: fallback,
+                                  logicalWidth: avatarSize,
+                                  maxCacheWidth:
+                                      dense ? 128 : (large ? 168 : 152),
+                                  fit: BoxFit.cover,
+                                ),
+                        ),
+                      ),
+                      if (_companionAssistUsedThisRound && !allUsed)
+                        Positioned(
+                          right: -1,
+                          top: -1,
+                          child: Container(
+                            width: dense ? 11 : 13,
+                            height: dense ? 11 : 13,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: const Color(0xD90B0C0E),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withOpacity(.34),
+                                width: .6,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.schedule_rounded,
+                              size: dense ? 7 : 8.5,
+                              color: Colors.white.withOpacity(.84),
+                            ),
+                          ),
+                        ),
                       Positioned(
-                        left: 6,
-                        right: 6,
-                        bottom: -3,
+                        right: -1,
+                        bottom: -1,
                         child: Container(
-                          height: 2,
+                          constraints: BoxConstraints(
+                            minWidth: dense ? 11 : 13,
+                            minHeight: dense ? 11 : 13,
+                          ),
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(horizontal: 2),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(.82),
-                            borderRadius: BorderRadius.circular(2),
+                            color: const Color(0xD90B0C0E),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(.20),
+                              width: .5,
+                            ),
+                          ),
+                          child: Text(
+                            '$remaining',
+                            style: TextStyle(
+                              color: allUsed
+                                  ? Colors.white38
+                                  : Colors.white.withOpacity(.90),
+                              fontSize: dense ? 6.7 : 7.5,
+                              height: 1,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
                         ),
                       ),
-                    if (_companionAssistUsedThisRound && !allUsed)
-                      Positioned(
-                        right: 1,
-                        top: 1,
-                        child: Icon(
-                          Icons.schedule_rounded,
-                          size: 10,
-                          color: Colors.white.withOpacity(.82),
-                        ),
-                      ),
-                    Positioned(
-                      right: 1,
-                      bottom: 1,
-                      child: Text(
-                        '$remaining',
-                        style: TextStyle(
-                          color: allUsed
-                              ? Colors.white38
-                              : Colors.white.withOpacity(.88),
-                          fontSize: 8,
-                          fontWeight: FontWeight.w900,
-                          shadows: const <Shadow>[
-                            Shadow(color: Color(0xD0000000), blurRadius: 3),
-                            Shadow(color: Color(0xA0000000), offset: Offset(0, 1)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
         );
       }).toList(growable: false),
+    );
+  }
+
+  bool _canConfirmCurrentSelection() {
+    if (!_canAct) return false;
+    if (_activeCategory == _BattleCommandCategory.items) {
+      return _selectedItemId != null && _canUseItem(_selectedItemId!);
+    }
+    if (_activeCategory == _BattleCommandCategory.companions) {
+      final selected = _selectedCompanionSkill();
+      return !_companionAssistUsedThisRound &&
+          selected != null &&
+          !_usedCompanionSkillIds.contains(selected.value.id);
+    }
+    return _selectedSkillName != null && _canUseSkill(_selectedSkillName!);
+  }
+
+  Widget _buildActionUiVisibility({required Widget child}) {
+    final visible = _canAct;
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      opacity: visible ? 1 : 0,
+      child: IgnorePointer(
+        ignoring: !visible,
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildLandscapeRailButton({
+    required String label,
+    required String symbol,
+    required bool selected,
+    required bool veryShort,
+    required VoidCallback? onTap,
+    bool emphasized = false,
+  }) {
+    final enabled = onTap != null;
+    final light = selected || emphasized;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOutCubic,
+        width: double.infinity,
+        height: veryShort ? 31 : 35,
+        padding: EdgeInsets.symmetric(horizontal: veryShort ? 5 : 7),
+        decoration: BoxDecoration(
+          color: light
+              ? const Color(0xFFF0EEE8).withOpacity(enabled ? 1 : .30)
+              : Colors.black.withOpacity(.16),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: light
+                ? const Color(0xFFF0EEE8).withOpacity(enabled ? .88 : .28)
+                : Colors.white.withOpacity(enabled ? .18 : .07),
+            width: .8,
+          ),
+        ),
+        child: Row(
+          children: <Widget>[
+            Text(
+              symbol,
+              style: TextStyle(
+                color: light
+                    ? const Color(0xFF0B0C0E).withOpacity(enabled ? .78 : .28)
+                    : Colors.white.withOpacity(enabled ? .42 : .18),
+                fontSize: veryShort ? 7.0 : 7.6,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .2,
+              ),
+            ),
+            SizedBox(width: veryShort ? 4 : 5),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: light
+                      ? const Color(0xFF0B0C0E).withOpacity(enabled ? 1 : .34)
+                      : Colors.white.withOpacity(enabled ? .78 : .24),
+                  fontSize: veryShort ? 9.6 : 10.4,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: .3,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeCommandRail({required bool veryShort}) {
+    final isItems = _activeCategory == _BattleCommandCategory.items;
+    final isCompanions = _activeCategory == _BattleCommandCategory.companions;
+    final isSkills = !isItems && !isCompanions;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: <Color>[
+            Colors.black.withOpacity(.34),
+            Colors.black.withOpacity(.16),
+            Colors.transparent,
+          ],
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          veryShort ? 4 : 5,
+          veryShort ? 4 : 7,
+          veryShort ? 4 : 6,
+          veryShort ? 4 : 7,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            _buildLandscapeRailButton(
+              label: '行动',
+              symbol: '01',
+              selected: isSkills,
+              veryShort: veryShort,
+              onTap: _canAct
+                  ? () => _toggleCategory(_BattleCommandCategory.skills)
+                  : null,
+            ),
+            SizedBox(height: veryShort ? 5 : 6),
+            _buildLandscapeRailButton(
+              label: '道具',
+              symbol: '02',
+              selected: isItems,
+              veryShort: veryShort,
+              onTap: _canAct
+                  ? () => _toggleCategory(_BattleCommandCategory.items)
+                  : null,
+            ),
+            SizedBox(height: veryShort ? 5 : 6),
+            _buildLandscapeRailButton(
+              label: '逃跑',
+              symbol: '03',
+              selected: false,
+              veryShort: veryShort,
+              onTap: _canAct ? () => unawaited(_confirmEscape()) : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeCompanionRail({required bool veryShort}) {
+    if (_battleCompanions.isEmpty) return const SizedBox.shrink();
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerRight,
+          end: Alignment.centerLeft,
+          colors: <Color>[
+            Colors.black.withOpacity(.32),
+            Colors.black.withOpacity(.12),
+            Colors.transparent,
+          ],
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          veryShort ? 4 : 6,
+          veryShort ? 5 : 7,
+          veryShort ? 4 : 5,
+          veryShort ? 5 : 7,
+        ),
+        child: Column(
+          children: <Widget>[
+            Text(
+              '援助',
+              style: TextStyle(
+                color: Colors.white.withOpacity(.48),
+                fontSize: veryShort ? 8.0 : 8.7,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.5,
+              ),
+            ),
+            SizedBox(height: veryShort ? 3 : 5),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Center(
+                  child: _buildCompanionAvatarStrip(
+                    vertical: true,
+                    dense: true,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeActionSummary({required bool veryShort}) {
+    final isItems = _activeCategory == _BattleCommandCategory.items;
+    final isCompanions = _activeCategory == _BattleCommandCategory.companions;
+
+    String title = '技能卡';
+    String detail = '点击查看 · 上滑松手可直接释放';
+    IconData icon = Icons.auto_awesome_rounded;
+
+    if (isItems) {
+      icon = Icons.inventory_2_outlined;
+      title = '道具';
+      final selected = _selectedItemId == null
+          ? null
+          : _battleItemById(_selectedItemId!);
+      detail = selected == null
+          ? '选择道具后点击右侧确认'
+          : '${selected.name} · ${selected.effectLabel}';
+    } else if (isCompanions) {
+      icon = _companionAssistUsedThisRound
+          ? Icons.schedule_rounded
+          : Icons.person_add_alt_1_rounded;
+      final selected = _selectedCompanionSkill();
+      title = selected?.value.name ?? '角色援助';
+      detail = selected != null
+          ? selected.value.detail
+          : (_companionAssistUsedThisRound
+              ? '本回合援助已使用 · 下一回合恢复'
+              : '从右侧选择角色，再选择援助技能');
+    } else if (_selectedSkillName != null) {
+      for (final skill in _availableSkills) {
+        if (skill.name == _selectedSkillName) {
+          title = skill.name;
+          detail = skill.detail;
+          break;
+        }
+      }
+    }
+
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: veryShort ? 6 : 10),
+      padding: EdgeInsets.symmetric(
+        horizontal: veryShort ? 8 : 10,
+        vertical: veryShort ? 4 : 5,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(.24),
+        border: Border(
+          top: BorderSide(color: Colors.white.withOpacity(.09), width: .7),
+        ),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            icon,
+            size: veryShort ? 13 : 14,
+            color: Colors.white.withOpacity(.60),
+          ),
+          const SizedBox(width: 7),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: veryShort ? 90 : 116),
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withOpacity(.92),
+                fontSize: veryShort ? 9.5 : 10.2,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .25,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            width: 1,
+            height: veryShort ? 12 : 14,
+            color: Colors.white.withOpacity(.12),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withOpacity(.62),
+                fontSize: veryShort ? 8.5 : 9.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandscapeConfirmButton({
+    required bool veryShort,
+    required bool enabled,
+  }) {
+    final size = veryShort ? 54.0 : 62.0;
+    final borderColor = Colors.white.withOpacity(enabled ? .78 : .14);
+
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: '确认当前行动',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: enabled ? _handleConfirm : null,
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+          scale: enabled ? 1.0 : .94,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                center: const Alignment(-.18, -.24),
+                radius: .95,
+                colors: <Color>[
+                  Colors.white.withOpacity(enabled ? .20 : .045),
+                  Colors.white.withOpacity(enabled ? .075 : .018),
+                  Colors.transparent,
+                ],
+                stops: const <double>[0, .52, 1],
+              ),
+              border: Border.all(
+                color: borderColor,
+                width: enabled ? 1.35 : .8,
+              ),
+              boxShadow: enabled
+                  ? <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.white.withOpacity(.10),
+                        blurRadius: 14,
+                        spreadRadius: 1,
+                      ),
+                      BoxShadow(
+                        color: _BattleColors.energy.withOpacity(.10),
+                        blurRadius: 22,
+                        spreadRadius: 2,
+                      ),
+                    ]
+                  : const <BoxShadow>[],
+            ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: <Widget>[
+                Positioned.fill(
+                  child: Padding(
+                    padding: EdgeInsets.all(veryShort ? 5 : 6),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withOpacity(enabled ? .16 : .05),
+                          width: .6,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(
+                      Icons.bolt_rounded,
+                      size: veryShort ? 20 : 23,
+                      color: Colors.white.withOpacity(enabled ? .94 : .24),
+                    ),
+                    SizedBox(height: veryShort ? 0 : 1),
+                    Text(
+                      '确认',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(enabled ? .86 : .22),
+                        fontSize: veryShort ? 7.5 : 8.2,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .7,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeCenterTray({required bool veryShort}) {
+    final isItems = _activeCategory == _BattleCommandCategory.items;
+    final isCompanions = _activeCategory == _BattleCommandCategory.companions;
+    final canConfirm = _canConfirmCurrentSelection();
+    final content = isItems
+        ? _buildItemCards(compact: true)
+        : isCompanions
+            ? _buildCompanionCards(compact: true)
+            : _buildSkillCards(compact: true);
+
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            Color(0x00080A0C),
+            Color(0x26080A0C),
+            Color(0x84080A0C),
+          ],
+          stops: <double>[0, .28, 1],
+        ),
+      ),
+      child: Column(
+        children: <Widget>[
+          SizedBox(
+            height: veryShort ? 28 : 32,
+            child: _buildLandscapeActionSummary(veryShort: veryShort),
+          ),
+          Expanded(
+            child: Row(
+              children: <Widget>[
+                Expanded(child: content),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    veryShort ? 4 : 6,
+                    veryShort ? 4 : 6,
+                    veryShort ? 7 : 10,
+                    veryShort ? 4 : 7,
+                  ),
+                  child: _buildLandscapeConfirmButton(
+                    veryShort: veryShort,
+                    enabled: canConfirm,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -7870,51 +8383,7 @@ class _BattleStatusBar extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 3),
-              Row(
-                children: alignEnd
-                    ? <Widget>[
-                        Text(
-                          'SP $qi/$maxQi',
-                          style: TextStyle(
-                            color: _BattleColors.energy.withOpacity(.96),
-                            fontSize: 8.4,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: .15,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          'HP $hp/$maxHp',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(.46),
-                            fontSize: 7.8,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ]
-                    : <Widget>[
-                        Text(
-                          'HP $hp/$maxHp',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(.46),
-                            fontSize: 7.8,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          'SP $qi/$maxQi',
-                          style: TextStyle(
-                            color: _BattleColors.energy.withOpacity(.96),
-                            fontSize: 8.4,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: .15,
-                          ),
-                        ),
-                      ],
-              ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 5),
               SizedBox(
                 height: 3,
                 child: LayoutBuilder(
@@ -8804,6 +9273,7 @@ class _BattleEntranceOverlay extends StatelessWidget {
 
           final width = MediaQuery.sizeOf(context).width;
           final height = MediaQuery.sizeOf(context).height;
+          final landscape = width > height * 1.15;
           if (exit <= 0) return const SizedBox.shrink();
 
           Widget portraitLayer({
@@ -8832,6 +9302,218 @@ class _BattleEntranceOverlay extends StatelessWidget {
                     ),
                   ),
                 ),
+              ),
+            );
+          }
+
+          if (landscape) {
+            final nameSize = (height * .075).clamp(20.0, 28.0).toDouble();
+            return Opacity(
+              opacity: exit,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  const ColoredBox(color: Color(0xFF080908)),
+
+                  // 横屏 VS：双方改为左右对峙，不再沿用竖屏的上下切片。
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: width * .56,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        portraitLayer(
+                          source: playerPortrait,
+                          alignment: Alignment.center,
+                          top: true,
+                        ),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                              colors: <Color>[
+                                Color(0x16000000),
+                                Color(0x42000000),
+                                Color(0xE6080908),
+                              ],
+                              stops: <double>[0, .58, 1],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: width * .56,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        portraitLayer(
+                          source: enemyPortrait,
+                          alignment: Alignment.center,
+                          top: false,
+                          mirror: true,
+                        ),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerRight,
+                              end: Alignment.centerLeft,
+                              colors: <Color>[
+                                Color(0x16000000),
+                                Color(0x42000000),
+                                Color(0xE6080908),
+                              ],
+                              stops: <double>[0, .58, 1],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        radius: 1.10,
+                        colors: <Color>[
+                          Color(0x00101311),
+                          Color(0x33000000),
+                          Color(0xA8000000),
+                        ],
+                        stops: <double>[0, .66, 1],
+                      ),
+                    ),
+                  ),
+
+                  Center(
+                    child: Transform.rotate(
+                      angle: .09,
+                      child: Transform.translate(
+                        offset: Offset((slashIn - .5) * width * .08, 0),
+                        child: Opacity(
+                          opacity: slashOpacity,
+                          child: Container(
+                            width: 1.4,
+                            height: height * 1.35,
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: <Color>[
+                                  Color(0x00FFFFFF),
+                                  Color(0x55FFFFFF),
+                                  Color(0xFFFFFFFF),
+                                  Color(0x55FFFFFF),
+                                  Color(0x00FFFFFF),
+                                ],
+                                stops: <double>[0, .28, .50, .72, 1],
+                              ),
+                              boxShadow: <BoxShadow>[
+                                BoxShadow(
+                                  color: Color(0x55FFFFFF),
+                                  blurRadius: 9,
+                                  spreadRadius: .2,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  Positioned(
+                    left: width * .055,
+                    right: width * .56,
+                    bottom: height * .12,
+                    child: Opacity(
+                      opacity: contentOpacity,
+                      child: Transform.translate(
+                        offset: Offset(-18 * (1 - reveal), 0),
+                        child: Text(
+                          playerName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: const Color(0xFFF4F4F2),
+                            fontSize: nameSize,
+                            height: 1.05,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 2.4,
+                            shadows: const <Shadow>[
+                              Shadow(color: Color(0xA0000000), blurRadius: 12),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: width * .56,
+                    right: width * .055,
+                    bottom: height * .12,
+                    child: Opacity(
+                      opacity: contentOpacity,
+                      child: Transform.translate(
+                        offset: Offset(18 * (1 - reveal), 0),
+                        child: Text(
+                          enemyName.isEmpty ? '对手' : enemyName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                            color: const Color(0xFFE4E4E0),
+                            fontSize: nameSize,
+                            height: 1.05,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 2.4,
+                            shadows: const <Shadow>[
+                              Shadow(color: Color(0xA0000000), blurRadius: 12),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Center(
+                    child: Opacity(
+                      opacity: contentOpacity,
+                      child: Transform.scale(
+                        scale: .90 + .10 * reveal,
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: height < 360 ? 13 : 16,
+                            vertical: height < 360 ? 5 : 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xCC080908),
+                            border: Border.all(
+                              color: const Color(0x52FFFFFF),
+                              width: .8,
+                            ),
+                          ),
+                          child: Text(
+                            'VS',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontFamily: 'WenJinMinchoP0',
+                              fontSize: height < 360 ? 21 : 25,
+                              height: 1,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 3.2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             );
           }
@@ -9064,6 +9746,7 @@ class _BattleCardHand extends StatefulWidget {
     required this.onSkillSelected,
     required this.onSkillQuickCast,
     required this.onDragStateChanged,
+    this.compact = false,
   });
 
   final List<YoranBattleSkill> skills;
@@ -9075,6 +9758,7 @@ class _BattleCardHand extends StatefulWidget {
   final ValueChanged<String> onSkillSelected;
   final ValueChanged<String> onSkillQuickCast;
   final ValueChanged<String?> onDragStateChanged;
+  final bool compact;
 
   @override
   State<_BattleCardHand> createState() => _BattleCardHandState();
@@ -9082,10 +9766,12 @@ class _BattleCardHand extends StatefulWidget {
 
 class _BattleCardHandState extends State<_BattleCardHand>
     with SingleTickerProviderStateMixin {
-  static const double _cardSpacing = 70.0;
-  static const double _dragDistancePerCard = 52.0;
-  static const double _maxAngle = 0.30;
-  static const double _minScale = 0.86;
+  double get _cardSpacing => widget.compact ? 58.0 : 70.0;
+  double get _dragDistancePerCard => widget.compact ? 44.0 : 52.0;
+  double get _maxAngle => widget.compact ? 0.24 : 0.30;
+  double get _minScale => widget.compact ? 0.84 : 0.86;
+  double get _cardWidth => widget.compact ? 76.0 : 92.0;
+  double get _cardHeight => widget.compact ? 102.0 : 124.0;
 
   late final AnimationController _snapController;
   double _scrollPosition = 0.0;
@@ -9113,7 +9799,8 @@ class _BattleCardHandState extends State<_BattleCardHand>
     final upward = start.dy - end.dy;
     // 快捷出牌：明显向上拖出卡面后松手即可，不要求进入中央释放圈。
     // 同时保留方向判断，避免横向转手牌时误触释放。
-    return upward >= 42 && upward >= dx * .65;
+    final threshold = widget.compact ? 34.0 : 42.0;
+    return upward >= threshold && upward >= dx * .65;
   }
 
   void _clearQuickDragPointer() {
@@ -9172,14 +9859,25 @@ class _BattleCardHandState extends State<_BattleCardHand>
         .toDouble();
   }
 
-  void _selectCard(YoranBattleSkill skill) {
-    // 点击只改变选中态，不再自动旋转/居中手牌。
-    // 轮盘位置完全由用户横向拖动控制。
-    widget.onSkillSelected(skill.name);
+  void _selectCard(YoranBattleSkill skill, int index, {bool allowToggle = true}) {
+    // 无论点击还是从侧边上滑，目标卡都会平滑回到中央主位。
+    // 上滑开始时不重复触发同一张卡的 toggle，避免已选技能被意外取消。
+    if (allowToggle || widget.selectedSkillName != skill.name) {
+      widget.onSkillSelected(skill.name);
+    }
+    _animateToCard(index.toDouble());
   }
 
-  void _animateToCard(double target) {
+  void _animateToCard(double target, {bool selectCentered = false}) {
     final next = _clampPosition(target.roundToDouble());
+    if (selectCentered && widget.skills.isNotEmpty) {
+      final index = next.round().clamp(0, widget.skills.length - 1).toInt();
+      final skill = widget.skills[index];
+      if (widget.selectedSkillName != skill.name) {
+        widget.onSkillSelected(skill.name);
+      }
+    }
+
     if ((_scrollPosition - next).abs() < 0.001) {
       if (mounted) setState(() => _scrollPosition = next);
       return;
@@ -9209,7 +9907,7 @@ class _BattleCardHandState extends State<_BattleCardHand>
   void _handleTap(TapUpDetails details, double handWidth) {
     if (!widget.enabled || widget.skills.isEmpty) return;
     final index = _indexForTap(details.localPosition, handWidth);
-    _selectCard(widget.skills[index]);
+    _selectCard(widget.skills[index], index);
   }
 
   @override
@@ -9261,7 +9959,10 @@ class _BattleCardHandState extends State<_BattleCardHand>
           final baseAngle =
               (relative * 0.095).clamp(-_maxAngle, _maxAngle).toDouble();
           final offsetX = relative * _cardSpacing;
-          final baseOffsetY = math.min(distance * distance * 2.6, 28.0);
+          final baseOffsetY = math.min(
+            distance * distance * (widget.compact ? 2.1 : 2.6),
+            widget.compact ? 20.0 : 28.0,
+          );
           final baseScale =
               (1.0 - distance * 0.045).clamp(_minScale, 1.0).toDouble();
           final focusOpacity = isSelected
@@ -9272,7 +9973,7 @@ class _BattleCardHandState extends State<_BattleCardHand>
           visualCards.add(
             Positioned(
               key: ValueKey('card_${skill.name}'),
-              bottom: 4,
+              bottom: widget.compact ? 2 : 4,
               child: IgnorePointer(
                 child: Opacity(
                   opacity: draggingThis ? .18 : focusOpacity,
@@ -9289,6 +9990,7 @@ class _BattleCardHandState extends State<_BattleCardHand>
                           isSelected: isSelected,
                           playerQi: widget.playerQi,
                           playerHp: widget.playerHp,
+                          compact: widget.compact,
                         ),
                       ),
                     ),
@@ -9303,7 +10005,7 @@ class _BattleCardHandState extends State<_BattleCardHand>
           dragLanes.add(
             Positioned(
               key: ValueKey('drag_lane_${skill.name}'),
-              bottom: 4,
+              bottom: widget.compact ? 2 : 4,
               child: Transform.translate(
                 offset: Offset(offsetX, baseOffsetY),
                 child: Listener(
@@ -9316,9 +10018,14 @@ class _BattleCardHandState extends State<_BattleCardHand>
                     hitTestBehavior: HitTestBehavior.opaque,
                     maxSimultaneousDrags: 1,
                     onDragStarted: () {
+                      final alreadySelected = widget.selectedSkillName == skill.name;
                       setState(() => _activeDragSkillName = skill.name);
+                      _selectCard(skill, index, allowToggle: false);
                       widget.onDragStateChanged(skill.name);
-                      unawaited(HapticFeedback.selectionClick());
+                      // 新选中时父层已经提供触感；已选中的卡再次上滑时补一次起手反馈。
+                      if (alreadySelected) {
+                        unawaited(HapticFeedback.selectionClick());
+                      }
                     },
                     onDragUpdate: _updateQuickDrag,
                     onDragEnd: (details) {
@@ -9334,26 +10041,37 @@ class _BattleCardHandState extends State<_BattleCardHand>
                     },
                     feedback: Material(
                       color: Colors.transparent,
-                      child: Transform.scale(
-                        scale: 1.08,
-                        child: _BattleCard(
-                          skill: skill,
-                          cooldown: cooldown,
-                          canUse: true,
-                          isSelected: true,
-                          playerQi: widget.playerQi,
-                          playerHp: widget.playerHp,
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween<double>(begin: 0, end: 1),
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOutCubic,
+                        builder: (context, t, child) => Transform.translate(
+                          // 侧边卡向上拖出时，同时向手牌中央释放轴收拢。
+                          offset: Offset(-offsetX * t, 0),
+                          child: child,
+                        ),
+                        child: Transform.scale(
+                          scale: widget.compact ? 1.05 : 1.08,
+                          child: _BattleCard(
+                            skill: skill,
+                            cooldown: cooldown,
+                            canUse: true,
+                            isSelected: true,
+                            playerQi: widget.playerQi,
+                            playerHp: widget.playerHp,
+                            compact: widget.compact,
+                          ),
                         ),
                       ),
                     ),
                     childWhenDragging: SizedBox(
-                      width: count <= 1 ? 92 : _cardSpacing,
-                      height: 124,
+                      width: count <= 1 ? _cardWidth : _cardSpacing,
+                      height: _cardHeight,
                     ),
                     child: SizedBox(
                       // 拖拽槽位按扇形间距切分，彼此不重叠；不需要先选中或居中。
-                      width: count <= 1 ? 92 : _cardSpacing,
-                      height: 124,
+                      width: count <= 1 ? _cardWidth : _cardSpacing,
+                      height: _cardHeight,
                       child: const ColoredBox(color: Colors.transparent),
                     ),
                   ),
@@ -9384,11 +10102,11 @@ class _BattleCardHandState extends State<_BattleCardHand>
               : (details) {
                   final velocity = details.primaryVelocity ?? 0.0;
                   final projected = _scrollPosition - velocity / 760.0;
-                  _animateToCard(projected);
+                  _animateToCard(projected, selectCentered: true);
                 },
           onHorizontalDragCancel: count <= 1
               ? null
-              : () => _animateToCard(_scrollPosition),
+              : () => _animateToCard(_scrollPosition, selectCentered: true),
           child: Stack(
             alignment: Alignment.bottomCenter,
             clipBehavior: Clip.none,
@@ -9414,6 +10132,7 @@ class _BattleCard extends StatelessWidget {
     required this.isSelected,
     required this.playerQi,
     required this.playerHp,
+    this.compact = false,
   });
 
   final YoranBattleSkill skill;
@@ -9422,6 +10141,7 @@ class _BattleCard extends StatelessWidget {
   final bool isSelected;
   final int playerQi;
   final int playerHp;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -9444,15 +10164,15 @@ class _BattleCard extends StatelessWidget {
       opacity: isLocked && !isSelected ? .40 : 1,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 190),
-        width: 92,
-        height: 124,
+        width: compact ? 76 : 92,
+        height: compact ? 102 : 124,
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: <Color>[topSurface, bottomSurface],
           ),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(compact ? 8 : 10),
           border: Border.all(
             color: borderColor,
             width: isSelected ? 1.25 : .8,
@@ -9476,8 +10196,8 @@ class _BattleCard extends StatelessWidget {
           children: <Widget>[
             Positioned(
               top: 0,
-              left: 10,
-              right: 10,
+              left: compact ? 8 : 10,
+              right: compact ? 8 : 10,
               child: Container(
                 height: 2,
                 color: isLocked
@@ -9487,15 +10207,18 @@ class _BattleCard extends StatelessWidget {
             ),
             if (skill.energyCost > 0)
               Positioned(
-                top: 7,
-                left: 7,
+                top: compact ? 5 : 7,
+                left: compact ? 5 : 7,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: compact ? 5 : 6,
+                    vertical: compact ? 2 : 3,
+                  ),
                   decoration: BoxDecoration(
                     color: isEnergyShort
                         ? _BattleColors.enemy.withOpacity(.14)
                         : Colors.white.withOpacity(.075),
-                    borderRadius: BorderRadius.circular(5),
+                    borderRadius: BorderRadius.circular(compact ? 4 : 5),
                     border: Border.all(
                       color: isEnergyShort
                           ? _BattleColors.enemy.withOpacity(.48)
@@ -9509,7 +10232,7 @@ class _BattleCard extends StatelessWidget {
                       color: isEnergyShort
                           ? _BattleColors.enemy
                           : Colors.white.withOpacity(.92),
-                      fontSize: 9.6,
+                      fontSize: compact ? 8.0 : 9.6,
                       fontWeight: FontWeight.w900,
                       letterSpacing: .18,
                     ),
@@ -9518,26 +10241,26 @@ class _BattleCard extends StatelessWidget {
               ),
             if (cooldown > 0)
               Positioned(
-                top: 9,
-                right: 9,
+                top: compact ? 7 : 9,
+                right: compact ? 7 : 9,
                 child: Text(
                   'CD $cooldown',
                   style: TextStyle(
                     color: _BattleColors.enemy.withOpacity(.74),
-                    fontSize: 8.5,
+                    fontSize: compact ? 7.3 : 8.5,
                     fontWeight: FontWeight.w900,
                     letterSpacing: .2,
                   ),
                 ),
               ),
             Positioned(
-              top: 28,
+              top: compact ? 23 : 28,
               left: 0,
               right: 0,
               child: Center(
                 child: _BattleSkillTypeIcon(
                   skill: skill,
-                  size: 22,
+                  size: compact ? 18 : 22,
                   color: isLocked
                       ? Colors.white24
                       : (isSelected ? Colors.white : quality.withOpacity(.90)),
@@ -9545,9 +10268,9 @@ class _BattleCard extends StatelessWidget {
               ),
             ),
             Positioned(
-              left: 7,
-              right: 7,
-              top: 58,
+              left: compact ? 6 : 7,
+              right: compact ? 6 : 7,
+              top: compact ? 48 : 58,
               child: Text(
                 skill.name,
                 maxLines: 2,
@@ -9556,7 +10279,7 @@ class _BattleCard extends StatelessWidget {
                 style: TextStyle(
                   color: isLocked ? Colors.white30 : _BattleColors.text,
                   fontFamily: 'WenJinMinchoP0',
-                  fontSize: 13.5,
+                  fontSize: compact ? 11.3 : 13.5,
                   height: 1.10,
                   fontWeight: FontWeight.w700,
                   letterSpacing: .2,
@@ -9564,9 +10287,9 @@ class _BattleCard extends StatelessWidget {
               ),
             ),
             Positioned(
-              left: 8,
-              right: 8,
-              bottom: 9,
+              left: compact ? 6 : 8,
+              right: compact ? 6 : 8,
+              bottom: compact ? 7 : 9,
               child: Text(
                 _battleSkillTypeName(skill.iconType),
                 maxLines: 1,
@@ -9574,7 +10297,7 @@ class _BattleCard extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white.withOpacity(isLocked ? .18 : .34),
-                  fontSize: 8.2,
+                  fontSize: compact ? 7.2 : 8.2,
                   fontWeight: FontWeight.w700,
                   letterSpacing: .9,
                 ),

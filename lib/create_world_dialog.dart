@@ -5,6 +5,14 @@ import 'package:flutter/material.dart';
 import 'api/api_client.dart';
 import 'app_shared.dart';
 
+String _newWorldClientRequestId() {
+  final now = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+  final random = math.Random.secure();
+  final partA = random.nextInt(0x7fffffff).toRadixString(16);
+  final partB = random.nextInt(0x7fffffff).toRadixString(16);
+  return 'world_${now}_$partA$partB';
+}
+
 class CreateWorldDialog extends StatefulWidget {
   const CreateWorldDialog({
     super.key,
@@ -72,6 +80,7 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
   bool _showError = false;
   bool _handoffActive = false;
   String? _requestError;
+  late String _clientRequestId;
 
   late final AnimationController _shakeController;
   late final AnimationController _handoffController;
@@ -79,6 +88,7 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
   @override
   void initState() {
     super.initState();
+    _clientRequestId = _newWorldClientRequestId();
     _shakeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 420),
@@ -137,6 +147,7 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
           'mode': _selectedMode,
           'quality_mode': _qualityMode,
           'enable_refinement': false,
+          'client_request_id': _clientRequestId,
         },
       );
 
@@ -409,6 +420,9 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
               height: 1.5,
             ),
             onChanged: (text) {
+              if (!_isLoading && !_handoffActive) {
+                _clientRequestId = _newWorldClientRequestId();
+              }
               if (_showError && text.trim().isNotEmpty) {
                 setState(() => _showError = false);
               }

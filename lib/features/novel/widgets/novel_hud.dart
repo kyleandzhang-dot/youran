@@ -4,6 +4,16 @@ part of '../novel_widgets.dart';
 // 对外入口：NovelTopHud / NovelGoalHud / NovelLocationHud / NovelActionRail / NovelArchiveRail / NovelScoreChip / NovelTaskBadge / NovelHudEventOverlay
 // 内部实现：顶部按钮、状态头像、健康条、侧栏按钮与 HUD 动画。
 
+/// 从人物/经历/背包等嵌入式主标签返回剧情主画面。
+///
+/// 这些页面与剧情共用同一个游戏路由，因此这里必须切换主标签，
+/// 不能通过 Navigator.pop() 返回，否则会把整个剧情路由退出。
+void showNovelStoryPrimaryTab() {
+  if (_novelPrimaryTabIndex.value != 0) {
+    _novelPrimaryTabIndex.value = 0;
+  }
+}
+
 class NovelTopHud extends StatelessWidget {
   const NovelTopHud({
     super.key,
@@ -1065,7 +1075,7 @@ class _NovelScoreChipState extends State<NovelScoreChip>
                     padding: EdgeInsets.fromLTRB(
                       widget.compact ? 3 : 4,
                       3,
-                      widget.compact ? 7 : 10,
+                      widget.compact ? 5 : 6,
                       3,
                     ),
                     decoration: BoxDecoration(
@@ -1079,22 +1089,34 @@ class _NovelScoreChipState extends State<NovelScoreChip>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        // 1. 星块图标（尺寸收敛一点，显得更精致）
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
-                          width: animating
-                              ? (widget.compact ? 18.5 : 21.0)
-                              : (widget.compact ? 17.0 : 19.0),
-                          height: animating
-                              ? (widget.compact ? 18.5 : 21.0)
-                              : (widget.compact ? 17.0 : 19.0),
-                          child: Image.asset(
-                            'assets/images/xing.webp',
-                            fit: BoxFit.contain,
+                        // 只增加横向占位，把星币完整收回玻璃条左边界以内。
+                        // 高度仍保持原来的 17 / 19，不改变外层玻璃条高度。
+                        SizedBox(
+                          width: widget.compact ? 31.0 : 34.0,
+                          height: widget.compact ? 17.0 : 19.0,
+                          child: OverflowBox(
+                            alignment: Alignment.center,
+                            minWidth: 0,
+                            minHeight: 0,
+                            maxWidth: widget.compact ? 34.0 : 37.0,
+                            maxHeight: 40,
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 180),
+                              width: animating
+                                  ? (widget.compact ? 34.0 : 37.0)
+                                  : (widget.compact ? 31.0 : 34.0),
+                              height: animating
+                                  ? (widget.compact ? 34.0 : 37.0)
+                                  : (widget.compact ? 31.0 : 34.0),
+                              child: Image.asset(
+                                'assets/images/xing.webp',
+                                fit: BoxFit.contain,
+                              ),
+                            ),
                           ),
                         ),
-                        
-                        const SizedBox(width: 4),
+
+                        const SizedBox(width: 3),
                         
                         // 2. 纯白极简字体，去掉所有浮夸的颜色和阴影
                         AnimatedSwitcher(

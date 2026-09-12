@@ -190,12 +190,37 @@ class _CharactersPanelState extends State<_CharactersPanel> {
           ...npcs,
         ];
 
+        Widget header(_CharacterViewportMode mode) => _CharacterArchiveHeader(
+              dense: mode == _CharacterViewportMode.landscape,
+              // 嵌入式人物页不是一个 Navigator 路由，不能 pop 整个游戏页。
+              // 返回时直接切回剧情主标签。
+              onBack: widget.embedded ? showNovelStoryPrimaryTab : null,
+              onClose: widget.embedded
+                  ? null
+                  : () => Navigator.of(context).pop(),
+            );
+
         if (characters.isEmpty) {
           return _CharacterArchiveBackground(
             controller: widget.controller,
             embedded: widget.embedded,
-            child: _ArchiveEmptyState(
-              text: loading ? '正在整理人物档案…' : '还没有人物资料',
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final mode = _characterViewportMode(
+                  constraints,
+                  widget.controller.desktopMode,
+                );
+                return Column(
+                  children: <Widget>[
+                    header(mode),
+                    Expanded(
+                      child: _ArchiveEmptyState(
+                        text: loading ? '正在整理人物档案…' : '还没有人物资料',
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           );
         }
@@ -211,13 +236,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
               normalCount: normalCount,
               dense: mode == _CharacterViewportMode.landscape,
               onChanged: _changeFilter,
-            );
-
-        Widget header(_CharacterViewportMode mode) => _CharacterArchiveHeader(
-              dense: mode == _CharacterViewportMode.landscape,
-              onClose: widget.embedded
-                  ? null
-                  : () => Navigator.of(context).pop(),
             );
 
         Widget shell(
@@ -273,9 +291,31 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                       const Expanded(
                         child: _ArchiveEmptyState(text: '当前筛选下暂无角色'),
                       ),
-                      filterBar(mode),
-                      if (mode != _CharacterViewportMode.landscape)
+                      if (mode == _CharacterViewportMode.landscape)
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              right: constraints.maxWidth < 780 ? 62 : 76,
+                            ),
+                            child: SizedBox(
+                              width: math.min(constraints.maxWidth * .58, 540.0),
+                              child: _CharacterFilterBar(
+                                filter: filter,
+                                total: characters.length,
+                                closeCount: closeCount,
+                                normalCount: normalCount,
+                                dense: true,
+                                alignEnd: true,
+                                onChanged: _changeFilter,
+                              ),
+                            ),
+                          ),
+                        )
+                      else ...<Widget>[
+                        filterBar(mode),
                         const SizedBox(height: 106),
+                      ],
                     ],
                   ),
                 );
@@ -296,17 +336,58 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                 widget.controller.desktopMode,
               );
 
+              void selectCharacter(NovelCharacter character) {
+                setState(() => selectedCharacterKey = _characterKey(character));
+              }
+
+              final rightFloatingRailReserve =
+                  constraints.maxWidth < 780 ? 62.0 : 76.0;
+              final landscapeFooterWidth = math.min(
+                constraints.maxWidth * .58,
+                540.0,
+              );
+
+              final landscapeFooter = Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  // 右侧仍给一级悬浮导航留出安全带；筛选和头像整体贴着它左边摆放。
+                  padding: EdgeInsets.only(right: rightFloatingRailReserve),
+                  child: SizedBox(
+                    width: landscapeFooterWidth,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        _CharacterFilterBar(
+                          filter: filter,
+                          total: characters.length,
+                          closeCount: closeCount,
+                          normalCount: normalCount,
+                          dense: true,
+                          alignEnd: true,
+                          onChanged: _changeFilter,
+                        ),
+                        _CharacterThumbStrip(
+                          characters: filtered,
+                          selectedKey: _characterKey(selected),
+                          onSelected: selectCharacter,
+                          dense: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+
               final stage = _CharacterShowcaseStage(
                 controller: widget.controller,
                 character: selected,
                 summary: _summaryOf(selected),
                 identity: _identityOf(selected),
                 mode: mode,
+                landscapeFooter: mode == _CharacterViewportMode.landscape
+                    ? landscapeFooter
+                    : null,
               );
-
-              void selectCharacter(NovelCharacter character) {
-                setState(() => selectedCharacterKey = _characterKey(character));
-              }
 
               switch (mode) {
                 case _CharacterViewportMode.landscape:
@@ -316,14 +397,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                       children: <Widget>[
                         header(mode),
                         Expanded(child: stage),
-                        // 修改点：直接将筛选栏放在头像列表上方
-                        filterBar(mode),
-                        _CharacterThumbStrip(
-                          characters: filtered,
-                          selectedKey: _characterKey(selected),
-                          onSelected: selectCharacter,
-                          dense: true, 
-                        ),
                       ],
                     ),
                   );
@@ -399,36 +472,49 @@ class _CharacterArchiveBackground extends StatelessWidget {
 
 class _CharacterArchiveHeader extends StatelessWidget {
   const _CharacterArchiveHeader({
+    this.onBack,
     this.onClose,
     this.dense = false,
   });
 
+  final VoidCallback? onBack;
   final VoidCallback? onClose;
   final bool dense;
 
   @override
   Widget build(BuildContext context) {
     if (dense) {
-      // 嵌入式横屏也保留一条轻量顶部留白，避免人物资料直接顶到屏幕边缘。
-      if (onClose == null) return const SizedBox(height: 7);
+      if (onBack == null && onClose == null) return const SizedBox(height: 7);
       return SizedBox(
         height: 34,
-        child: Align(
-          alignment: Alignment.centerRight,
-          child: _CharacterHeaderButton(
-            tooltip: '关闭',
-            icon: Icons.close_rounded,
-            onTap: onClose,
-            compact: true,
-          ),
+        child: Row(
+          children: <Widget>[
+            if (onBack != null)
+              _CharacterBackButton(
+                onTap: onBack!,
+                compact: true,
+              ),
+            const Spacer(),
+            if (onClose != null)
+              _CharacterHeaderButton(
+                tooltip: '关闭',
+                icon: Icons.close_rounded,
+                onTap: onClose,
+                compact: true,
+              ),
+          ],
         ),
       );
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 13, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 13, 12, 6),
       child: Row(
         children: <Widget>[
+          if (onBack != null) ...<Widget>[
+            _CharacterBackButton(onTap: onBack!),
+            const SizedBox(width: 8),
+          ],
           const Expanded(
             child: Text(
               '人物',
@@ -448,6 +534,44 @@ class _CharacterArchiveHeader extends StatelessWidget {
               onTap: onClose,
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _CharacterBackButton extends StatelessWidget {
+  const _CharacterBackButton({
+    required this.onTap,
+    this.compact = false,
+  });
+
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final dimension = compact ? 30.0 : 36.0;
+    return Tooltip(
+      message: '返回剧情',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(999),
+          splashColor: _archiveThemeGreen.withOpacity(.08),
+          highlightColor: _archiveThemeGreen.withOpacity(.035),
+          child: SizedBox(
+            width: dimension,
+            height: dimension,
+            child: Center(
+              child: Icon(
+                Icons.arrow_back_ios_new_rounded,
+                size: compact ? 14 : 16,
+                color: _archiveTextSoft,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -500,6 +624,7 @@ class _CharacterFilterBar extends StatelessWidget {
     required this.normalCount,
     required this.onChanged,
     this.dense = false,
+    this.alignEnd = false,
   });
 
   final int filter;
@@ -508,9 +633,16 @@ class _CharacterFilterBar extends StatelessWidget {
   final int normalCount;
   final ValueChanged<int> onChanged;
   final bool dense;
+  final bool alignEnd;
 
   @override
   Widget build(BuildContext context) {
+    final divider = Container(
+      width: 54,
+      height: .7,
+      color: _archiveLine,
+    );
+
     return Padding(
       padding: EdgeInsets.fromLTRB(
         dense ? 8 : 18,
@@ -520,11 +652,16 @@ class _CharacterFilterBar extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
+          if (alignEnd) ...<Widget>[
+            divider,
+            const Spacer(),
+          ],
           _CharacterFilterText(
             label: '全部',
             count: total,
             selected: filter == 0,
             onTap: () => onChanged(0),
+            dense: dense,
           ),
           SizedBox(width: dense ? 10 : 18),
           _CharacterFilterText(
@@ -532,6 +669,7 @@ class _CharacterFilterBar extends StatelessWidget {
             count: closeCount,
             selected: filter == 1,
             onTap: () => onChanged(1),
+            dense: dense,
           ),
           SizedBox(width: dense ? 10 : 18),
           _CharacterFilterText(
@@ -539,13 +677,12 @@ class _CharacterFilterBar extends StatelessWidget {
             count: normalCount,
             selected: filter == 2,
             onTap: () => onChanged(2),
+            dense: dense,
           ),
-          const Spacer(),
-          Container(
-            width: 54,
-            height: .7,
-            color: _archiveLine,
-          ),
+          if (!alignEnd) ...<Widget>[
+            const Spacer(),
+            divider,
+          ],
         ],
       ),
     );
@@ -610,6 +747,7 @@ class _CharacterShowcaseStage extends StatefulWidget {
     required this.character,
     required this.summary,
     required this.identity,
+    this.landscapeFooter,
     _CharacterViewportMode? mode,
     bool? compact,
   }) : mode = mode ??
@@ -621,6 +759,7 @@ class _CharacterShowcaseStage extends StatefulWidget {
   final NovelCharacter character;
   final String summary;
   final String identity;
+  final Widget? landscapeFooter;
   final _CharacterViewportMode mode;
 
   @override
@@ -704,7 +843,8 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              // 左侧：人物资料阅读区
+              // 左侧资料区独占整段高度。横屏底部筛选/头像不再压缩这里，
+              // 因此左下角也能完整留给人物资料信息。
               SizedBox(
                 width: infoWidth,
                 child: Padding(
@@ -722,41 +862,56 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                   ),
                 ),
               ),
-              // 中间：角色大立绘
               Expanded(
-                child: ClipRect(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 5, 6, 2),
-                    child: Transform.scale(
-                      scale: 1.04,
-                      alignment: Alignment.bottomCenter,
-                      child: portraitArtwork(),
+                child: Column(
+                  children: <Widget>[
+                    Expanded(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          // 中间：角色大立绘
+                          Expanded(
+                            child: ClipRect(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(6, 5, 6, 2),
+                                child: Transform.scale(
+                                  scale: 1.04,
+                                  alignment: Alignment.bottomCenter,
+                                  child: portraitArtwork(),
+                                ),
+                              ),
+                            ),
+                          ),
+                          // 右侧：立绘生成编辑器区
+                          SizedBox(
+                            // 把悬浮导航的安全带算进右栏总宽度，保证编辑器自身不会被挤窄。
+                            width: editorWidth + rightFloatingRailReserve,
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(
+                                12,
+                                9,
+                                rightFloatingRailReserve,
+                                9,
+                              ),
+                              child: _CharacterQuickPortraitEditor(
+                                controller: widget.controller,
+                                character: widget.character,
+                                compact: true,
+                                landscapeDense: false,
+                                fillHeight: true,
+                                onPortraitChanged: (portraitUrl) {
+                                  if (!mounted) return;
+                                  setState(() => _previewPortraitUrl = portraitUrl);
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-              ),
-              // 右侧：立绘生成编辑器区
-              SizedBox(
-                // 把悬浮导航的安全带算进右栏总宽度，保证编辑器自身不会被挤窄。
-                width: editorWidth + rightFloatingRailReserve,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    12,
-                    9,
-                    rightFloatingRailReserve,
-                    9,
-                  ),
-                  child: _CharacterQuickPortraitEditor(
-                    controller: widget.controller,
-                    character: widget.character,
-                    compact: true,
-                    landscapeDense: false, 
-                    fillHeight: true, // 核心修改：允许高度完全填充
-                    onPortraitChanged: (portraitUrl) {
-                      if (!mounted) return;
-                      setState(() => _previewPortraitUrl = portraitUrl);
-                    },
-                  ),
+                    if (widget.landscapeFooter != null)
+                      widget.landscapeFooter!,
+                  ],
                 ),
               ),
             ],
@@ -1788,8 +1943,16 @@ class _CharacterThumbStrip extends StatelessWidget {
       height: dense ? 60 : 106,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
+        // 横屏人物页右侧留白更多，头像从右向左铺开，把左侧空间留给资料阅读区。
+        // 竖屏仍保持原来的左起顺序，避免改变手机竖屏的使用习惯。
+        reverse: dense,
         physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(dense ? 2 : 14, dense ? 4 : 3, dense ? 8 : 18, 2),
+        padding: EdgeInsets.fromLTRB(
+          dense ? 8 : 14,
+          dense ? 4 : 3,
+          dense ? 10 : 18,
+          2,
+        ),
         itemCount: characters.length,
         separatorBuilder: (_, __) => SizedBox(width: dense ? 6 : 8),
         itemBuilder: (context, index) => buildThumb(characters[index]),

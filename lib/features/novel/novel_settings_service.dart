@@ -35,7 +35,11 @@ class NovelSettingsService extends ChangeNotifier {
 
   Future<void> load() async {
     fontKey = await _prefs.getString('novel-font') ?? 'font-hei';
-    fontSize = (await _prefs.getInt('novel-size') ?? 13).toDouble();
+    final savedFontSize = await _prefs.getInt('novel-size') ?? 13;
+    fontSize = savedFontSize.clamp(8, 20).toDouble();
+    if (savedFontSize != fontSize.round()) {
+      await _prefs.setInt('novel-size', fontSize.round());
+    }
     themeKey = await _prefs.getString('novel-theme') ?? 'theme-glass';
     // 旧版本的绿色阅读主题不再属于当前小说美术体系，自动迁移到深色玻璃主题。
     if (themeKey == 'theme-green') {
@@ -90,7 +94,7 @@ class NovelSettingsService extends ChangeNotifier {
   };
 
   Future<void> setFontSize(double value) async {
-    fontSize = value.clamp(12.0, 24.0).toDouble();
+    fontSize = value.clamp(8.0, 20.0).toDouble();
     await _prefs.setInt('novel-size', fontSize.round());
     notifyListeners();
   }

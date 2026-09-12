@@ -2317,15 +2317,14 @@ class _NovelGamePageState extends State<NovelGamePage>
                           ),
                         ),
 
-                  // 六个右侧一级导航位于亮色剧情图之上时，只做一层轻柔的环境压暗。
-                  // 核心区域保持足够对比度，但扩大羽化范围，让遮罩向左、向上自然消失，
-                  // 避免出现明显的黑块或边缘。
+                  // 右侧一级导航使用中等强度的窄暗带。
+                  // 保持遮罩范围收敛，但提高核心暗度，让图标和文字在亮背景上仍然清楚。
                   if (showBottomNav)
                     Positioned(
                       right: 0,
                       bottom: 0,
-                      width: desktopMode ? 220.0 : 170.0,
-                      height: desktopMode ? 600.0 : 460.0,
+                      width: desktopMode ? 126.0 : 104.0,
+                      height: desktopMode ? 520.0 : 432.0,
                       child: IgnorePointer(
                         child: ShaderMask(
                           blendMode: BlendMode.dstIn,
@@ -2339,7 +2338,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                               Color(0x66FFFFFF),
                               Color(0x00FFFFFF),
                             ],
-                            stops: <double>[0, .44, .66, .85, 1],
+                            stops: <double>[0, .52, .70, .88, 1],
                           ).createShader(bounds),
                           child: const DecoratedBox(
                             decoration: BoxDecoration(
@@ -2347,13 +2346,13 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 begin: Alignment.centerRight,
                                 end: Alignment.centerLeft,
                                 colors: <Color>[
-                                  Color(0x90000000),
-                                  Color(0x6E000000),
-                                  Color(0x46000000),
-                                  Color(0x20000000),
+                                  Color(0x78000000),
+                                  Color(0x56000000),
+                                  Color(0x30000000),
+                                  Color(0x12000000),
                                   Color(0x00000000),
                                 ],
-                                stops: <double>[0, .22, .48, .76, 1],
+                                stops: <double>[0, .22, .48, .74, 1],
                               ),
                             ),
                           ),
