@@ -63,6 +63,7 @@ class NovelEndpointConfig {
     this.revertTurn = '/novel/revert',
     this.developerContent = '/novel/developer/content',
     this.developerBattleOpponents = '/novel/developer/battle-opponents',
+    this.sceneLayoutPreview = '/novel/scene-layout/preview',
     this.webSocket = '/ws/private',
   });
 
@@ -106,6 +107,7 @@ class NovelEndpointConfig {
   final String revertTurn;
   final String developerContent;
   final String developerBattleOpponents;
+  final String sceneLayoutPreview;
   final String webSocket;
 
   String resolve(
@@ -128,8 +130,7 @@ class NovelEndpointConfig {
   }
 }
 
-class HttpNovelBackend
-    implements NovelBackend, NovelDeveloperContentBackend {
+class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
   HttpNovelBackend({
     required this.baseUrl,
     required this.tokenProvider,
@@ -1292,6 +1293,40 @@ class HttpNovelBackend
         'name': cleanName,
         'description': description.trim(),
       },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> previewSceneLayout({
+    required String name,
+    String? sessionId,
+    String description = '',
+  }) async {
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) {
+      throw const NovelBackendException('场景名称不能为空');
+    }
+
+    int? numericSessionId;
+    final cleanSessionId = sessionId?.trim() ?? '';
+    if (cleanSessionId.isNotEmpty) {
+      numericSessionId = int.tryParse(cleanSessionId);
+      if (numericSessionId == null) {
+        throw const NovelBackendException('当前会话ID无效，无法生成场景布局预览');
+      }
+    }
+
+    final payload = <String, dynamic>{
+      'name': cleanName,
+      if (numericSessionId != null) 'session_id': numericSessionId,
+      if (description.trim().isNotEmpty) 'description': description.trim(),
+    };
+
+    final response = await _send(
+      'POST',
+      endpoints.sceneLayoutPreview,
+      body: payload,
     );
     return asJsonMap(_dataOf(response));
   }

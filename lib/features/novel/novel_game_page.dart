@@ -699,6 +699,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         previewChoices: _previewChoices,
         previewSurroundings: _previewSurroundings,
         previewWorldMap: _previewWorldMap,
+        previewExploration: _previewExploration,
         previewBattle: _previewBattle,
         previewTimeSkip: _previewTimeSkip,
         previewEndingIntro: _previewEndingIntro,
@@ -1018,6 +1019,25 @@ class _NovelGamePageState extends State<NovelGamePage>
   Future<void> _previewWorldMap() async {
     if (!mounted) return;
     await showNovelSceneMapDeveloperPreview(context, controller);
+  }
+
+  Future<void> _previewExploration() async {
+    if (!mounted) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final initialSceneName = controller.locationTitle.trim().isNotEmpty
+        ? controller.locationTitle.trim()
+        : '斗破苍穹 乌坦城萧家坊市';
+
+    await Navigator.of(context, rootNavigator: true).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => NovelExplorationPage(
+          backend: controller.backend,
+          sessionId: controller.sessionId,
+          initialSceneName: initialSceneName,
+        ),
+      ),
+    );
   }
 
   List<YoranBattleSkill> _currentPreviewBattleSkills() {

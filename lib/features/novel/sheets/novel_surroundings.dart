@@ -142,8 +142,464 @@ String _surroundRewardAsset(String itemType) {
     'score' => 'assets/images/xing.webp',
     'gift' => 'assets/images/gift.webp',
     'lucky_card' => 'assets/images/lucky_card.webp',
+    'skill_book' => 'assets/images/skill_book.webp',
+    'blind_box' => 'assets/images/blind_box.webp',
     _ => '',
   };
+}
+
+class _SurroundNoBlur extends StatelessWidget {
+  const _SurroundNoBlur({
+    required ImageFilter filter,
+    required this.child,
+  });
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => child;
+}
+
+IconData? _surroundRewardFallbackIcon(String itemType) {
+  return switch (itemType.trim().toLowerCase()) {
+    'score' => Icons.auto_awesome_rounded,
+    'gift' => Icons.local_florist_rounded,
+    'lucky_card' => Icons.eco_rounded,
+    'skill_book' => Icons.menu_book_rounded,
+    'blind_box' => Icons.redeem_rounded,
+    _ => null,
+  };
+}
+
+String _surroundSpecialRewardType(JsonMap reward) => stringValue(
+      reward['type'] ?? reward['item_type'],
+    ).trim().toLowerCase();
+
+Future<void> _showSurroundBlindBoxScratch(
+  BuildContext context,
+  NovelGameController controller,
+  JsonMap blindBox,
+) async {
+  if (blindBox.isEmpty || _surroundSpecialRewardType(blindBox) != 'blind_box') {
+    return;
+  }
+  await showGeneralDialog<void>(
+    context: context,
+    useRootNavigator: true,
+    barrierDismissible: false,
+    barrierLabel: '福袋刮奖',
+    barrierColor: Colors.black.withOpacity(.52),
+    transitionDuration: const Duration(milliseconds: 160),
+    pageBuilder: (dialogContext, animation, secondaryAnimation) {
+      return _SurroundBlindBoxScratchDialog(
+        controller: controller,
+        blindBox: blindBox,
+      );
+    },
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: .97, end: 1).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _SurroundBlindBoxScratchDialog extends StatefulWidget {
+  const _SurroundBlindBoxScratchDialog({
+    required this.controller,
+    required this.blindBox,
+  });
+
+  final NovelGameController controller;
+  final JsonMap blindBox;
+
+  @override
+  State<_SurroundBlindBoxScratchDialog> createState() =>
+      _SurroundBlindBoxScratchDialogState();
+}
+
+class _SurroundBlindBoxScratchDialogState
+    extends State<_SurroundBlindBoxScratchDialog> {
+  static const int _scratchColumns = 10;
+  static const int _scratchRows = 4;
+  static const double _revealRatio = .40;
+
+  final Path _scratchPath = Path();
+  final Set<int> _scratchedCells = <int>{};
+  Offset? _lastScratchPoint;
+  int _scratchRevision = 0;
+  bool _revealed = false;
+
+  JsonMap get _reveal => asJsonMap(widget.blindBox['reveal']);
+
+  void _scratchAt(Offset point, Size size) {
+    if (_revealed || size.width <= 0 || size.height <= 0) return;
+    final dx = point.dx.clamp(0.0, size.width - .001).toDouble();
+    final dy = point.dy.clamp(0.0, size.height - .001).toDouble();
+    final current = Offset(dx, dy);
+    final last = _lastScratchPoint;
+    if (last != null && (current - last).distanceSquared < 36) return;
+    _lastScratchPoint = current;
+
+    final column = (dx / size.width * _scratchColumns).floor();
+    final row = (dy / size.height * _scratchRows).floor();
+    for (var rowOffset = -1; rowOffset <= 1; rowOffset++) {
+      for (var columnOffset = -1; columnOffset <= 1; columnOffset++) {
+        final nextRow = row + rowOffset;
+        final nextColumn = column + columnOffset;
+        if (nextRow < 0 ||
+            nextRow >= _scratchRows ||
+            nextColumn < 0 ||
+            nextColumn >= _scratchColumns) {
+          continue;
+        }
+        _scratchedCells.add(nextRow * _scratchColumns + nextColumn);
+      }
+    }
+
+    _scratchPath.addOval(Rect.fromCircle(center: current, radius: 24));
+    _scratchRevision += 1;
+    final ratio = _scratchedCells.length / (_scratchColumns * _scratchRows);
+    setState(() {
+      if (ratio >= _revealRatio) _revealed = true;
+    });
+  }
+
+  Widget _fallbackPortrait() {
+    return Center(
+      child: Icon(
+        Icons.auto_awesome_rounded,
+        size: 72,
+        color: Colors.white.withOpacity(.10),
+      ),
+    );
+  }
+
+  Widget _portraitImage(String source, {required Widget fallback}) {
+    final value = source.trim();
+    if (value.isEmpty) return fallback;
+    if (value.startsWith('assets/')) {
+      return Image.asset(
+        value,
+        fit: BoxFit.contain,
+        alignment: Alignment.bottomCenter,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    }
+    return Image.network(
+      value,
+      fit: BoxFit.contain,
+      alignment: Alignment.bottomCenter,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (_, __, ___) => fallback,
+    );
+  }
+
+  Widget _portrait() {
+    final protagonist = widget.controller.protagonist;
+    final portrait = protagonist?.portraitUrl.trim() ?? '';
+    final avatar = protagonist?.avatarUrl.trim() ?? '';
+    final fallback = _fallbackPortrait();
+    final avatarLayer = _portraitImage(avatar, fallback: fallback);
+    return _portraitImage(portrait, fallback: avatarLayer);
+  }
+
+  Widget _rewardIcon(String rewardType, String assetPath) {
+    if (assetPath.isNotEmpty) {
+      return Image.asset(
+        assetPath,
+        width: 48,
+        height: 48,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) => _rewardIcon(rewardType, ''),
+      );
+    }
+    final icon = switch (rewardType) {
+      'skill_book' => Icons.menu_book_rounded,
+      'gift' => Icons.local_florist_rounded,
+      'lucky_card' => Icons.eco_rounded,
+      'score' => Icons.auto_awesome_rounded,
+      _ => Icons.card_giftcard_rounded,
+    };
+    return Icon(icon, size: 42, color: Colors.white.withOpacity(.92));
+  }
+
+  Widget _rewardPanel() {
+    final reveal = _reveal;
+    final rewardType = _surroundSpecialRewardType(reveal);
+    final name = stringValue(reveal['name'], '神秘奖励');
+    final amount = intValue(reveal['score'] ?? reveal['quantity'], 1);
+    final asset = stringValue(
+      reveal['image_asset'],
+      _surroundRewardAsset(rewardType),
+    ).trim();
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(.18),
+        border: Border.all(color: Colors.white.withOpacity(.18), width: .8),
+      ),
+      child: Center(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            _rewardIcon(rewardType, asset),
+            const SizedBox(width: 12),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .2,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '×$amount',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.68),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final cardWidth = math.min(354.0, media.size.width - 32);
+    final cardHeight = math.min(238.0, media.size.height - 72);
+    return Material(
+      type: MaterialType.transparency,
+      child: SafeArea(
+        child: Center(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _revealed ? () => Navigator.of(context).pop() : null,
+            child: SizedBox(
+              width: cardWidth,
+              height: cardHeight,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0xCC0B0F12),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(.20),
+                    width: .8,
+                  ),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withOpacity(.34),
+                      blurRadius: 14,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: ClipRect(
+                  child: Stack(
+                    children: <Widget>[
+                      Positioned(
+                        right: -5,
+                        bottom: -8,
+                        width: cardWidth * .31,
+                        height: cardHeight * .78,
+                        child: IgnorePointer(
+                          child: Opacity(opacity: .44, child: _portrait()),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                                colors: <Color>[
+                                  Colors.black.withOpacity(.18),
+                                  Colors.black.withOpacity(.08),
+                                  Colors.transparent,
+                                ],
+                                stops: const <double>[0, .66, 1],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Row(
+                              children: <Widget>[
+                                SizedBox(
+                                  width: 28,
+                                  height: 28,
+                                  child: Image.asset(
+                                    'assets/images/blind_box.webp',
+                                    fit: BoxFit.contain,
+                                    filterQuality: FilterQuality.medium,
+                                    errorBuilder: (_, __, ___) => const Icon(
+                                      Icons.redeem_rounded,
+                                      color: Colors.white,
+                                      size: 21,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 9),
+                                const Text(
+                                  '福袋',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16.5,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: .3,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.only(right: cardWidth * .22),
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final scratchSize = constraints.biggest;
+                                    return Stack(
+                                      fit: StackFit.expand,
+                                      children: <Widget>[
+                                        _rewardPanel(),
+                                        if (!_revealed)
+                                          GestureDetector(
+                                            behavior: HitTestBehavior.opaque,
+                                            onPanStart: (details) => _scratchAt(
+                                              details.localPosition,
+                                              scratchSize,
+                                            ),
+                                            onPanUpdate: (details) => _scratchAt(
+                                              details.localPosition,
+                                              scratchSize,
+                                            ),
+                                            child: CustomPaint(
+                                              painter: _SurroundScratchMaskPainter(
+                                                scratchPath: _scratchPath,
+                                                revision: _scratchRevision,
+                                              ),
+                                              isComplex: false,
+                                              willChange: true,
+                                              child: Center(
+                                                child: IgnorePointer(
+                                                  child: Text(
+                                                    '刮开',
+                                                    style: TextStyle(
+                                                      color: Colors.white.withOpacity(.78),
+                                                      fontSize: 12.5,
+                                                      fontWeight: FontWeight.w700,
+                                                      letterSpacing: 1.2,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 9),
+                            Text(
+                              _revealed ? '轻触收下' : '刮开 40% 自动揭晓',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.42),
+                                fontSize: 9.8,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: .35,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SurroundScratchMaskPainter extends CustomPainter {
+  const _SurroundScratchMaskPainter({
+    required this.scratchPath,
+    required this.revision,
+  });
+
+  final Path scratchPath;
+  final int revision;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bounds = Offset.zero & size;
+    canvas.saveLayer(bounds, Paint());
+
+    canvas.drawRect(
+      bounds,
+      Paint()
+        ..color = const Color(0xFF74787B)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawRect(
+      bounds,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            Colors.white.withOpacity(.20),
+            Colors.white.withOpacity(.025),
+            Colors.white.withOpacity(.12),
+          ],
+        ).createShader(bounds),
+    );
+    canvas.drawPath(
+      scratchPath,
+      Paint()
+        ..blendMode = BlendMode.clear
+        ..style = PaintingStyle.fill,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _SurroundScratchMaskPainter oldDelegate) =>
+      oldDelegate.revision != revision;
 }
 
 class _SurroundNodeDef {
@@ -997,19 +1453,24 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           .map(asJsonMap)
           .where((item) => item.isNotEmpty)
           .toList(growable: false);
-      final bonusLabels = bonusRewards.map((bonus) {
+      final blindBoxes = bonusRewards
+          .where((bonus) => _surroundSpecialRewardType(bonus) == 'blind_box')
+          .toList(growable: false);
+      final displayBonuses = bonusRewards
+          .where((bonus) => _surroundSpecialRewardType(bonus) != 'blind_box')
+          .toList(growable: false);
+      final bonusLabels = displayBonuses.map((bonus) {
         final name = stringValue(bonus['name'], '额外奖励');
         final amount = intValue(bonus['score'] ?? bonus['quantity'], 1);
         return '$name ×$amount';
       }).toList(growable: false);
-      final bonusAssets = bonusRewards
+      final bonusAssets = displayBonuses
           .map((bonus) => stringValue(
                 bonus['image_asset'],
                 _surroundRewardAsset(stringValue(
                   bonus['type'] ?? bonus['item_type'],
                 )),
               ).trim())
-          .where((asset) => asset.isNotEmpty)
           .toList(growable: false);
       setState(() {
         _collecting.remove(id);
@@ -1022,7 +1483,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           text: (isScore || isRareShopItem
               ? '探索中发现$rewardName ×$rewardAmount。'
               : '「$rewardName」已放入背包。') +
-              (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。'),
+              (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。') +
+              (blindBoxes.isEmpty ? '' : ' 还发现了福袋！'),
           gain: <String>[id],
         );
       });
@@ -1032,9 +1494,17 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
             : '$rewardName + ${bonusLabels.join('、')}',
         assetPath: rewardAsset,
         assetPaths: bonusAssets,
+        rewardType: rewardType,
+        rewardTypes: displayBonuses
+            .map(_surroundSpecialRewardType)
+            .toList(growable: false),
         scoreAmount: isScore ? rewardAmount : 0,
         quantity: rewardAmount,
       );
+      for (final blindBox in blindBoxes) {
+        await _showSurroundBlindBoxScratch(context, widget.controller, blindBox);
+        if (!mounted) return;
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -1053,6 +1523,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
     String rewardName, {
     String assetPath = '',
     List<String> assetPaths = const <String>[],
+    String rewardType = '',
+    List<String> rewardTypes = const <String>[],
     int scoreAmount = 0,
     int quantity = 1,
   }) {
@@ -1072,6 +1544,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
           child: _SurroundPickupRewardToast(
             assetPath: assetPath,
             assetPaths: assetPaths,
+            rewardType: rewardType,
+            rewardTypes: rewardTypes,
             text: scoreAmount > 0
                 ? '获得星块 ×$scoreAmount'
                 : '获得$rewardName${quantity > 1 ? ' ×$quantity' : ''}',
@@ -1253,8 +1727,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+              child: _SurroundNoBlur(
+                filter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
                 child: Container(
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(.075),
@@ -1495,8 +1969,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
         return Material(
           color: widget.embedded ? Colors.transparent : Colors.black.withOpacity(0.34),
           child: ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: _SurroundNoBlur(
+              filter: ImageFilter.blur(sigmaX: 3, sigmaY: 3),
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -1535,8 +2009,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
                             height: windowHeight,
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(12),
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+                              child: _SurroundNoBlur(
+                                filter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
                                 child: Container(
                                   decoration: BoxDecoration(
                                     color: Colors.black.withOpacity(0.14),
@@ -1664,6 +2138,11 @@ class _FogTileDef {
     this.rare = false,
     this.nodeId = '',
     this.collectible = false,
+    this.rewardType = '',
+    this.rewardAsset = '',
+    this.previewRewardType = '',
+    this.previewRewardAmount = 1,
+    this.previewRewardAsset = '',
   });
 
   final _FogTileKind kind;
@@ -1674,6 +2153,15 @@ class _FogTileDef {
   final bool rare;
   final String nodeId;
   final bool collectible;
+
+  // 地面显示使用的奖励类型 / 图片。真实探索来自 reward_preview；开发者预览直接写入。
+  final String rewardType;
+  final String rewardAsset;
+
+  // 只用于 developerPreview 的本地奖励演示，不参与真实探索数据。
+  final String previewRewardType;
+  final int previewRewardAmount;
+  final String previewRewardAsset;
 }
 
 class _SurroundFogPrototype extends StatefulWidget {
@@ -1736,6 +2224,11 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   double _walkViewportWidth = 390;
   double _walkViewportHeight = 420;
   List<_WalkTerrainBlob> _walkTerrain = const <_WalkTerrainBlob>[];
+  Path? _walkTerrainLandPath;
+  List<Path> _walkTerrainContourPaths = const <Path>[];
+  final Map<int, Offset> _walkTilePointCache = <int, Offset>{};
+  Duration _walkLastDiscoveryCheck = Duration.zero;
+  bool _didPrecacheWalkAssets = false;
   int _walkTerrainSeed = -1;
   double _walkTerrainWidth = 0;
   double _walkTerrainHeight = 0;
@@ -1766,6 +2259,28 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       });
     } else {
       _startNewRun();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didPrecacheWalkAssets) return;
+    _didPrecacheWalkAssets = true;
+    for (final asset in const <String>[
+      'assets/images/xing.webp',
+      'assets/images/gift.webp',
+      'assets/images/lucky_card.webp',
+      'assets/images/skill_book.webp',
+      'assets/images/blind_box.webp',
+    ]) {
+      unawaited(
+        precacheImage(
+          AssetImage(asset),
+          context,
+          onError: (_, __) {},
+        ),
+      );
     }
   }
 
@@ -1873,6 +2388,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           : nodeType == 'container'
               ? _FogTileKind.scavenge
               : _FogTileKind.genericItem;
+      final rewardType = stringValue(reward['item_type']).trim().toLowerCase();
       result[index] = _FogTileDef(
         kind: kind,
         label: encounter.isNotEmpty
@@ -1883,6 +2399,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         rare: tier == 'elite' || nodeType == 'product',
         nodeId: id,
         collectible: boolValue(node['collectible']),
+        rewardType: rewardType,
+        rewardAsset: _surroundRewardAsset(rewardType),
       );
     }
     return result;
@@ -2156,6 +2674,89 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       rare: true,
     );
 
+    // 开发者专用：固定放入稀有探索奖励，方便不等随机概率就直接检查正式 UI。
+    final previewSkillBook = pick(
+      (index) => _gridDistance(index, _startIndex) <= 3,
+      avoid: <int>[branch, stone, vine],
+      minDistanceFromAvoid: 1,
+    );
+    final previewGift = pick(
+      (index) => _gridDistance(index, _startIndex) <= 3,
+      avoid: <int>[previewSkillBook],
+      minDistanceFromAvoid: 1,
+    );
+    final previewLuckyCard = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[previewGift],
+      minDistanceFromAvoid: 1,
+    );
+    final previewBlindBox = pick(
+      (index) => _gridDistance(index, _startIndex) >= 2,
+      avoid: <int>[previewSkillBook, previewLuckyCard],
+      minDistanceFromAvoid: 1,
+    );
+    final previewScore = pick(
+      (index) => _gridDistance(index, _startIndex) >= 1,
+      avoid: <int>[previewBlindBox],
+      minDistanceFromAvoid: 1,
+    );
+
+    result[previewSkillBook] = const _FogTileDef(
+      kind: _FogTileKind.genericItem,
+      label: '技能书',
+      text: '开发者奖励测试：技能书 ×1。',
+      rare: true,
+      rewardType: 'skill_book',
+      rewardAsset: 'assets/images/skill_book.webp',
+      previewRewardType: 'skill_book',
+      previewRewardAmount: 1,
+      previewRewardAsset: 'assets/images/skill_book.webp',
+    );
+    result[previewGift] = const _FogTileDef(
+      kind: _FogTileKind.genericItem,
+      label: '鲜花',
+      text: '开发者奖励测试：鲜花 ×1。',
+      rare: true,
+      rewardType: 'gift',
+      rewardAsset: 'assets/images/gift.webp',
+      previewRewardType: 'gift',
+      previewRewardAmount: 1,
+      previewRewardAsset: 'assets/images/gift.webp',
+    );
+    result[previewLuckyCard] = const _FogTileDef(
+      kind: _FogTileKind.genericItem,
+      label: '幸运草',
+      text: '开发者奖励测试：幸运草 ×1。',
+      rare: true,
+      rewardType: 'lucky_card',
+      rewardAsset: 'assets/images/lucky_card.webp',
+      previewRewardType: 'lucky_card',
+      previewRewardAmount: 1,
+      previewRewardAsset: 'assets/images/lucky_card.webp',
+    );
+    result[previewBlindBox] = const _FogTileDef(
+      kind: _FogTileKind.genericItem,
+      label: '福袋',
+      text: '开发者奖励测试：触发正式福袋刮刮卡。',
+      rare: true,
+      rewardType: 'blind_box',
+      rewardAsset: 'assets/images/blind_box.webp',
+      previewRewardType: 'blind_box',
+      previewRewardAmount: 1,
+      previewRewardAsset: 'assets/images/blind_box.webp',
+    );
+    result[previewScore] = const _FogTileDef(
+      kind: _FogTileKind.genericItem,
+      label: '星块 ×8',
+      text: '开发者奖励测试：星块 ×8。',
+      rare: true,
+      rewardType: 'score',
+      rewardAsset: 'assets/images/xing.webp',
+      previewRewardType: 'score',
+      previewRewardAmount: 8,
+      previewRewardAsset: 'assets/images/xing.webp',
+    );
+
     return result;
   }
 
@@ -2368,6 +2969,101 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     _interactWithRevealed(index);
   }
 
+  JsonMap _developerBlindBoxReveal(int tileIndex) {
+    // 每次重置开发者探索都会换 seed，因此福袋结果会在五档奖池间轮换，
+    // 方便连续测试星块 / 幸运草 / 鲜花 / 技能书 / 幸运草×2 的展示。
+    final pick = ((_seed ^ (tileIndex * 97)) & 0x7fffffff) % 5;
+    return switch (pick) {
+      0 => <String, dynamic>{
+          'name': '星块',
+          'item_type': 'score',
+          'type': 'score',
+          'score': 8,
+          'quantity': 8,
+          'image_asset': 'assets/images/xing.webp',
+        },
+      1 => <String, dynamic>{
+          'name': '幸运草',
+          'item_type': 'lucky_card',
+          'type': 'lucky_card',
+          'quantity': 1,
+          'image_asset': 'assets/images/lucky_card.webp',
+        },
+      2 => <String, dynamic>{
+          'name': '鲜花',
+          'item_type': 'gift',
+          'type': 'gift',
+          'quantity': 1,
+          'image_asset': 'assets/images/gift.webp',
+        },
+      3 => <String, dynamic>{
+          'name': '技能书',
+          'item_type': 'skill_book',
+          'type': 'skill_book',
+          'quantity': 1,
+          'image_asset': 'assets/images/skill_book.webp',
+        },
+      _ => <String, dynamic>{
+          'name': '幸运草',
+          'item_type': 'lucky_card',
+          'type': 'lucky_card',
+          'quantity': 2,
+          'image_asset': 'assets/images/lucky_card.webp',
+        },
+    };
+  }
+
+  Future<void> _previewDeveloperSpecialReward(
+    int index,
+    _FogTileDef tile,
+  ) async {
+    final rewardType = tile.previewRewardType.trim().toLowerCase();
+    if (rewardType.isEmpty || _searched.contains(index)) return;
+    final amount = math.max(1, tile.previewRewardAmount);
+
+    if (rewardType == 'blind_box') {
+      final reveal = _developerBlindBoxReveal(index);
+      setState(() {
+        _searched.add(index);
+        _message = '开发者预览：发现「福袋」！刮开约 40% 查看奖励。（不写入存档）';
+      });
+      _showRemoteRewardToast(
+        text: '发现 福袋 ×1',
+        rewardType: 'blind_box',
+      );
+      await _showSurroundBlindBoxScratch(
+        context,
+        widget.controller,
+        <String, dynamic>{
+          'name': '福袋',
+          'item_type': 'blind_box',
+          'type': 'blind_box',
+          'quantity': 1,
+          'reveal': reveal,
+        },
+      );
+      if (!mounted) return;
+      final revealName = stringValue(reveal['name'], '神秘奖励');
+      final revealAmount = intValue(reveal['score'] ?? reveal['quantity'], 1);
+      setState(() {
+        _message = '福袋刮奖预览：$revealName ×$revealAmount。（开发者预览，不写入存档）';
+      });
+      return;
+    }
+
+    setState(() {
+      _searched.add(index);
+      _message = '开发者奖励预览：${tile.label}${amount > 1 ? ' ×$amount' : ''}。（不写入存档）';
+    });
+    _showRemoteRewardToast(
+      text: rewardType == 'score'
+          ? '获得 星块 ×$amount'
+          : '获得 ${tile.label}${amount > 1 ? ' ×$amount' : ''}',
+      assetPath: tile.previewRewardAsset,
+      rewardType: rewardType,
+    );
+  }
+
   Future<void> _openDeveloperBattle(int index, _FogTileDef tile) async {
     final launcher = widget.previewBattleLauncher;
     if (launcher == null || _developerBattleOpening) {
@@ -2520,36 +3216,46 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           .map(asJsonMap)
           .where((item) => item.isNotEmpty)
           .toList(growable: false);
-      final bonusLabels = bonusRewards.map((bonus) {
+      final blindBoxes = bonusRewards
+          .where((bonus) => _surroundSpecialRewardType(bonus) == 'blind_box')
+          .toList(growable: false);
+      final displayBonuses = bonusRewards
+          .where((bonus) => _surroundSpecialRewardType(bonus) != 'blind_box')
+          .toList(growable: false);
+      final bonusLabels = displayBonuses.map((bonus) {
         final bonusName = stringValue(bonus['name'], '额外奖励');
         final bonusAmount = intValue(bonus['score'] ?? bonus['quantity'], 1);
         return '$bonusName ×$bonusAmount';
       }).toList(growable: false);
-      final bonusAssets = bonusRewards
+      final bonusAssets = displayBonuses
           .map((bonus) => stringValue(
                 bonus['image_asset'],
                 _surroundRewardAsset(stringValue(
                   bonus['type'] ?? bonus['item_type'],
                 )),
               ).trim())
-          .where((asset) => asset.isNotEmpty)
           .toList(growable: false);
-      final bonusScore = bonusRewards
-          .where((bonus) => stringValue(
-                bonus['type'] ?? bonus['item_type'],
-              ).trim().toLowerCase() == 'score')
+      final bonusScore = displayBonuses
+          .where((bonus) => _surroundSpecialRewardType(bonus) == 'score')
           .map((bonus) => intValue(bonus['new_score'], -1))
+          .fold<int>(-1, (current, value) => math.max(current, value).toInt());
+      final blindBoxScore = blindBoxes
+          .map((bonus) => asJsonMap(bonus['reveal']))
+          .where((reveal) => _surroundSpecialRewardType(reveal) == 'score')
+          .map((reveal) => intValue(reveal['new_score'], -1))
           .fold<int>(-1, (current, value) => math.max(current, value).toInt());
       setState(() {
         if (isScore && newScore >= 0) _scoreOverride = newScore;
         if (bonusScore >= 0) _scoreOverride = bonusScore;
+        if (blindBoxScore >= 0) _scoreOverride = blindBoxScore;
         if (!isScore && !isRareShopItem) {
           _addItem(name, amount: quantity, quality: quality);
         }
         _message = (isScore || isRareShopItem
             ? '探索中发现$name ×$quantity。'
             : '获得「$name${quantity > 1 ? ' ×$quantity' : ''}」· ${_qualityLabel(quality)}。') +
-            (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。');
+            (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。') +
+            (blindBoxes.isEmpty ? '' : ' 还发现了福袋！');
       });
       _showRemoteRewardToast(
         text: isScore
@@ -2558,7 +3264,15 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                 (bonusLabels.isEmpty ? '' : ' + ${bonusLabels.join('、')}'),
         assetPath: rewardAsset,
         assetPaths: bonusAssets,
+        rewardType: rewardType,
+        rewardTypes: displayBonuses
+            .map(_surroundSpecialRewardType)
+            .toList(growable: false),
       );
+      for (final blindBox in blindBoxes) {
+        await _showSurroundBlindBoxScratch(context, widget.controller, blindBox);
+        if (!mounted) return;
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -2573,6 +3287,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     required String text,
     String assetPath = '',
     List<String> assetPaths = const <String>[],
+    String rewardType = '',
+    List<String> rewardTypes = const <String>[],
   }) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
@@ -2590,6 +3306,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
             text: text,
             assetPath: assetPath,
             assetPaths: assetPaths,
+            rewardType: rewardType,
+            rewardTypes: rewardTypes,
             onCompleted: () {
               if (_rewardToastEntry != entry) return;
               entry.remove();
@@ -2654,6 +3372,10 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     final tile = _tileAt(index);
     if (_searched.contains(index)) {
       setState(() => _message = '「${tile.label}」已经处理过了。');
+      return;
+    }
+    if (tile.previewRewardType.isNotEmpty) {
+      unawaited(_previewDeveloperSpecialReward(index, tile));
       return;
     }
 
@@ -2925,6 +3647,23 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     _walkTerrainSeed = _seed;
     _walkTerrainWidth = worldWidth;
     _walkTerrainHeight = worldHeight;
+    _walkTilePointCache.clear();
+
+    Path? landPath;
+    final contourPaths = <Path>[];
+    for (final blob in blobs) {
+      final blobPath = _walkTerrainBlobPath(blob);
+      landPath = landPath == null
+          ? blobPath
+          : Path.combine(PathOperation.union, landPath, blobPath);
+      contourPaths
+        ..add(_walkTerrainBlobPath(blob, scale: .72))
+        ..add(_walkTerrainBlobPath(blob, scale: .48));
+    }
+    // 地形几何只在地图生成/尺寸变化时计算一次。移动镜头时 Painter 直接复用，
+    // 避免 Chrome 每帧反复 Path.combine + Random + 三角函数。
+    _walkTerrainLandPath = landPath;
+    _walkTerrainContourPaths = List<Path>.unmodifiable(contourPaths);
   }
 
   bool _walkPointInsideTerrain(Offset point, {double inset = .90}) {
@@ -2996,32 +3735,42 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   Offset _walkTilePoint(int index, double worldWidth, double worldHeight) {
     _ensureWalkTerrain(worldWidth, worldHeight);
     if (_walkTerrain.isEmpty) return Offset(worldWidth * .5, worldHeight * .5);
-    if (index == _startIndex) return _walkTerrain.first.center;
+    final cached = _walkTilePointCache[index];
+    if (cached != null) return cached;
 
-    final random = math.Random((_seed ^ ((index + 1) * 0x45D9F3B)) & 0x7fffffff);
-    final firstUsable = math.min(1, _walkTerrain.length - 1);
-    final usableCount = math.max(1, _walkTerrain.length - firstUsable);
-    final blobIndex = firstUsable + ((index * 5 + random.nextInt(usableCount)) % usableCount);
-    final blob = _walkTerrain[blobIndex];
-    final angle = random.nextDouble() * math.pi * 2;
-    final radial = math.sqrt(random.nextDouble()) * .56;
-    final localX = math.cos(angle) * blob.radiusX * radial;
-    final localY = math.sin(angle) * blob.radiusY * radial;
-    final cosA = math.cos(blob.rotation);
-    final sinA = math.sin(blob.rotation);
-    final rotated = Offset(
-      localX * cosA - localY * sinA,
-      localX * sinA + localY * cosA,
-    );
-    return blob.center + rotated;
+    final Offset result;
+    if (index == _startIndex) {
+      result = _walkTerrain.first.center;
+    } else {
+      final random =
+          math.Random((_seed ^ ((index + 1) * 0x45D9F3B)) & 0x7fffffff);
+      final firstUsable = math.min(1, _walkTerrain.length - 1);
+      final usableCount = math.max(1, _walkTerrain.length - firstUsable);
+      final blobIndex =
+          firstUsable + ((index * 5 + random.nextInt(usableCount)) % usableCount);
+      final blob = _walkTerrain[blobIndex];
+      final angle = random.nextDouble() * math.pi * 2;
+      final radial = math.sqrt(random.nextDouble()) * .56;
+      final localX = math.cos(angle) * blob.radiusX * radial;
+      final localY = math.sin(angle) * blob.radiusY * radial;
+      final cosA = math.cos(blob.rotation);
+      final sinA = math.sin(blob.rotation);
+      final rotated = Offset(
+        localX * cosA - localY * sinA,
+        localX * sinA + localY * cosA,
+      );
+      result = blob.center + rotated;
+    }
+    _walkTilePointCache[index] = result;
+    return result;
   }
 
-  double _walkDistanceToIndex(int index) {
+  double _walkDistanceSquaredToIndex(int index) {
     final point = _walkTilePoint(index, _walkWorldWidth, _walkWorldHeight);
     final playerY = _walkWorldHeight * _playerDepth;
     final dx = point.dx - _playerWorldX;
     final dy = (point.dy - playerY) * 1.18;
-    return math.sqrt(dx * dx + dy * dy);
+    return dx * dx + dy * dy;
   }
 
   // 黑暗探索：只给角色脚边一小圈可辨认空间，避免远处背景提前看清。
@@ -3153,12 +3902,18 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       _playerFacingLeft = facingLeft;
       _playerMoving = moving;
     });
-    _discoverByWalking();
+    // 角色移动仍按动画帧更新，但附近目标发现不需要 60fps 扫描 36 个格子。
+    // 80ms 一次在视觉上仍然即时，同时显著减少距离计算和 rebuild 压力。
+    if (_walkLastDiscoveryCheck == Duration.zero ||
+        elapsed - _walkLastDiscoveryCheck >= const Duration(milliseconds: 80)) {
+      _walkLastDiscoveryCheck = elapsed;
+      _discoverByWalking();
+    }
   }
 
   void _discoverByWalking() {
     final newlySensed = <int>[];
-    for (var index = 0; index < _rows * _columns; index++) {
+    for (final index in _tiles.keys) {
       if (index == _startIndex ||
           _searched.contains(index) ||
           _walkSensed.contains(index)) {
@@ -3166,7 +3921,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       }
       final tile = _tileAt(index);
       if (tile.kind == _FogTileKind.empty) continue;
-      if (_walkDistanceToIndex(index) <= _walkSenseRadius) {
+      if (_walkDistanceSquaredToIndex(index) <= _walkSenseRadius * _walkSenseRadius) {
         newlySensed.add(index);
       }
     }
@@ -3180,6 +3935,19 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           ? '发现「${first.label}」。'
           : '前方出现了新的探索目标。';
     });
+  }
+
+  String _walkTileRewardAsset(_FogTileDef tile) {
+    final explicit = tile.rewardAsset.trim().isNotEmpty
+        ? tile.rewardAsset.trim()
+        : tile.previewRewardAsset.trim();
+    if (explicit.isNotEmpty) return explicit;
+
+    final rewardType = tile.rewardType.trim().isNotEmpty
+        ? tile.rewardType.trim().toLowerCase()
+        : tile.previewRewardType.trim().toLowerCase();
+    if (rewardType.isEmpty) return '';
+    return _surroundRewardAsset(rewardType);
   }
 
   IconData _walkTileIcon(_FogTileKind kind) {
@@ -3258,18 +4026,21 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     final known = _revealed.contains(index) || _walkSensed.contains(index);
     if (!known) return const SizedBox.shrink();
 
-    final distance = _walkDistanceToIndex(index);
+    final distanceSquared = _walkDistanceSquaredToIndex(index);
     // 即使以前发现过，走远后也立刻重新藏进黑暗里；必须再次靠近才显示。
-    if (distance > _walkObjectRevealRadius) return const SizedBox.shrink();
+    if (distanceSquared > _walkObjectRevealRadius * _walkObjectRevealRadius) {
+      return const SizedBox.shrink();
+    }
 
     final point = _walkTilePoint(index, _walkWorldWidth, _walkWorldHeight);
-    final near = distance <= _walkInteractRadius;
+    final near = distanceSquared <= _walkInteractRadius * _walkInteractRadius;
     final width = (_walkViewportWidth * .24).clamp(72.0, 112.0).toDouble();
     final height = (_walkViewportHeight * .115).clamp(58.0, 86.0).toDouble();
     final opacity = near ? 1.0 : .52;
     final enemy = tile.kind == _FogTileKind.normalEnemy ||
         tile.kind == _FogTileKind.eliteEnemy;
     final iconSize = near ? (enemy ? 40.0 : 36.0) : (enemy ? 34.0 : 30.0);
+    final rewardAsset = enemy ? '' : _walkTileRewardAsset(tile);
 
     return Positioned(
       left: point.dx - cameraX - width / 2,
@@ -3302,16 +4073,30 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     boxShadow: <BoxShadow>[
                       BoxShadow(
                         color: Colors.black.withOpacity(.52),
-                        blurRadius: 12,
-                        spreadRadius: 1,
+                        blurRadius: 6,
+                        spreadRadius: 0,
                       ),
                     ],
                   ),
-                  child: Icon(
-                    _walkTileIcon(tile.kind),
-                    size: near ? 20 : 17,
-                    color: _walkTileColor(tile),
-                  ),
+                  child: rewardAsset.isNotEmpty
+                      ? Padding(
+                          padding: EdgeInsets.all(near ? 4.5 : 4),
+                          child: Image.asset(
+                            rewardAsset,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (_, __, ___) => Icon(
+                              _walkTileIcon(tile.kind),
+                              size: near ? 20 : 17,
+                              color: _walkTileColor(tile),
+                            ),
+                          ),
+                        )
+                      : Icon(
+                          _walkTileIcon(tile.kind),
+                          size: near ? 20 : 17,
+                          color: _walkTileColor(tile),
+                        ),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -3364,6 +4149,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     required BoxFit fit,
     Alignment alignment = Alignment.center,
     Widget? fallback,
+    FilterQuality filterQuality = FilterQuality.high,
   }) {
     final value = source.trim();
     if (value.isEmpty) return fallback ?? const SizedBox.shrink();
@@ -3372,7 +4158,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         value,
         fit: fit,
         alignment: alignment,
-        filterQuality: FilterQuality.high,
+        filterQuality: filterQuality,
         errorBuilder: (_, __, ___) => fallback ?? const SizedBox.shrink(),
       );
     }
@@ -3380,7 +4166,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       value,
       fit: fit,
       alignment: alignment,
-      filterQuality: FilterQuality.high,
+      filterQuality: filterQuality,
       errorBuilder: (_, __, ___) => fallback ?? const SizedBox.shrink(),
     );
   }
@@ -3583,45 +4369,50 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                   top: -cameraY,
                   width: worldWidth,
                   height: worldHeight,
-                  child: _previewBackgroundBytes != null
-                      ? Image.memory(
-                          _previewBackgroundBytes!,
-                          fit: BoxFit.cover,
-                          alignment: Alignment.center,
-                          filterQuality: FilterQuality.high,
-                        )
-                      : widget.controller.world.backgroundUrl.trim().isNotEmpty
-                          ? _walkImageSource(
-                              widget.controller.world.backgroundUrl.trim(),
-                              fit: BoxFit.cover,
-                              alignment: Alignment.center,
-                              fallback: const SizedBox.expand(),
-                            )
-                          : const SizedBox.expand(),
+                  child: RepaintBoundary(
+                    child: _previewBackgroundBytes != null
+                        ? Image.memory(
+                            _previewBackgroundBytes!,
+                            fit: BoxFit.cover,
+                            alignment: Alignment.center,
+                            filterQuality: FilterQuality.medium,
+                          )
+                        : widget.controller.world.backgroundUrl.trim().isNotEmpty
+                            ? _walkImageSource(
+                                widget.controller.world.backgroundUrl.trim(),
+                                fit: BoxFit.cover,
+                                alignment: Alignment.center,
+                                filterQuality: FilterQuality.medium,
+                                fallback: const SizedBox.expand(),
+                              )
+                            : const SizedBox.expand(),
+                  ),
                 ),
-                // 只做雾化和轻压暗，不制造明显的白色“光圈”。
+                // 全屏 BackdropFilter 在 Web/Chrome 上代价很高，且镜头移动时会持续重算。
+                // 这里改为纯暗色压层；迷雾和地形黑幕仍保留原来的氛围与视野效果。
                 Positioned.fill(
                   child: IgnorePointer(
-                    child: ClipRect(
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(widget.storyStage ? .30 : .26),
-                          ),
-                        ),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(widget.storyStage ? .32 : .28),
                       ),
                     ),
                   ),
                 ),
-                // 随机场景地形：不是方形地图，而是连通的自然板块；板块之外压入黑暗。
-                Positioned.fill(
+                // 地形是世界坐标中的静态缓存层；镜头移动只改变 Positioned 偏移，
+                // RepaintBoundary 内的地图 Path 不需要跟着角色每帧重新绘制。
+                Positioned(
+                  left: -cameraX,
+                  top: -cameraY,
+                  width: worldWidth,
+                  height: worldHeight,
                   child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: _WalkTerrainPainter(
-                        terrain: _walkTerrain,
-                        cameraX: cameraX,
-                        cameraY: cameraY,
+                    child: RepaintBoundary(
+                      child: CustomPaint(
+                        painter: _WalkTerrainPainter(
+                          landPath: _walkTerrainLandPath,
+                          contourPaths: _walkTerrainContourPaths,
+                        ),
                       ),
                     ),
                   ),
@@ -3637,8 +4428,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     ),
                   ),
                 ),
-                ...List<Widget>.generate(
-                  _rows * _columns,
+                ..._tiles.keys.map(
                   (index) => _buildWalkObject(index, cameraX, cameraY),
                 ),
                 _buildWalkPlayer(cameraX, cameraY),
@@ -3704,41 +4494,35 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     );
   }
 
-  Widget _walkToolButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onTap,
-  }) {
+  Widget _backButton() {
     return Tooltip(
-      message: tooltip,
+      message: '返回',
       child: Material(
-        color: Colors.black.withOpacity(.40),
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.black.withOpacity(.42),
+        shape: const CircleBorder(),
         child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(18),
-          child: SizedBox(
-            width: 34,
-            height: 34,
-            child: Icon(icon, size: 16, color: Colors.white.withOpacity(.78)),
+          onTap: () {
+            final onClose = widget.onClose;
+            if (onClose != null) {
+              onClose();
+            } else {
+              Navigator.of(context).maybePop();
+            }
+          },
+          customBorder: const CircleBorder(),
+          child: const SizedBox(
+            width: 50,
+            height: 50,
+            child: Center(
+              child: Icon(
+                Icons.chevron_left_rounded,
+                size: 38,
+                color: Colors.white,
+              ),
+            ),
           ),
         ),
       ),
-    );
-  }
-
-  Widget _backButton() {
-    return _walkToolButton(
-      icon: Icons.arrow_back_rounded,
-      tooltip: '返回',
-      onTap: () {
-        final onClose = widget.onClose;
-        if (onClose != null) {
-          onClose();
-        } else {
-          Navigator.of(context).maybePop();
-        }
-      },
     );
   }
 
@@ -4157,36 +4941,6 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     top: 52,
                     child: _floatingCraftButton(),
                   ),
-                if (widget.developerPreview)
-                  Positioned(
-                    left: 50,
-                    top: 10,
-                    child: Row(
-                      children: <Widget>[
-                        _walkToolButton(
-                          icon: Icons.image_outlined,
-                          tooltip: '选择场景背景图',
-                          onTap: () => unawaited(
-                            _pickWalkPreviewImage(portrait: false),
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        _walkToolButton(
-                          icon: Icons.person_outline_rounded,
-                          tooltip: '选择主角立绘',
-                          onTap: () => unawaited(
-                            _pickWalkPreviewImage(portrait: true),
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        _walkToolButton(
-                          icon: Icons.refresh_rounded,
-                          tooltip: '生成新地图',
-                          onTap: _reset,
-                        ),
-                      ],
-                    ),
-                  ),
               ],
             ),
           ),
@@ -4254,76 +5008,71 @@ Path _walkTerrainBlobPath(_WalkTerrainBlob blob, {double scale = 1.0}) {
 
 class _WalkTerrainPainter extends CustomPainter {
   const _WalkTerrainPainter({
-    required this.terrain,
-    required this.cameraX,
-    required this.cameraY,
+    required this.landPath,
+    required this.contourPaths,
   });
 
-  final List<_WalkTerrainBlob> terrain;
-  final double cameraX;
-  final double cameraY;
+  final Path? landPath;
+  final List<Path> contourPaths;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.isEmpty || terrain.isEmpty) return;
+    final land = landPath;
+    if (size.isEmpty || land == null) return;
 
-    Path? land;
-    for (final blob in terrain) {
-      final path = _walkTerrainBlobPath(blob);
-      land = land == null ? path : Path.combine(PathOperation.union, land, path);
-    }
-    if (land == null) return;
-
-    canvas.save();
-    canvas.translate(-cameraX, -cameraY);
-
-    final viewRect = Rect.fromLTWH(cameraX, cameraY, size.width, size.height).inflate(3);
     final outside = Path()
       ..fillType = PathFillType.evenOdd
-      ..addRect(viewRect)
+      ..addRect(Offset.zero & size)
       ..addPath(land, Offset.zero);
     canvas.drawPath(
       outside,
       Paint()
-        ..color = Colors.black.withOpacity(.82)
+        ..color = Colors.black.withOpacity(.84)
         ..style = PaintingStyle.fill,
     );
 
     canvas.drawPath(
       land,
       Paint()
-        ..color = Colors.white.withOpacity(.025)
+        ..color = Colors.white.withOpacity(.026)
         ..style = PaintingStyle.fill,
     );
+
+    // 双层地图边界：外层暗线负责和背景分层，内层细亮线负责可读性。
+    // 不使用发光/blur，避免“科幻 HUD”感，同时保持 Web 端轻量。
     canvas.drawPath(
       land,
       Paint()
-        ..color = Colors.white.withOpacity(.075)
+        ..color = Colors.black.withOpacity(.58)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0,
+        ..strokeWidth = 3.2
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawPath(
+      land,
+      Paint()
+        ..color = Colors.white.withOpacity(.20)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.25
+        ..strokeJoin = StrokeJoin.round,
     );
 
-    // 类似真实地形图的弱等高线，只提供板块层次，不抢物品和人物。
-    for (final blob in terrain) {
-      for (final scale in <double>[.72, .48]) {
-        canvas.drawPath(
-          _walkTerrainBlobPath(blob, scale: scale),
-          Paint()
-            ..color = Colors.white.withOpacity(scale > .6 ? .032 : .022)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = .7,
-        );
-      }
+    // 等高线也已经在地图生成时预计算；这里只绘制缓存 Path。
+    for (var i = 0; i < contourPaths.length; i++) {
+      canvas.drawPath(
+        contourPaths[i],
+        Paint()
+          ..color = Colors.white.withOpacity(i.isEven ? .034 : .022)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = .7,
+      );
     }
-
-    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _WalkTerrainPainter oldDelegate) {
-    return oldDelegate.terrain != terrain ||
-        oldDelegate.cameraX != cameraX ||
-        oldDelegate.cameraY != cameraY;
+    return !identical(oldDelegate.landPath, landPath) ||
+        !identical(oldDelegate.contourPaths, contourPaths);
   }
 }
 
@@ -4341,13 +5090,12 @@ class _WalkDarknessPainter extends CustomPainter {
     if (size.isEmpty || visionRadius <= 0) return;
     final shader = const RadialGradient(
       colors: <Color>[
-        // 人物身边也保留明显黑幕，只让近处轮廓勉强可辨。
-        Color(0x52000000),
-        Color(0x8C000000),
-        Color(0xE6000000),
+        // 三段渐变足够保持黑暗探索氛围，也减少移动时的 shader 插值负担。
+        Color(0x56000000),
+        Color(0xD8000000),
         Color(0xFA000000),
       ],
-      stops: <double>[0, .30, .70, 1],
+      stops: <double>[0, .66, 1],
     ).createShader(
       Rect.fromCircle(center: player, radius: visionRadius),
     );
@@ -4748,12 +5496,16 @@ class _SurroundPickupRewardToast extends StatefulWidget {
     required this.onCompleted,
     this.assetPath = '',
     this.assetPaths = const <String>[],
+    this.rewardType = '',
+    this.rewardTypes = const <String>[],
   });
 
   final String text;
   final VoidCallback onCompleted;
   final String assetPath;
   final List<String> assetPaths;
+  final String rewardType;
+  final List<String> rewardTypes;
 
   @override
   State<_SurroundPickupRewardToast> createState() =>
@@ -4831,8 +5583,36 @@ class _SurroundPickupRewardToastState extends State<_SurroundPickupRewardToast>
     super.dispose();
   }
 
+  Widget _rewardVisual(String assetPath, String rewardType) {
+    final type = rewardType.trim().toLowerCase();
+    final fallbackIcon = _surroundRewardFallbackIcon(type);
+    final fallback = fallbackIcon == null
+        ? const SizedBox.shrink()
+        : Icon(
+            fallbackIcon,
+            size: 34,
+            color: Colors.white.withOpacity(.94),
+          );
+    if (assetPath.trim().isEmpty) return fallback;
+    return Image.asset(
+      assetPath.trim(),
+      width: 38,
+      height: 38,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) => fallback,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final primaryType = widget.rewardType.trim().toLowerCase();
+    final visualCount = math.max(widget.assetPaths.length, widget.rewardTypes.length);
+    final hasVisuals = widget.assetPath.isNotEmpty ||
+        widget.assetPaths.any((path) => path.trim().isNotEmpty) ||
+        _surroundRewardFallbackIcon(primaryType) != null ||
+        widget.rewardTypes.any(
+          (type) => _surroundRewardFallbackIcon(type) != null,
+        );
     return IgnorePointer(
       child: Material(
         type: MaterialType.transparency,
@@ -4854,22 +5634,25 @@ class _SurroundPickupRewardToastState extends State<_SurroundPickupRewardToast>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                if (widget.assetPath.isNotEmpty || widget.assetPaths.isNotEmpty) ...<Widget>[
+                if (hasVisuals) ...<Widget>[
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      for (final asset in <String>{
-                        if (widget.assetPath.isNotEmpty) widget.assetPath,
-                        ...widget.assetPaths.where((path) => path.isNotEmpty),
-                      })
+                      if (widget.assetPath.isNotEmpty || primaryType.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(right: 3),
-                          child: Image.asset(
-                            asset,
-                            width: 38,
-                            height: 38,
-                            fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                          child: _rewardVisual(widget.assetPath, primaryType),
+                        ),
+                      for (var index = 0; index < visualCount; index++)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 3),
+                          child: _rewardVisual(
+                            index < widget.assetPaths.length
+                                ? widget.assetPaths[index]
+                                : '',
+                            index < widget.rewardTypes.length
+                                ? widget.rewardTypes[index]
+                                : '',
                           ),
                         ),
                     ],
@@ -4955,8 +5738,8 @@ class _SurroundingsHeader extends StatelessWidget {
                 message: '关闭',
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(21),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                  child: _SurroundNoBlur(
+                    filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
                     child: Container(
                       color: Colors.black.withOpacity(0.15),
                       child: IconButton(
@@ -5018,8 +5801,8 @@ class _SurroundTutorialStep extends StatelessWidget {
 
     return ClipRRect(
       borderRadius: BorderRadius.zero,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+      child: _SurroundNoBlur(
+        filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
         child: Container(
           width: width,
           height: 30,

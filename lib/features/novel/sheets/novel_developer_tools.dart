@@ -31,6 +31,7 @@ class NovelDeveloperPreviewActions {
     required this.previewChoices,
     required this.previewSurroundings,
     required this.previewWorldMap,
+    required this.previewExploration,
     required this.previewBattle,
     required this.previewTimeSkip,
     required this.previewEndingIntro,
@@ -75,6 +76,7 @@ class NovelDeveloperPreviewActions {
   final Future<void> Function() previewChoices;
   final Future<void> Function() previewSurroundings;
   final Future<void> Function() previewWorldMap;
+  final Future<void> Function() previewExploration;
   final Future<void> Function() previewBattle;
   final Future<void> Function() previewTimeSkip;
   final Future<void> Function() previewEndingIntro;
@@ -1018,7 +1020,7 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(
                   title: '探索周围',
-                  subtitle: '打开本地演示场景，点击绿色成品测试拾取与放入背包提示',
+                  subtitle: '本地演示：普通物资 + 星块 / 幸运草 / 鲜花 / 技能书 / 福袋刮奖；不写入存档',
                   onTap: () => _openPreview(actions.previewSurroundings),
                 ),
                 _DeveloperPreviewDivider(),
@@ -1026,6 +1028,12 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                   title: '世界地图',
                   subtitle: '四个场景填充斜角地图格；白线分隔并随机分布',
                   onTap: () => _openPreview(actions.previewWorldMap),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '自由探索',
+                  subtitle: '整屏背景 + 隐形移动格；测试 NPC、事件、敌人、出口与碰撞编辑',
+                  onTap: () => _openPreview(actions.previewExploration),
                 ),
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(
@@ -1324,3 +1332,7 @@ class _DeveloperPreviewRow extends StatelessWidget {
     );
   }
 }
+
+// ============================================================================
+// 探索页面已拆分至 novel_exploration_page.dart。
+// Developer 仅触发 previewExploration；正式页面由上层注入 backend/sessionId 后打开。

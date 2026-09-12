@@ -14,6 +14,7 @@ import 'novel_game_controller.dart';
 import 'novel_display_mode.dart';
 import 'novel_models.dart';
 import 'novel_widgets.dart';
+import '../../vfx/procedural_skill_vfx.dart';
 
 // ============================================================================
 // Novel Sheets 总入口
@@ -29,6 +30,7 @@ import 'novel_widgets.dart';
 part 'sheets/novel_sheet_common.dart';
 part 'sheets/novel_choices.dart';
 part 'sheets/novel_scene_map.dart';
+part 'sheets/novel_exploration_page.dart';
 part 'sheets/novel_inventory.dart';
 part 'sheets/novel_store.dart';
 part 'sheets/novel_character.dart';

@@ -554,13 +554,29 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
 
       final clean = name.trim();
       if (clean.isEmpty) continue;
-      await _finalizeCompanionSkillWithPreview(
+      if (_companionSkillNameExists(
+        widget.controller,
+        character.id,
+        clean,
+        excludeSkillId: stringValue(skill['id']),
+      )) {
+        draftName = '';
+        _message('技能名称已存在，请重新填写');
+        continue;
+      }
+      final finalizeResult = await _finalizeCompanionSkillWithPreview(
         context: context,
         controller: widget.controller,
         character: character,
         skill: skill,
         name: clean,
       );
+      if (!mounted) return;
+      if (finalizeResult == _CompanionSkillFinalizeResult.renameRequired) {
+        draftName = '';
+        _message('技能名称已存在，请重新填写');
+        continue;
+      }
       return;
     }
   }
@@ -939,49 +955,48 @@ class _CharacterHeaderNavAction extends StatelessWidget {
         : _characterTextMuted.withOpacity(.88);
     final color = selected ? selectedColor : idleColor;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          height: dense ? 34 : 42,
-          child: Stack(
-            alignment: Alignment.center,
-            children: <Widget>[
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (icon != null) ...<Widget>[
-                      Icon(icon, size: dense ? 12 : 14, color: color),
-                      SizedBox(width: dense ? 4 : 5),
-                    ],
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: color,
-                        fontSize: dense ? 11 : 12.5,
-                        fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
-                        letterSpacing: selected ? 1.25 : 1.0,
-                        shadows: _characterTextOutlineShadows,
-                      ),
-                    ),
+    // 顶部导航不使用 InkWell，避免手机按下时出现方形白色遮罩。
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        height: dense ? 34 : 42,
+        child: Stack(
+          alignment: Alignment.center,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  if (icon != null) ...<Widget>[
+                    Icon(icon, size: dense ? 12 : 14, color: color),
+                    SizedBox(width: dense ? 4 : 5),
                   ],
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: dense ? 11 : 12.5,
+                      fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                      letterSpacing: selected ? 1.25 : 1.0,
+                      shadows: _characterTextOutlineShadows,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (selected)
+              Positioned(
+                left: 4,
+                right: 4,
+                bottom: 2,
+                child: Container(
+                  height: 2,
+                  color: selectedColor.withOpacity(.92),
                 ),
               ),
-              if (selected)
-                Positioned(
-                  left: 4,
-                  right: 4,
-                  bottom: 2,
-                  child: Container(
-                    height: 2,
-                    color: selectedColor.withOpacity(.92),
-                  ),
-                ),
-            ],
-          ),
+          ],
         ),
       ),
     );
@@ -1657,58 +1672,48 @@ class _CharacterPortraitRail extends StatelessWidget {
           width: 46,
           height: 46,
           child: Center(
-            child: Material(
-              color: Colors.transparent,
-              shape: const CircleBorder(),
-              child: InkWell(
-                onTap: () => onSelect(character),
-                customBorder: const CircleBorder(),
-                child: AnimatedScale(
-                  scale: active ? 1.08 : 1,
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
+            // 纯圆形头像交互：不使用 Material/InkWell，不绘制背景或方形按压层。
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => onSelect(character),
+              child: AnimatedScale(
+                scale: active ? 1.08 : 1,
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                child: SizedBox(
+                  width: 36,
+                  height: 36,
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: <Widget>[
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        width: 36,
-                        height: 36,
-                        padding: EdgeInsets.all(active || cooperating ? 2 : 1),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: active
-                                ? _characterGold
-                                : cooperating
-                                    ? _characterBlueBright
-                                    : Colors.white.withOpacity(.12),
+                      Positioned.fill(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          padding: EdgeInsets.all(active || cooperating ? 2 : 0),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            // 只保留圆形状态边框；未选中时完全没有底色/遮罩/阴影。
+                            border: Border.all(
+                              color: active
+                                  ? _characterGold
+                                  : cooperating
+                                      ? _characterBlueBright
+                                      : Colors.transparent,
+                            ),
                           ),
-                          boxShadow: active || cooperating
-                              ? <BoxShadow>[
-                                  BoxShadow(
-                                    color: (cooperating
-                                            ? _characterBlueBright
-                                            : _characterBlue)
-                                        .withOpacity(.38),
-                                    blurRadius: cooperating ? 13 : 10,
-                                    spreadRadius: cooperating ? 1 : 0,
-                                  ),
-                                ]
-                              : const <BoxShadow>[],
-                        ),
-                        child: ClipOval(
-                          child: NovelArtwork(
-                            url: CdnUtil.resize(imageUrl, width: 140),
-                            assetCandidates: <String>[
-                              fallbackAsset,
-                              'assets/images/portrait_female.webp',
-                              'assets/images/portrait_male.png',
-                            ],
-                            fit: BoxFit.cover,
-                            alignment: Alignment.topCenter,
-                            fallbackText: '',
-                            fallbackIcon: Icons.person_outline_rounded,
+                          child: ClipOval(
+                            child: NovelArtwork(
+                              url: CdnUtil.resize(imageUrl, width: 140),
+                              assetCandidates: <String>[
+                                fallbackAsset,
+                                'assets/images/portrait_female.webp',
+                                'assets/images/portrait_male.png',
+                              ],
+                              fit: BoxFit.cover,
+                              alignment: Alignment.topCenter,
+                              fallbackText: '',
+                              fallbackIcon: Icons.person_outline_rounded,
+                            ),
                           ),
                         ),
                       ),
@@ -2329,15 +2334,31 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
 
       final clean = name.trim();
       if (clean.isEmpty) continue;
+      if (_companionSkillNameExists(
+        widget.controller,
+        widget.character.id,
+        clean,
+        excludeSkillId: stringValue(skill['id']),
+      )) {
+        draftName = '';
+        _showCompanionMessage('技能名称已存在，请重新填写');
+        continue;
+      }
       setState(() => _companionBusy = true);
       try {
-        await _finalizeCompanionSkillWithPreview(
+        final finalizeResult = await _finalizeCompanionSkillWithPreview(
           context: context,
           controller: widget.controller,
           character: widget.character,
           skill: skill,
           name: clean,
         );
+        if (!mounted) return;
+        if (finalizeResult == _CompanionSkillFinalizeResult.renameRequired) {
+          draftName = '';
+          _showCompanionMessage('技能名称已存在，请重新填写');
+          continue;
+        }
       } finally {
         if (mounted) setState(() => _companionBusy = false);
       }
@@ -2563,6 +2584,9 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
         );
         final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
         final keyboardVisible = keyboardInset > 0;
+        // 手机底部输入框避开 Home Indicator / 系统手势区。
+        // 键盘弹出时 viewInsets 已经负责抬升，不重复叠加安全区。
+        final bottomSafeInset = MediaQuery.viewPaddingOf(context).bottom;
 
         switch (mode) {
           case _CharacterViewportMode.desktop:
@@ -2666,7 +2690,9 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                     // 横屏聊天整体留出左右呼吸空间，避免输入框贴住头像轨 / 右侧导航。
                     left: 18,
                     right: globalNavInset + 12,
-                    bottom: keyboardVisible ? keyboardInset + 4 : 4,
+                    bottom: keyboardVisible
+                        ? keyboardInset + 4
+                        : bottomSafeInset + 8,
                     height: chatHeight,
                     child: _CharacterInlineChat(
                       controller: widget.controller,
@@ -2722,7 +2748,9 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
                     curve: Curves.easeOutCubic,
                     left: 8,
                     right: globalNavInset,
-                    bottom: keyboardVisible ? keyboardInset + 8 : 8,
+                    bottom: keyboardVisible
+                        ? keyboardInset + 8
+                        : bottomSafeInset + 10,
                     height: chatHeight,
                     child: _CharacterInlineChat(
                       controller: widget.controller,
@@ -2869,22 +2897,24 @@ class _CharacterProfileActions extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(5),
-                        border: Border.all(
-                          color: Colors.white,
-                        ),
+                        border: Border.all(color: Colors.white),
                       ),
-                      child: Text(
-                        fullStar
-                            ? '已满星 · 技能效果 130%'
-                            : '升星  $fragments/20  ·  +3%',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: canUpgrade
-                              ? const Color(0xFF161A18)
-                              : const Color(0xFF8B908D),
-                          fontSize: compact ? 7.2 : 9.1,
-                          fontWeight: FontWeight.w800,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          compact
+                              ? (fullStar ? '满星' : '升星 $fragments/20')
+                              : (fullStar
+                                  ? '已满星 · 技能效果 130%'
+                                  : '升星  $fragments/20  ·  +3%'),
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: canUpgrade
+                                ? const Color(0xFF161A18)
+                                : const Color(0xFF8B908D),
+                            fontSize: compact ? 7.8 : 9.1,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
                     ),
@@ -3129,18 +3159,37 @@ Future<String?> _showCompanionSkillNamingDialog(
     context: context,
     barrierDismissible: allowCancel,
     barrierColor: Colors.black.withOpacity(.20),
-    builder: (dialogContext) => _CharacterDialogBackdrop(child: Dialog(
-      elevation: 0,
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 26),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      child: _CharacterGlassDialogFrame(
-        width: 350,
-        child: Stack(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
-              child: Column(
+    builder: (dialogContext) {
+      final media = MediaQuery.of(dialogContext);
+      final landscape = media.size.width > media.size.height;
+      final maxDialogHeight = math.max(
+        1.0,
+        media.size.height -
+            media.viewInsets.bottom -
+            (landscape ? 20.0 : 48.0),
+      );
+      final dialogWidth = landscape
+          ? math.min(430.0, media.size.width - 32.0)
+          : math.min(350.0, media.size.width - 52.0);
+      return _CharacterDialogBackdrop(
+        child: Dialog(
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: landscape ? 16 : 26,
+            vertical: landscape ? 10 : 24,
+          ),
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          child: _CharacterGlassDialogFrame(
+            width: dialogWidth,
+            child: Stack(
+              children: <Widget>[
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxDialogHeight),
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+                    child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
@@ -3302,28 +3351,62 @@ Future<String?> _showCompanionSkillNamingDialog(
                       ),
                     ],
                   ),
-                ],
-              ),
-            ),
-            if (allowCancel)
-              Positioned(
+                      ],
+                    ),
+                  ),
+                ),
+                if (allowCancel)
+                  Positioned(
                 right: 0,
                 top: 0,
                 child: _CharacterDialogCloseButton(
                   onTap: () => Navigator.of(dialogContext).pop(),
                 ),
-              ),
-          ],
+                  ),
+              ],
+            ),
+          ),
         ),
-      ),
-    )),
+      );
+    },
   );
   editor.dispose();
   return result;
 }
 
 
-Future<void> _finalizeCompanionSkillWithPreview({
+bool _companionSkillNameExists(
+  NovelGameController controller,
+  String characterId,
+  String name, {
+  String excludeSkillId = '',
+}) {
+  final target = name.trim();
+  if (target.isEmpty) return false;
+  final excluded = excludeSkillId.trim();
+  for (final skill in controller.novelCompanionSkills(characterId)) {
+    final skillId = stringValue(skill['id']).trim();
+    if (excluded.isNotEmpty && skillId == excluded) continue;
+    if (stringValue(skill['name']).trim() == target) return true;
+  }
+  return false;
+}
+
+bool _isCompanionSkillNameConflict(Object error) {
+  final message = error is NovelBackendException
+      ? error.message.trim()
+      : error.toString().trim();
+  final lower = message.toLowerCase();
+  return RegExp(r'(技能|名称|名字).{0,12}(已存在|重复|同名|重名)').hasMatch(message) ||
+      RegExp(r'(已存在|重复|同名|重名).{0,12}(技能|名称|名字)').hasMatch(message) ||
+      lower.contains('already exists') ||
+      lower.contains('duplicate name') ||
+      lower.contains('name conflict');
+}
+
+enum _CompanionSkillFinalizeResult { completed, renameRequired, failed }
+
+Future<_CompanionSkillFinalizeResult> _finalizeCompanionSkillWithPreview({
   required BuildContext context,
   required NovelGameController controller,
   required NovelCharacter character,
@@ -3331,11 +3414,13 @@ Future<void> _finalizeCompanionSkillWithPreview({
   required String name,
 }) async {
   final skillId = stringValue(skill['id']).trim();
-  if (skillId.isEmpty || name.trim().isEmpty) return;
+  if (skillId.isEmpty || name.trim().isEmpty) {
+    return _CompanionSkillFinalizeResult.failed;
+  }
 
   JsonMap responseSkill = const <String, dynamic>{};
   JsonMap responseVfx = const <String, dynamic>{};
-  await showDialog<void>(
+  final result = await showDialog<_CompanionSkillFinalizeResult>(
     context: context,
     barrierDismissible: false,
     barrierColor: Colors.black.withOpacity(.32),
@@ -3354,7 +3439,14 @@ Future<void> _finalizeCompanionSkillWithPreview({
         responseVfx = asJsonMap(payload['vfx_spec']);
       },
       resolveSkill: () {
-        if (responseSkill.isNotEmpty) return responseSkill;
+        // rename API may return the renamed skill and VFX as sibling fields.
+        // Always merge the fresh vfx_spec into the skill used by the preview.
+        if (responseSkill.isNotEmpty) {
+          return <String, dynamic>{
+            ...responseSkill,
+            if (responseVfx.isNotEmpty) 'vfx_spec': responseVfx,
+          };
+        }
         final skills = controller.novelCompanionSkills(character.id);
         for (final candidate in skills) {
           if (stringValue(candidate['id']).trim() == skillId) {
@@ -3369,6 +3461,7 @@ Future<void> _finalizeCompanionSkillWithPreview({
       },
     )),
   );
+  return result ?? _CompanionSkillFinalizeResult.failed;
 }
 
 class _CompanionSkillEvolutionDialog extends StatefulWidget {
@@ -3431,6 +3524,12 @@ class _CompanionSkillEvolutionDialogState
       });
     } catch (error) {
       if (!mounted) return;
+      if (_isCompanionSkillNameConflict(error)) {
+        Navigator.of(context).pop(
+          _CompanionSkillFinalizeResult.renameRequired,
+        );
+        return;
+      }
       setState(() {
         _loading = false;
         _error = error is NovelBackendException
@@ -3451,24 +3550,39 @@ class _CompanionSkillEvolutionDialogState
     final quality = intValue(skill['quality']).clamp(1, 10).toInt();
     final color = _companionSkillQualityColor(quality);
     final media = MediaQuery.sizeOf(context);
+    final landscape = media.width > media.height;
     final width = math.min(430.0, media.width - 30);
+    final maxDialogHeight = math.max(
+      1.0,
+      media.height - MediaQuery.viewInsetsOf(context).bottom -
+          (landscape ? 20.0 : 40.0),
+    );
 
     return Dialog(
       elevation: 0,
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 15),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: 15,
+        vertical: landscape ? 10 : 20,
+      ),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       child: _CharacterGlassDialogFrame(
         width: width,
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 320),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          child: _loading
-              ? _buildLoading(color)
-              : _error.isNotEmpty
-                  ? _buildError(color)
-                  : _buildPreview(skill, quality, color),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxDialogHeight),
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 320),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: _loading
+                  ? _buildLoading(color)
+                  : _error.isNotEmpty
+                      ? _buildError(color)
+                      : _buildPreview(skill, quality, color),
+            ),
+          ),
         ),
       ),
     );
@@ -3581,7 +3695,9 @@ class _CompanionSkillEvolutionDialogState
                 foreground: _characterTextMuted,
                 fillColor: Colors.white.withOpacity(.025),
                 borderColor: Colors.white.withOpacity(.10),
-                onTap: () => Navigator.of(context).pop(),
+                onTap: () => Navigator.of(context).pop(
+                  _CompanionSkillFinalizeResult.failed,
+                ),
               ),
               const Spacer(),
               _CharacterSkillDialogAction(
@@ -3706,7 +3822,9 @@ class _CompanionSkillEvolutionDialogState
                 foreground: _characterText,
                 fillColor: color.withOpacity(.14),
                 borderColor: color.withOpacity(.48),
-                onTap: () => Navigator.of(context).pop(),
+                onTap: () => Navigator.of(context).pop(
+                  _CompanionSkillFinalizeResult.completed,
+                ),
               ),
             ],
           ),
@@ -3724,7 +3842,11 @@ double _companionVfxDouble(dynamic value, [double fallback = 0]) {
 JsonMap _fallbackCompanionVfxSpec(JsonMap skill) {
   final name = stringValue(skill['name']).toLowerCase();
   final description = _companionSkillEffectText(skill).toLowerCase();
-  final text = '$name $description';
+  // V13 prompt-only specs do not contain sequence. Include the model prompt as
+  // fallback evidence so a timed-out / old skill still produces a visible preview.
+  final rawVfx = asJsonMap(skill['vfx_spec']);
+  final renderPrompt = stringValue(rawVfx['render_prompt']).toLowerCase();
+  final text = '$name $description $renderPrompt';
   final type = _companionSkillTypeOf(skill);
   final quality = intValue(skill['quality']).clamp(1, 10).toInt();
 
@@ -3742,7 +3864,7 @@ JsonMap _fallbackCompanionVfxSpec(JsonMap skill) {
   } else if (<String>['风', '岚'].any(text.contains)) {
     element = 'wind';
     palette = 'emerald';
-  } else if (<String>['圣', '光', '辉'].any(text.contains)) {
+  } else if (<String>['金', '圣', '光', '辉', '佛', 'gold', 'holy'].any(text.contains)) {
     element = 'light';
     palette = 'gold';
   } else if (<String>['暗', '影', '幽', '冥'].any(text.contains)) {
@@ -3834,7 +3956,49 @@ JsonMap _fallbackCompanionVfxSpec(JsonMap skill) {
 
 JsonMap _companionSkillVfxSpec(JsonMap skill) {
   final raw = asJsonMap(skill['vfx_spec']);
-  return _sanitizeCompanionVfxSpec(raw.isNotEmpty ? raw : _fallbackCompanionVfxSpec(skill));
+
+  // V19 Visual-Target spec: pass the art-directed 2.5D layers through untouched.
+  // Do NOT route it through the old sequence sanitizer, otherwise the new
+  // palette/layers contract gets treated like a legacy primitive graph.
+  final rawLayers = raw['layers'];
+  final renderMode = stringValue(raw['render_mode']).trim().toLowerCase();
+  final engine = stringValue(raw['engine']).trim().toLowerCase();
+  final isV19 = renderMode == 'canvas2d_visual_target' ||
+      engine.contains('visual_target') ||
+      (rawLayers is List && rawLayers.isNotEmpty);
+  if (raw.isNotEmpty && isV19) {
+    return Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      ...raw,
+      if (stringValue(raw['caption']).trim().isEmpty)
+        'caption': stringValue(skill['name']),
+      if (stringValue(raw['semantic_role']).trim().isEmpty)
+        'semantic_role': _companionSkillTypeOf(skill),
+    });
+  }
+
+  // Legacy VFX stays supported. It is converted into a compact descriptor and
+  // the V19 renderer will use its own high-quality local fallback layers when
+  // no Visual-Target layers are present.
+  if (raw.isEmpty) {
+    return Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      'render_mode': 'canvas2d_visual_target',
+      'duration_ms': intValue(skill['quality']).clamp(1, 10) >= 8 ? 4200 : 3400,
+      'caption': stringValue(skill['name']),
+      'semantic_role': _companionSkillTypeOf(skill),
+      'seed': stringValue(skill['name']).hashCode,
+    });
+  }
+
+  return Map<String, dynamic>.unmodifiable(<String, dynamic>{
+    ...raw,
+    'render_mode': 'canvas2d_visual_target',
+    'caption': stringValue(raw['caption']).trim().isNotEmpty
+        ? stringValue(raw['caption'])
+        : stringValue(skill['name']),
+    'semantic_role': stringValue(raw['semantic_role']).trim().isNotEmpty
+        ? stringValue(raw['semantic_role'])
+        : _companionSkillTypeOf(skill),
+  });
 }
 
 Color _companionVfxPalette(String palette) => switch (palette) {
@@ -3889,7 +4053,7 @@ JsonMap _sanitizeCompanionVfxSpec(JsonMap raw) {
   return Map<String, dynamic>.unmodifiable(spec);
 }
 
-class _CompanionSkillVfxPreview extends StatefulWidget {
+class _CompanionSkillVfxPreview extends StatelessWidget {
   const _CompanionSkillVfxPreview({
     super.key,
     required this.skill,
@@ -3902,104 +4066,44 @@ class _CompanionSkillVfxPreview extends StatefulWidget {
   final bool showReplayHint;
 
   @override
-  State<_CompanionSkillVfxPreview> createState() =>
-      _CompanionSkillVfxPreviewState();
-}
-
-class _CompanionSkillVfxPreviewState extends State<_CompanionSkillVfxPreview>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late JsonMap _spec;
-
-  @override
-  void initState() {
-    super.initState();
-    _spec = _companionSkillVfxSpec(widget.skill);
-    final duration = intValue(_spec['duration_ms'], 1200).clamp(550, 3000).toInt();
-    _controller = AnimationController(
-      vsync: this,
-      duration: Duration(milliseconds: duration),
-    )..forward();
-  }
-
-  @override
-  void didUpdateWidget(covariant _CompanionSkillVfxPreview oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (identical(oldWidget.skill, widget.skill)) return;
-    _spec = _companionSkillVfxSpec(widget.skill);
-    final duration = intValue(_spec['duration_ms'], 1200).clamp(550, 3000).toInt();
-    _controller.duration = Duration(milliseconds: duration);
-    _controller.forward(from: 0);
-  }
-
-  void _replay() {
-    if (!widget.tapToReplay) return;
-    _controller.forward(from: 0);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: widget.tapToReplay ? _replay : null,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (_, __) => CustomPaint(
-          painter: _CompanionSkillVfxPainter(
-            spec: _spec,
-            progress: _controller.value,
+    final spec = _companionSkillVfxSpec(skill);
+    return RepaintBoundary(
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          ProceduralSkillVfx(
+            key: ValueKey<String>(
+              'v19-${stringValue(skill['id'])}-${stringValue(skill['name'])}-'
+              '${stringValue(spec['seed'])}-${stringValue(spec['source'])}',
+            ),
+            vfxSpec: Map<String, dynamic>.from(spec),
+            loop: false,
+            tapToReplay: tapToReplay,
+            showDebugLabel: false,
           ),
-          child: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              Align(
-                alignment: const Alignment(0, .72),
-                child: Opacity(
-                  opacity: (_controller.value * 2.4).clamp(0.0, 1.0).toDouble(),
-                  child: Text(
-                    stringValue(_spec['caption'], stringValue(widget.skill['name'])),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(.82),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2.2,
-                      shadows: const <Shadow>[Shadow(color: Colors.black, blurRadius: 8)],
-                    ),
+          if (showReplayHint && tapToReplay)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 6,
+              child: IgnorePointer(
+                child: Text(
+                  '点击画面可重播',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.28),
+                    fontSize: 8,
+                    letterSpacing: .8,
                   ),
                 ),
               ),
-              if (widget.showReplayHint)
-                Positioned(
-                  right: 8,
-                  bottom: 7,
-                  child: IgnorePointer(
-                    child: Text(
-                      '点击重播',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.34),
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: .7,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
+            ),
+        ],
       ),
     );
   }
 }
-
 
 class _CompanionSkillVfxPainter extends CustomPainter {
   const _CompanionSkillVfxPainter({required this.spec, required this.progress});
@@ -6340,7 +6444,6 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                               ? _characterTextSoft
                               : _characterTextMuted,
                           fontSize: widget.dense ? 9.2 : 10.5,
-                          shadows: _characterTextOutlineShadows,
                         ),
                       ),
                     );
@@ -6414,8 +6517,8 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
           height: widget.dense ? 34 : (desktopMode ? 38 : 46),
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            // 输入区只保留细边框，不再额外铺半透明底色。
-            color: Colors.transparent,
+            // 用轻量半透明底色保证立绘上的可读性，不再依赖黑色文字描边。
+            color: _characterInk.withOpacity(widget.dense ? .42 : .34),
             borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: Colors.white.withOpacity(0.18),
@@ -6434,7 +6537,6 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                   style: TextStyle(
                     color: _characterText,
                     fontSize: widget.dense ? 11.5 : 13,
-                    shadows: _characterTextOutlineShadows,
                   ),
                   decoration: InputDecoration(
                     isDense: true,
@@ -6446,7 +6548,6 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                     hintStyle: TextStyle(
                       color: _characterTextMuted,
                       fontSize: 12.5,
-                      shadows: _characterTextOutlineShadows,
                     ),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.symmetric(vertical: widget.dense ? 6 : 10),
@@ -6536,13 +6637,14 @@ class _CharacterChatLineView extends StatelessWidget {
         ),
         decoration: BoxDecoration(
           color: message.isUser
-              ? _characterBlue.withOpacity(dense ? .24 : .30)
-              : Colors.white.withOpacity(dense ? .060 : .075),
+              ? _characterBlue.withOpacity(dense ? .38 : .42)
+              // NPC 气泡只保留轻薄的半透明层，不再用大面积深黑遮住立绘。
+              : _characterInkSoft.withOpacity(dense ? .20 : .24),
           borderRadius: BorderRadius.circular(dense ? 4 : 7),
           border: Border.all(
             color: message.isUser
-                ? _characterBlueBright.withOpacity(.38)
-                : Colors.white.withOpacity(.12),
+                ? _characterBlueBright.withOpacity(.30)
+                : Colors.white.withOpacity(.14),
           ),
         ),
         child: Text(
@@ -6552,8 +6654,7 @@ class _CharacterChatLineView extends StatelessWidget {
             fontSize: dense ? 10.6 : (desktopMode ? 11.8 : 13),
             height: dense ? 1.34 : 1.5,
             fontFamily: 'MiSans',
-            // 三种布局都取消聊天大遮罩，因此统一使用多方向阴影模拟细描边。
-            shadows: _characterTextOutlineShadows,
+            // 气泡自身提供对比度，文字保持纯净，不再使用黑色描边。
           ),
         ),
       ),

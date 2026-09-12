@@ -10,6 +10,14 @@ abstract class NovelBackend {
 
   Stream<NovelStreamEvent> sendMessageStream(NovelSendRequest request);
 
+  /// 按场景名称生成新版自由二维 ScenePlan。
+  /// 返回只负责空间布局与实体语义，不写旧 surroundings 探索状态。
+  Future<JsonMap> previewSceneLayout({
+    required String name,
+    String? sessionId,
+    String description = '',
+  });
+
   /// 获取当前位置与一跳相邻节点。后端不会返回完整世界地图或隐藏节点。
   Future<JsonMap> fetchSceneMap(String sessionId);
 

@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui'; // 用于毛玻璃模糊效果
+import 'dart:ui'; // PointerDeviceKind / 绘制支持
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:youran_ai/vfx/procedural_skill_vfx.dart';
 
-import 'novel_asr_stream_service.dart';
 import 'novel_socket_service.dart';
 
 /// 战斗页返回给剧情层的最小结果。
@@ -391,10 +391,11 @@ class _BattleSkillVfxPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final caster = Offset(size.width * .28, size.height * .46);
+    // 与 2.5D 构图一致：玩家在左下近景，敌人在右侧中远景。
+    final caster = Offset(size.width * .23, size.height * .58);
     final target = targetSelf
-        ? Offset(size.width * .32, size.height * .46)
-        : Offset(size.width * .70, size.height * .45);
+        ? Offset(size.width * .25, size.height * .58)
+        : Offset(size.width * .67, size.height * .43);
     _BattleVfxGraphRenderer(spec: spec, progress: progress, accent: accent)
         .paint(canvas, size, caster: caster, target: target);
 
@@ -2387,7 +2388,7 @@ const List<YoranBattleSkill> yoranDefaultBattleSkills = <YoranBattleSkill>[
   ),
 ];
 
-/// 需要启用战斗语音输入时，传入剧情控制器持有的 `controller.socket`。
+/// `socketService` 参数暂为兼容旧调用保留；当前战斗页不再包含语音输入入口。
 /// `skills` 与 `items` 可直接传入后端战斗快照中的真实技能和背包消耗品。
 /// 正式模式应提供 [onSettleItems]，在返回剧情时一次性扣除本场消耗品。
 Future<YoranBattleOutcome?> showYoranBattlePage(
@@ -2877,12 +2878,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   static const double _baseSkillPower = 10.0;
   static const double _skillDamageVariance = .10;
   static const int _maxBattleLogEntries = 120;
-  static const Duration _maximumSpeechDuration = Duration(seconds: 30);
-  static const Duration _speechTranscriptionTimeout = Duration(seconds: 10);
 
   final math.Random _random = math.Random();
-  final TextEditingController _actionController = TextEditingController();
-  final FocusNode _actionFocus = FocusNode();
   final ScrollController _logController = ScrollController();
 
   late final AnimationController _entranceController;
@@ -2903,16 +2900,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   late final AnimationController _playerBreathController;
   late final AnimationController _enemyBreathController;
 
-  NovelAsrStreamService? _asr;
-  bool _speechStarting = false;
-  bool _isListening = false;
-  bool _micHeld = false;
-  bool _speechFinishing = false;
-  String _speechBaseText = '';
-  int _speechSessionId = 0;
-  Future<void>? _speechStartFuture;
-  Stopwatch? _speechHoldWatch;
-  Timer? _speechLimitTimer;
 
   late int _playerHp;
   int _enemyHp = _baseMaxHp;
@@ -2938,6 +2925,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   String _settlementError = '';
   int _enemyIndex = 0;
   String? _selectedSkillName;
+  // 拖拽技能卡时用于显示场景中央的“释放区”。
+  String? _draggingSkillName;
   String? _selectedItemId;
   String? _selectedCompanionId;
   String? _selectedCompanionSkillId;
@@ -2988,10 +2977,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   final List<_BattleLogEntry> _logs = <_BattleLogEntry>[];
   final ValueNotifier<int> _logRevision = ValueNotifier<int>(0);
 
-  bool get _speechBusy =>
-      _speechStarting || _isListening || _micHeld || _speechFinishing;
-  bool get _canAct =>
-      !_busy && _outcome == null && !_entranceVisible && !_speechBusy;
+  bool get _canAct => !_busy && _outcome == null && !_entranceVisible;
   YoranBattleEnemy get _currentEnemy => _battleEnemies[_enemyIndex];
   String get _enemyName => _currentEnemy.name.trim().isEmpty
       ? '对手${_enemyIndex + 1}'
@@ -3114,7 +3100,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     for (final item in _battleItems) {
       _itemCounts[item.id] = item.quantity;
     }
-    _actionFocus.addListener(_handleActionFocusChanged);
     _entranceController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1850), // 入场动画：短促的黑白斜切过场
@@ -3159,11 +3144,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _enemyBreathController = _controller(4400)
       ..value = .62
       ..repeat(reverse: true);
-    final socketService = widget.socketService;
-    if (socketService != null) {
-      _asr = NovelAsrStreamService(socketService: socketService);
-    }
-
     _resetBattle(startEntrance: true);
   }
 
@@ -3188,18 +3168,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     if (!identical(oldWidget.skills, widget.skills)) {
       _availableSkillsCache = _collectAvailableSkills();
     }
-    if (oldWidget.socketService == widget.socketService) return;
-    _speechSessionId++;
-    _speechLimitTimer?.cancel();
-    unawaited(_asr?.dispose());
-    final socketService = widget.socketService;
-    _asr = socketService == null
-        ? null
-        : NovelAsrStreamService(socketService: socketService);
-    _speechStarting = false;
-    _isListening = false;
-    _micHeld = false;
-    _speechFinishing = false;
   }
 
   @override
@@ -3221,121 +3189,17 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _skillImpactController.dispose();
     _playerBreathController.dispose();
     _enemyBreathController.dispose();
-    _speechSessionId++;
-    _speechLimitTimer?.cancel();
-    _speechHoldWatch?.stop();
-    unawaited(_asr?.dispose());
-    _actionFocus.removeListener(_handleActionFocusChanged);
-    _actionController.dispose();
-    _actionFocus.dispose();
     _logController.dispose();
     _logRevision.dispose();
     super.dispose();
   }
 
-  void _handleActionFocusChanged() {
-    if (mounted) setState(() {});
-  }
-
   void _toggleCategory(_BattleCommandCategory category) {
-    if (!_canAct || _speechBusy) return;
-    _actionFocus.unfocus();
+    if (!_canAct) return;
     if (_activeCategory == category) return;
     setState(() {
       _activeCategory = category;
     });
-  }
-
-  String _mergeSpeechText(String base, String spoken) {
-    final words = spoken.trim();
-    if (words.isEmpty) return base;
-    if (base.isEmpty) return words;
-    if (RegExp(r'\s$').hasMatch(base)) return '$base$words';
-
-    final last = base.runes.isEmpty ? 0 : base.runes.last;
-    final first = words.runes.isEmpty ? 0 : words.runes.first;
-    bool isCjk(int rune) =>
-        (rune >= 0x3400 && rune <= 0x9FFF) ||
-        (rune >= 0xF900 && rune <= 0xFAFF);
-    return isCjk(last) && isCjk(first) ? '$base$words' : '$base $words';
-  }
-
-  void _commitSpeechText(int sessionId, String spoken) {
-    if (!mounted || sessionId != _speechSessionId) return;
-    final nextText = _mergeSpeechText(_speechBaseText, spoken);
-    if (nextText.trim().isEmpty) return;
-    _actionController.value = TextEditingValue(
-      text: nextText,
-      selection: TextSelection.collapsed(offset: nextText.length),
-      composing: TextRange.empty,
-    );
-  }
-
-  Future<void> _beginHoldListening() async {
-    if (!_canAct || _speechBusy) return;
-    final asr = _asr;
-    if (asr == null) {
-      _showSpeechMessage('语音服务未连接，请从剧情控制器传入 socketService。');
-      return;
-    }
-
-    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar(
-      reason: SnackBarClosedReason.hide,
-    );
-    final sessionId = ++_speechSessionId;
-    _speechBaseText = _actionController.text;
-    _speechHoldWatch = Stopwatch()..start();
-    _speechLimitTimer?.cancel();
-    _speechLimitTimer = Timer(_maximumSpeechDuration, () {
-      if (!mounted ||
-          sessionId != _speechSessionId ||
-          (!_micHeld && !_isListening && !_speechStarting)) {
-        return;
-      }
-      unawaited(_finishHoldListening());
-    });
-    _actionFocus.unfocus();
-    setState(() {
-      _activeCategory = null;
-      _micHeld = true;
-      _speechStarting = true;
-    });
-
-    final startFuture = asr.start();
-    _speechStartFuture = startFuture;
-    try {
-      await startFuture;
-      if (!mounted || sessionId != _speechSessionId) {
-        await asr.cancel();
-        return;
-      }
-      setState(() {
-        _speechStarting = false;
-        _isListening = _micHeld;
-      });
-    } on NovelAsrStreamException catch (error) {
-      if (!mounted || sessionId != _speechSessionId) return;
-      _speechLimitTimer?.cancel();
-      setState(() {
-        _speechStarting = false;
-        _isListening = false;
-        _micHeld = false;
-      });
-      _showSpeechMessage(error.message);
-    } catch (_) {
-      if (!mounted || sessionId != _speechSessionId) return;
-      _speechLimitTimer?.cancel();
-      setState(() {
-        _speechStarting = false;
-        _isListening = false;
-        _micHeld = false;
-      });
-      _showSpeechMessage('无法启动语音输入，请重试。');
-    } finally {
-      if (identical(_speechStartFuture, startFuture)) {
-        _speechStartFuture = null;
-      }
-    }
   }
 
 
@@ -3360,6 +3224,26 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         });
         unawaited(HapticFeedback.selectionClick());
       },
+      onSkillQuickCast: (name) {
+        if (!_canUseSkill(name)) return;
+        if (mounted) {
+          setState(() {
+            _draggingSkillName = null;
+            _selectedSkillName = null;
+            _selectedItemId = null;
+          });
+        }
+        unawaited(HapticFeedback.mediumImpact());
+        unawaited(_useSkill(name));
+      },
+      onDragStateChanged: (name) {
+        if (!mounted) return;
+        setState(() {
+          // 拖拽和“选择技能”彻底解耦：任意可用卡都能直接上滑释放。
+          _draggingSkillName = name;
+          if (name != null) _selectedItemId = null;
+        });
+      },
     );
   }
 
@@ -3376,7 +3260,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
     return ScrollConfiguration(
       behavior: ScrollConfiguration.of(context).copyWith(
-        dragDevices: {
+        dragDevices: const <PointerDeviceKind>{
           PointerDeviceKind.touch,
           PointerDeviceKind.mouse,
           PointerDeviceKind.trackpad,
@@ -3385,10 +3269,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         clipBehavior: Clip.none,
-        padding: const EdgeInsets.fromLTRB(24, 22, 24, 0),
+        padding: const EdgeInsets.fromLTRB(24, 7, 24, 4),
         physics: const BouncingScrollPhysics(),
         itemCount: _battleItems.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 12),
+        separatorBuilder: (context, index) => const SizedBox(width: 10),
         itemBuilder: (context, index) {
           final item = _battleItems[index];
           final count = _itemCounts[item.id] ?? 0;
@@ -3398,105 +3282,170 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               ? _BattleColors.player
               : item.restoresSp && !item.restoresHp
                   ? _BattleColors.energy
-                  : Colors.white;
+                  : _BattleColors.text;
 
           return AnimatedSlide(
-            duration: const Duration(milliseconds: 220),
+            duration: const Duration(milliseconds: 190),
             curve: Curves.easeOutCubic,
-            offset: isSelected ? const Offset(0, -0.075) : Offset.zero,
+            offset: isSelected ? const Offset(0, -0.055) : Offset.zero,
             child: AnimatedScale(
-              duration: const Duration(milliseconds: 220),
+              duration: const Duration(milliseconds: 190),
               curve: Curves.easeOutCubic,
-              scale: isSelected ? 1.025 : 1.0,
+              scale: isSelected ? 1.035 : 1.0,
               child: GestureDetector(
-                onTap: (!isEmpty && _canAct) ? () {
-                  setState(() {
-                    if (_selectedItemId == item.id) {
-                      _selectedItemId = null;
-                    } else {
-                      _selectedItemId = item.id;
-                      _selectedSkillName = null;
-                    }
-                  });
-                  unawaited(HapticFeedback.selectionClick());
-                } : null,
-                child: ClipRect( // 新增毛玻璃裁剪区
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12), // 增加毛玻璃特效
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 84,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? Colors.white.withOpacity(0.12)
-                            : (isEmpty
-                                ? const Color(0x24000000)
-                                : const Color(0x3D000000)),
-                        border: Border.all(
-                          color: isSelected
-                              ? Colors.white.withOpacity(0.78)
-                              : Colors.white.withOpacity(isEmpty ? 0.04 : 0.085),
-                          width: isSelected ? 0.95 : 0.75,
+                behavior: HitTestBehavior.opaque,
+                onTap: (!isEmpty && _canAct)
+                    ? () {
+                        setState(() {
+                          if (_selectedItemId == item.id) {
+                            _selectedItemId = null;
+                          } else {
+                            _selectedItemId = item.id;
+                            _selectedSkillName = null;
+                          }
+                        });
+                        unawaited(HapticFeedback.selectionClick());
+                      }
+                    : null,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 170),
+                  width: 92,
+                  height: 122,
+                  decoration: BoxDecoration(
+                    color: isEmpty
+                        ? const Color(0x8A0A0B0D)
+                        : (isSelected
+                            ? const Color(0xD9181A1D)
+                            : const Color(0x99121416)),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isSelected
+                          ? Colors.white.withOpacity(.82)
+                          : Colors.white.withOpacity(isEmpty ? .035 : .10),
+                      width: isSelected ? 1.1 : .8,
+                    ),
+                    boxShadow: isSelected
+                        ? const <BoxShadow>[
+                            BoxShadow(
+                              color: Color(0x52000000),
+                              blurRadius: 14,
+                              offset: Offset(0, 8),
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Stack(
+                    children: <Widget>[
+                      Positioned(
+                        left: 9,
+                        right: 9,
+                        top: 0,
+                        child: Container(
+                          height: 2,
+                          color: isEmpty
+                              ? Colors.white10
+                              : (isSelected ? Colors.white : accent.withOpacity(.62)),
                         ),
                       ),
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: <Widget>[
-                          Positioned(
-                            top: 6, right: 6,
-                            child: Text('x$count', style: TextStyle(color: isEmpty ? Colors.white30 : Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+                      Positioned(
+                        top: 9,
+                        left: 9,
+                        child: Text(
+                          'Q${item.quality}',
+                          style: TextStyle(
+                            color: isEmpty ? Colors.white24 : Colors.white54,
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: .5,
                           ),
-                          Positioned(
-                            top: 7,
-                            left: 7,
-                            child: Text(
-                              'Q${item.quality}',
-                              style: TextStyle(
-                                color: isEmpty ? Colors.white24 : accent,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          Center(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 6),
-                              child: Text(item.name, textAlign: TextAlign.center, style: TextStyle(color: isEmpty ? Colors.white30 : Colors.white, fontFamily: 'WenJinMinchoP0', fontSize: 14, fontWeight: FontWeight.w600)),
-                            ),
-                          ),
-                          Positioned(
-                            left: 4,
-                            right: 4,
-                            bottom: 7,
-                            child: Text(
-                              item.effectLabel,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: isEmpty ? Colors.white24 : accent,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          if (isSelected)
-                            Positioned(
-                              bottom: -24, left: -24, right: -24,
-                              child: Text(
-                                item.detail.isEmpty ? item.effectLabel : '${item.detail} · ${item.effectLabel}',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: Colors.white70, fontSize: 10, shadows: <Shadow>[Shadow(color: Colors.black, blurRadius: 4)]),
-                              ),
-                            ),
-                        ],
+                        ),
                       ),
-                    ),
+                      Positioned(
+                        top: 8,
+                        right: 9,
+                        child: Text(
+                          '×$count',
+                          style: TextStyle(
+                            color: isEmpty ? Colors.white24 : Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 2, 8, 14),
+                          child: Text(
+                            item.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: isEmpty ? Colors.white30 : _BattleColors.text,
+                              fontFamily: 'WenJinMinchoP0',
+                              fontSize: 14,
+                              height: 1.15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        left: 7,
+                        right: 7,
+                        bottom: 8,
+                        child: Text(
+                          item.effectLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: isEmpty ? Colors.white24 : accent.withOpacity(.78),
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .2,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
           );
         },
+      ),
+    );
+  }
+
+  void _showCompanionUnavailableMessage({required bool used}) {
+    final String message;
+    if (used) {
+      message = '该援助技能本场已经使用过了';
+    } else if (_companionAssistUsedThisRound) {
+      message = '本回合援助已使用 · 下一回合可再次援助';
+    } else if (!_canAct) {
+      message = '当前行动正在结算，请稍候';
+    } else {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        duration: const Duration(milliseconds: 1500),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xEE111317),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        margin: const EdgeInsets.fromLTRB(18, 0, 18, 18),
       ),
     );
   }
@@ -3508,19 +3457,23 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   }) {
     final used = _usedCompanionSkillIds.contains(skill.id);
     final selected = _selectedCompanionSkillId == skill.id;
-    final disabled = used || _companionAssistUsedThisRound || !_canAct;
+    final roundLocked = _companionAssistUsedThisRound && !used;
+    final disabled = used || roundLocked || !_canAct;
     final accent = _battleSkillQualityColor(skill.quality);
     return GestureDetector(
-      onTap: disabled
-          ? null
-          : () {
-              setState(() {
-                _selectedCompanionSkillId = selected ? null : skill.id;
-                _selectedSkillName = null;
-                _selectedItemId = null;
-              });
-              unawaited(HapticFeedback.selectionClick());
-            },
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        if (disabled) {
+          _showCompanionUnavailableMessage(used: used);
+          return;
+        }
+        setState(() {
+          _selectedCompanionSkillId = selected ? null : skill.id;
+          _selectedSkillName = null;
+          _selectedItemId = null;
+        });
+        unawaited(HapticFeedback.selectionClick());
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 170),
         padding: EdgeInsets.fromLTRB(
@@ -3531,27 +3484,17 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         ),
         decoration: BoxDecoration(
           color: used
-              ? const Color(0xCC111318)
-              : selected
-                  ? accent.withOpacity(.18)
-                  : const Color(0xD9141820),
+              ? const Color(0x8A0A0B0D)
+              : (selected
+                  ? const Color(0xD9181A1D)
+                  : const Color(0x99121416)),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: selected
-                ? Colors.white.withOpacity(.92)
-                : used
-                    ? Colors.white.withOpacity(.10)
-                    : accent.withOpacity(.66),
-            width: selected ? 1.6 : 1.05,
+                ? Colors.white.withOpacity(.84)
+                : Colors.white.withOpacity(used ? .04 : .10),
+            width: selected ? 1.1 : .8,
           ),
-          boxShadow: selected
-              ? <BoxShadow>[
-                  BoxShadow(
-                    color: accent.withOpacity(.30),
-                    blurRadius: 14,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : null,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3561,7 +3504,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 _BattleSkillTypeIcon(
                   skill: skill,
                   size: compact ? 15 : 18,
-                  color: disabled ? Colors.white30 : accent,
+                  color: disabled ? Colors.white24 : accent.withOpacity(.86),
                 ),
                 SizedBox(width: compact ? 5 : 7),
                 Expanded(
@@ -3570,31 +3513,23 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: used ? Colors.white30 : Colors.white,
+                      color: used ? Colors.white30 : _BattleColors.text,
                       fontSize: compact ? 11 : 13,
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
                 const SizedBox(width: 5),
                 Text(
-                  '${companion.star}★ · 效果${companion.skillEffectPercent}%',
+                  '${companion.star}★ · ${companion.skillEffectPercent}%',
                   maxLines: 1,
                   style: TextStyle(
-                    color: used ? Colors.white24 : accent.withOpacity(.78),
+                    color: used ? Colors.white24 : Colors.white38,
                     fontSize: compact ? 7.4 : 8.2,
                     fontWeight: FontWeight.w800,
                     letterSpacing: .15,
                   ),
                 ),
-                if (used) ...<Widget>[
-                  const SizedBox(width: 4),
-                  const Icon(
-                    Icons.check_circle_rounded,
-                    size: 13,
-                    color: Colors.white24,
-                  ),
-                ],
               ],
             ),
             SizedBox(height: compact ? 3 : 7),
@@ -3604,7 +3539,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 maxLines: compact ? 1 : 3,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: used ? Colors.white24 : Colors.white60,
+                  color: used ? Colors.white24 : Colors.white54,
                   fontSize: compact ? 8.5 : 9.5,
                   height: 1.3,
                 ),
@@ -3617,14 +3552,22 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                   child: Text(
                     used
                         ? '本场已使用'
-                        : _companionAssistUsedThisRound
-                            ? '本回合已援战'
-                            : '限定技 · 0精力',
+                        : roundLocked
+                            ? '本回合已援助 · 下回合恢复'
+                            : !_canAct
+                                ? '等待当前行动结束'
+                                : '每回合可援助 1 次 · 0 SP',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: disabled ? Colors.white30 : accent,
-                      fontSize: compact ? 8 : 9,
+                      color: used
+                          ? Colors.white30
+                          : roundLocked
+                              ? Colors.white.withOpacity(.72)
+                              : disabled
+                                  ? Colors.white38
+                                  : accent.withOpacity(.86),
+                      fontSize: compact ? 8.2 : 9.2,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -3633,7 +3576,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                   Text(
                     _battleSkillTypeName(skill.iconType),
                     style: TextStyle(
-                      color: used ? Colors.white24 : accent.withOpacity(.86),
+                      color: used ? Colors.white24 : Colors.white38,
                       fontSize: 8.5,
                       fontWeight: FontWeight.w700,
                     ),
@@ -3865,127 +3808,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
   }
 
-  Future<void> _finishHoldListening({bool commit = true}) async {
-    if (_speechFinishing) return;
-    final asr = _asr;
-    if (asr == null) return;
-
-    _speechLimitTimer?.cancel();
-    _speechLimitTimer = null;
-    final sessionId = _speechSessionId;
-    final hadActiveSession =
-        _micHeld || _isListening || _speechStarting || asr.isSessionOpen;
-    if (!hadActiveSession) return;
-
-    final heldFor = _speechHoldWatch?.elapsed ?? Duration.zero;
-    _speechHoldWatch?.stop();
-    _speechHoldWatch = null;
-    final tooShort =
-        commit && heldFor < NovelAsrStreamService.minimumSpeechDuration;
-    if (mounted) {
-      setState(() {
-        _micHeld = false;
-        _speechStarting = false;
-        _isListening = false;
-        _speechFinishing = commit && !tooShort;
-      });
-    }
-
-    var speechCommitted = false;
-    try {
-      if (!commit || tooShort) {
-        final starting = _speechStartFuture;
-        if (starting != null) {
-          try {
-            await starting;
-          } catch (_) {}
-        }
-        if (sessionId != _speechSessionId) return;
-        await asr.cancel();
-        if (tooShort && mounted && sessionId == _speechSessionId) {
-          _showSpeechMessage('说话太短了', lightweight: true);
-        }
-      } else {
-        final finalText = await (() async {
-          final starting = _speechStartFuture;
-          if (starting != null) {
-            try {
-              await starting;
-            } catch (_) {}
-          }
-          if (sessionId != _speechSessionId || !asr.isSessionOpen) return '';
-          return asr.stopAndGetFinal();
-        })().timeout(_speechTranscriptionTimeout);
-        if (finalText.trim().isNotEmpty) {
-          _commitSpeechText(sessionId, finalText);
-          speechCommitted = true;
-        }
-      }
-    } on TimeoutException {
-      unawaited(asr.dispose());
-      if (identical(_asr, asr)) {
-        final socketService = widget.socketService;
-        _asr = socketService == null
-            ? null
-            : NovelAsrStreamService(socketService: socketService);
-      }
-      if (commit && mounted && sessionId == _speechSessionId) {
-        _showSpeechMessage('识别超时，已放弃', lightweight: true);
-      }
-    } on NovelAsrStreamException catch (error) {
-      if (commit && mounted && sessionId == _speechSessionId) {
-        final code = error.code.trim().toUpperCase();
-        if (code == 'AUDIO_TOO_SHORT') {
-          _showSpeechMessage('说话太短了', lightweight: true);
-        } else if (code == 'NO_VOICE' ||
-            code == 'EMPTY_RESULT' ||
-            code == 'EMPTY_AUDIO') {
-          _showSpeechMessage('未识别到语音', lightweight: true);
-        } else {
-          _showSpeechMessage(error.message);
-        }
-      }
-    } catch (_) {
-      if (commit && mounted && sessionId == _speechSessionId) {
-        _showSpeechMessage('语音识别失败，请再试一次。');
-      }
-    } finally {
-      if (!mounted || sessionId != _speechSessionId) return;
-      setState(() {
-        _speechStarting = false;
-        _isListening = false;
-        _speechFinishing = false;
-      });
-      if (speechCommitted) _actionFocus.requestFocus();
-    }
-  }
-
-  void _showSpeechMessage(String message, {bool lightweight = false}) {
-    if (!mounted) return;
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    messenger
-      ..hideCurrentSnackBar(reason: SnackBarClosedReason.hide)
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            message,
-            textAlign: lightweight ? TextAlign.center : TextAlign.start,
-            style: const TextStyle(color: Colors.white, fontSize: 13),
-          ),
-          duration: Duration(milliseconds: lightweight ? 700 : 1500),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor:
-              lightweight ? Colors.transparent : const Color(0xE6111413),
-          elevation: lightweight ? 0 : 3,
-          width: lightweight ? 128 : null,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(lightweight ? 0 : 10),
-          ),
-        ),
-      );
-  }
-
   int _d20() => 1 + _random.nextInt(20);
 
   int _clampPlayerHp(int value) => value.clamp(0, _playerMaxHp).toInt();
@@ -4152,18 +3974,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         _cooldownFor(skill.name) <= 0;
   }
 
-  String _skillDetail(String skillName) {
-    final skill = _skillFor(skillName);
-    final cooldown = _cooldownFor(skill.name);
-    if (cooldown > 0) return '冷却中 · $cooldown回合';
-    if (skill.resting && _playerQi >= _playerMaxQi) return '精力已满';
-    if (_playerQi < skill.energyCost) return '精力不足 · 需要${skill.energyCost}';
-    if (!skill.canSelfKill && _playerHp <= skill.healthCost) {
-      return '生命不足 · 需要保留至少1点生命';
-    }
-    return skill.detail;
-  }
-
   void _tickSkillCooldowns() {
     for (final name in _skillCooldowns.keys.toList(growable: false)) {
       final next = (_skillCooldowns[name] ?? 0) - 1;
@@ -4249,15 +4059,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     if (!_enemyBreathController.isAnimating) {
       unawaited(_enemyBreathController.repeat(reverse: true));
     }
-    if (_speechBusy) {
-      _micHeld = false;
-      unawaited(_finishHoldListening(commit: false));
-    }
-    _actionController.clear();
     _playerHp = _playerMaxHp;
     _enemyIndex = 0;
     _enemyHp = _enemyStartingHp;
     _selectedSkillName = null;
+    _draggingSkillName = null;
     _selectedItemId = null;
     _selectedCompanionId =
         _battleCompanions.isEmpty ? null : _battleCompanions.first.id;
@@ -4420,14 +4226,93 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     return const <String, dynamic>{};
   }
 
+  bool _isV19VisualTargetSpec(Map<String, dynamic> spec) {
+    final mode = '${spec['render_mode'] ?? ''}'.trim().toLowerCase();
+    final layers = spec['layers'];
+    return mode == 'canvas2d_visual_target' || (layers is List && layers.isNotEmpty);
+  }
+
+  bool _isOpenVisualProgramSpec(Map<String, dynamic> spec) {
+    final engine = '${spec['engine'] ?? ''}'.trim().toLowerCase();
+    final version = YoranBattleSkill._asInt(spec['schema_version']);
+    final program = spec['program'];
+    return engine == 'open_visual_program' ||
+        version >= 21 ||
+        (program is List && program.isNotEmpty);
+  }
+
+  List<Map<String, dynamic>> _v19Layers(Map<String, dynamic> spec) {
+    final raw = spec['layers'];
+    if (raw is! List) return const <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((item) => item.map((key, value) => MapEntry('$key', value)))
+        .toList(growable: false);
+  }
+
   int _skillVfxDurationMs(YoranBattleSkill skill) {
     final spec = _effectiveVfxSpec(skill);
     if (spec.isEmpty) return 0;
-    return YoranBattleSkill._asInt(spec['duration_ms'], 1100).clamp(550, 3000).toInt();
+    final raw = YoranBattleSkill._asInt(spec['duration_ms'], 1100);
+    if (_isV19VisualTargetSpec(spec)) {
+      // Preview timelines may intentionally be 5-6 seconds. In combat we keep
+      // the same normalized choreography but compress wall-clock time so the
+      // battle remains responsive.
+      return (raw * .62).round().clamp(1600, 3600).toInt();
+    }
+    return raw.clamp(550, 3000).toInt();
   }
 
   double _skillVfxImpactProgress(YoranBattleSkill skill) {
     final spec = _effectiveVfxSpec(skill);
+
+    // V21 carries the director's explicit contact moment. Battle timing must not
+    // infer visual semantics from geometry or convert it back into an op menu.
+    if (_isOpenVisualProgramSpec(spec)) {
+      return _battleVfxDouble(spec['impact_at'], .62).clamp(.18, .94).toDouble();
+    }
+
+    if (_isV19VisualTargetSpec(spec)) {
+      final layers = _v19Layers(spec);
+      double? best;
+      for (final layer in layers) {
+        final hitStart = _battleVfxDouble(layer['hit_start'], -1);
+        if (hitStart >= 0) {
+          best = best == null ? hitStart : math.min(best, hitStart);
+        }
+        final op = '${layer['op'] ?? ''}'.trim().toLowerCase();
+        final start = _battleVfxDouble(layer['start'], -1);
+        if (start < 0) continue;
+        if (const <String>{
+          'impact_flash',
+          'fracture_field',
+          'crater_field',
+          'shockwave',
+          'debris_field',
+        }.contains(op)) {
+          best = best == null ? start : math.min(best, start);
+        }
+      }
+      if (best != null) return best.clamp(.28, .88).toDouble();
+
+      // If a generated V19 plan omitted explicit impact layers, use the end of
+      // the delivery construct rather than a blind .52 midpoint.
+      for (final layer in layers) {
+        final op = '${layer['op'] ?? ''}'.trim().toLowerCase();
+        if (const <String>{
+          'beam',
+          'projectile_orb',
+          'creature_construct',
+          'colossal_limb',
+          'ribbon_field',
+        }.contains(op)) {
+          final end = _battleVfxDouble(layer['end'], -1);
+          if (end >= 0) best = best == null ? end : math.min(best, end);
+        }
+      }
+      return (best ?? .62).clamp(.32, .88).toDouble();
+    }
+
     final rawSequence = spec['sequence'];
     if (rawSequence is! List || rawSequence.isEmpty) return .52;
 
@@ -4482,6 +4367,31 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
   int _skillHitStopMs(YoranBattleSkill? skill, bool critical) {
     if (skill == null || !skill.hasVfx) return critical ? 120 : 60;
+    final spec = _effectiveVfxSpec(skill);
+
+    if (_isOpenVisualProgramSpec(spec)) {
+      final strength = _battleVfxDouble(spec['hit_stop_strength'], .55).clamp(0.0, 1.0);
+      var milliseconds = 58 + (strength * 82).round();
+      if (critical) milliseconds += 34;
+      return milliseconds.clamp(58, 176).toInt();
+    }
+
+    if (_isV19VisualTargetSpec(spec)) {
+      var milliseconds = 62 + skill.quality.clamp(1, 10) * 5;
+      if (_skillLooksLikeSlash(skill)) milliseconds += 18;
+      final ops = _v19Layers(spec)
+          .map((layer) => '${layer['op'] ?? ''}'.trim().toLowerCase())
+          .toSet();
+      if (ops.contains('colossal_limb') || ops.contains('crater_field')) {
+        milliseconds += 24;
+      }
+      if (ops.contains('fracture_field') || ops.contains('shockwave')) {
+        milliseconds += 10;
+      }
+      if (critical) milliseconds += 38;
+      return milliseconds.clamp(72, 180).toInt();
+    }
+
     final style = '${skill.vfxSpec['style'] ?? ''}'.trim().toLowerCase();
     var milliseconds = 48 + skill.quality.clamp(1, 10) * 4;
     if (_skillLooksLikeSlash(skill)) milliseconds += 18;
@@ -4570,24 +4480,38 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   Widget _buildSkillVfxOverlay() {
     final skill = _activeSkillVfx;
     if (skill == null || !skill.hasVfx) return const SizedBox.shrink();
+    final spec = _effectiveVfxSpec(skill);
+    final isV19 = _isV19VisualTargetSpec(spec);
+
     return Positioned.fill(
       child: IgnorePointer(
-        child: AnimatedBuilder(
-          animation: _skillVfxController,
-          builder: (_, __) => AnimatedBuilder(
-            animation: _skillImpactController,
-            builder: (_, __) => CustomPaint(
-              painter: _BattleSkillVfxPainter(
-                spec: skill.vfxSpec,
-                progress: _skillVfxController.value,
-                impactProgress: _skillImpactController.value,
-                targetSelf: skill.isSelfAction,
-                hit: _activeSkillVfxHit,
-                critical: _activeSkillVfxCritical,
+        child: isV19
+            ? ProceduralSkillVfx(
+                key: ValueKey<String>('battle-v19-${skill.id}-${skill.name}'),
+                vfxSpec: spec,
+                animation: _skillVfxController,
+                loop: false,
+                tapToReplay: false,
+                showDebugLabel: false,
+                transparentBackground: true,
+                drawVignette: true,
+              )
+            : AnimatedBuilder(
+                animation: _skillVfxController,
+                builder: (_, __) => AnimatedBuilder(
+                  animation: _skillImpactController,
+                  builder: (_, __) => CustomPaint(
+                    painter: _BattleSkillVfxPainter(
+                      spec: spec,
+                      progress: _skillVfxController.value,
+                      impactProgress: _skillImpactController.value,
+                      targetSelf: skill.isSelfAction,
+                      hit: _activeSkillVfxHit,
+                      critical: _activeSkillVfxCritical,
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -4731,7 +4655,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         );
       }
     });
-    _actionFocus.unfocus();
     if (skill.hasVfx) {
       _startSkillVfx(skill, hit: true, critical: false);
       unawaited(_skillImpactController.forward(from: 0));
@@ -4787,165 +4710,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     await _enemyAction();
   }
 
-  int _difficultyFor(String action) {
-    if (RegExp(r'致命|秒杀|斩首|要害').hasMatch(action)) return 18;
-    if (RegExp(r'沙|佯攻|引诱|绕后|地形|观察|破绽').hasMatch(action)) {
-      return 10;
-    }
-    return 12;
-  }
-
-  Future<void> _submitCustomAction() async {
-    if (!_canAct) return;
-    final action = _actionController.text.trim();
-    if (action.isEmpty) return;
-    _actionController.clear();
-    _actionFocus.unfocus();
-
-    if (RegExp(r'防御|格挡|护住|架住').hasMatch(action)) {
-      await _useCustomStance(action, dodging: false);
-      return;
-    }
-    if (RegExp(r'闪避|躲开|翻滚|后撤').hasMatch(action)) {
-      await _useCustomStance(action, dodging: true);
-      return;
-    }
-    if (RegExp(r'休整|休息|调息|恢复精力').hasMatch(action)) {
-      await _useSelfSkill(_skillFor('休整'));
-      return;
-    }
-
-    final tactical =
-        RegExp(r'沙|佯攻|引诱|绕后|地形|观察|破绽').hasMatch(action);
-    final lethal = RegExp(r'致命|秒杀|斩首|要害').hasMatch(action);
-    final energyCost = lethal ? 20 : (tactical ? 8 : 0);
-    if (_playerQi < energyCost) {
-      _addLog(
-        _BattleLogEntry(
-          label: action,
-          before: '精力不足，这个行动需要$energyCost点精力。',
-          meta: '本回合尚未消耗',
-        ),
-      );
-      return;
-    }
-    final enemyDodgeBonus = _enemyIntent == _EnemyIntentKind.skill &&
-            (_enemyIntentSkill?.dodging ?? false)
-        ? _enemyIntentSkill!.enemyHitDifficultyBonus
-        : 0;
-    final dc = _difficultyFor(action) + enemyDodgeBonus;
-    final exposed = _enemyExposedTurns > 0;
-    final exposedHitBonus = exposed ? _enemyExposedHitBonus : 0;
-    final roll = _d20();
-    final total = roll + 4 + exposedHitBonus + _playerHitBonusShift;
-    final baseSuccess = roll != 1 && (roll == 20 || total >= dc);
-    final equipmentHit = roll != 1 &&
-        !baseSuccess &&
-        _equipmentHitPercent > 0 &&
-        _random.nextInt(100) < _equipmentHitPercent;
-    final success = baseSuccess || equipmentHit;
-    final baseCritical = success && (roll == 20 || (exposed && roll >= 19));
-    final accessoryCritical = success &&
-        !baseCritical &&
-        _equipmentCriticalPercent > 0 &&
-        _random.nextInt(100) < _equipmentCriticalPercent;
-    final critical = baseCritical || accessoryCritical;
-    final baseDamage = !success
-        ? 0
-        : _rollPowerDamage(
-            lethal ? 230 : (tactical ? 90 : 65),
-          );
-    final exposedExtraDamage = success && exposed && _enemyExposedExtraDamageMax > 0
-        ? _rollBetween(
-            _enemyExposedExtraDamageMin,
-            _enemyExposedExtraDamageMax,
-          )
-        : 0;
-    final damage = baseDamage + exposedExtraDamage;
-
-    setState(() {
-      _tickSkillCooldowns();
-      _playerQi = _clampPlayerQi(_playerQi - energyCost);
-    });
-    await _resolvePlayerAttack(
-      actionName: action,
-      hit: success,
-      critical: critical,
-      damage: damage,
-      exposes: tactical,
-      exposeHitBonus: tactical ? 2 : 0,
-      exposeExtraDamageMin: tactical ? _powerDamageMin(40) : 0,
-      exposeExtraDamageMax: tactical ? _powerDamageMax(40) : 0,
-      consumeExpose: exposed,
-      piercesGuard: tactical,
-      successText: tactical
-          ? '你的判断奏效，敌人的注意力被误导，'
-          : lethal
-              ? '你冒险抓住了稍纵即逝的要害，'
-              : '行动成功，',
-      failureText: lethal
-          ? '这个动作过于冒险，$_enemyName提前封住了要害。'
-          : '$_enemyName识破了你的意图，你没能形成有效攻击。',
-      meta: 'D20：$roll + 4'
-          '${_modifierLabel(_playerHitBonusShift, '阶位')}'
-          '${exposedHitBonus > 0 ? ' + $exposedHitBonus破绽' : ''}'
-          '${equipmentHit ? '  ·  装备命中修正' : ''}'
-          '${accessoryCritical ? '  ·  饰品暴击' : ''}'
-          '  ·  难度：$dc'
-          '${energyCost > 0 ? '  ·  精力-$energyCost' : ''}'
-          '${tactical ? '  ·  战术有利' : ''}',
-    );
-  }
-
-  Future<void> _useCustomStance(
-    String action, {
-    required bool dodging,
-  }) async {
-    if (!_canAct) return;
-    final energyCost = dodging ? 10 : 5;
-    if (_playerQi < energyCost) {
-      _addLog(
-        _BattleLogEntry(
-          label: action,
-          before: '精力不足，这个行动需要$energyCost点精力。',
-          meta: '本回合尚未消耗',
-        ),
-      );
-      return;
-    }
-    setState(() {
-      _busy = true;
-
-      _tickSkillCooldowns();
-      _playerQi = _clampPlayerQi(_playerQi - energyCost);
-      if (dodging) {
-        _playerDodging = true;
-        _playerDodgeDifficultyBonus = math.max(_playerDodgeDifficultyBonus, 5);
-      } else {
-        _playerGuarding = true;
-        _playerGuardReductionPercent = math.max(_playerGuardReductionPercent, 50);
-      }
-    });
-    _addLog(
-      _BattleLogEntry(
-        label: action,
-        before: dodging
-            ? '你没有贸然出手，而是预判攻击轨迹，准备侧身避让。'
-            : '你稳住下盘，将力量集中在防御上。',
-        meta: dodging
-            ? '精力-10 · 敌方命中难度提高至16'
-            : '精力-5 · 下次伤害降低50%',
-        tone: _BattleLogTone.success,
-      ),
-    );
-    if (!dodging) {
-      unawaited(_playerGuardController.forward(from: 0));
-      unawaited(HapticFeedback.lightImpact());
-    }
-    if (!await _pause(720)) return;
-    await _enemyAction();
-  }
-
   Future<void> _resolvePlayerAttack({
     required String actionName,
     YoranBattleSkill? skillVfx,
@@ -4972,7 +4736,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       _busy = true;
    
     });
-    _actionFocus.unfocus();
 
     // 有 vfx_spec 时，先按技能自己的时间轴蓄力/飞行，在真正的视觉命中点
     // 再进入结算；没有 VFX 的普通攻击继续沿用原来的 245ms 冲刺命中点。
@@ -5316,111 +5079,102 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
   Future<void> _confirmEscape() async {
     if (!_canAct) return;
-    _actionFocus.unfocus();
 
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black.withOpacity(.34),
+      barrierColor: Colors.black.withOpacity(.66),
       builder: (dialogContext) {
         return Dialog(
-          backgroundColor: Colors.transparent,
+          backgroundColor: const Color(0xFF0D0E10),
           insetPadding: const EdgeInsets.symmetric(horizontal: 28),
-          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-          child: ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.085),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(.12),
-                    width: .8,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: Colors.white.withOpacity(.12), width: .8),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  '逃跑',
+                  style: TextStyle(
+                    color: _BattleColors.text,
+                    fontFamily: 'WenJinMinchoP0',
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
                   ),
                 ),
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(height: 10),
+                Text(
+                  '逃跑需要进行判定；如果失败，对手仍会获得本回合行动机会。',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.46),
+                    fontSize: 10.5,
+                    height: 1.55,
+                    letterSpacing: .25,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
                   children: <Widget>[
-                    const Text(
-                      '逃跑',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontFamily: 'WenJinMinchoP0',
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      '逃跑需要进行判定；如果失败，对手仍会获得本回合行动机会。',
-                      style: TextStyle(
-                        color: Color(0xAFFFFFFF),
-                        fontSize: 10.5,
-                        height: 1.55,
-                        letterSpacing: .25,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.of(dialogContext).pop(false),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.white.withOpacity(.72),
-                              side: BorderSide(
-                                color: Colors.white.withOpacity(.14),
-                                width: .8,
-                              ),
-                              minimumSize: const Size.fromHeight(40),
-                              shape: const RoundedRectangleBorder(
-                                borderRadius: BorderRadius.zero,
-                              ),
-                            ),
-                            child: const Text(
-                              '继续战斗',
-                              style: TextStyle(fontSize: 11, letterSpacing: .4),
-                            ),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white.withOpacity(.72),
+                          side: BorderSide(
+                            color: Colors.white.withOpacity(.12),
+                            width: .8,
+                          ),
+                          minimumSize: const Size.fromHeight(40),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: FilledButton(
-                            onPressed: () => Navigator.of(dialogContext).pop(true),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: Colors.white.withOpacity(.96),
-                              foregroundColor: const Color(0xFF111512),
-                              minimumSize: const Size.fromHeight(40),
-                              elevation: 0,
-                              shape: const RoundedRectangleBorder(
-                                borderRadius: BorderRadius.zero,
-                              ),
-                            ),
-                            child: const Text(
-                              '确认逃跑',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: .4,
-                              ),
-                            ),
+                        child: const Text(
+                          '继续战斗',
+                          style: TextStyle(fontSize: 11, letterSpacing: .4),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _BattleColors.text,
+                          foregroundColor: _BattleColors.background,
+                          minimumSize: const Size.fromHeight(40),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
                           ),
                         ),
-                      ],
+                        child: const Text(
+                          '尝试逃跑',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: .4,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
-              ),
+              ],
             ),
           ),
         );
       },
     );
 
-    if (!mounted || confirmed != true || !_canAct) return;
-    await _attemptEscape();
+    if (confirmed == true && mounted) {
+      await _attemptEscape();
+    }
   }
 
   Future<void> _attemptEscape() async {
@@ -5430,7 +5184,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
      
       _tickSkillCooldowns();
     });
-    _actionFocus.unfocus();
     final roll = _d20();
     final dc = (14 + (_opponentHitBonusShift / 2).round())
         .clamp(8, 20)
@@ -6048,11 +5801,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     final companion = _activeAssistCompanion;
     final skill = _activeAssistSkill;
     if (companion == null || skill == null) return const SizedBox.shrink();
-    final accent = _battleSkillQualityColor(skill.quality);
     final portrait = companion.portrait.trim().isNotEmpty
         ? companion.portrait
         : companion.avatar;
 
+    // 援护要“大气”，但不靠华丽配饰：用大幅人物、全屏压暗、轻微推镜和排版制造电影感。
     return IgnorePointer(
       child: AnimatedBuilder(
         animation: _companionAssistController,
@@ -6060,24 +5813,38 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           final t = _companionAssistController.value;
           double phase(double start, double end) =>
               ((t - start) / (end - start)).clamp(0.0, 1.0).toDouble();
-          final enter = Curves.easeOutCubic.transform(phase(0, .24));
-          final exit = Curves.easeInCubic.transform(phase(.76, 1));
+          final enter = Curves.easeOutCubic.transform(phase(0, .22));
+          final exit = Curves.easeInCubic.transform(phase(.80, 1));
           final opacity =
               (math.min(enter, 1 - exit)).clamp(0.0, 1.0).toDouble();
+          final focus = math.sin(t * math.pi).clamp(0.0, 1.0).toDouble();
 
           return LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxWidth < 560;
-              final panelHeight = (constraints.maxHeight * (compact ? .34 : .40))
-                  .clamp(190.0, 320.0)
+              final wide = constraints.maxWidth > constraints.maxHeight * 1.15;
+              final compact = constraints.maxWidth < 560 || constraints.maxHeight < 520;
+              // 援护角色要一眼看清：大幅立绘从屏幕边缘切入，而不是小头像式展示。
+              final portraitHeight = (constraints.maxHeight *
+                      (wide ? 1.08 : (compact ? .78 : .84)))
+                  .clamp(220.0, wide ? 620.0 : 680.0)
                   .toDouble();
-              final slideX = -constraints.maxWidth * .58 * (1 - enter) +
-                  constraints.maxWidth * .30 * exit;
+              final portraitWidth = math
+                  .min(
+                    constraints.maxWidth * (wide ? .56 : .74),
+                    portraitHeight * .92,
+                  )
+                  .toDouble();
+              final slideX = -portraitWidth * .52 * (1 - enter) +
+                  portraitWidth * .28 * exit;
+              final portraitScale = .96 + enter * .08 - exit * .02;
+              final bottom = wide
+                  ? -portraitHeight * .08
+                  : constraints.maxHeight * .025;
               final fallback = Center(
                 child: Icon(
                   Icons.person_rounded,
-                  size: panelHeight * .42,
-                  color: accent.withOpacity(.55),
+                  size: portraitHeight * .30,
+                  color: Colors.white.withOpacity(.22),
                 ),
               );
 
@@ -6086,113 +5853,145 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 child: Stack(
                   fit: StackFit.expand,
                   children: <Widget>[
-                    ColoredBox(color: Colors.black.withOpacity(.18 * opacity)),
-                    Center(
-                      child: Transform.translate(
-                        offset: Offset(slideX, 0),
-                        child: SizedBox(
-                          width: constraints.maxWidth,
-                          height: panelHeight,
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: <Widget>[
-                              Positioned.fill(
-                                left: -28,
-                                right: -28,
-                                child: Transform.rotate(
-                                  angle: -.035,
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: <Color>[
-                                          Colors.black.withOpacity(.92),
-                                          accent.withOpacity(.34),
-                                          Colors.black.withOpacity(.84),
-                                        ],
-                                        stops: const <double>[0, .58, 1],
-                                      ),
-                                      border: Border.symmetric(
-                                        horizontal: BorderSide(
-                                          color: accent.withOpacity(.72),
-                                          width: 1.2,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                left: compact ? -8 : 20,
-                                top: -panelHeight * .14,
-                                bottom: -panelHeight * .03,
-                                width: constraints.maxWidth * (compact ? .58 : .48),
-                                child: _BattleImage(
-                                  source: portrait,
-                                  fallback: fallback,
-                                  logicalWidth: constraints.maxWidth * .5,
-                                  maxCacheWidth: 900,
-                                  fit: BoxFit.contain,
-                                  alignment: Alignment.bottomCenter,
-                                ),
-                              ),
-                              Positioned(
-                                left: constraints.maxWidth * (compact ? .43 : .46),
-                                right: compact ? 18 : 48,
-                                top: panelHeight * .22,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Row(
-                                      children: <Widget>[
-                                        _BattleSkillTypeIcon(
-                                          skill: skill,
-                                          size: compact ? 20 : 25,
-                                          color: accent,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          '限定技',
-                                          style: TextStyle(
-                                            color: accent,
-                                            fontSize: compact ? 10 : 12,
-                                            fontWeight: FontWeight.w900,
-                                            letterSpacing: 2,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 9),
-                                    Text(
-                                      companion.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: Colors.white70,
-                                        fontSize: compact ? 12 : 15,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      skill.name,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontFamily: 'WenJinMinchoP0',
-                                        fontSize: compact ? 22 : 31,
-                                        height: 1.08,
-                                        fontWeight: FontWeight.w800,
-                                        shadows: const <Shadow>[
-                                          Shadow(color: Colors.black, blurRadius: 8),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                    ColoredBox(
+                      color: Colors.black.withOpacity(.10 + .12 * focus),
+                    ),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: <Color>[
+                            Colors.black.withOpacity(.42 * focus),
+                            Colors.black.withOpacity(.15 * focus),
+                            Colors.transparent,
+                          ],
+                          stops: const <double>[0, .48, 1],
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            center: const Alignment(-.58, .08),
+                            radius: .72,
+                            colors: <Color>[
+                              Colors.white.withOpacity(.055 * focus),
+                              Colors.transparent,
                             ],
                           ),
+                        ),
+                      ),
+                    ),
+                    // 一道非常克制的电影式扫光，只负责把援护瞬间“拉开”。
+                    Positioned(
+                      left: -constraints.maxWidth * .28 +
+                          constraints.maxWidth * 1.45 * phase(.02, .62),
+                      top: -constraints.maxHeight * .12,
+                      bottom: -constraints.maxHeight * .12,
+                      width: constraints.maxWidth * .16,
+                      child: Transform.rotate(
+                        angle: -.12,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                              colors: <Color>[
+                                Colors.transparent,
+                                Colors.white.withOpacity(.04 * focus),
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: wide ? -portraitWidth * .03 : -portraitWidth * .08,
+                      bottom: bottom,
+                      width: portraitWidth,
+                      height: portraitHeight,
+                      child: Transform.translate(
+                        offset: Offset(slideX, 0),
+                        child: Transform.scale(
+                          scale: portraitScale,
+                          alignment: Alignment.bottomCenter,
+                          child: _BattleImage(
+                            source: portrait,
+                            fallback: fallback,
+                            logicalWidth: portraitWidth,
+                            maxCacheWidth: 900,
+                            fit: BoxFit.contain,
+                            alignment: Alignment.bottomCenter,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: wide
+                          ? constraints.maxWidth * .42
+                          : constraints.maxWidth * .38,
+                      right: compact ? 16 : constraints.maxWidth * .08,
+                      bottom: wide
+                          ? constraints.maxHeight * .18
+                          : constraints.maxHeight * .20,
+                      child: Transform.translate(
+                        offset: Offset(slideX * .14, 0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Row(
+                              children: <Widget>[
+                                Container(
+                                  width: compact ? 28 : 42,
+                                  height: 1,
+                                  color: Colors.white.withOpacity(.34),
+                                ),
+                                const SizedBox(width: 9),
+                                Text(
+                                  '援 护',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(.72),
+                                    fontSize: compact ? 9.5 : 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 3.0,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: compact ? 7 : 9),
+                            Text(
+                              companion.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.64),
+                                fontSize: compact ? 11 : 13,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: .8,
+                              ),
+                            ),
+                            SizedBox(height: compact ? 3 : 5),
+                            Text(
+                              skill.name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontFamily: 'WenJinMinchoP0',
+                                fontSize: compact ? 23 : 31,
+                                height: 1.02,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: .5,
+                                shadows: const <Shadow>[
+                                  Shadow(color: Color(0xA0000000), blurRadius: 8),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -6218,12 +6017,61 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         body: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          _BattleSceneBackground(image: widget.sceneBackground),
-          // 正式战斗背景统一压暗到约 64% 亮度。
-          // 只压场景背景，不影响角色立绘、战斗特效和白色毛玻璃 UI。
+          AnimatedBuilder(
+            animation: Listenable.merge(<Listenable>[
+              _playerAttackController,
+              _enemyAttackController,
+              _playerDamageController,
+              _enemyDamageController,
+            ]),
+            child: _BattleSceneBackground(image: widget.sceneBackground),
+            builder: (context, child) {
+              final playerAttack = math.sin(_playerAttackController.value * math.pi);
+              final enemyAttack = math.sin(_enemyAttackController.value * math.pi);
+              final impact = math.max(
+                math.sin(_playerDamageController.value * math.pi),
+                math.sin(_enemyDamageController.value * math.pi),
+              ).clamp(0.0, 1.0).toDouble();
+              final focus = playerAttack - enemyAttack;
+              return Transform.translate(
+                offset: Offset(-focus * 3.4, impact * 1.1),
+                child: Transform.scale(
+                  scale: 1.0 + impact * .006,
+                  alignment: const Alignment(.10, .10),
+                  child: child,
+                ),
+              );
+            },
+          ),
+          // 轻量电影式遮罩：只保证 HUD 可读，不压掉场景本身的颜色。
           const DecoratedBox(
             decoration: BoxDecoration(
-              color: Color(0x5C000000),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[
+                  Color(0x5208090B),
+                  Color(0x1C090A0C),
+                  Color(0x00000000),
+                  Color(0x10060709),
+                  Color(0x5208090B),
+                ],
+                stops: <double>[0, .16, .45, .74, 1],
+              ),
+            ),
+          ),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0, -.10),
+                radius: 1.06,
+                colors: <Color>[
+                  Color(0x00000000),
+                  Color(0x08000000),
+                  Color(0x38000000),
+                ],
+                stops: <double>[0, .62, 1],
+              ),
             ),
           ),
           FadeTransition(
@@ -6262,67 +6110,175 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               constraints.maxHeight <= 560 &&
               constraints.maxWidth <= 1100;
 
-          // 手机横屏使用独立布局：左边专注战斗舞台，右边集中战况与操作。
-          // 不再把“舞台 / 记录 / 指令”全部上下堆叠，避免横屏纵向空间被压扁。
           if (landscapePhone) {
             final veryShort = constraints.maxHeight < 360;
-            final sidePanelWidth = (constraints.maxWidth * .42)
-                .clamp(310.0, 410.0)
+            final controlWidth = (constraints.maxWidth * .40)
+                .clamp(300.0, 410.0)
                 .toDouble();
-            return Column(
+            final historyWidth = math
+                .max(190.0, constraints.maxWidth - controlWidth - 42.0)
+                .toDouble();
+            final historyHeight = (constraints.maxHeight * .14)
+                .clamp(42.0, 62.0)
+                .toDouble();
+
+            return Stack(
+              fit: StackFit.expand,
               children: <Widget>[
-                SizedBox(
-                  height: veryShort ? 54 : 60,
-                  child: _buildStatusBars(landscape: true),
-                ),
-                Expanded(
+                Positioned.fill(
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
-                      8,
                       0,
-                      8,
-                      veryShort ? 2 : 6,
+                      veryShort ? 38 : 46,
+                      0,
+                      0,
                     ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        Expanded(
-                          child: _buildStage(landscape: true),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          width: sidePanelWidth,
-                          child: Column(
-                            children: <Widget>[
-                              Expanded(
-                                child: _buildHistory(compact: true),
-                              ),
-                              _buildControls(compact: true),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                    child: _buildStage(landscape: true),
                   ),
                 ),
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  top: 0,
+                  height: veryShort ? 50 : 58,
+                  child: _buildStatusBars(landscape: true),
+                ),
+                Positioned(
+                  left: 14,
+                  bottom: veryShort ? 5 : 10,
+                  width: historyWidth,
+                  height: historyHeight,
+                  child: _buildHistory(compact: true),
+                ),
+                Positioned(
+                  right: 6,
+                  bottom: 0,
+                  width: controlWidth,
+                  child: _buildControls(compact: true),
+                ),
+                _buildSkillDropTarget(landscape: true),
               ],
             );
           }
 
-          // 竖屏 / PC 保持原来的纵向战斗布局。
-          return Column(
+          // 竖屏不再用很小的 flex 强塞战况文字。
+          // 战况区按可用高度自适应 48~72px，剩余空间全部交给人物舞台。
+          final historyHeight = (constraints.maxHeight * .085)
+              .clamp(compactHeight ? 48.0 : 54.0, 72.0)
+              .toDouble();
+
+          return Stack(
+            fit: StackFit.expand,
             children: <Widget>[
-              _buildStatusBars(),
-              Expanded(
-                flex: compactHeight ? 48 : 54,
-                child: _buildStage(),
+              Column(
+                children: <Widget>[
+                  _buildStatusBars(),
+                  Expanded(child: _buildStage()),
+                  SizedBox(
+                    height: historyHeight,
+                    child: _buildHistory(compact: compactHeight),
+                  ),
+                  _buildControls(compact: compactHeight),
+                ],
               ),
-              Expanded(
-                flex: compactHeight ? 24 : 29,
-                child: _buildHistory(),
-              ),
-              _buildControls(compact: compactHeight),
+              _buildSkillDropTarget(landscape: false),
             ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 技能卡可直接拖到战场中央释放。
+  /// DragTarget 本身始终存在，但只有拖拽时才显示视觉反馈，避免平时抢画面。
+  Widget _buildSkillDropTarget({required bool landscape}) {
+    final visible = _draggingSkillName != null &&
+        _activeCategory == _BattleCommandCategory.skills &&
+        _canAct;
+
+    return Align(
+      alignment: landscape ? const Alignment(.08, -.08) : const Alignment(0, -.12),
+      child: DragTarget<YoranBattleSkill>(
+        onWillAccept: (skill) {
+          if (skill == null || !visible) return false;
+          return _canUseSkill(skill.name);
+        },
+        onAccept: (skill) {
+          if (!_canUseSkill(skill.name)) return;
+          setState(() {
+            _draggingSkillName = null;
+            _selectedSkillName = null;
+          });
+          unawaited(HapticFeedback.mediumImpact());
+          unawaited(_useSkill(skill.name));
+        },
+        onLeave: (_) {
+          // 保留拖拽态，真正结束时由 Draggable.onDragEnd 清理。
+        },
+        builder: (context, candidateData, rejectedData) {
+          final hovering = candidateData.isNotEmpty;
+          final rejected = rejectedData.isNotEmpty;
+          final diameter = landscape ? 146.0 : 132.0;
+
+          return AnimatedOpacity(
+            duration: const Duration(milliseconds: 120),
+            opacity: visible ? 1 : 0,
+            child: AnimatedScale(
+              duration: const Duration(milliseconds: 120),
+              curve: Curves.easeOutCubic,
+              scale: hovering ? 1.08 : 1.0,
+              child: Container(
+                width: diameter,
+                height: diameter,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: <Color>[
+                      (hovering ? Colors.white : _BattleColors.text)
+                          .withOpacity(hovering ? .10 : .035),
+                      Colors.black.withOpacity(.04),
+                      Colors.transparent,
+                    ],
+                    stops: const <double>[0, .56, 1],
+                  ),
+                  border: Border.all(
+                    color: rejected
+                        ? _BattleColors.enemy.withOpacity(.72)
+                        : Colors.white.withOpacity(hovering ? .72 : .24),
+                    width: hovering ? 1.4 : .8,
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(
+                      hovering ? Icons.flash_on_rounded : Icons.my_location_rounded,
+                      color: rejected
+                          ? _BattleColors.enemy
+                          : Colors.white.withOpacity(hovering ? .94 : .62),
+                      size: hovering ? 27 : 23,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      rejected
+                          ? '当前不可释放'
+                          : hovering
+                              ? '松手释放'
+                              : '上滑松手释放',
+                      style: TextStyle(
+                        color: rejected
+                            ? _BattleColors.enemy
+                            : Colors.white.withOpacity(hovering ? .92 : .58),
+                        fontSize: landscape ? 10.5 : 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: .8,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           );
         },
       ),
@@ -6447,94 +6403,205 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   Widget _buildStage({bool landscape = false}) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // 横屏和竖屏分别计算舞台尺寸，但双方始终共用同一组 width / height。
-        // 横屏优先按舞台高度放大，保证主角与对手视觉体量一致。
-        final height = landscape
-            ? (constraints.maxHeight - 2).clamp(150.0, 340.0).toDouble()
-            : (constraints.maxHeight - 4).clamp(0.0, 300.0).toDouble();
-        final width = landscape
-            ? math.min(
-                ((constraints.maxWidth - 24) / 2).clamp(105.0, 250.0),
-                height * .72,
-              ).toDouble()
-            : ((constraints.maxWidth - 30) / 2)
-                .clamp(105.0, 210.0)
+        final stageWidth = constraints.maxWidth;
+        final stageHeight = constraints.maxHeight;
+        final wide = landscape || stageWidth > stageHeight * 1.25;
+
+        // 角色不要“抱在一起”：按屏幕比例主动留出中间战斗空间。
+        // 横屏留更大的中央空场，竖屏也保证两张立绘之间至少有明显呼吸区。
+        final narrow = stageWidth < 430;
+        final playerHeight = (stageHeight * (wide ? .90 : (narrow ? .82 : .86)))
+            .clamp(140.0, wide ? 365.0 : 335.0)
+            .toDouble();
+        final enemyHeight = (stageHeight * (wide ? .80 : (narrow ? .72 : .76)))
+            .clamp(128.0, wide ? 320.0 : 295.0)
+            .toDouble();
+        // 画布稍微给宽一点，但立绘本身使用 contain；这样宽构图素材不会被横向裁掉。
+        final playerWidth = math
+            .min(
+              stageWidth * (wide ? .36 : (narrow ? .42 : .43)),
+              playerHeight * .90,
+            )
+            .toDouble();
+        final enemyWidth = math
+            .min(
+              stageWidth * (wide ? .34 : (narrow ? .40 : .41)),
+              enemyHeight * .90,
+            )
+            .toDouble();
+
+        // 双方都向屏幕边缘退，让中央真正留出“交战区”，不再像贴在一起。
+        final playerLeft = wide ? -playerWidth * .08 : -playerWidth * .10;
+        final playerBottom = wide ? -playerHeight * .045 : -playerHeight * .03;
+        final enemyRight = wide ? -enemyWidth * .05 : -enemyWidth * .075;
+        final enemyBottom = wide ? stageHeight * .07 : stageHeight * .08;
+
+        final cameraAnimation = Listenable.merge(<Listenable>[
+          _playerAttackController,
+          _enemyAttackController,
+          _playerDamageController,
+          _enemyDamageController,
+        ]);
+
+        return AnimatedBuilder(
+          animation: cameraAnimation,
+          builder: (context, _) {
+            final playerAttack = math
+                .sin(_playerAttackController.value * math.pi)
+                .clamp(0.0, 1.0)
                 .toDouble();
-        
-        return Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            Align(
-              alignment: Alignment.topCenter,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 2, left: 72, right: 72),
-                child: _buildSceneCaption(),
-              ),
-            ),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Container(
-                height: 28,
-                margin: const EdgeInsets.symmetric(horizontal: 42),
-                decoration: const BoxDecoration(
-                  gradient: RadialGradient(
-                    colors: <Color>[Color(0x4A000000), Color(0x00000000)],
+            final enemyAttack = math
+                .sin(_enemyAttackController.value * math.pi)
+                .clamp(0.0, 1.0)
+                .toDouble();
+            final playerImpact = math
+                .sin(_playerDamageController.value * math.pi)
+                .clamp(0.0, 1.0)
+                .toDouble();
+            final enemyImpact = math
+                .sin(_enemyDamageController.value * math.pi)
+                .clamp(0.0, 1.0)
+                .toDouble();
+            final attackPulse = math.max(playerAttack, enemyAttack).toDouble();
+            final impactPulse = math.max(playerImpact, enemyImpact).toDouble();
+            final focusX = playerAttack - enemyAttack;
+            final cameraX = focusX * 5.0;
+            final cameraY = -impactPulse * 2.0;
+            final cameraScale = 1.0 + attackPulse * .007 + impactPulse * .010;
+
+            return Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.none,
+              children: <Widget>[
+                // 一层非常轻的地面空气感，不画透视网格、不伪造 3D 地板。
+                Positioned(
+                  left: -stageWidth * .08,
+                  right: -stageWidth * .08,
+                  bottom: -stageHeight * .04,
+                  height: stageHeight * .38,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: RadialGradient(
+                          center: const Alignment(0, .42),
+                          radius: .92,
+                          colors: <Color>[
+                            Colors.black.withOpacity(.03),
+                            Colors.black.withOpacity(.10),
+                            Colors.transparent,
+                          ],
+                          stops: const <double>[0, .58, 1],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-            // 恢复为 Row 左右平齐站位，底部对齐 (CrossAxisAlignment.end) 让立绘稳稳踩在地上
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                landscape ? 4 : 6,
-                landscape ? 1 : 3,
-                landscape ? 4 : 6,
-                landscape ? 0 : 2,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: <Widget>[
-                  _AnimatedBattleFighter(
-                    name: widget.playerName,
-                    portrait: widget.playerPortrait,
-                    width: width,
-                    height: height,
-                    isPlayer: true,
-                    attack: _playerAttackController,
-                    damage: _playerDamageController,
-                    breath: _playerBreathController,
-                    dodge: _playerDodgeController,
-                    heal: _playerHealController,
-                    rest: _playerRestController,
-                    guard: _playerGuardController,
-                    guardImpact: _playerGuardImpactController,
-                    isGuarding: _playerGuarding,
-                    criticalHit: _playerDamageCritical,
-                    entrance: _entranceController,
+                Positioned(
+                  left: playerLeft - playerWidth * .03 + cameraX * .55,
+                  bottom: playerBottom + playerHeight * .015,
+                  width: playerWidth * 1.12,
+                  height: math.max(24.0, playerHeight * .075).toDouble(),
+                  child: const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        colors: <Color>[
+                          Color(0x80000000),
+                          Color(0x2A000000),
+                          Color(0x00000000),
+                        ],
+                        stops: <double>[0, .48, 1],
+                      ),
+                    ),
                   ),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 520),
+                ),
+                Positioned(
+                  right: enemyRight + cameraX * .24,
+                  bottom: enemyBottom - 1,
+                  width: enemyWidth * 1.02,
+                  height: math.max(20.0, enemyHeight * .060).toDouble(),
+                  child: const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        colors: <Color>[
+                          Color(0x62000000),
+                          Color(0x20000000),
+                          Color(0x00000000),
+                        ],
+                        stops: <double>[0, .52, 1],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: playerLeft + cameraX * .82,
+                  bottom: playerBottom + cameraY * .72,
+                  width: playerWidth,
+                  height: playerHeight,
+                  child: Transform.scale(
+                    scale: cameraScale + playerAttack * .006,
+                    alignment: Alignment.bottomCenter,
                     child: _AnimatedBattleFighter(
-                      key: ValueKey<int>(_enemyIndex),
-                      name: _enemyName,
-                      portrait: _enemyPortrait,
-                      width: width,
-                      height: height,
-                      isPlayer: false,
-                      attack: _enemyAttackController,
-                      damage: _enemyDamageController,
-                      breath: _enemyBreathController,
-                      dodge: _enemyDodgeController,
-                      criticalHit: _enemyDamageCritical,
+                      name: widget.playerName,
+                      portrait: widget.playerPortrait,
+                      width: playerWidth,
+                      height: playerHeight,
+                      isPlayer: true,
+                      attack: _playerAttackController,
+                      damage: _playerDamageController,
+                      breath: _playerBreathController,
+                      dodge: _playerDodgeController,
+                      heal: _playerHealController,
+                      rest: _playerRestController,
+                      guard: _playerGuardController,
+                      guardImpact: _playerGuardImpactController,
+                      isGuarding: _playerGuarding,
+                      criticalHit: _playerDamageCritical,
                       entrance: _entranceController,
                     ),
                   ),
-                ],
-              ),
-            ),
-            _buildCombatFeedback(),
-          ],
+                ),
+                Positioned(
+                  right: enemyRight - cameraX * .34,
+                  bottom: enemyBottom + cameraY * .28,
+                  width: enemyWidth,
+                  height: enemyHeight,
+                  child: Transform.scale(
+                    scale: 1.0 + enemyAttack * .006 + impactPulse * .003,
+                    alignment: Alignment.bottomCenter,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 520),
+                      child: _AnimatedBattleFighter(
+                        key: ValueKey<int>(_enemyIndex),
+                        name: _enemyName,
+                        portrait: _enemyPortrait,
+                        width: enemyWidth,
+                        height: enemyHeight,
+                        isPlayer: false,
+                        attack: _enemyAttackController,
+                        damage: _enemyDamageController,
+                        breath: _enemyBreathController,
+                        dodge: _enemyDodgeController,
+                        criticalHit: _enemyDamageCritical,
+                        entrance: _entranceController,
+                      ),
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      top: wide ? 2 : 4,
+                      left: wide ? 120 : 70,
+                      right: wide ? 120 : 70,
+                    ),
+                    child: _buildSceneCaption(),
+                  ),
+                ),
+                _buildCombatFeedback(),
+              ],
+            );
+          },
         );
       },
     );
@@ -6557,8 +6624,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               : .90 + math.sin(t * math.pi) * .15;
           return Align(
             alignment: Alignment(
-              _combatTextOnEnemy ? .56 : -.56,
-              -.24,
+              _combatTextOnEnemy ? .38 : -.58,
+              _combatTextOnEnemy ? -.16 : -.04,
             ),
             child: Transform.translate(
               offset: Offset(0, -30 * Curves.easeOutCubic.transform(t)),
@@ -6602,107 +6669,110 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   }
 
  Widget _buildHistory({bool compact = false}) {
-    return Container(
-      margin: compact
-          ? const EdgeInsets.fromLTRB(2, 0, 2, 4)
-          : const EdgeInsets.fromLTRB(14, 0, 14, 8),
-      padding: compact
-          ? const EdgeInsets.fromLTRB(8, 5, 8, 5)
-          : const EdgeInsets.fromLTRB(10, 9, 10, 7),
-      decoration: const BoxDecoration(
-        // 去除生硬边框，改为轻微的渐变，避免文字看不清
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[
-            Color(0x00000000), // 顶部完全透明
-            Color(0x1A000000),
-            Color(0x3D000000), // 底部微暗，自然融入下方操作区
-          ],
-        ),
-      ),
-      child: ValueListenableBuilder<int>(
-        valueListenable: _logRevision,
-        builder: (context, _, __) {
-          if (_logs.isEmpty) return const SizedBox.shrink();
-          final latest = _logs.last;
-          final historyStart = math.max(0, _logs.length - 10).toInt();
-          final historyEnd = math.max(historyStart, _logs.length - 1).toInt();
-          final history = _logs.sublist(historyStart, historyEnd);
-          final latestIsIntent = latest.label == '敌方意图';
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final height = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : (compact ? 56.0 : 68.0);
+        final veryTight = height < 50;
+        final tight = compact || height < 66;
+        final showHeader = !veryTight;
+        final showMeta = !tight && height >= 76;
+        final statusLines = tight ? 1 : 2;
 
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Padding(
-                padding: EdgeInsets.fromLTRB(2, 0, 2, compact ? 4 : 7),
-                child: Row(
-                  children: <Widget>[
-                    Text(
-                      '战况 · 第$_round回合',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.48),
-                        fontSize: compact ? 8.9 : 9.6,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: .65,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (!latestIsIntent)
-                      Text(
-                        '敌方意图 · $_enemyIntentTitle',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: _BattleColors.enemy.withOpacity(.72),
-                          fontSize: compact ? 8.8 : 9.4,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: .35,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              _BattleCurrentStatus(entry: latest),
-              if (history.isNotEmpty) ...<Widget>[
-                SizedBox(height: compact ? 3 : 5),
-                Expanded(
-                  child: ScrollConfiguration(
-                    behavior: ScrollConfiguration.of(context).copyWith(
-                      dragDevices: const <PointerDeviceKind>{
-                        PointerDeviceKind.touch,
-                        PointerDeviceKind.mouse,
-                        PointerDeviceKind.trackpad,
-                      },
-                    ),
-                    child: ListView.separated(
-                      controller: _logController,
-                      padding: const EdgeInsets.fromLTRB(2, 3, 2, 5),
-                      physics: const BouncingScrollPhysics(),
-                      itemCount: history.length,
-                      separatorBuilder: (_, __) => SizedBox(height: compact ? 3 : 5),
-                      itemBuilder: (_, index) {
-                        final age = history.length <= 1
-                            ? 1.0
-                            : (index + 1) / history.length;
-                        return Opacity(
-                          opacity: .24 + .46 * age,
-                          child: _BattleLogTile(
-                            key: ValueKey<String>(
-                              'battle-history-$index-${history[index].label}',
-                            ),
-                            entry: history[index],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
+        return Container(
+          margin: compact
+              ? const EdgeInsets.fromLTRB(2, 0, 2, 3)
+              : const EdgeInsets.fromLTRB(14, 0, 14, 5),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 9 : 12,
+            veryTight ? 4 : (tight ? 5 : 7),
+            compact ? 9 : 12,
+            veryTight ? 4 : (tight ? 5 : 7),
+          ),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: <Color>[
+                Color(0x00080A0C),
+                Color(0x1F080A0C),
+                Color(0x33080A0C),
+                Color(0x1F080A0C),
+                Color(0x00080A0C),
               ],
-            ],
-          );
-        },
-      ),
+              stops: <double>[0, .16, .50, .84, 1],
+            ),
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: ValueListenableBuilder<int>(
+            valueListenable: _logRevision,
+            builder: (context, _, __) {
+              if (_logs.isEmpty) return const SizedBox.shrink();
+              final latest = _logs.last;
+              final latestIsIntent = latest.label == '敌方意图';
+
+              if (veryTight) {
+                return Align(
+                  alignment: Alignment.centerLeft,
+                  child: _BattleCurrentStatus(
+                    entry: latest,
+                    compact: true,
+                    maxLines: 1,
+                    showMeta: false,
+                  ),
+                );
+              }
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  if (showHeader)
+                    Row(
+                      children: <Widget>[
+                        Text(
+                          'TURN ${_round.toString().padLeft(2, '0')}',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(.32),
+                            fontSize: tight ? 8.2 : 8.8,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.4,
+                            height: 1,
+                          ),
+                        ),
+                        const Spacer(),
+                        if (!latestIsIntent)
+                          Flexible(
+                            child: Text(
+                              'NEXT · $_enemyIntentTitle',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: _BattleColors.enemy.withOpacity(.66),
+                                fontSize: tight ? 8.1 : 8.7,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: .7,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  SizedBox(height: tight ? 3 : 5),
+                  _BattleCurrentStatus(
+                    entry: latest,
+                    compact: tight,
+                    maxLines: statusLines,
+                    showMeta: showMeta,
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
@@ -6729,7 +6799,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
   void _openCompanionSkills(YoranBattleCompanion companion) {
     if (!_canAct) return;
-    _actionFocus.unfocus();
     setState(() {
       _selectedCompanionId = companion.id;
       _selectedCompanionSkillId = null;
@@ -6769,64 +6838,76 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Tooltip(
-            message: '${companion.name} · 剩余$remaining个限定技',
+            message: _companionAssistUsedThisRound && !allUsed
+                ? '${companion.name} · 本回合已援助，下一回合恢复'
+                : '${companion.name} · 剩余$remaining个限定技',
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _canAct ? () => _openCompanionSkills(companion) : null,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                width: 32,
-                height: 32,
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? _BattleColors.energy.withOpacity(.15)
-                      : Colors.black.withOpacity(.24),
-                  border: Border.all(
-                    color: selected
-                        ? _BattleColors.energy
-                        : Colors.white.withOpacity(allUsed ? .04 : .14),
-                    width: selected ? 1.4 : .8,
-                  ),
-                  borderRadius: BorderRadius.circular(7),
+                width: 38,
+                height: 38,
+                decoration: const BoxDecoration(
+                  color: Colors.transparent,
                 ),
-                clipBehavior: Clip.antiAlias,
                 child: Stack(
                   fit: StackFit.expand,
+                  clipBehavior: Clip.none,
                   children: <Widget>[
                     Opacity(
-                      opacity: allUsed ? .34 : 1,
-                      child: ClipRect(
+                      opacity: allUsed ? .30 : 1,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(7),
                         child: source.isEmpty
                             ? fallback
                             : _BattleImage(
                                 source: source,
                                 fallback: fallback,
-                                logicalWidth: 30,
-                                maxCacheWidth: 120,
+                                logicalWidth: 38,
+                                maxCacheWidth: 152,
                                 fit: BoxFit.cover,
                               ),
                       ),
                     ),
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        alignment: Alignment.center,
-                        color: allUsed
-                            ? const Color(0xCC343840)
-                            : const Color(0xD90B1423),
-                        child: Text(
-                          '$remaining',
-                          style: TextStyle(
-                            color: allUsed
-                                ? Colors.white38
-                                : _BattleColors.energy,
-                            fontSize: 7.5,
-                            fontWeight: FontWeight.w900,
+                    if (selected)
+                      Positioned(
+                        left: 6,
+                        right: 6,
+                        bottom: -3,
+                        child: Container(
+                          height: 2,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(.82),
+                            borderRadius: BorderRadius.circular(2),
                           ),
+                        ),
+                      ),
+                    if (_companionAssistUsedThisRound && !allUsed)
+                      Positioned(
+                        right: 1,
+                        top: 1,
+                        child: Icon(
+                          Icons.schedule_rounded,
+                          size: 10,
+                          color: Colors.white.withOpacity(.82),
+                        ),
+                      ),
+                    Positioned(
+                      right: 1,
+                      bottom: 1,
+                      child: Text(
+                        '$remaining',
+                        style: TextStyle(
+                          color: allUsed
+                              ? Colors.white38
+                              : Colors.white.withOpacity(.88),
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          shadows: const <Shadow>[
+                            Shadow(color: Color(0xD0000000), blurRadius: 3),
+                            Shadow(color: Color(0xA0000000), offset: Offset(0, 1)),
+                          ],
                         ),
                       ),
                     ),
@@ -6841,10 +6922,22 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   }
 
   Widget _buildControls({required bool compact}) {
-    final bool isSkills = _activeCategory == _BattleCommandCategory.skills;
+    // skills 是战斗页的默认模式。某些短暂状态（敌方行动、眩晕）
+    // 会把 _activeCategory 暂时置空，但视觉上不应该让用户误以为切到了别的模式。
     final bool isItems = _activeCategory == _BattleCommandCategory.items;
     final bool isCompanions =
         _activeCategory == _BattleCommandCategory.companions;
+    final bool isSkills = !isItems && !isCompanions;
+
+    YoranBattleSkill? selectedSkill;
+    if (isSkills && _selectedSkillName != null) {
+      for (final skill in _availableSkills) {
+        if (skill.name == _selectedSkillName) {
+          selectedSkill = skill;
+          break;
+        }
+      }
+    }
 
     bool canConfirm = false;
     if (isSkills && _selectedSkillName != null) {
@@ -6864,12 +6957,22 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
-        color: Colors.transparent, // 移除暗色背景和顶部分界线，彻底透明化
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            Color(0x00080A0C),
+            Color(0x18080A0C),
+            Color(0x52080A0C),
+            Color(0xA6080A0C),
+          ],
+          stops: <double>[0, .20, .60, 1],
+        ),
       ),
       padding: EdgeInsets.only(
-        top: compact ? 6 : 15,
+        top: compact ? 7 : 10,
         bottom: math.max(
-          compact ? 4.0 : 12.0,
+          compact ? 4.0 : 10.0,
           MediaQuery.viewPaddingOf(context).bottom,
         ).toDouble(),
       ),
@@ -6877,7 +6980,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
+            padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 16),
             child: Row(
               children: <Widget>[
                 Expanded(
@@ -6891,7 +6994,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         children: <Widget>[
                           _buildMenuTab(
                             label: '行动',
-                            symbol: '✦',
+                            symbol: '01',
                             isSelected: isSkills,
                             onTap: () {
                               if (_canAct) {
@@ -6899,10 +7002,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                               }
                             },
                           ),
-                          const SizedBox(width: 7),
+                          const SizedBox(width: 6),
                           _buildMenuTab(
                             label: '道具',
-                            symbol: '▣',
+                            symbol: '02',
                             isSelected: isItems,
                             onTap: () {
                               if (_canAct) {
@@ -6910,7 +7013,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                               }
                             },
                           ),
-                          const SizedBox(width: 7),
+                          const SizedBox(width: 6),
                           _buildEscapeAction(),
                           if (_battleCompanions.isNotEmpty) ...<Widget>[
                             const SizedBox(width: 7),
@@ -6923,38 +7026,176 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 ),
                 const SizedBox(width: 8),
                 AnimatedOpacity(
-                  duration: const Duration(milliseconds: 160),
+                  duration: const Duration(milliseconds: 140),
                   opacity: canConfirm ? 1 : 0,
                   child: IgnorePointer(
                     ignoring: !canConfirm,
-                    child: FilledButton.icon(
+                    child: FilledButton(
                       onPressed: canConfirm ? _handleConfirm : null,
-                      icon: const Icon(Icons.check_rounded, size: 15),
-                      label: const Text('确定'),
                       style: FilledButton.styleFrom(
-                        backgroundColor: Colors.white.withOpacity(.96),
-                        foregroundColor: const Color(0xFF111512),
+                        backgroundColor: const Color(0xFFF2F0EA),
+                        foregroundColor: const Color(0xFF0B0C0E),
                         elevation: 0,
-                        minimumSize: const Size(76, 36),
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        shape: const RoundedRectangleBorder(
-                          borderRadius: BorderRadius.zero,
+                        minimumSize: const Size(72, 34),
+                        padding: const EdgeInsets.symmetric(horizontal: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         textStyle: const TextStyle(
                           fontSize: 11.5,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: .7,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.0,
                         ),
                       ),
+                      child: const Text('执行'),
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          SizedBox(height: compact ? 6 : 13),
+          // 技能说明永远占据固定高度：选中技能只替换内容，不改变整个操作区高度。
+          // 这样点击/抬起卡牌时，手牌和上方战场都不会被重新顶动。
           SizedBox(
-            height: 140,
+            height: compact ? 48 : 54,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 140),
+              layoutBuilder: (currentChild, previousChildren) => Stack(
+                alignment: Alignment.center,
+                children: <Widget>[
+                  ...previousChildren,
+                  if (currentChild != null) currentChild,
+                ],
+              ),
+              child: isCompanions
+                  ? Container(
+                      key: ValueKey<String>(
+                        _companionAssistUsedThisRound
+                            ? 'companion-rule-locked'
+                            : 'companion-rule-ready',
+                      ),
+                      width: double.infinity,
+                      margin: EdgeInsets.symmetric(
+                        horizontal: compact ? 10 : 18,
+                        vertical: 4,
+                      ),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: compact ? 10 : 12,
+                        vertical: compact ? 6 : 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0x32080A0C),
+                        border: Border(
+                          top: BorderSide(
+                            color: Colors.white.withOpacity(.12),
+                            width: .8,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          Icon(
+                            _companionAssistUsedThisRound
+                                ? Icons.schedule_rounded
+                                : Icons.person_add_alt_1_rounded,
+                            size: compact ? 15 : 17,
+                            color: Colors.white.withOpacity(
+                              _companionAssistUsedThisRound ? .82 : .68,
+                            ),
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(
+                            child: Text(
+                              _companionAssistUsedThisRound
+                                  ? '本回合援助已使用 · 下一回合恢复'
+                                  : '援助每回合可发动 1 次 · 选择援助技能后执行',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(
+                                  _companionAssistUsedThisRound ? .88 : .74,
+                                ),
+                                fontSize: compact ? 10.2 : 10.8,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: .12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : selectedSkill == null
+                      ? const SizedBox.expand(
+                          key: ValueKey<String>('skill-detail-empty'),
+                        )
+                      : Container(
+                          key: ValueKey<String>('skill-detail-${selectedSkill.name}'),
+                      width: double.infinity,
+                      margin: EdgeInsets.symmetric(
+                        horizontal: compact ? 10 : 18,
+                        vertical: 4,
+                      ),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: compact ? 10 : 12,
+                        vertical: compact ? 6 : 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0x3A080A0C),
+                        border: Border(
+                          top: BorderSide(
+                            color: Colors.white.withOpacity(.10),
+                            width: .7,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: <Widget>[
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: compact ? 92 : 132,
+                            ),
+                            child: Text(
+                              selectedSkill.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: _BattleColors.text,
+                                fontFamily: 'WenJinMinchoP0',
+                                fontSize: 11.8,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: .6,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Container(
+                            width: 1,
+                            height: compact ? 15 : 19,
+                            color: Colors.white.withOpacity(.16),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              selectedSkill.detail,
+                              maxLines: compact ? 1 : 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.90),
+                                fontSize: compact ? 10.5 : 11.0,
+                                height: 1.24,
+                                fontWeight: FontWeight.w500,
+                                letterSpacing: .04,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+          ),
+          SizedBox(
+            height: compact ? 142 : 148,
             child: isSkills
                 ? _buildSkillCards()
                 : isItems
@@ -6976,64 +7217,49 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
+        duration: const Duration(milliseconds: 150),
         curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: isSelected
-              ? Colors.white.withOpacity(.095)
-              : Colors.transparent,
+              ? const Color(0xFFF0EEE8)
+              : Colors.white.withOpacity(.025),
+          borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: isSelected
-                ? Colors.white.withOpacity(.16)
-                : Colors.transparent,
-            width: .7,
+                ? const Color(0xFFF0EEE8)
+                : Colors.white.withOpacity(.24),
+            width: isSelected ? .9 : 1.0,
           ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
           children: <Widget>[
-            SizedBox(
-              width: 17,
-              height: 17,
-              child: Center(
-                child: Transform.translate(
-                  offset: const Offset(0, -.4),
-                  child: Text(
-                    symbol,
-                    textAlign: TextAlign.center,
-                    textHeightBehavior: const TextHeightBehavior(
-                      applyHeightToFirstAscent: false,
-                      applyHeightToLastDescent: false,
-                    ),
-                    style: TextStyle(
-                      color: isSelected
-                          ? Colors.white.withOpacity(.94)
-                          : Colors.white.withOpacity(.42),
-                      fontSize: 14,
-                      height: 1,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 5),
             Text(
-              label,
-              textHeightBehavior: const TextHeightBehavior(
-                applyHeightToFirstAscent: false,
-                applyHeightToLastDescent: false,
-              ),
+              symbol,
               style: TextStyle(
                 color: isSelected
-                    ? Colors.white.withOpacity(.94)
+                    ? const Color(0xFF0B0C0E)
                     : Colors.white.withOpacity(.52),
-                fontSize: 12.5,
+                fontSize: 8.5,
                 height: 1,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
-                letterSpacing: .7,
+                fontWeight: FontWeight.w900,
+                letterSpacing: .3,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected
+                    ? const Color(0xFF0B0C0E)
+                    : Colors.white.withOpacity(.80),
+                fontSize: 12.2,
+                height: 1,
+                fontWeight: FontWeight.w800,
+                letterSpacing: .8,
               ),
             ),
           ],
@@ -7047,33 +7273,44 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       onTap: _canAct ? () => unawaited(_confirmEscape()) : null,
       behavior: HitTestBehavior.opaque,
       child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 160),
-        opacity: _canAct ? 1 : .42,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        duration: const Duration(milliseconds: 150),
+        opacity: _canAct ? 1 : .36,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOutCubic,
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 11),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: const Color(0x26000000),
+            color: Colors.white.withOpacity(.025),
+            borderRadius: BorderRadius.circular(6),
             border: Border.all(
-              color: Colors.white.withOpacity(.07),
-              width: .7,
+              color: Colors.white.withOpacity(.24),
+              width: 1.0,
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
-            children: const <Widget>[
-              Icon(
-                Icons.directions_run_rounded,
-                size: 14,
-                color: Colors.white54,
+            children: <Widget>[
+              Text(
+                '03',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.52),
+                  fontSize: 8.5,
+                  height: 1,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: .3,
+                ),
               ),
-              SizedBox(width: 5),
+              const SizedBox(width: 6),
               Text(
                 '逃跑',
                 style: TextStyle(
-                  color: Colors.white60,
+                  color: Colors.white.withOpacity(.80),
                   fontSize: 12.2,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: .55,
+                  height: 1,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .8,
                 ),
               ),
             ],
@@ -7220,57 +7457,53 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 260),
+      duration: const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,
       builder: (context, value, child) {
-        final scale = .97 + (.03 * value);
         return Opacity(
           opacity: value,
           child: ColoredBox(
-            color: const Color(0x52000000),
+            color: const Color(0xC7000000),
             child: Center(
               child: Transform.translate(
-                offset: Offset(0, 10 * (1 - value)),
-                child: Transform.scale(
-                  scale: scale,
-                  child: child,
-                ),
+                offset: Offset(0, 12 * (1 - value)),
+                child: child,
               ),
             ),
           ),
         );
       },
-      child: ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-          child: Container(
-            width: 340,
-            padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.075),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.12),
-                width: 0.85,
-              ),
-              boxShadow: <BoxShadow>[
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.20),
-                  blurRadius: 26,
-                  offset: const Offset(0, 12),
-                ),
-              ],
+      child: Container(
+        width: 340,
+        padding: const EdgeInsets.fromLTRB(22, 23, 22, 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0D0E10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: Colors.white.withOpacity(.13),
+            width: .8,
+          ),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(
+              color: Color(0xB8000000),
+              blurRadius: 32,
+              offset: Offset(0, 16),
             ),
-            child: Column(
+          ],
+        ),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
+            Container(width: 28, height: 2, color: _BattleColors.text),
+            const SizedBox(height: 12),
             Text(
               title,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                color: Colors.white,
+                color: _BattleColors.text,
                 fontFamily: 'WenJinMinchoP0',
                 fontSize: 21,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
                 letterSpacing: 2.6,
               ),
             ),
@@ -7286,20 +7519,24 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                       child: TextButton(
                         onPressed: _settlingItems ? null : () => _resetBattle(),
                         style: TextButton.styleFrom(
-                          foregroundColor: Colors.white.withOpacity(0.72),
-                          backgroundColor: Colors.white.withOpacity(0.035),
+                          foregroundColor: Colors.white.withOpacity(.66),
+                          backgroundColor: Colors.transparent,
                           padding: EdgeInsets.zero,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.zero,
+                            borderRadius: BorderRadius.circular(6),
                             side: BorderSide(
-                              color: Colors.white.withOpacity(0.12),
-                              width: 0.8,
+                              color: Colors.white.withOpacity(.12),
+                              width: .8,
                             ),
                           ),
                         ),
                         child: const Text(
                           '重新挑战',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .4),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .4,
+                          ),
                         ),
                       ),
                     ),
@@ -7317,26 +7554,23 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                                 returnAfterSettlement: true,
                               )),
                       style: FilledButton.styleFrom(
-                        backgroundColor: _BattleColors.accent,
-                        foregroundColor: const Color(0xFF0F140F),
-                        disabledBackgroundColor: Colors.white.withOpacity(0.05),
-                        disabledForegroundColor: Colors.white.withOpacity(0.30),
-                        padding: EdgeInsets.zero,
+                        backgroundColor: _BattleColors.text,
+                        foregroundColor: _BattleColors.background,
+                        disabledBackgroundColor: Colors.white12,
+                        disabledForegroundColor: Colors.white30,
                         elevation: 0,
-                        shape: const RoundedRectangleBorder(
-                          borderRadius: BorderRadius.zero,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
                         ),
                       ),
                       child: Text(
-                        _settlingItems
-                            ? '结算中…'
-                            : outcome == YoranBattleOutcome.defeat
-                                ? '接受失败并继续'
-                                : '继续剧情',
+                        outcome == YoranBattleOutcome.victory
+                            ? '领取并继续'
+                            : '继续剧情',
                         style: const TextStyle(
                           fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: .4,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: .5,
                         ),
                       ),
                     ),
@@ -7344,9 +7578,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                 ),
               ],
             ),
-              ],
-            ),
-          ),
+          ],
         ),
       ),
     );
@@ -7354,28 +7586,29 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 }
 
 class _BattleColors {
-  static const Color background = Color(0xFF0A0C0B);
-  static const Color surface = Colors.transparent;
-  static const Color surfaceStrong = Color(0x0DFFFFFF);
-  static const Color surfaceElevated = Colors.transparent;
-  static const Color controlSurface = Colors.transparent;
-  static const Color inputSurface = Color(0x0DFFFFFF);
-  
-  static const Color border = Colors.transparent;
-  static const Color borderBright = Color(0x1AFFFFFF);
-  static const Color accentBorder = Color(0x33FFFFFF);
-  static const Color enemyBorder = Colors.transparent;
-  
-  static const Color text = Color(0xFFF2F5F8);
-  static const Color mutedLight = Color(0xFFC0CDC6);
-  static const Color muted = Color(0xFF8A9A91);
-  
-  static const Color accent = Color(0xFF81F670);
-  static const Color accentSoft = Color(0x2681F670);
-  static const Color player = Color(0xFF81F670);
-  static const Color energy = Color(0xFF4DA3FF);
-  static const Color warning = Color(0xFFF4C873);
-  static const Color enemy = Color(0xFFFF7474);
+  static const Color background = Color(0xFF08090B);
+  static const Color surface = Color(0xFF0D0E10);
+  static const Color surfaceStrong = Color(0xFF151619);
+  static const Color surfaceElevated = Color(0xFF191A1E);
+  static const Color controlSurface = Color(0xFF0A0B0D);
+  static const Color inputSurface = Color(0xFF1A1B1E);
+
+  static const Color border = Color(0x18FFFFFF);
+  static const Color borderBright = Color(0x32FFFFFF);
+  static const Color accentBorder = Color(0x66FFFFFF);
+  static const Color enemyBorder = Color(0x33B97A7A);
+
+  static const Color text = Color(0xFFF1EFE9);
+  static const Color mutedLight = Color(0xFFB8B6AF);
+  static const Color muted = Color(0xFF777871);
+
+  // 黑白为主体；状态色全部降饱和，只在反馈节点出现。
+  static const Color accent = Color(0xFFE7E4DC);
+  static const Color accentSoft = Color(0x1FE7E4DC);
+  static const Color player = Color(0xFFA7B6AC);
+  static const Color energy = Color(0xFF91A3B0);
+  static const Color warning = Color(0xFFC6AE7A);
+  static const Color enemy = Color(0xFFB97A7A);
 }
 
 /// 统一战斗页图片加载策略。图片只按当前显示宽度解码，避免手机浏览器
@@ -7466,7 +7699,7 @@ class _BattleSceneBackground extends StatelessWidget {
     );
 
     return RepaintBoundary(
-      child: Transform.scale(scale: 1.025, child: imageWidget),
+      child: Transform.scale(scale: 1.06, child: imageWidget),
     );
   }
 }
@@ -7483,8 +7716,8 @@ class _BattleStatusBar extends StatelessWidget {
     this.enemyIndex,
     this.enemyCount = 0,
     required this.damageAnimation,
-    this.healAnimation, 
-    this.isGuarding = false, 
+    this.healAnimation,
+    this.isGuarding = false,
   });
 
   final String name;
@@ -7502,138 +7735,196 @@ class _BattleStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final listenables = <Listenable>[damageAnimation];
-
     return AnimatedBuilder(
-      animation: Listenable.merge(listenables),
+      animation: damageAnimation,
       builder: (context, child) {
         final progress = (hp / maxHp).clamp(0.0, 1.0).toDouble();
         final qiProgress = (qi / maxQi).clamp(0.0, 1.0).toDouble();
         final sideColor = alignEnd ? _BattleColors.enemy : _BattleColors.player;
-
-        Color hpColor;
-        if (progress > 0.5) {
-          hpColor = sideColor;
-        } else if (progress > 0.25) {
-          hpColor = _BattleColors.warning;
-        } else {
-          hpColor = _BattleColors.enemy;
-        }
+        final hpColor = progress <= .25 ? _BattleColors.enemy : _BattleColors.text;
 
         final damageWave = math.sin(damageAnimation.value * math.pi * 6) *
             (1 - damageAnimation.value);
-        final shakeOffset = damageWave * 3.5;
-        final flashOpacity = (math.sin(damageAnimation.value * math.pi).clamp(0.0, 1.0) * 0.22).toDouble();
+        final shakeOffset = damageWave * 3.0;
+        final flashOpacity =
+            (math.sin(damageAnimation.value * math.pi).clamp(0.0, 1.0) * .18)
+                .toDouble();
         final avatarFallback = Center(
           child: Text(
             name.isNotEmpty ? String.fromCharCode(name.runes.first) : '?',
             style: TextStyle(
               color: sideColor,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
             ),
           ),
         );
-        Widget avatarWidget = AnimatedContainer(
-          duration: const Duration(milliseconds: 260),
-          curve: Curves.easeOutCubic,
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: const Color(0x36000000),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.09),
-              width: 0.75,
-            ),
+
+        // HUD 头像直接展示内容本身，不再套黑色底板或描边框。
+        // 只保留轻微圆角裁切，避免头像像一枚独立的 App 图标。
+        Widget avatarWidget = SizedBox(
+          width: 42,
+          height: 42,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(7),
+            child: portrait.isNotEmpty
+                ? _BattleImage(
+                    source: portrait,
+                    fallback: avatarFallback,
+                    logicalWidth: 42,
+                    maxCacheWidth: 168,
+                    fit: BoxFit.cover,
+                  )
+                : avatarFallback,
           ),
-          clipBehavior: Clip.antiAlias,
-          child: portrait.isNotEmpty
-              ? _BattleImage(
-                  source: portrait,
-                  fallback: avatarFallback,
-                  logicalWidth: 36,
-                  maxCacheWidth: 144,
-                )
-              : avatarFallback,
         );
 
         Widget infoWidget = Expanded(
           child: Column(
-            crossAxisAlignment: alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            crossAxisAlignment:
+                alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
-              Text( 
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: _BattleColors.text,
-                  fontSize: 12,
-                  height: 1,
-                  fontWeight: FontWeight.w500, 
-                  letterSpacing: 1.0,
-                ),
+              Row(
+                mainAxisAlignment:
+                    alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
+                children: <Widget>[
+                  if (!alignEnd)
+                    Container(
+                      width: 4,
+                      height: 4,
+                      margin: const EdgeInsets.only(right: 6),
+                      decoration: BoxDecoration(
+                        color: sideColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  Flexible(
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _BattleColors.text,
+                        fontSize: 12.5,
+                        height: 1,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: .8,
+                      ),
+                    ),
+                  ),
+                  if (alignEnd)
+                    Container(
+                      width: 4,
+                      height: 4,
+                      margin: const EdgeInsets.only(left: 6),
+                      decoration: BoxDecoration(
+                        color: sideColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 6),
               SizedBox(
-                height: 4,
+                height: 6,
                 child: LayoutBuilder(
                   builder: (context, constraints) => Stack(
-                    alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
+                    alignment:
+                        alignEnd ? Alignment.centerRight : Alignment.centerLeft,
                     children: <Widget>[
                       Container(
                         width: constraints.maxWidth,
-                        color: _BattleColors.inputSurface,
-                      ),
-                      Stack(
-                        alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
-                        children: <Widget>[
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 380),
-                            curve: Curves.easeOutCubic,
-                            width: constraints.maxWidth * progress,
-                            color: hpColor,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(.62),
+                          borderRadius: BorderRadius.circular(3),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(.055),
+                            width: .6,
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 2), 
-              SizedBox(
-                height: 1.5,
-                child: LayoutBuilder(
-                  builder: (context, constraints) => Stack(
-                    alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
-                    children: <Widget>[
-                      Container(
-                        width: constraints.maxWidth,
-                        color: Colors.white.withOpacity(0.04), 
+                        ),
                       ),
                       AnimatedContainer(
-                        duration: const Duration(milliseconds: 380),
+                        duration: const Duration(milliseconds: 360),
                         curve: Curves.easeOutCubic,
-                        width: constraints.maxWidth * qiProgress,
+                        width: constraints.maxWidth * progress,
                         decoration: BoxDecoration(
-                          color: alignEnd 
-                              ? _BattleColors.enemy.withOpacity(0.7) 
-                              : _BattleColors.energy,
-                          boxShadow: <BoxShadow>[
-                            BoxShadow(
-                              color: (alignEnd ? _BattleColors.enemy : _BattleColors.energy)
-                                  .withOpacity(0.6),
-                              blurRadius: 3,
-                            ),
-                          ],
+                          color: hpColor,
+                          borderRadius: BorderRadius.circular(3),
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
+              const SizedBox(height: 3),
+              Row(
+                children: alignEnd
+                    ? <Widget>[
+                        Text(
+                          'SP $qi/$maxQi',
+                          style: TextStyle(
+                            color: _BattleColors.energy.withOpacity(.96),
+                            fontSize: 8.4,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: .15,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          'HP $hp/$maxHp',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(.46),
+                            fontSize: 7.8,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ]
+                    : <Widget>[
+                        Text(
+                          'HP $hp/$maxHp',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(.46),
+                            fontSize: 7.8,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          'SP $qi/$maxQi',
+                          style: TextStyle(
+                            color: _BattleColors.energy.withOpacity(.96),
+                            fontSize: 8.4,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: .15,
+                          ),
+                        ),
+                      ],
+              ),
+              const SizedBox(height: 2),
+              SizedBox(
+                height: 3,
+                child: LayoutBuilder(
+                  builder: (context, constraints) => Stack(
+                    alignment:
+                        alignEnd ? Alignment.centerRight : Alignment.centerLeft,
+                    children: <Widget>[
+                      Container(
+                        width: constraints.maxWidth,
+                        color: Colors.white.withOpacity(.09),
+                      ),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 360),
+                        curve: Curves.easeOutCubic,
+                        width: constraints.maxWidth * qiProgress,
+                        color: _BattleColors.energy.withOpacity(.96),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               if (enemyIndex != null && enemyCount > 1) ...<Widget>[
-                const SizedBox(height: 6),
+                const SizedBox(height: 5),
                 _EnemyRosterIndicator(
                   currentIndex: enemyIndex!,
                   count: enemyCount,
@@ -7644,7 +7935,8 @@ class _BattleStatusBar extends StatelessWidget {
         );
 
         Widget content = Row(
-          mainAxisAlignment: alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
+          mainAxisAlignment:
+              alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
           children: alignEnd
               ? <Widget>[infoWidget, const SizedBox(width: 10), avatarWidget]
               : <Widget>[avatarWidget, const SizedBox(width: 10), infoWidget],
@@ -7653,7 +7945,7 @@ class _BattleStatusBar extends StatelessWidget {
         if (flashOpacity > 0) {
           content = ColorFiltered(
             colorFilter: ColorFilter.mode(
-              const Color(0xFFF56C6C).withOpacity(flashOpacity),
+              _BattleColors.enemy.withOpacity(flashOpacity),
               BlendMode.srcATop,
             ),
             child: content,
@@ -7662,11 +7954,8 @@ class _BattleStatusBar extends StatelessWidget {
 
         return Transform.translate(
           offset: Offset(shakeOffset, 0),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            decoration: const BoxDecoration(
-              color: Colors.transparent, // 取消底层的大黑底与边框
-            ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
             child: content,
           ),
         );
@@ -8115,17 +8404,15 @@ class _BattlePortrait extends StatelessWidget {
       height: height,
     );
     if (portrait.trim().isEmpty) return fallback;
-    final image = ClipRect(
-      child: _BattleImage(
-        source: portrait,
-        fallback: fallback,
-        logicalWidth: width,
-        maxCacheWidth: 900,
-        // 双方立绘共用固定画布，并统一按高度适配。
-        // 相比 contain，可避免一张图因为原始宽高比不同而显得明显更矮。
-        fit: BoxFit.fitHeight,
-        alignment: Alignment.bottomCenter,
-      ),
+    // 立绘必须完整显示。之前 fitHeight + ClipRect 会把较宽的敌方素材直接裁掉一半。
+    // contain 会在当前自适应画布内保留完整人物，再由舞台尺寸控制视觉体量。
+    final image = _BattleImage(
+      source: portrait,
+      fallback: fallback,
+      logicalWidth: width,
+      maxCacheWidth: 900,
+      fit: BoxFit.contain,
+      alignment: Alignment.bottomCenter,
     );
     final display = isPlayer
         ? image
@@ -8217,9 +8504,17 @@ class _BattleLogEntry {
 }
 
 class _BattleCurrentStatus extends StatelessWidget {
-  const _BattleCurrentStatus({required this.entry});
+  const _BattleCurrentStatus({
+    required this.entry,
+    this.compact = false,
+    this.maxLines = 2,
+    this.showMeta = true,
+  });
 
   final _BattleLogEntry entry;
+  final bool compact;
+  final int maxLines;
+  final bool showMeta;
 
   @override
   Widget build(BuildContext context) {
@@ -8232,90 +8527,96 @@ class _BattleCurrentStatus extends StatelessWidget {
       _ => Colors.white,
     };
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(2, 0, 2, 2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    if (isIntent) {
+      return Row(
         children: <Widget>[
-          if (isIntent)
-            Row(
-              children: <Widget>[
-                Icon(
-                  Icons.visibility_outlined,
-                  size: 12.5,
-                  color: _BattleColors.enemy.withOpacity(.72),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '敌方意图',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(.52),
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: .5,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    entry.before,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _BattleColors.enemy.withOpacity(.92),
-                      fontSize: 13.2,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: .25,
-                    ),
-                  ),
-                ),
-              ],
-            )
-          else
-            Text.rich(
-              TextSpan(
-                style: TextStyle(
-                  color: enemy
-                      ? Colors.white.withOpacity(.82)
-                      : Colors.white.withOpacity(.92),
-                  fontSize: 13.1,
-                  height: 1.45,
-                  fontWeight: FontWeight.w500,
-                  shadows: const <Shadow>[
-                    Shadow(color: Color(0x70000000), blurRadius: 2),
-                  ],
-                ),
-                children: <InlineSpan>[
-                  TextSpan(text: entry.before),
-                  if (entry.emphasis.isNotEmpty)
-                    TextSpan(
-                      text: entry.emphasis,
-                      style: TextStyle(
-                        color: emphasisColor,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  if (entry.after.isNotEmpty) TextSpan(text: entry.after),
-                ],
-              ),
+          Icon(
+            Icons.visibility_outlined,
+            size: compact ? 11.5 : 12.5,
+            color: _BattleColors.enemy.withOpacity(.68),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            '敌方意图',
+            style: TextStyle(
+              color: Colors.white.withOpacity(.46),
+              fontSize: compact ? 8.8 : 9.5,
+              fontWeight: FontWeight.w600,
+              letterSpacing: .4,
+              height: 1.1,
             ),
-          if (entry.meta.isNotEmpty && !isIntent) ...<Widget>[
-            const SizedBox(height: 3),
-            Text(
-              entry.meta,
+          ),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              entry.before,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: TextStyle(
-                color: Colors.white.withOpacity(.35),
-                fontSize: 8.9,
-                height: 1.15,
-                fontWeight: FontWeight.w500,
+                color: _BattleColors.enemy.withOpacity(.90),
+                fontSize: compact ? 11.6 : 12.8,
+                fontWeight: FontWeight.w700,
                 letterSpacing: .2,
+                height: 1.15,
               ),
             ),
-          ],
+          ),
         ],
-      ),
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text.rich(
+          TextSpan(
+            style: TextStyle(
+              color: enemy
+                  ? Colors.white.withOpacity(.80)
+                  : Colors.white.withOpacity(.90),
+              fontSize: compact ? 11.7 : 12.7,
+              height: compact ? 1.22 : 1.30,
+              fontWeight: FontWeight.w500,
+              shadows: const <Shadow>[
+                Shadow(color: Color(0x66000000), blurRadius: 2),
+              ],
+            ),
+            children: <InlineSpan>[
+              TextSpan(text: entry.before),
+              if (entry.emphasis.isNotEmpty)
+                TextSpan(
+                  text: entry.emphasis,
+                  style: TextStyle(
+                    color: emphasisColor,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              if (entry.after.isNotEmpty) TextSpan(text: entry.after),
+            ],
+          ),
+          maxLines: maxLines < 1 ? 1 : maxLines,
+          overflow: TextOverflow.ellipsis,
+          softWrap: true,
+        ),
+        if (showMeta && entry.meta.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 2),
+          Text(
+            entry.meta,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: TextStyle(
+              color: Colors.white.withOpacity(.32),
+              fontSize: compact ? 8.2 : 8.7,
+              height: 1.05,
+              fontWeight: FontWeight.w500,
+              letterSpacing: .15,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -8747,6 +9048,8 @@ class _BattleCardHand extends StatefulWidget {
     required this.enabled,
     required this.selectedSkillName,
     required this.onSkillSelected,
+    required this.onSkillQuickCast,
+    required this.onDragStateChanged,
   });
 
   final List<YoranBattleSkill> skills;
@@ -8756,6 +9059,8 @@ class _BattleCardHand extends StatefulWidget {
   final bool enabled;
   final String? selectedSkillName;
   final ValueChanged<String> onSkillSelected;
+  final ValueChanged<String> onSkillQuickCast;
+  final ValueChanged<String?> onDragStateChanged;
 
   @override
   State<_BattleCardHand> createState() => _BattleCardHandState();
@@ -8763,14 +9068,44 @@ class _BattleCardHand extends StatefulWidget {
 
 class _BattleCardHandState extends State<_BattleCardHand>
     with SingleTickerProviderStateMixin {
-  static const double _cardSpacing = 60.0;
-  static const double _maxAngle = 0.42;
-  static const double _minScale = 0.82;
+  static const double _cardSpacing = 70.0;
+  static const double _dragDistancePerCard = 52.0;
+  static const double _maxAngle = 0.30;
+  static const double _minScale = 0.86;
 
   late final AnimationController _snapController;
   double _scrollPosition = 0.0;
   double _snapFrom = 0.0;
   double _snapTo = 0.0;
+  Offset? _quickDragStartGlobal;
+  Offset? _quickDragLatestGlobal;
+  String? _activeDragSkillName;
+
+  void _rememberQuickDragPointer(PointerDownEvent event) {
+    _quickDragStartGlobal = event.position;
+    _quickDragLatestGlobal = event.position;
+  }
+
+  void _updateQuickDrag(DragUpdateDetails details) {
+    _quickDragLatestGlobal = details.globalPosition;
+  }
+
+  bool _shouldQuickCast(DraggableDetails details) {
+    if (details.wasAccepted) return false;
+    final start = _quickDragStartGlobal;
+    final end = _quickDragLatestGlobal;
+    if (start == null || end == null) return false;
+    final dx = (end.dx - start.dx).abs();
+    final upward = start.dy - end.dy;
+    // 快捷出牌：明显向上拖出卡面后松手即可，不要求进入中央释放圈。
+    // 同时保留方向判断，避免横向转手牌时误触释放。
+    return upward >= 42 && upward >= dx * .65;
+  }
+
+  void _clearQuickDragPointer() {
+    _quickDragStartGlobal = null;
+    _quickDragLatestGlobal = null;
+  }
 
   @override
   void initState() {
@@ -8823,6 +9158,12 @@ class _BattleCardHandState extends State<_BattleCardHand>
         .toDouble();
   }
 
+  void _selectCard(YoranBattleSkill skill) {
+    // 点击只改变选中态，不再自动旋转/居中手牌。
+    // 轮盘位置完全由用户横向拖动控制。
+    widget.onSkillSelected(skill.name);
+  }
+
   void _animateToCard(double target) {
     final next = _clampPosition(target.roundToDouble());
     if ((_scrollPosition - next).abs() < 0.001) {
@@ -8839,6 +9180,22 @@ class _BattleCardHandState extends State<_BattleCardHand>
       milliseconds: (220 + distance * 55).clamp(220, 380).round(),
     );
     _snapController.forward(from: 0.0);
+  }
+
+  int _indexForTap(Offset localPosition, double handWidth) {
+    if (widget.skills.length <= 1) return 0;
+    final centerX = handWidth / 2;
+    final relative = (localPosition.dx - centerX) / _cardSpacing;
+    return (_scrollPosition + relative)
+        .round()
+        .clamp(0, widget.skills.length - 1)
+        .toInt();
+  }
+
+  void _handleTap(TapUpDetails details, double handWidth) {
+    if (!widget.enabled || widget.skills.isEmpty) return;
+    final index = _indexForTap(details.localPosition, handWidth);
+    _selectCard(widget.skills[index]);
   }
 
   @override
@@ -8864,104 +9221,176 @@ class _BattleCardHandState extends State<_BattleCardHand>
       return bDistance.compareTo(aDistance);
     });
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onHorizontalDragStart: (_) {
-        _snapController.stop();
-      },
-      onHorizontalDragUpdate: count <= 1
-          ? null
-          : (details) {
-              setState(() {
-                // 手指向左拖，轮盘向下一张技能滚动。
-                _scrollPosition = _clampPosition(
-                  _scrollPosition - details.delta.dx / _cardSpacing,
-                );
-              });
-            },
-      onHorizontalDragEnd: count <= 1
-          ? null
-          : (details) {
-              // 根据松手速度做一小段惯性预测，再吸附到最近的一张。
-              final velocity = details.primaryVelocity ?? 0.0;
-              final projected = _scrollPosition - velocity / 950.0;
-              _animateToCard(projected);
-            },
-      onHorizontalDragCancel: count <= 1
-          ? null
-          : () => _animateToCard(_scrollPosition),
-      child: Stack(
-        alignment: Alignment.bottomCenter,
-        clipBehavior: Clip.none,
-        children: drawOrder.map((index) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final handWidth = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
+
+        // 视觉层和手势层彻底分开：卡片可以互相重叠，但每个技能拥有独立的
+        // 70px 拖拽槽位。这样侧边露出的卡不会再被中央卡的矩形 hitbox 抢走。
+        final visualCards = <Widget>[];
+        final dragLanes = <Widget>[];
+
+        for (final index in drawOrder) {
           final skill = widget.skills[index];
           final cooldown = widget.cooldowns[skill.name] ?? 0;
           final isSelected = skill.name == widget.selectedSkillName;
-
           final canUse = widget.enabled &&
               cooldown <= 0 &&
               (!skill.resting || widget.playerQi < 100) &&
               widget.playerQi >= skill.energyCost &&
               (skill.canSelfKill || widget.playerHp > skill.healthCost);
 
-          // 核心：每一帧都根据“卡片索引 - 当前轮盘位置”重新计算扇形。
-          // 因此拖动 2.0 -> 2.5 -> 3.0 时，所有卡都会一起旋转滚动。
-          final double relative = index - _scrollPosition;
-          final double distance = relative.abs();
-          final double baseAngle =
-              (relative * 0.12).clamp(-_maxAngle, _maxAngle).toDouble();
-          final double offsetX = relative * _cardSpacing;
-          final double baseOffsetY = math.min(distance * distance * 4.5, 58.0);
-          final double baseScale =
+          final relative = index - _scrollPosition;
+          final distance = relative.abs();
+          final baseAngle =
+              (relative * 0.095).clamp(-_maxAngle, _maxAngle).toDouble();
+          final offsetX = relative * _cardSpacing;
+          final baseOffsetY = math.min(distance * distance * 2.6, 28.0);
+          final baseScale =
               (1.0 - distance * 0.045).clamp(_minScale, 1.0).toDouble();
+          final focusOpacity = isSelected
+              ? 1.0
+              : (1.0 - distance * .10).clamp(.62, 1.0).toDouble();
+          final draggingThis = _activeDragSkillName == skill.name;
 
-          return Positioned(
-            key: ValueKey('card_${skill.name}'),
-            bottom: 10,
-            child: TweenAnimationBuilder<double>(
-              tween: Tween<double>(begin: 0, end: isSelected ? 1.0 : 0.0),
-              duration: const Duration(milliseconds: 280),
-              curve: Curves.easeOutBack,
-              builder: (context, t, child) {
-                // 选中时仍保留原来的直立 + 上弹效果。
-                final double currentAngle = baseAngle * (1 - t);
-                final double currentOffsetY =
-                    -baseOffsetY + (44.0 + baseOffsetY) * t;
-                final double currentScale = _mix(baseScale, 1.025, t);
-
-                return Transform.translate(
-                  offset: Offset(offsetX, -currentOffsetY),
-                  child: Transform.scale(
-                    scale: currentScale,
-                    child: Transform.rotate(
-                      angle: currentAngle,
-                      child: child,
+          visualCards.add(
+            Positioned(
+              key: ValueKey('card_${skill.name}'),
+              bottom: 4,
+              child: IgnorePointer(
+                child: Opacity(
+                  opacity: draggingThis ? .18 : focusOpacity,
+                  child: Transform.translate(
+                    offset: Offset(offsetX, baseOffsetY),
+                    child: Transform.scale(
+                      scale: baseScale,
+                      child: Transform.rotate(
+                        angle: baseAngle,
+                        child: _BattleCard(
+                          skill: skill,
+                          cooldown: cooldown,
+                          canUse: canUse,
+                          isSelected: isSelected,
+                          playerQi: widget.playerQi,
+                          playerHp: widget.playerHp,
+                        ),
+                      ),
                     ),
                   ),
-                );
-              },
-              child: GestureDetector(
-                onTap: () => widget.onSkillSelected(skill.name),
-                behavior: HitTestBehavior.opaque,
-                child: _BattleCard(
-                  skill: skill,
-                  cooldown: cooldown,
-                  canUse: canUse,
-                  isSelected: isSelected,
-                  playerQi: widget.playerQi,
-                  playerHp: widget.playerHp,
                 ),
               ),
             ),
           );
-        }).toList(),
-      ),
+
+          if (!canUse) continue;
+
+          dragLanes.add(
+            Positioned(
+              key: ValueKey('drag_lane_${skill.name}'),
+              bottom: 4,
+              child: Transform.translate(
+                offset: Offset(offsetX, baseOffsetY),
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: _rememberQuickDragPointer,
+                  child: Draggable<YoranBattleSkill>(
+                    data: skill,
+                    axis: Axis.vertical,
+                    affinity: Axis.vertical,
+                    hitTestBehavior: HitTestBehavior.opaque,
+                    maxSimultaneousDrags: 1,
+                    onDragStarted: () {
+                      setState(() => _activeDragSkillName = skill.name);
+                      widget.onDragStateChanged(skill.name);
+                      unawaited(HapticFeedback.selectionClick());
+                    },
+                    onDragUpdate: _updateQuickDrag,
+                    onDragEnd: (details) {
+                      final quickCast = _shouldQuickCast(details);
+                      if (mounted) {
+                        setState(() => _activeDragSkillName = null);
+                      }
+                      widget.onDragStateChanged(null);
+                      _clearQuickDragPointer();
+                      if (quickCast) {
+                        widget.onSkillQuickCast(skill.name);
+                      }
+                    },
+                    feedback: Material(
+                      color: Colors.transparent,
+                      child: Transform.scale(
+                        scale: 1.08,
+                        child: _BattleCard(
+                          skill: skill,
+                          cooldown: cooldown,
+                          canUse: true,
+                          isSelected: true,
+                          playerQi: widget.playerQi,
+                          playerHp: widget.playerHp,
+                        ),
+                      ),
+                    ),
+                    childWhenDragging: SizedBox(
+                      width: count <= 1 ? 92 : _cardSpacing,
+                      height: 124,
+                    ),
+                    child: SizedBox(
+                      // 拖拽槽位按扇形间距切分，彼此不重叠；不需要先选中或居中。
+                      width: count <= 1 ? 92 : _cardSpacing,
+                      height: 124,
+                      child: const ColoredBox(color: Colors.transparent),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // 轻点仍可查看/高亮技能，但它和快捷释放完全解耦。
+          onTapUp: (details) => _handleTap(details, handWidth),
+          onHorizontalDragStart: (_) {
+            _snapController.stop();
+          },
+          onHorizontalDragUpdate: count <= 1
+              ? null
+              : (details) {
+                  setState(() {
+                    _scrollPosition = _clampPosition(
+                      _scrollPosition - details.delta.dx / _dragDistancePerCard,
+                    );
+                  });
+                },
+          onHorizontalDragEnd: count <= 1
+              ? null
+              : (details) {
+                  final velocity = details.primaryVelocity ?? 0.0;
+                  final projected = _scrollPosition - velocity / 760.0;
+                  _animateToCard(projected);
+                },
+          onHorizontalDragCancel: count <= 1
+              ? null
+              : () => _animateToCard(_scrollPosition),
+          child: Stack(
+            alignment: Alignment.bottomCenter,
+            clipBehavior: Clip.none,
+            children: <Widget>[
+              ...visualCards,
+              ...dragLanes,
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
 /// 单张卡牌的美术呈现
-/// 单张卡牌：烟熏半透明 HUD + 白色选中态。
+/// 卡面使用通透的炭灰层级；选中态通过亮面、白边与极轻品质色光晕聚焦。
 class _BattleCard extends StatelessWidget {
   const _BattleCard({
     super.key,
@@ -8982,146 +9411,165 @@ class _BattleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 判定不可用的具体原因
     final bool isEnergyShort = playerQi < skill.energyCost;
-    final bool isHpShort = !skill.canSelfKill && playerHp <= skill.healthCost;
     final bool isLocked = !canUse;
+    final quality = _battleSkillQualityColor(skill.quality);
 
-    // 交互选中统一使用白色
-    Color borderColor;
-    if (isSelected) {
-      borderColor = Colors.white.withOpacity(0.78);
-    } else if (isLocked) {
-      borderColor = Colors.white.withOpacity(0.045);
-    } else {
-      borderColor = Colors.white.withOpacity(0.085);
-    }
+    final borderColor = isSelected
+        ? Colors.white.withOpacity(.94)
+        : Colors.white.withOpacity(isLocked ? .07 : .20);
+    final topSurface = isLocked
+        ? const Color(0x6617191D)
+        : (isSelected ? const Color(0xE34A4F58) : const Color(0xB5363941));
+    final bottomSurface = isLocked
+        ? const Color(0x73101215)
+        : (isSelected ? const Color(0xD62B2F36) : const Color(0xA31A1D22));
 
-    Color bgColor = isSelected
-        ? Colors.white.withOpacity(0.12)
-        : (isLocked ? const Color(0x24000000) : const Color(0x3D000000));
-
-    return Stack(
-      clipBehavior: Clip.none,
-      alignment: Alignment.center,
-      children: [
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 200),
-          opacity: isLocked && !isSelected ? 0.65 : 1.0, 
-          child: ClipRect( // 新增毛玻璃裁剪区
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12), // 增加毛玻璃特效
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                width: 84,  
-                height: 120, 
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.zero, 
-                  color: bgColor, 
-                  border: Border.all(
-                    color: borderColor,
-                    width: isSelected ? 0.95 : 0.75,
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 170),
+      opacity: isLocked && !isSelected ? .40 : 1,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 190),
+        width: 92,
+        height: 124,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: <Color>[topSurface, bottomSurface],
+          ),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: borderColor,
+            width: isSelected ? 1.25 : .8,
+          ),
+          boxShadow: isSelected
+              ? <BoxShadow>[
+                  BoxShadow(
+                    color: quality.withOpacity(.16),
+                    blurRadius: 18,
+                    spreadRadius: 1,
                   ),
-                  boxShadow: null,
+                  BoxShadow(
+                    color: Colors.black.withOpacity(.30),
+                    blurRadius: 14,
+                    offset: const Offset(0, 8),
+                  ),
+                ]
+              : null,
+        ),
+        child: Stack(
+          children: <Widget>[
+            Positioned(
+              top: 0,
+              left: 10,
+              right: 10,
+              child: Container(
+                height: 2,
+                color: isLocked
+                    ? Colors.white12
+                    : (isSelected ? Colors.white : quality.withOpacity(.84)),
+              ),
+            ),
+            if (skill.energyCost > 0)
+              Positioned(
+                top: 7,
+                left: 7,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isEnergyShort
+                        ? _BattleColors.enemy.withOpacity(.14)
+                        : Colors.white.withOpacity(.075),
+                    borderRadius: BorderRadius.circular(5),
+                    border: Border.all(
+                      color: isEnergyShort
+                          ? _BattleColors.enemy.withOpacity(.48)
+                          : Colors.white.withOpacity(.18),
+                      width: .8,
+                    ),
+                  ),
+                  child: Text(
+                    'SP -${skill.energyCost}',
+                    style: TextStyle(
+                      color: isEnergyShort
+                          ? _BattleColors.enemy
+                          : Colors.white.withOpacity(.92),
+                      fontSize: 9.6,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .18,
+                    ),
+                  ),
                 ),
-                child: Stack(
-                  children: <Widget>[
-                    // 左上角：精力消耗
-                    if (skill.energyCost > 0)
-                      Positioned(
-                        top: 6,
-                        left: 6,
-                        child: Text(
-                          '${skill.energyCost}',
-                          style: TextStyle(
-                            color: isEnergyShort 
-                                ? _BattleColors.enemy 
-                                : (isSelected ? Colors.white : Colors.white70),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                            shadows: null,
-                          ),
-                        ),
-                      ),
-                    // 右上角：CD冷却
-                    if (cooldown > 0)
-                      Positioned(
-                        top: 6,
-                        right: 6,
-                        child: Text(
-                          '${cooldown}CD',
-                          style: TextStyle(
-                            color: _BattleColors.enemy.withOpacity(0.82),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    Positioned(
-                      top: 8,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: _BattleSkillTypeIcon(
-                          skill: skill,
-                          size: 17,
-                          color: isLocked
-                              ? Colors.white24
-                              : (isSelected
-                                  ? Colors.white
-                                  : _battleSkillQualityColor(skill.quality)),
-                        ),
-                      ),
-                    ),
-                    // 技能名称
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(4, 19, 4, 0),
-                        child: Text(
-                          skill.name,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: isLocked 
-                                ? Colors.white30 
-                                : (isSelected ? Colors.white : Colors.white.withOpacity(0.85)), 
-                            fontFamily: 'WenJinMinchoP0',
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+              ),
+            if (cooldown > 0)
+              Positioned(
+                top: 9,
+                right: 9,
+                child: Text(
+                  'CD $cooldown',
+                  style: TextStyle(
+                    color: _BattleColors.enemy.withOpacity(.74),
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .2,
+                  ),
+                ),
+              ),
+            Positioned(
+              top: 28,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _BattleSkillTypeIcon(
+                  skill: skill,
+                  size: 22,
+                  color: isLocked
+                      ? Colors.white24
+                      : (isSelected ? Colors.white : quality.withOpacity(.90)),
                 ),
               ),
             ),
-          ),
-        ),
-        // 选中时的悬浮描述
-        Positioned(
-          bottom: -30, 
-          width: 140, 
-          child: AnimatedOpacity(
-            duration: const Duration(milliseconds: 250),
-            opacity: isSelected ? 1.0 : 0.0,
-            child: IgnorePointer(
+            Positioned(
+              left: 7,
+              right: 7,
+              top: 58,
               child: Text(
-                skill.detail,
+                skill.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white70, 
-                  fontSize: 10,
-                  height: 1.3,
-                  fontWeight: FontWeight.w600,
-                  shadows: [
-                    Shadow(color: Colors.black, blurRadius: 4, offset: Offset(0, 1)),
-                  ],
+                style: TextStyle(
+                  color: isLocked ? Colors.white30 : _BattleColors.text,
+                  fontFamily: 'WenJinMinchoP0',
+                  fontSize: 13.5,
+                  height: 1.10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: .2,
                 ),
               ),
             ),
-          ),
+            Positioned(
+              left: 8,
+              right: 8,
+              bottom: 9,
+              child: Text(
+                _battleSkillTypeName(skill.iconType),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(isLocked ? .18 : .34),
+                  fontSize: 8.2,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: .9,
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
+
