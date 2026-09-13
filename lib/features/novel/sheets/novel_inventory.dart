@@ -1133,7 +1133,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     final identity = stringValue(status['identity'] ?? host?.persona['identity']).trim();
     final level = stringValue(status['level']).trim();
     final condition = widget.controller.protagonistCondition.trim();
-    final avatar = host?.avatarUrl.trim() ?? '';
+    // 游戏内头像统一从立绘截取：优先 portrait，缺失时再退回 avatar。
+    // 背包头像需要更聚焦头部，因此在圆形裁切中再上移并放大。
+    final avatar = (host?.portraitUrl.trim().isNotEmpty ?? false)
+        ? host!.portraitUrl.trim()
+        : (host?.avatarUrl.trim() ?? '');
     final fallbackAsset = host?.gender.trim() == '女'
         ? 'assets/images/female.webp'
         : 'assets/images/male.webp';
@@ -1169,11 +1173,21 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   ],
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: NovelArtwork(
-                  url: CdnUtil.resize(avatar, width: 256),
-                  assetCandidates: <String>[fallbackAsset],
-                  fit: BoxFit.cover,
-                  fallbackText: name,
+                child: ClipRect(
+                  child: Transform.scale(
+                    // 继续放大，但不再以图片最顶部作为缩放锚点，
+                    // 避免头顶留白被放大后把整张脸推出圆形裁切区。
+                    scale: landscape ? 1.82 : 1.88,
+                    alignment: const Alignment(0, -0.38),
+                    child: NovelArtwork(
+                      url: CdnUtil.resize(avatar, width: 320),
+                      assetCandidates: <String>[fallbackAsset],
+                      fit: BoxFit.cover,
+                      // 仍然偏上取景，但保留脸部，不再死贴 topCenter。
+                      alignment: const Alignment(0, -1.3),
+                      fallbackText: name,
+                    ),
+                  ),
                 ),
               ),
               SizedBox(width: landscape ? 10 : 12),
