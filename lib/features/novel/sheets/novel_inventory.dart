@@ -182,6 +182,12 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
       'gift' => '赠礼',
       'blind_box' => '特殊物品',
       'lucky_card' => '特殊物品',
+      'fate_card' => '特殊物品',
+      'revert_card' => '特殊物品',
+      'skill_book' => '特殊物品',
+      'image_card' => '特殊物品',
+      'cat_eye_stone' => '特殊物品',
+      'enhance_stone' => '特殊物品',
       'weapon' => '手持',
       'wearable' || 'armor' => '穿戴',
       'accessory' => '饰品',
@@ -499,9 +505,28 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
 
   Future<void> _toggleWear(NovelInventoryItem item) async {
     if (busy.isNotEmpty) return;
+    final targetEquipped = !item.isEquipped;
     setState(() => busy = item.id);
     try {
-      await widget.controller.setEquipped(item, !item.isEquipped);
+      await widget.controller.setEquipped(item, targetEquipped);
+
+      // 不依赖 controller 是否主动 notify：穿戴成功后强制重新读取当前背包，
+      // 保证“已穿戴 / 卸下”状态和左侧装备加成立即刷新。
+      await widget.controller.refreshInventory(notify: false);
+      if (mounted) setState(() {});
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is NovelBackendException && error.message.trim().isNotEmpty
+          ? error.message.trim()
+          : (targetEquipped ? '穿戴失败：$error' : '卸下失败：$error');
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 2),
+          ),
+        );
     } finally {
       if (mounted) setState(() => busy = '');
     }
@@ -2002,6 +2027,84 @@ class _InventoryHeader extends StatelessWidget {
   }
 }
 
+String _inventoryItemImageSource(NovelInventoryItem item) {
+  final raw = item.raw;
+  for (final value in <dynamic>[
+    raw['image_asset'],
+    raw['imageAsset'],
+    raw['icon'],
+  ]) {
+    final source = stringValue(value).trim();
+    if (source.startsWith('assets/') ||
+        source.startsWith('http://') ||
+        source.startsWith('https://')) {
+      return source;
+    }
+  }
+
+  return switch (item.itemType.trim().toLowerCase()) {
+    'fate_card' => 'assets/images/fate_card.webp',
+    'revert_card' => 'assets/images/revert_card.webp',
+    'gift' => 'assets/images/gift.webp',
+    'skill_book' => 'assets/images/skill_book.webp',
+    'image_card' => 'assets/images/image_card.webp',
+    'lucky_card' => 'assets/images/lucky_card.webp',
+    'cat_eye_stone' => 'assets/images/cat_eye_stone.webp',
+    'enhance_stone' => 'assets/images/enhance_stone.webp',
+    'blind_box' => 'assets/images/blind_box.webp',
+    _ => '',
+  };
+}
+
+class _InventoryItemIcon extends StatelessWidget {
+  const _InventoryItemIcon({
+    required this.item,
+    required this.size,
+  });
+
+  final NovelInventoryItem item;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final source = _inventoryItemImageSource(item);
+    if (source.isEmpty) return const SizedBox.shrink();
+
+    final fallback = Icon(
+      Icons.inventory_2_outlined,
+      size: size * .62,
+      color: _inventoryGoldSoft,
+    );
+    final errorBuilder = (
+      BuildContext _,
+      Object __,
+      StackTrace? ___,
+    ) => fallback;
+
+    return Container(
+      width: size,
+      height: size,
+      padding: EdgeInsets.all(size * .10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.035),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: Colors.white.withOpacity(.07)),
+      ),
+      child: source.startsWith('http://') || source.startsWith('https://')
+          ? Image.network(
+              source,
+              fit: BoxFit.contain,
+              errorBuilder: errorBuilder,
+            )
+          : Image.asset(
+              source,
+              fit: BoxFit.contain,
+              errorBuilder: errorBuilder,
+            ),
+    );
+  }
+}
+
 int _inventoryItemQuality(NovelInventoryItem item) {
   final rawQuality = item.raw['quality'];
   final quality = rawQuality is num
@@ -2263,6 +2366,13 @@ class _GameStyleInventoryRow extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
+              if (_inventoryItemImageSource(item).isNotEmpty) ...<Widget>[
+                _InventoryItemIcon(
+                  item: item,
+                  size: dense ? 34 : 40,
+                ),
+                SizedBox(width: dense ? 9 : 11),
+              ],
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

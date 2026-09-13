@@ -379,6 +379,8 @@ Color _battleDotColor(String kind) => switch (_battleNormalizeDotKind(kind)) {
 
 // 状态图标预留 WebP 路径。图片未放入 assets 时会自动回退到 Material 线性图标。
 // 建议在 pubspec.yaml 中声明 assets/images/battle/status/ 目录。
+const String _catEyeStoneAssetPath = 'assets/images/cat_eye_stone.webp';
+
 String _battleStatusAssetPath(String kind) => switch (kind) {
       'stun' => 'assets/images/battle/status/stun.webp',
       'burn' => 'assets/images/battle/status/burn.webp',
@@ -2062,6 +2064,9 @@ typedef YoranBattleItemSettlementCallback = Future<Map<String, dynamic>?> Functi
   YoranBattleOutcome outcome,
 );
 
+/// 猫眼石扣除回调：后端只负责扣 1 个道具；成功后页面沿用旧版 _resetBattle()。
+typedef YoranBattleRetryCallback = Future<Map<String, dynamic>?> Function();
+
 /// 当前穿戴装备。槽位与品质提供固定加成，后端持久化的基础词条提供差异化加成。
 class YoranBattleEquipment {
   const YoranBattleEquipment({
@@ -2252,6 +2257,7 @@ class YoranBattleEquipment {
 /// 玩家与对手都从同一次响应构建，避免前端使用旧角色数据进行比较。
 class YoranGeneratedBattleSetup {
   const YoranGeneratedBattleSetup({
+    this.battleId = '',
     required this.playerName,
     required this.playerAvatar,
     required this.playerPortrait,
@@ -2264,6 +2270,7 @@ class YoranGeneratedBattleSetup {
     required this.openingEstimate,
   });
 
+  final String battleId;
   final String playerName;
   final String playerAvatar;
   final String playerPortrait;
@@ -2422,6 +2429,7 @@ class YoranGeneratedBattleSetup {
     final playerAssets = _playerAssets(player, json);
 
     return YoranGeneratedBattleSetup(
+      battleId: _string(json['battle_id']),
       playerName: _string(player['name']).isNotEmpty
           ? _string(player['name'])
           : (_string(assessedPlayer['name']).isNotEmpty
@@ -2533,6 +2541,7 @@ Future<YoranBattleOutcome?> showYoranBattlePage(
   String sceneBackground = '',
   String sceneTitle = '',
   String sceneSubtitle = '',
+  String battleId = '',
   NovelSocketService? socketService,
   List<YoranBattleEnemy> enemies = const <YoranBattleEnemy>[],
   List<YoranBattleSkill> skills = yoranDefaultBattleSkills,
@@ -2540,6 +2549,7 @@ Future<YoranBattleOutcome?> showYoranBattlePage(
   List<dynamic> items = const <dynamic>[],
   List<dynamic> equipment = const <dynamic>[],
   YoranBattleItemSettlementCallback? onSettleItems,
+  YoranBattleRetryCallback? onRetryBattle,
   @Deprecated('请改用战斗结束批量结算 onSettleItems')
   YoranBattleItemConsumeCallback? onConsumeItem,
 }) {
@@ -2558,6 +2568,7 @@ Future<YoranBattleOutcome?> showYoranBattlePage(
         sceneBackground: sceneBackground,
         sceneTitle: sceneTitle,
         sceneSubtitle: sceneSubtitle,
+        battleId: battleId,
         socketService: socketService,
         enemies: enemies,
         skills: skills,
@@ -2565,6 +2576,7 @@ Future<YoranBattleOutcome?> showYoranBattlePage(
         items: items,
         equipment: equipment,
         onSettleItems: onSettleItems,
+        onRetryBattle: onRetryBattle,
         onConsumeItem: onConsumeItem,
       ),
       transitionsBuilder: (_, animation, secondaryAnimation, child) {
@@ -2599,6 +2611,7 @@ Future<YoranBattleOutcome?> showYoranGeneratedBattlePage(
   String sceneSubtitle = '',
   NovelSocketService? socketService,
   YoranBattleItemSettlementCallback? onSettleItems,
+  YoranBattleRetryCallback? onRetryBattle,
 }) {
   FocusManager.instance.primaryFocus?.unfocus();
   return Navigator.of(context).push<YoranBattleOutcome>(
@@ -2618,6 +2631,7 @@ Future<YoranBattleOutcome?> showYoranGeneratedBattlePage(
         sceneSubtitle: sceneSubtitle,
         socketService: socketService,
         onSettleItems: onSettleItems,
+        onRetryBattle: onRetryBattle,
       ),
       transitionsBuilder: (_, animation, secondaryAnimation, child) {
         final curved = CurvedAnimation(
@@ -2643,6 +2657,7 @@ class _YoranGeneratedBattleLoaderPage extends StatefulWidget {
     required this.sceneSubtitle,
     required this.socketService,
     required this.onSettleItems,
+    required this.onRetryBattle,
   });
 
   final YoranGeneratedBattleSetupLoader setupLoader;
@@ -2655,6 +2670,7 @@ class _YoranGeneratedBattleLoaderPage extends StatefulWidget {
   final String sceneSubtitle;
   final NovelSocketService? socketService;
   final YoranBattleItemSettlementCallback? onSettleItems;
+  final YoranBattleRetryCallback? onRetryBattle;
 
   @override
   State<_YoranGeneratedBattleLoaderPage> createState() =>
@@ -2753,8 +2769,10 @@ class _YoranGeneratedBattleLoaderPageState
         sceneBackground: widget.sceneBackground,
         sceneTitle: widget.sceneTitle,
         sceneSubtitle: _finalSceneSubtitle(setup),
+        battleId: setup.battleId,
         socketService: widget.socketService,
         onSettleItems: widget.onSettleItems,
+        onRetryBattle: widget.onRetryBattle,
       );
     }
 
@@ -2961,6 +2979,7 @@ class YoranBattlePage extends StatefulWidget {
     this.sceneBackground = '',
     this.sceneTitle = '',
     this.sceneSubtitle = '',
+    this.battleId = '',
     this.socketService,
     this.enemies = const <YoranBattleEnemy>[],
     this.skills = yoranDefaultBattleSkills,
@@ -2968,6 +2987,7 @@ class YoranBattlePage extends StatefulWidget {
     this.items = const <dynamic>[],
     this.equipment = const <dynamic>[],
     this.onSettleItems,
+    this.onRetryBattle,
     this.onConsumeItem,
   });
 
@@ -2979,6 +2999,7 @@ class YoranBattlePage extends StatefulWidget {
   final String sceneBackground;
   final String sceneTitle;
   final String sceneSubtitle;
+  final String battleId;
   final NovelSocketService? socketService;
   final List<YoranBattleEnemy> enemies;
   final List<YoranBattleSkill> skills;
@@ -2986,6 +3007,7 @@ class YoranBattlePage extends StatefulWidget {
   final List<dynamic> items;
   final List<dynamic> equipment;
   final YoranBattleItemSettlementCallback? onSettleItems;
+  final YoranBattleRetryCallback? onRetryBattle;
   @Deprecated('请改用战斗结束批量结算 onSettleItems')
   final YoranBattleItemConsumeCallback? onConsumeItem;
 
@@ -3010,6 +3032,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   static const double _baseSkillPower = 10.0;
   static const double _skillDamageVariance = .10;
   static const int _maxBattleLogEntries = 120;
+  static const int _maxCatEyeRetriesPerBattle = 3;
 
   final math.Random _random = math.Random();
   final ScrollController _logController = ScrollController();
@@ -3055,6 +3078,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   bool _settlementAccepted = false;
   Map<String, dynamic> _battleSettlement = const <String, dynamic>{};
   String _settlementError = '';
+  bool _retryingBattle = false;
+  String _retryError = '';
+  int _battleRetryCount = 0;
+  final int _battleRetryLimit = _maxCatEyeRetriesPerBattle;
+  int? _catEyeStoneQuantityRemaining;
   int _enemyIndex = 0;
   String? _selectedSkillName;
   // 拖拽技能卡时用于显示场景中央的“释放区”。
@@ -3112,6 +3140,13 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   final ValueNotifier<int> _logRevision = ValueNotifier<int>(0);
 
   bool get _canAct => !_busy && _outcome == null && !_entranceVisible;
+  int get _battleRetriesRemaining =>
+      math.max(0, _battleRetryLimit - _battleRetryCount);
+  bool get _canRetryBattleWithCatEye =>
+      _battleRetryCount < _battleRetryLimit &&
+      !_retryingBattle &&
+      (_catEyeStoneQuantityRemaining == null ||
+          _catEyeStoneQuantityRemaining! > 0);
   YoranBattleEnemy get _currentEnemy => _battleEnemies[_enemyIndex];
   String get _enemyName => _currentEnemy.name.trim().isEmpty
       ? '对手${_enemyIndex + 1}'
@@ -3192,6 +3227,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
   @override
   void initState() {
     super.initState();
+    // 猫眼石每场最多 3 次完全由当前战斗页本地计数；后端只负责扣库存。
+    _battleRetryCount = 0;
     _battleEnemies = (widget.enemies.isEmpty
             ? <YoranBattleEnemy>[
                 YoranBattleEnemy(
@@ -6224,6 +6261,71 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     }
   }
 
+  Future<void> _retryBattleWithCatEyeStone() async {
+    if (!mounted ||
+        _outcome != YoranBattleOutcome.defeat ||
+        _retryingBattle ||
+        _settlingItems) {
+      return;
+    }
+    if (_battleRetryCount >= _battleRetryLimit) {
+      setState(() => _retryError = '本场战斗最多使用$_battleRetryLimit次猫眼石');
+      return;
+    }
+
+    final callback = widget.onRetryBattle;
+    // 纯预览战斗没有后端结算，因此仍允许免费本地重置；正式战斗绝不允许绕过猫眼石。
+    if (callback == null) {
+      if (widget.onSettleItems == null) {
+        _resetBattle();
+        return;
+      }
+      setState(() => _retryError = '当前战斗入口尚未接入猫眼石重试接口');
+      return;
+    }
+    setState(() {
+      _retryingBattle = true;
+      _retryError = '';
+    });
+
+    Map<String, dynamic>? result;
+    Object? retryFailure;
+    try {
+      result = await callback();
+    } catch (error) {
+      retryFailure = error;
+    }
+    if (!mounted) return;
+    if (result == null) {
+      var message = '${retryFailure ?? '猫眼石使用失败，请重试'}'.trim();
+      for (final prefix in const <String>['Exception: ', 'NovelBackendException: ']) {
+        if (message.startsWith(prefix)) {
+          message = message.substring(prefix.length).trim();
+          break;
+        }
+      }
+      setState(() {
+        _retryingBattle = false;
+        _retryError = message.isEmpty ? '猫眼石使用失败，请重试' : message;
+      });
+      return;
+    }
+
+    final remaining = int.tryParse('${result['quantity_remaining'] ?? ''}');
+    _battleRetryCount = math.min(
+      _battleRetryLimit,
+      _battleRetryCount + 1,
+    );
+    _catEyeStoneQuantityRemaining =
+        remaining == null ? null : math.max(0, remaining).toInt();
+    _retryingBattle = false;
+    _retryError = '';
+
+    // 保留最旧版“重新挑战”的行为：后端只负责先扣 1 个猫眼石，
+    // 扣除成功后仍然执行原来的本地 _resetBattle()，不创建新战斗、不重播 VS。
+    _resetBattle();
+  }
+
   Future<void> _finishBattle(YoranBattleOutcome outcome) async {
     if (!mounted || _outcome != null) return;
     setState(() => _busy = true);
@@ -6232,7 +6334,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     _enemyBreathController.stop(canceled: false);
     setState(() => _outcome = outcome);
     // 胜利后立即进行权威结算，拿到奖励后留在结算页展示。
-    // 失败不立即提交，玩家仍可无副作用地重新挑战。
+    // 失败不立即提交；玩家可先消耗猫眼石重试，或继续剧情接受失败。
     if (outcome == YoranBattleOutcome.victory) {
       await _settleBattle(outcome, returnAfterSettlement: false);
     }
@@ -8349,15 +8451,25 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
   Widget _buildSettlementRewards(YoranBattleOutcome outcome) {
     if (outcome != YoranBattleOutcome.victory) {
+      if (outcome == YoranBattleOutcome.escaped) {
+        return Text(
+          '脱离战斗不会获得战斗奖励。',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.white.withOpacity(.48),
+            fontSize: 11.5,
+            height: 1.55,
+          ),
+        );
+      }
+      if (_retryError.isEmpty) return const SizedBox.shrink();
       return Text(
-        outcome == YoranBattleOutcome.defeat
-            ? '重新挑战不会消耗本场使用的道具；继续剧情将接受本次失败。'
-            : '脱离战斗不会获得战斗奖励。',
+        _retryError,
         textAlign: TextAlign.center,
-        style: TextStyle(
-          color: Colors.white.withOpacity(.48),
-          fontSize: 11.5,
-          height: 1.55,
+        style: const TextStyle(
+          color: Color(0xFFFF8B8B),
+          fontSize: 10.5,
+          height: 1.35,
         ),
       );
     }
@@ -8544,11 +8656,16 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     child: SizedBox(
                       height: 42,
                       child: TextButton(
-                        onPressed: _settlingItems ? null : () => _resetBattle(),
+                        onPressed: _settlingItems ||
+                                _retryingBattle ||
+                                !_canRetryBattleWithCatEye
+                            ? null
+                            : () => unawaited(_retryBattleWithCatEyeStone()),
                         style: TextButton.styleFrom(
-                          foregroundColor: Colors.white.withOpacity(.66),
+                          foregroundColor: Colors.white.withOpacity(.78),
+                          disabledForegroundColor: Colors.white.withOpacity(.25),
                           backgroundColor: Colors.transparent,
-                          padding: EdgeInsets.zero,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(6),
                             side: BorderSide(
@@ -8557,14 +8674,58 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                             ),
                           ),
                         ),
-                        child: const Text(
-                          '重新挑战',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: .4,
-                          ),
-                        ),
+                        child: _retryingBattle
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 1.6),
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  const Text(
+                                    '重试',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: .4,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    '×',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.52),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: Image.asset(
+                                      _catEyeStoneAssetPath,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (_, __, ___) => const Icon(
+                                        Icons.remove_red_eye_outlined,
+                                        size: 16,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 9),
+                                  Text(
+                                    '$_battleRetriesRemaining/$_battleRetryLimit',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.46),
+                                      fontSize: 10.2,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: .2,
+                                    ),
+                                  ),
+                                ],
+                              ),
                       ),
                     ),
                   ),
@@ -9886,33 +10047,53 @@ class _BattleEntranceOverlay extends StatelessWidget {
             required Alignment alignment,
             required bool top,
             bool mirror = false,
+            bool compactLandscape = false,
           }) {
             if (source.trim().isEmpty) return const SizedBox.shrink();
             final slide = (1 - reveal) * (top ? -22.0 : 22.0);
+            Widget image = ColorFiltered(
+              colorFilter: _monochrome,
+              child: Transform.flip(
+                flipX: mirror,
+                child: _BattleImage(
+                  source: source,
+                  fallback: const SizedBox.shrink(),
+                  logicalWidth: compactLandscape ? width * .46 : width,
+                  maxCacheWidth: compactLandscape ? 900 : 1280,
+                  fit: compactLandscape ? BoxFit.contain : BoxFit.cover,
+                  alignment: alignment,
+                ),
+              ),
+            );
+            if (compactLandscape) {
+              final shortScreen = height < 360;
+              image = Align(
+                alignment: alignment,
+                child: FractionallySizedBox(
+                  widthFactor: shortScreen ? .80 : .90,
+                  heightFactor: shortScreen ? .72 : .84,
+                  child: image,
+                ),
+              );
+            }
             return Transform.translate(
               offset: Offset(0, slide),
               child: Opacity(
                 opacity: (.56 * contentOpacity).clamp(0.0, 1.0),
-                child: ColorFiltered(
-                  colorFilter: _monochrome,
-                  child: Transform.flip(
-                    flipX: mirror,
-                    child: _BattleImage(
-                      source: source,
-                      fallback: const SizedBox.shrink(),
-                      logicalWidth: width,
-                      maxCacheWidth: 1280,
-                      fit: BoxFit.cover,
-                      alignment: alignment,
-                    ),
-                  ),
-                ),
+                child: image,
               ),
             );
           }
 
           if (landscape) {
-            final nameSize = (height * .075).clamp(20.0, 28.0).toDouble();
+            // 横屏以可用高度为第一约束：低矮屏幕自动缩小立绘、名字与 VS。
+            final shortLandscape = height < 360;
+            final nameSize = math.min(height * .068, width * .030)
+                .clamp(16.0, 24.0)
+                .toDouble();
+            final vsSize = math.min(height * .070, width * .027)
+                .clamp(17.0, 23.0)
+                .toDouble();
             return Opacity(
               opacity: exit,
               child: Stack(
@@ -9931,8 +10112,9 @@ class _BattleEntranceOverlay extends StatelessWidget {
                       children: <Widget>[
                         portraitLayer(
                           source: playerPortrait,
-                          alignment: Alignment.center,
+                          alignment: Alignment.centerLeft,
                           top: true,
+                          compactLandscape: true,
                         ),
                         const DecoratedBox(
                           decoration: BoxDecoration(
@@ -9961,9 +10143,10 @@ class _BattleEntranceOverlay extends StatelessWidget {
                       children: <Widget>[
                         portraitLayer(
                           source: enemyPortrait,
-                          alignment: Alignment.center,
+                          alignment: Alignment.centerRight,
                           top: false,
                           mirror: true,
+                          compactLandscape: true,
                         ),
                         const DecoratedBox(
                           decoration: BoxDecoration(
@@ -10093,8 +10276,8 @@ class _BattleEntranceOverlay extends StatelessWidget {
                         scale: .90 + .10 * reveal,
                         child: Container(
                           padding: EdgeInsets.symmetric(
-                            horizontal: height < 360 ? 13 : 16,
-                            vertical: height < 360 ? 5 : 7,
+                            horizontal: shortLandscape ? 11 : 15,
+                            vertical: shortLandscape ? 4 : 6,
                           ),
                           decoration: BoxDecoration(
                             color: const Color(0xCC080908),
@@ -10108,7 +10291,7 @@ class _BattleEntranceOverlay extends StatelessWidget {
                             style: TextStyle(
                               color: Colors.white,
                               fontFamily: 'WenJinMinchoP0',
-                              fontSize: height < 360 ? 21 : 25,
+                              fontSize: vsSize,
                               height: 1,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 3.2,

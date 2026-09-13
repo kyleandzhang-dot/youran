@@ -55,6 +55,7 @@ class NovelEndpointConfig {
     this.r2Signature = '/r2/get-signature',
     this.inventory = '/novel/inventory/{sessionId}',
     this.battleItemSettlement = '/novel/battle/items/settle',
+    this.battleRetry = '/novel/battle/retry',
     this.equipItem = '/novel/inventory/{scenarioInstanceId}/equip',
     this.enhanceEquipment = '/novel/inventory/{scenarioInstanceId}/enhance',
     this.useGift = '/novel/use-gift',
@@ -100,6 +101,7 @@ class NovelEndpointConfig {
   final String r2Signature;
   final String inventory;
   final String battleItemSettlement;
+  final String battleRetry;
   final String equipItem;
   final String enhanceEquipment;
   final String useGift;
@@ -1248,6 +1250,25 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
   }
 
   @override
+  // 猫眼石接口只扣当前 session 的库存；不参与任何战斗状态判断。
+  Future<JsonMap> retryBattleWithCatEyeStone({
+    required String sessionId,
+  }) async {
+    final numericSessionId = int.tryParse(sessionId.trim());
+    if (numericSessionId == null || numericSessionId <= 0) {
+      throw const NovelBackendException('当前会话ID无效，无法使用猫眼石重试');
+    }
+    final response = await _send(
+      'POST',
+      endpoints.battleRetry,
+      body: <String, dynamic>{
+        'session_id': numericSessionId,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
   Future<JsonMap> recognizeAndAcquireDeveloperContent({
     required String sessionId,
     required String name,
@@ -1338,13 +1359,29 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
     required String scenarioInstanceId,
     required String itemId,
     required bool equipped,
+    String? sessionId,
   }) async {
+    // 与强化接口保持同一套 item id 清洗规则。
+    final cleanItemId = itemId.trim();
+    if (cleanItemId.isEmpty) {
+      throw const NovelBackendException('装备ID不能为空');
+    }
+
+    final cleanSessionId = sessionId?.trim() ?? '';
+    final numericSessionId =
+        cleanSessionId.isEmpty ? null : int.tryParse(cleanSessionId);
+    if (cleanSessionId.isNotEmpty &&
+        (numericSessionId == null || numericSessionId <= 0)) {
+      throw const NovelBackendException('当前会话ID无效，无法更新装备');
+    }
+
     final path = endpoints.resolve(
       endpoints.equipItem,
       scenarioInstanceId: scenarioInstanceId,
     );
     await _send('POST', path, body: <String, dynamic>{
-      'item_id': itemId,
+      if (numericSessionId != null) 'session_id': numericSessionId,
+      'item_id': cleanItemId,
       'equipped': equipped,
     });
   }

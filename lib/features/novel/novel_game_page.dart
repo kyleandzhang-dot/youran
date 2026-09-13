@@ -1277,6 +1277,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     final companions = _currentBattleCompanions();
     if (companions.isEmpty) return setup;
     return YoranGeneratedBattleSetup(
+      battleId: setup.battleId,
       playerName: setup.playerName,
       playerAvatar: setup.playerAvatar,
       playerPortrait: setup.playerPortrait,
@@ -1524,6 +1525,11 @@ class _NovelGamePageState extends State<NovelGamePage>
           outcome: outcome.name,
         );
       },
+      onRetryBattle: () {
+        return backend.retryBattleWithCatEyeStone(
+          sessionId: controller.sessionId,
+        );
+      },
     );
   }
 
@@ -1595,6 +1601,11 @@ class _NovelGamePageState extends State<NovelGamePage>
               .toList(growable: false),
         );
       },
+      onRetryBattle: () {
+        return controller.backend.retryBattleWithCatEyeStone(
+          sessionId: controller.sessionId,
+        );
+      },
     );
 
     if (!mounted) return;
@@ -1655,6 +1666,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         companions: setup.companions,
         items: setup.playerItems,
         equipment: setup.playerEquipment,
+        battleId: battleId,
         onSettleItems: (consumptions, result) {
           return controller.settleStoryBattle(
             battleId: battleId,
@@ -1662,6 +1674,11 @@ class _NovelGamePageState extends State<NovelGamePage>
             consumptions: consumptions
                 .map((item) => item.toJson())
                 .toList(growable: false),
+          );
+        },
+        onRetryBattle: () {
+          return controller.backend.retryBattleWithCatEyeStone(
+            sessionId: controller.sessionId,
           );
         },
         enemyName: setup.enemy.name,

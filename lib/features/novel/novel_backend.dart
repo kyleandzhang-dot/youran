@@ -183,13 +183,22 @@ abstract class NovelBackend {
     throw const NovelBackendException('当前后端不支持战斗道具结算');
   }
 
+  /// 消耗 1 个猫眼石；成功后战斗页继续沿用旧版本地 _resetBattle()。
+  Future<JsonMap> retryBattleWithCatEyeStone({
+    required String sessionId,
+  }) {
+    throw const NovelBackendException('当前后端不支持猫眼石重试');
+  }
+
   Future<void> equipItem({
     required String scenarioInstanceId,
     required String itemId,
     required bool equipped,
+    // 新 controller 可显式传当前 session；旧 controller 不传也保持兼容。
+    String? sessionId,
   });
 
-  /// 消耗 1 颗玄石尝试强化装备；成功率、保底与材料扣除均由后端权威判定。
+  /// 消耗 1 颗强化石尝试强化装备；成功率、保底与材料扣除均由后端权威判定。
   Future<JsonMap> enhanceEquipment({
     required String sessionId,
     required String scenarioInstanceId,
