@@ -20,7 +20,7 @@ class _NovelBrewingOverlayState extends State<NovelBrewingOverlay>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2200),
+      duration: const Duration(milliseconds: 1100),
     )..repeat();
   }
 
@@ -42,81 +42,48 @@ class _NovelBrewingOverlayState extends State<NovelBrewingOverlay>
           Center(
             child: Transform.translate(
               offset: const Offset(0, -18),
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (context, _) {
-                  final progress = reduceMotion ? .5 : _controller.value;
-
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      SizedBox(
-                        width: 116,
-                        height: 8,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          clipBehavior: Clip.none,
-                          children: <Widget>[
-                            Container(
-                              height: 1,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: <Color>[
-                                    Colors.transparent,
-                                    NovelPalette.text.withOpacity(.18),
-                                    Colors.transparent,
-                                  ],
-                                ),
-                              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: reduceMotion
+                        ? CircularProgressIndicator(
+                            value: .78,
+                            strokeWidth: 2,
+                            strokeCap: StrokeCap.round,
+                            color: Colors.white.withOpacity(.92),
+                            backgroundColor: Colors.white.withOpacity(.14),
+                          )
+                        : RotationTransition(
+                            turns: _controller,
+                            child: CircularProgressIndicator(
+                              value: .78,
+                              strokeWidth: 2,
+                              strokeCap: StrokeCap.round,
+                              color: Colors.white.withOpacity(.92),
+                              backgroundColor: Colors.white.withOpacity(.14),
                             ),
-                            Align(
-                              alignment: Alignment(
-                                -1.25 + progress * 2.5,
-                                0,
-                              ),
-                              child: Container(
-                                width: 30,
-                                height: 1.4,
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: <Color>[
-                                      Colors.transparent,
-                                      NovelPalette.accentSoft.withOpacity(.92),
-                                      Colors.transparent,
-                                    ],
-                                  ),
-                                  boxShadow: <BoxShadow>[
-                                    BoxShadow(
-                                      color: NovelPalette.accent.withOpacity(.32),
-                                      blurRadius: 8,
-                                      spreadRadius: 1,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
+                          ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    '故事正在展开',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.84),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 2.8,
+                      shadows: const <Shadow>[
+                        Shadow(
+                          color: Color(0x66000000),
+                          blurRadius: 6,
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        '故事正在展开',
-                        style: TextStyle(
-                          color: NovelPalette.text.withOpacity(.78),
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: 2.8,
-                          shadows: const <Shadow>[
-                            Shadow(
-                              color: Color(0x66000000),
-                              blurRadius: 6,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                },
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
