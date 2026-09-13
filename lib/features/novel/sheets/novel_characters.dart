@@ -550,9 +550,9 @@ class _CharacterBackButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dimension = compact ? 30.0 : 36.0;
+    final height = compact ? 30.0 : 36.0;
     return Tooltip(
-      message: '返回剧情',
+      message: '快速切换到剧情页面',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -560,15 +560,38 @@ class _CharacterBackButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(999),
           splashColor: _archiveThemeGreen.withOpacity(.08),
           highlightColor: _archiveThemeGreen.withOpacity(.035),
-          child: SizedBox(
-            width: dimension,
-            height: dimension,
-            child: Center(
-              child: Icon(
-                Icons.arrow_back_ios_new_rounded,
-                size: compact ? 14 : 16,
-                color: _archiveTextSoft,
+          child: Container(
+            height: height,
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 9 : 11,
+            ),
+            decoration: BoxDecoration(
+              color: _archiveThemeGreen.withOpacity(.055),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: _archiveThemeGreen.withOpacity(.16),
+                width: .8,
               ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  Icons.auto_stories_rounded,
+                  size: compact ? 13.5 : 15.5,
+                  color: _archiveTextSoft,
+                ),
+                SizedBox(width: compact ? 4 : 5),
+                Text(
+                  '剧情',
+                  style: TextStyle(
+                    color: _archiveTextSoft,
+                    fontSize: compact ? 10 : 11.2,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .4,
+                  ),
+                ),
+              ],
             ),
           ),
         ),

@@ -42,108 +42,6 @@ const Color _characterText = Color(0xFFF2F0E8);
 const Color _characterTextSoft = Color(0xFFB9C0D0);
 const Color _characterTextMuted = Color(0xFF737C91);
 
-/// 角色图片专用磁盘缓存：尽量做到看过一次后长期直接读本地。
-final CacheManager _characterImageCacheManager = CacheManager(
-  Config(
-    'novelCharacterImagesV1',
-    stalePeriod: const Duration(days: 365),
-    maxNrOfCacheObjects: 1000,
-  ),
-);
-
-/// 角色页统一网络图片入口：
-/// - http/https 图片使用 CachedNetworkImageProvider，首次下载后写入磁盘缓存；
-/// - 当前页面再次显示时会同时受 Flutter 内存 ImageCache 加速；
-/// - asset / data / 其他 NovelArtwork 支持的来源仍交回 NovelArtwork，保持原有兼容性。
-///
-/// 注意：不同 CDN resize URL 仍是不同缓存条目，但每个条目只需首次联网下载；
-/// 后续再次进入页面时优先从磁盘缓存读取。
-class _CharacterDiskArtwork extends StatelessWidget {
-  const _CharacterDiskArtwork({
-    super.key,
-    required this.url,
-    this.assetCandidates = const <String>[],
-    this.fit = BoxFit.cover,
-    this.alignment = Alignment.center,
-    this.fallbackText = '',
-    this.fallbackIcon = Icons.image_not_supported_outlined,
-  });
-
-  final String url;
-  final List<String> assetCandidates;
-  final BoxFit fit;
-  final AlignmentGeometry alignment;
-  final String fallbackText;
-  final IconData fallbackIcon;
-
-  bool get _isNetworkUrl {
-    final value = url.trim().toLowerCase();
-    return value.startsWith('http://') || value.startsWith('https://');
-  }
-
-  Widget _fallbackAsset(int index) {
-    if (index >= assetCandidates.length) {
-      return Center(
-        child: fallbackText.trim().isEmpty
-            ? Icon(fallbackIcon, color: _characterTextMuted)
-            : Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Icon(fallbackIcon, color: _characterTextMuted),
-                  const SizedBox(height: 6),
-                  Text(
-                    fallbackText,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: _characterTextMuted,
-                      fontSize: 10,
-                    ),
-                  ),
-                ],
-              ),
-      );
-    }
-
-    return Image.asset(
-      assetCandidates[index],
-      fit: fit,
-      alignment: alignment,
-      filterQuality: FilterQuality.medium,
-      errorBuilder: (_, __, ___) => _fallbackAsset(index + 1),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final source = url.trim();
-    if (source.isEmpty) return _fallbackAsset(0);
-
-    if (!_isNetworkUrl) {
-      // 非网络来源继续复用原 NovelArtwork，避免改变 data URI / asset 等既有行为。
-      return NovelArtwork(
-        url: source,
-        assetCandidates: assetCandidates,
-        fit: fit,
-        alignment: alignment,
-        fallbackText: fallbackText,
-        fallbackIcon: fallbackIcon,
-      );
-    }
-
-    return Image(
-      image: CachedNetworkImageProvider(
-        source,
-        cacheManager: _characterImageCacheManager,
-      ),
-      fit: fit,
-      alignment: alignment,
-      filterQuality: FilterQuality.medium,
-      gaplessPlayback: true,
-      errorBuilder: (_, __, ___) => _fallbackAsset(0),
-    );
-  }
-}
-
 
 void _showCharacterFloatingNotice(BuildContext context, String message) {
   final text = message.trim();
@@ -489,10 +387,7 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
 
     final ImageProvider<Object> provider =
         resolved.startsWith('http://') || resolved.startsWith('https://')
-            ? CachedNetworkImageProvider(
-                resolved,
-                cacheManager: _characterImageCacheManager,
-              )
+            ? NetworkImage(resolved)
             : AssetImage(resolved);
     try {
       await precacheImage(provider, context);
@@ -1318,7 +1213,7 @@ class _CharacterGameCard extends StatelessWidget {
                         0, 0, 1, 0, 0,
                         0, 0, 0, 1, 0,
                       ]),
-                child: _CharacterDiskArtwork(
+                child: NovelArtwork(
                   url: CdnUtil.resize(imageUrl, width: 420),
                   assetCandidates: <String>[
                     fallbackAsset,
@@ -1461,7 +1356,7 @@ class _CharacterSummonView extends StatelessWidget {
         opacity: opacity,
         child: SizedBox(
           width: width,
-          child: _CharacterDiskArtwork(
+          child: NovelArtwork(
             url: CdnUtil.resize(imageUrl, width: width.toInt() * 2),
             assetCandidates: <String>[fallbackAsset, 'assets/images/portrait_female.webp', 'assets/images/portrait_male.png'],
             fit: BoxFit.contain,
@@ -1811,7 +1706,33 @@ class _CharacterDrawResultCardState extends State<_CharacterDrawResultCard> with
         children: [
           Column(
             children: <Widget>[
-              Expanded(child: ClipRect(child: Transform.scale(scale: isFlipping ? _scaleAnim.value : 1.0, child: _CharacterDiskArtwork(url: CdnUtil.resize(character.avatarUrl.trim().isNotEmpty ? character.avatarUrl : character.portraitUrl, width: 240), assetCandidates: <String>[fallbackAsset, 'assets/images/portrait_female.webp', 'assets/images/portrait_male.png'], fit: BoxFit.cover, alignment: Alignment.topCenter, fallbackText: '', fallbackIcon: Icons.person_outline_rounded)))),
+              Expanded(
+                child: ClipRect(
+                  child: Transform.scale(
+                    // 结缘结果卡也统一从立绘顶部裁出头肩，不再依赖单独 avatar 图。
+                    // 翻牌动画本身还会追加 _scaleAnim，所以这里把头像基础放大保留下来。
+                    scale: (isFlipping ? _scaleAnim.value : 1.0) * 1.32,
+                    alignment: Alignment.topCenter,
+                    child: NovelArtwork(
+                      url: CdnUtil.resize(
+                        character.portraitUrl.trim().isNotEmpty
+                            ? character.portraitUrl
+                            : character.avatarUrl,
+                        width: 360,
+                      ),
+                      assetCandidates: <String>[
+                        fallbackAsset,
+                        'assets/images/portrait_female.webp',
+                        'assets/images/portrait_male.png',
+                      ],
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topCenter,
+                      fallbackText: '',
+                      fallbackIcon: Icons.person_outline_rounded,
+                    ),
+                  ),
+                ),
+              ),
               Container(
                 width: double.infinity, padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
                 decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Color(0xFF090E1A), Color(0xCC090E1A), Colors.transparent])),
@@ -1868,9 +1789,11 @@ class _CharacterPortraitRail extends StatelessWidget {
         final fallbackAsset = character.gender.trim() == '女'
             ? 'assets/images/portrait_female.webp'
             : 'assets/images/portrait_male.png';
-        final imageUrl = character.avatarUrl.trim().isNotEmpty
-            ? character.avatarUrl
-            : character.portraitUrl;
+        // 角色栏头像统一从立绘生成：顶部对齐后放大裁切头肩。
+        // 不再优先使用 avatarUrl，保证头像和当前立绘始终一致。
+        final imageUrl = character.portraitUrl.trim().isNotEmpty
+            ? character.portraitUrl
+            : character.avatarUrl;
         return SizedBox(
           width: 46,
           height: 46,
@@ -1905,17 +1828,22 @@ class _CharacterPortraitRail extends StatelessWidget {
                             ),
                           ),
                           child: ClipOval(
-                            child: _CharacterDiskArtwork(
-                              url: CdnUtil.resize(imageUrl, width: 140),
-                              assetCandidates: <String>[
-                                fallbackAsset,
-                                'assets/images/portrait_female.webp',
-                                'assets/images/portrait_male.png',
-                              ],
-                              fit: BoxFit.cover,
+                            child: Transform.scale(
+                              // 全身立绘直接裁成头像：锁定顶部并放大，只保留头肩区域。
+                              scale: 1.42,
                               alignment: Alignment.topCenter,
-                              fallbackText: '',
-                              fallbackIcon: Icons.person_outline_rounded,
+                              child: NovelArtwork(
+                                url: CdnUtil.resize(imageUrl, width: 240),
+                                assetCandidates: <String>[
+                                  fallbackAsset,
+                                  'assets/images/portrait_female.webp',
+                                  'assets/images/portrait_male.png',
+                                ],
+                                fit: BoxFit.cover,
+                                alignment: Alignment.topCenter,
+                                fallbackText: '',
+                                fallbackIcon: Icons.person_outline_rounded,
+                              ),
                             ),
                           ),
                         ),
@@ -2159,7 +2087,7 @@ class _CharacterPortraitModalContentState
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  _CharacterDiskArtwork(
+                  NovelArtwork(
                     key: ValueKey(_currentPortraitUrl), 
                     url: CdnUtil.resize(_currentPortraitUrl, width: 600),
                     assetCandidates: <String>[
@@ -2820,7 +2748,7 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
     Widget artwork(Alignment alignment) {
       return Hero(
         tag: 'character-stage-${widget.character.id}-${widget.character.name}',
-        child: _CharacterDiskArtwork(
+        child: NovelArtwork(
           url: CdnUtil.resize(imageUrl, width: 1280),
           assetCandidates: <String>[
             fallbackAsset,
@@ -7262,7 +7190,7 @@ class _CharacterGameDetail extends StatelessWidget {
             top: compact ? 22 : 2,
             bottom: -12,
             width: compact ? 300 : 540,
-            child: _CharacterDiskArtwork(
+            child: NovelArtwork(
               url: CdnUtil.resize(
                 character.portraitUrl.trim().isNotEmpty
                     ? character.portraitUrl

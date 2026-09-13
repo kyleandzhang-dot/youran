@@ -53,11 +53,20 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   static const Duration _maxCreationDisconnect =
       Duration(seconds: 45);
 
+  // 世界切换会 pushReplacement 到一套新的 GameShell。切换瞬间如果其他初始化逻辑
+  // 短暂清空 ApiClient 的内存身份，新 Shell 不能立刻把它误判成“已退出登录”。
+  // 因此在路由替换前保留一个仅存在于当前 Dart isolate 的短期身份交接。
+  static const Duration _routeAuthHandoffTtl = Duration(seconds: 15);
+  static String _routeAuthToken = '';
+  static String _routeAuthUserId = '';
+  static DateTime? _routeAuthCapturedAt;
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   UserSession? _session;
   bool _loaded = false;
   bool _autoOpened = false;
+  bool _scenarioSwitchInFlight = false;
 
   /// -1 表示当前没有真正激活的剧情。
   int _selectedGameIndex = -1;
@@ -134,14 +143,47 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     }
   }
 
+  bool _routeAuthHandoffIsFresh() {
+    final capturedAt = _routeAuthCapturedAt;
+    if (capturedAt == null || _routeAuthToken.trim().isEmpty) return false;
+    return DateTime.now().difference(capturedAt) <= _routeAuthHandoffTtl;
+  }
+
+  void _captureRouteAuthHandoff() {
+    final token = ApiClient.instance.accessToken?.trim() ?? '';
+    if (token.isEmpty) return;
+
+    _routeAuthToken = token;
+    _routeAuthUserId = ApiClient.instance.userId?.trim() ?? _userId.trim();
+    _routeAuthCapturedAt = DateTime.now();
+  }
+
+  void _clearRouteAuthHandoff() {
+    _routeAuthToken = '';
+    _routeAuthUserId = '';
+    _routeAuthCapturedAt = null;
+  }
+
+  bool _restoreRouteAuthHandoffIfNeeded() {
+    final currentToken = ApiClient.instance.accessToken?.trim() ?? '';
+    if (currentToken.isNotEmpty) {
+      _captureRouteAuthHandoff();
+      return true;
+    }
+
+    if (!_routeAuthHandoffIsFresh()) return false;
+
+    ApiClient.instance.accessToken = _routeAuthToken;
+    if (_routeAuthUserId.isNotEmpty) {
+      ApiClient.instance.userId = _routeAuthUserId;
+    }
+    return true;
+  }
+
   Future<void> _bootstrap() async {
-    // 重要：GameShell 不能再次调用 SessionManager.restore()。
-    // NovelGamePage 的 controller.initialize() 会与 Shell 同时启动；
-    // 某些 SessionManager.restore() 会先清空内存 token/userId，再刷新 token，
-    // 这会让正在进行的场景/历史请求瞬间失去鉴权，最终显示“世界暂时无法载入”。
-    //
-    // 冷启动的 Session 由 main.dart 的 StartupGate 只恢复一次；
-    // 游戏页 Shell 只复用已经存在的 ApiClient 身份。
+    // GameShell 不主动再次 SessionManager.restore()。
+    // 世界切换时优先复用 ApiClient；若它正好处于短暂的 token 空窗，
+    // 则接回上一条游戏路由留下的短期内存身份，避免误判成登出。
     final restored = widget.initialSession;
 
     if (restored != null) {
@@ -149,7 +191,10 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       ApiClient.instance.userId =
           restored.userId.trim().isEmpty ? null : restored.userId.trim();
       _applySession(restored);
+      _captureRouteAuthHandoff();
     } else {
+      _restoreRouteAuthHandoffIfNeeded();
+
       final token = ApiClient.instance.accessToken?.trim() ?? '';
       final userId = ApiClient.instance.userId?.trim() ?? '';
 
@@ -160,7 +205,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       _userUid = userId;
       _userPoints = 0;
 
-      if (!_isLoggedIn) {
+      if (_isLoggedIn) {
+        _captureRouteAuthHandoff();
+      } else {
         _userAvatarUrl = null;
         _checkinStatusLoaded = false;
         _checkedInToday = false;
@@ -217,11 +264,14 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
   Future<void> _refreshUserData({String? focusScenarioId}) async {
     if (!_isLoggedIn) return;
-    await Future.wait<void>(<Future<void>>[
-      _loadProfile(),
-      _loadCheckinStatus(),
-      _loadHomeData(focusScenarioId: focusScenarioId),
-    ]);
+
+    // 新游戏路由创建时不要同时打出多组鉴权请求。切世界本身还会初始化
+    // Novel/RPG/Chat runtime；如果 token 刷新采用轮换制，并发 refresh 容易互相覆盖。
+    await _loadHomeData(focusScenarioId: focusScenarioId);
+    if (!mounted) return;
+    await _loadProfile();
+    if (!mounted) return;
+    await _loadCheckinStatus();
   }
 
   Future<void> _loadCheckinStatus() async {
@@ -358,22 +408,37 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   }
 
   Future<void> _onGameSelected(int index) async {
-    if (index < 0 || index >= _games.length) return;
+    if (index < 0 || index >= _games.length || _scenarioSwitchInFlight) return;
 
-    if (!_isLoggedIn) {
+    // Shell 仍认为已登录时，不允许因为 ApiClient 瞬时为空就把用户送去登录。
+    // 先尝试接回刚才路由交接的身份。
+    if (_isLoggedIn) {
+      _restoreRouteAuthHandoffIfNeeded();
+    }
+
+    final token = ApiClient.instance.accessToken?.trim() ?? '';
+    if (!_isLoggedIn || token.isEmpty) {
+      if (_isLoggedIn) {
+        AppNotice.info(context, '登录状态正在同步，请稍后重试');
+        return;
+      }
       await _closeDrawerIfNeeded();
       if (!mounted) return;
       _openLoginSheet();
       return;
     }
 
+    _scenarioSwitchInFlight = true;
+    _captureRouteAuthHandoff();
     final scenario = _games[index];
 
     try {
       final result = await UserApi.setActiveScenario(scenario.id.toString());
       if (!mounted) return;
 
-      // 后端确认成功后，才算用户真正选择了剧情。
+      // 后端确认世界切换成功后，再确认一次身份仍在。
+      _restoreRouteAuthHandoffIfNeeded();
+
       setState(() {
         _selectedGameIndex = index;
         _scenarioSelectionCommitted = true;
@@ -392,6 +457,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     } catch (error) {
       debugPrint('GameShell set active scenario failed: $error');
       if (mounted) AppNotice.error(context, '进入世界失败，请稍后重试');
+    } finally {
+      if (mounted) _scenarioSwitchInFlight = false;
     }
   }
 
@@ -421,6 +488,10 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       AppNotice.error(context, '缺少剧本或会话参数，无法进入世界');
       return;
     }
+
+    // pushReplacement 会销毁旧 Shell 并创建新 Shell；先留下短期身份交接。
+    _restoreRouteAuthHandoffIfNeeded();
+    _captureRouteAuthHandoff();
 
     final mode = launch.mode.trim().toLowerCase();
     final route = mode == 'online'
@@ -916,6 +987,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     _creationPollEpoch++;
     _creationPolling = false;
     _activeCreationTaskId = null;
+    _clearRouteAuthHandoff();
     await SessionManager.logout();
     ApiClient.instance.accessToken = null;
     ApiClient.instance.userId = null;
@@ -937,6 +1009,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
         ApiClient.instance.accessToken = result.accessToken;
         ApiClient.instance.userId = result.userId;
+        _captureRouteAuthHandoff();
 
         if (!mounted) return;
         setState(() {

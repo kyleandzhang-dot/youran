@@ -1253,12 +1253,75 @@ class _NovelGamePageState extends State<NovelGamePage>
           ];
   }
 
+  JsonMap _battleCompanionStateWithPortraitAvatar(JsonMap raw) {
+    final normalized = <String, dynamic>{...raw};
+    final portrait = stringValue(
+      raw['portrait_url'] ??
+          raw['portraitUrl'] ??
+          raw['portrait'] ??
+          raw['tachie'] ??
+          raw['image_url'],
+    ).trim();
+
+    // 战斗右侧“角色援助”统一使用立绘作为头像源。
+    // 真正的头像 Widget 会用 cover 裁切；这里确保它拿到的不是旧 avatar 图。
+    if (portrait.isNotEmpty) {
+      normalized['avatar_url'] = portrait;
+      normalized['avatarUrl'] = portrait;
+      normalized['avatar'] = portrait;
+    }
+    return normalized;
+  }
+
+  JsonMap _battlePayloadWithPortraitAvatars(JsonMap payload) {
+    final normalized = <String, dynamic>{...payload};
+
+    dynamic normalizeList(dynamic value) {
+      if (value is! List) return value;
+      return value.map((item) {
+        if (item is Map<String, dynamic>) {
+          return _battleCompanionStateWithPortraitAvatar(item);
+        }
+        if (item is Map) {
+          return _battleCompanionStateWithPortraitAvatar(
+            item.map<String, dynamic>(
+              (key, value) => MapEntry<String, dynamic>('$key', value),
+            ),
+          );
+        }
+        return item;
+      }).toList(growable: false);
+    }
+
+    // 兼容当前/旧版后端可能使用的几种援助角色字段名。
+    for (final key in <String>[
+      'companions',
+      'battle_companions',
+      'deployed_companions',
+      'allies',
+      'party',
+    ]) {
+      if (normalized.containsKey(key)) {
+        normalized[key] = normalizeList(normalized[key]);
+      }
+    }
+
+    final player = asJsonMap(normalized['player']);
+    if (player.isNotEmpty) {
+      normalized['player'] = _battleCompanionStateWithPortraitAvatar(player);
+    }
+
+    return normalized;
+  }
+
   List<YoranBattleCompanion> _currentBattleCompanions() {
     final result = <YoranBattleCompanion>[];
     final seen = <String>{};
     for (final raw in controller.novelCharacterRoster.values) {
       if (!boolValue(raw['deployed'])) continue;
-      final companion = YoranBattleCompanion.fromState(raw);
+      final companion = YoranBattleCompanion.fromState(
+        _battleCompanionStateWithPortraitAvatar(raw),
+      );
       if (companion == null ||
           companion.skills.isEmpty ||
           !seen.add(companion.id)) {
@@ -1508,7 +1571,9 @@ class _NovelGamePageState extends State<NovelGamePage>
             description: description,
           );
           return _withLocalCompanionFallback(
-            YoranGeneratedBattleSetup.fromJson(response),
+            YoranGeneratedBattleSetup.fromJson(
+              _battlePayloadWithPortraitAvatars(response),
+            ),
           );
         } on NovelBackendException catch (error) {
           throw Exception(error.message);
@@ -1566,7 +1631,9 @@ class _NovelGamePageState extends State<NovelGamePage>
       setupLoader: () async {
         try {
           final response = await request.loadPayload();
-          final setup = YoranGeneratedBattleSetup.fromJson(response);
+          final setup = YoranGeneratedBattleSetup.fromJson(
+              _battlePayloadWithPortraitAvatars(response),
+            );
 
           battleId = stringValue(response['battle_id']).trim();
           if (battleId.isEmpty) {
@@ -1632,7 +1699,9 @@ class _NovelGamePageState extends State<NovelGamePage>
     if (!mounted) return;
     FocusManager.instance.primaryFocus?.unfocus();
     try {
-      final setup = YoranGeneratedBattleSetup.fromJson(response);
+      final setup = YoranGeneratedBattleSetup.fromJson(
+              _battlePayloadWithPortraitAvatars(response),
+            );
       final battleId = stringValue(response['battle_id']).trim();
       final target = asJsonMap(response['target']);
       final design = asJsonMap(response['battle_opponent']);

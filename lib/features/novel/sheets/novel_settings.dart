@@ -17,7 +17,6 @@ Future<void> showNovelSettingsSheet(
   bool isAdmin = false,
   NovelDeveloperPreviewActions? developerPreview,
 }) async {
-  final compactLandscape = NovelViewportMetrics.of(context).shortWide;
   final panel = _SettingsPanel(
     controller: controller,
     immersiveMode: immersiveMode,
@@ -26,52 +25,17 @@ Future<void> showNovelSettingsSheet(
     developerPreview: developerPreview,
   );
 
-  // 竖屏沿用全局抽屉；横屏单独使用和左侧 GameDrawer 接近的窄侧栏。
-  if (!compactLandscape) {
-    await _showNovelEndDrawer<void>(context, child: panel);
-    return;
-  }
-
+  // 始终使用同一条 Dialog Route 承载设置抽屉。
+  // 这样在“标准 / 沉浸”切换导致设备方向变化时，不需要先关闭再重新打开：
+  // MediaQuery 一变化，外层抽屉和内部设置内容会在当前 Route 内立即重建成对应样式。
   await showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
     barrierLabel: '关闭偏好设置',
     barrierColor: Colors.black.withOpacity(.56),
-    transitionDuration: const Duration(milliseconds: 220),
+    transitionDuration: const Duration(milliseconds: 200),
     pageBuilder: (dialogContext, _, __) {
-      final size = MediaQuery.sizeOf(dialogContext);
-      final drawerWidth = (size.width * .40).clamp(286.0, 320.0).toDouble();
-      return Align(
-        alignment: Alignment.centerRight,
-        child: Material(
-          color: Colors.transparent,
-          child: SizedBox(
-            width: drawerWidth,
-            height: double.infinity,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xFF171717).withOpacity(.96),
-                border: Border(
-                  left: BorderSide(color: Colors.white.withOpacity(.055)),
-                ),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: Colors.black.withOpacity(.34),
-                    blurRadius: 22,
-                    offset: const Offset(-8, 0),
-                  ),
-                ],
-              ),
-              // 抽屉背景必须铺到屏幕右侧和底部；只让内部内容避开
-              // 刘海 / Home Indicator 等系统安全区，避免出现透明空边。
-              child: SafeArea(
-                left: false,
-                child: panel,
-              ),
-            ),
-          ),
-        ),
-      );
+      return _AdaptiveSettingsDrawerFrame(child: panel);
     },
     transitionBuilder: (dialogContext, animation, secondaryAnimation, child) {
       final slide = CurvedAnimation(
@@ -88,6 +52,66 @@ Future<void> showNovelSettingsSheet(
       );
     },
   );
+}
+
+/// 设置抽屉的自适应外壳。
+///
+/// - 手机竖屏 / 常规窗口：较宽的标准右侧抽屉。
+/// - 手机紧凑横屏：切换成和游戏主抽屉接近的窄侧栏。
+/// - 抽屉保持在同一个 Dialog Route 中，因此旋转屏幕时不会消失或重新弹出。
+class _AdaptiveSettingsDrawerFrame extends StatelessWidget {
+  const _AdaptiveSettingsDrawerFrame({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+
+    final drawerWidth = compactLandscape
+        ? (size.width * .40).clamp(286.0, 320.0).toDouble()
+        : math.min(size.width * .90, 420.0);
+
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Material(
+        color: Colors.transparent,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+          width: drawerWidth,
+          height: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFF171717).withOpacity(
+              compactLandscape ? .96 : .985,
+            ),
+            border: Border(
+              left: BorderSide(
+                color: Colors.white.withOpacity(
+                  compactLandscape ? .055 : .075,
+                ),
+              ),
+            ),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withOpacity(
+                  compactLandscape ? .34 : .30,
+                ),
+                blurRadius: compactLandscape ? 22 : 26,
+                offset: const Offset(-8, 0),
+              ),
+            ],
+          ),
+          // 背景铺满屏幕右侧和底部，只让内容避开刘海 / Home Indicator。
+          child: SafeArea(
+            left: false,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SettingsDrawerScaffold extends StatelessWidget {
