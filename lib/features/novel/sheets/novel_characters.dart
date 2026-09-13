@@ -637,12 +637,6 @@ class _CharacterFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final divider = Container(
-      width: 54,
-      height: .7,
-      color: _archiveLine,
-    );
-
     return Padding(
       padding: EdgeInsets.fromLTRB(
         dense ? 8 : 18,
@@ -652,10 +646,7 @@ class _CharacterFilterBar extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          if (alignEnd) ...<Widget>[
-            divider,
-            const Spacer(),
-          ],
+          if (alignEnd) const Spacer(),
           _CharacterFilterText(
             label: '全部',
             count: total,
@@ -679,10 +670,7 @@ class _CharacterFilterBar extends StatelessWidget {
             onTap: () => onChanged(2),
             dense: dense,
           ),
-          if (!alignEnd) ...<Widget>[
-            const Spacer(),
-            divider,
-          ],
+          if (!alignEnd) const Spacer(),
         ],
       ),
     );
@@ -1508,9 +1496,31 @@ class _CharacterQuickPortraitEditorState
         return;
       }
 
+      // 生成结果不再直接加载/保存原图。预览窗最大只有约 420px，
+      // 使用 800px CDN 版本可兼顾高 DPI 清晰度与加载速度。
+      final lightweightPortraitUrl = CdnUtil.resize(
+        result.portraitUrl,
+        width: 800,
+      );
+
+      // 弹窗前先把轻量图放进 Flutter image cache。
+      // 即使预加载失败也不阻断流程，NovelArtwork 仍会自行加载/fallback。
+      try {
+        await precacheImage(
+          NetworkImage(lightweightPortraitUrl),
+          context,
+        );
+      } catch (_) {}
+
+      if (!mounted ||
+          requestToken != _requestToken ||
+          _characterKey(widget.character) != targetKey) {
+        return;
+      }
+
       final shouldSave = await _showGeneratedPortraitPreview(
         character: target,
-        portraitUrl: result.portraitUrl,
+        portraitUrl: lightweightPortraitUrl,
       );
       if (!mounted ||
           !shouldSave ||
@@ -1521,7 +1531,7 @@ class _CharacterQuickPortraitEditorState
 
       await widget.controller.updateCharacterVisuals(
         character: target,
-        portraitUrl: result.portraitUrl,
+        portraitUrl: lightweightPortraitUrl,
         avatarUrl: result.avatarUrl,
       );
       widget.controller.clearMessages();
@@ -1530,7 +1540,7 @@ class _CharacterQuickPortraitEditorState
       final stillCurrent = requestToken == _requestToken &&
           _characterKey(widget.character) == targetKey;
       if (stillCurrent) {
-        widget.onPortraitChanged(result.portraitUrl);
+        widget.onPortraitChanged(lightweightPortraitUrl);
       }
 
       await widget.controller.refreshCharacterStatus();
