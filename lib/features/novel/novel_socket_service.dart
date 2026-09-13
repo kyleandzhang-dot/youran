@@ -17,6 +17,20 @@ typedef SocketKickedCallback = Future<void> Function();
 /// - 普通断线指数退避重连（2/4/6/8/10s，上限 10s）
 /// - kicked / closeCode=4001 时禁止重连
 class NovelSocketService {
+  // 同一个 Dart isolate 内只允许当前剧情持有私有 WS。
+  // 世界切换时旧页面的 dispose 可能晚于新页面创建，因此不能等 dispose 才断开；
+  // GameShell 会在后端确认切换成功后主动 retire 当前实例。
+  static NovelSocketService? _activeInstance;
+
+  static Future<void> retireActiveForRouteReplacement() async {
+    final active = _activeInstance;
+    if (active == null) return;
+    if (identical(_activeInstance, active)) {
+      _activeInstance = null;
+    }
+    await active._retireForRouteReplacement();
+  }
+
   NovelSocketService({
     required this.baseUrl,
     required this.path,
@@ -46,6 +60,7 @@ class NovelSocketService {
   bool _connecting = false;
   bool _kickNotified = false;
   bool _everConnected = false;
+  bool _retiredForRouteReplacement = false;
   int _attempt = 0;
   String _sessionId = '';
 
@@ -71,6 +86,9 @@ class NovelSocketService {
   }
 
   Future<void> connect(String sessionId) async {
+    // 被世界切换退休的旧 Service 永久失去重连资格。旧页面即使随后收到
+    // resumed / recoverAfterResume，也不能重新抢回私有 WS。
+    if (_retiredForRouteReplacement) return;
     if (_connecting) return;
     if (_channel != null && _sessionId == sessionId) return;
 
@@ -100,6 +118,7 @@ class NovelSocketService {
       }
 
       _channel = channel;
+      _activeInstance = this;
       _attempt = 0;
       _startHeartbeat();
 
@@ -204,6 +223,10 @@ class NovelSocketService {
 
 
   void _notifyKicked() {
+    // 路由替换过程中被退休的旧连接即使晚到 kicked / 4001，也只关闭自己，
+    // 绝不能再清掉新世界正在使用的全局登录态。
+    if (_retiredForRouteReplacement) return;
+    if (!identical(_activeInstance, this)) return;
     if (_kickNotified) return;
     _kickNotified = true;
     final callback = onKicked;
@@ -278,10 +301,21 @@ class NovelSocketService {
     _channel = null;
   }
 
+  Future<void> _retireForRouteReplacement() async {
+    _retiredForRouteReplacement = true;
+    _manuallyClosed = true;
+    _sessionId = '';
+    _everConnected = false;
+    await _closeChannel();
+  }
+
   Future<void> disconnect() async {
     _manuallyClosed = true;
     _sessionId = '';
     _everConnected = false;
+    if (identical(_activeInstance, this)) {
+      _activeInstance = null;
+    }
     await _closeChannel();
   }
 

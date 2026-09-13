@@ -30,11 +30,16 @@ class NovelCharactersTab extends StatelessWidget {
     required this.controller,
     this.focusCharacterKey = '',
     this.focusRequestId = 0,
+    this.onBackToStory,
   });
 
   final NovelGameController controller;
   final String focusCharacterKey;
   final int focusRequestId;
+
+  /// 只有从剧情里的角色头像进入人物页时才传入。
+  /// 右侧一级导航直接进入人物页时保持 null，因此不显示左上角返回按钮。
+  final VoidCallback? onBackToStory;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +48,7 @@ class NovelCharactersTab extends StatelessWidget {
       embedded: true,
       focusCharacterKey: focusCharacterKey,
       focusRequestId: focusRequestId,
+      onBackToStory: onBackToStory,
     );
   }
 }
@@ -53,12 +59,14 @@ class _CharactersPanel extends StatefulWidget {
     this.embedded = false,
     this.focusCharacterKey = '',
     this.focusRequestId = 0,
+    this.onBackToStory,
   });
 
   final NovelGameController controller;
   final bool embedded;
   final String focusCharacterKey;
   final int focusRequestId;
+  final VoidCallback? onBackToStory;
 
   @override
   State<_CharactersPanel> createState() => _CharactersPanelState();
@@ -192,9 +200,10 @@ class _CharactersPanelState extends State<_CharactersPanel> {
 
         Widget header(_CharacterViewportMode mode) => _CharacterArchiveHeader(
               dense: mode == _CharacterViewportMode.landscape,
-              // 嵌入式人物页不是一个 Navigator 路由，不能 pop 整个游戏页。
-              // 返回时直接切回剧情主标签。
-              onBack: widget.embedded ? showNovelStoryPrimaryTab : null,
+              // 左上角返回只由真实入口决定：
+              // 从剧情角色头像进入时由 NovelGamePage 传入回调；
+              // 从右侧一级导航进入时回调为 null，因此完全不显示。
+              onBack: widget.embedded ? widget.onBackToStory : null,
               onClose: widget.embedded
                   ? null
                   : () => Navigator.of(context).pop(),

@@ -11,6 +11,7 @@ import 'api/mine_api.dart';
 import 'api/user_api.dart';
 import 'create_world_dialog.dart';
 import 'game_drawer.dart';
+import 'features/novel/novel_socket_service.dart';
 import 'login_sheet.dart';
 import 'mine_dialogs.dart';
 import 'scenario_edit_page.dart';
@@ -434,6 +435,12 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
     try {
       final result = await UserApi.setActiveScenario(scenario.id.toString());
+      if (!mounted) return;
+
+      // 后端已确认新世界可进入，此时立刻退休旧 Novel 私有 WS。
+      // 不能等旧页面 dispose：原生横竖屏切换会让旧页面短暂收到 resumed，
+      // 若旧 WS 与新 WS 重叠，服务端的 4001/kicked 会被误判成账号过期。
+      await NovelSocketService.retireActiveForRouteReplacement();
       if (!mounted) return;
 
       // 后端确认世界切换成功后，再确认一次身份仍在。

@@ -20,10 +20,19 @@ class NovelChoicePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final mediaSize = MediaQuery.sizeOf(context);
+    final portrait = mediaSize.height >= mediaSize.width;
+
+    // 竖屏时给最后一个选择框和底部输入框留极小间隙，
+    // 避免两边框贴在一起看起来像重叠；横屏保持现有布局不变。
+    final bottomGap = portrait ? 2.0 : 0.0;
+
     // 明确吃满父级可用宽度，让剧情选项区与底部输入区保持一致的横向尺度。
-    return SizedBox(
-      width: double.infinity,
-      child: Column(
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomGap),
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -58,7 +67,8 @@ class NovelChoicePanel extends StatelessWidget {
               onTap: () => onSelect(options[i]),
             ),
           ],
-        ],
+          ],
+        ),
       ),
     );
   }

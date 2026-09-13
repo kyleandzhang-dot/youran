@@ -2239,6 +2239,13 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   Uint8List? _previewPortraitBytes;
   final Set<int> _walkSensed = <int>{};
 
+  // 手机端：场景本身用拖动手势驱动浮动摇杆，而可拾取物也要接收点击。
+  // 用原始 Pointer 记录当前物品触摸，避免轻微手抖让父级 Pan 手势抢走 onTap。
+  int? _walkObjectPointerId;
+  int? _walkObjectPointerIndex;
+  Offset? _walkObjectPointerStart;
+  bool _walkObjectPointerMoved = false;
+
   bool get _remote => !widget.developerPreview;
 
   @override
@@ -3794,8 +3801,54 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
 
   double get _walkJoystickTravel => _walkJoystickSize * .31;
 
+  bool get _walkObjectPointerActive => _walkObjectPointerId != null;
+
+  void _beginWalkObjectPointer(int index, PointerDownEvent event) {
+    // 触摸从物品上开始时，这一整次 pointer sequence 都优先解释为“点击物品”。
+    // 这样手机上的微小滑动不会被底层浮动摇杆抢走。
+    _endFloatingWalkJoystick();
+    _walkObjectPointerId = event.pointer;
+    _walkObjectPointerIndex = index;
+    _walkObjectPointerStart = event.position;
+    _walkObjectPointerMoved = false;
+  }
+
+  void _updateWalkObjectPointer(PointerMoveEvent event) {
+    if (event.pointer != _walkObjectPointerId) return;
+    final start = _walkObjectPointerStart;
+    if (start == null) return;
+
+    // 允许正常的手指抖动；只有明显拖动才取消本次拾取。
+    if ((event.position - start).distanceSquared > 26 * 26) {
+      _walkObjectPointerMoved = true;
+    }
+  }
+
+  void _finishWalkObjectPointer(int index, PointerUpEvent event) {
+    if (event.pointer != _walkObjectPointerId) return;
+    final shouldTap = !_walkObjectPointerMoved &&
+        _walkObjectPointerIndex == index &&
+        _walkDistanceSquaredToIndex(index) <=
+            _walkInteractRadius * _walkInteractRadius;
+
+    _walkObjectPointerId = null;
+    _walkObjectPointerIndex = null;
+    _walkObjectPointerStart = null;
+    _walkObjectPointerMoved = false;
+
+    if (shouldTap) _tapTile(index);
+  }
+
+  void _cancelWalkObjectPointer(PointerCancelEvent event) {
+    if (event.pointer != _walkObjectPointerId) return;
+    _walkObjectPointerId = null;
+    _walkObjectPointerIndex = null;
+    _walkObjectPointerStart = null;
+    _walkObjectPointerMoved = false;
+  }
+
   void _beginFloatingWalkJoystick(DragDownDetails details) {
-    if (!widget.movementEnabled) return;
+    if (!widget.movementEnabled || _walkObjectPointerActive) return;
     setState(() {
       _walkJoystickCenter = details.localPosition;
       _walkJoystickKnobOffset = Offset.zero;
@@ -3804,7 +3857,11 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   }
 
   void _updateFloatingWalkJoystick(DragUpdateDetails details) {
-    if (!widget.movementEnabled || _walkJoystickCenter == null) return;
+    if (!widget.movementEnabled ||
+        _walkObjectPointerActive ||
+        _walkJoystickCenter == null) {
+      return;
+    }
 
     // 一次触摸周期内，摇杆底座永远固定在第一次按下的位置。
     // 手指拖多远都只移动摇杆帽；松手后整个摇杆消失，下一次按下再重新定中心。
@@ -4052,8 +4109,12 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 180),
           opacity: opacity,
-          child: GestureDetector(
-            onTap: () => _tapTile(index),
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (event) => _beginWalkObjectPointer(index, event),
+            onPointerMove: _updateWalkObjectPointer,
+            onPointerUp: (event) => _finishWalkObjectPointer(index, event),
+            onPointerCancel: _cancelWalkObjectPointer,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
@@ -4237,6 +4298,16 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
             fallback: avatarFallback,
           )
         : avatarFallback;
+    final playerVisual = portraitBytes != null
+        ? Image.memory(
+            portraitBytes,
+            fit: BoxFit.contain,
+            alignment: Alignment.bottomCenter,
+            filterQuality: FilterQuality.high,
+            errorBuilder: (_, __, ___) => bestPortrait,
+          )
+        : bestPortrait;
+
     return Positioned(
       left: _playerWorldX - cameraX - playerWidth / 2,
       top: playerY - cameraY - playerHeight,
@@ -4264,15 +4335,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                 ),
               );
             },
-            child: portraitBytes != null
-                ? Image.memory(
-                    portraitBytes,
-                    fit: BoxFit.contain,
-                    alignment: Alignment.bottomCenter,
-                    filterQuality: FilterQuality.high,
-                    errorBuilder: (_, __, ___) => bestPortrait,
-                  )
-                : bestPortrait,
+            child: playerVisual,
           ),
         ),
       ),
@@ -4424,6 +4487,23 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                       painter: _WalkDarknessPainter(
                         player: visionCenter,
                         visionRadius: _walkVisionRadius,
+                      ),
+                    ),
+                  ),
+                ),
+                // 墙体边缘必须画在黑暗遮罩之上，否则原来的边线会被黑幕再次压暗。
+                // 只在角色附近裁出一小圈灰色边界：靠墙时可辨认，离开后自然消失。
+                Positioned(
+                  left: -cameraX,
+                  top: -cameraY,
+                  width: worldWidth,
+                  height: worldHeight,
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _WalkNearbyWallOutlinePainter(
+                        landPath: _walkTerrainLandPath,
+                        player: Offset(_playerWorldX, playerWorldY),
+                        radius: _walkVisionRadius * 1.05,
                       ),
                     ),
                   ),
@@ -5073,6 +5153,59 @@ class _WalkTerrainPainter extends CustomPainter {
   bool shouldRepaint(covariant _WalkTerrainPainter oldDelegate) {
     return !identical(oldDelegate.landPath, landPath) ||
         !identical(oldDelegate.contourPaths, contourPaths);
+  }
+}
+
+class _WalkNearbyWallOutlinePainter extends CustomPainter {
+  const _WalkNearbyWallOutlinePainter({
+    required this.landPath,
+    required this.player,
+    required this.radius,
+  });
+
+  final Path? landPath;
+  final Offset player;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final land = landPath;
+    if (land == null || size.isEmpty || radius <= 0) return;
+
+    // 只保留角色附近的墙边，避免整张地图都变成明显的描边地图。
+    canvas.save();
+    canvas.clipPath(
+      Path()..addOval(Rect.fromCircle(center: player, radius: radius)),
+    );
+
+    // 一层较宽、极淡的灰线托底，再叠一层细线。
+    // 不使用 blur / glow，保持“墙的轮廓”而不是角色发光。
+    canvas.drawPath(
+      land,
+      Paint()
+        ..color = const Color(0xFF8B9096).withOpacity(.20)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawPath(
+      land,
+      Paint()
+        ..color = const Color(0xFFC1C4C8).withOpacity(.30)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.05
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _WalkNearbyWallOutlinePainter oldDelegate) {
+    return !identical(oldDelegate.landPath, landPath) ||
+        oldDelegate.player != player ||
+        oldDelegate.radius != radius;
   }
 }
 

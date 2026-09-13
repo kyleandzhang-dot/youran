@@ -18,7 +18,7 @@ typedef RuntimeTokenRefresher = FutureOr<String?> Function();
 typedef RuntimeKickedCallback = Future<void> Function();
 
 class NovelRuntime {
-  const NovelRuntime({
+  NovelRuntime({
     required this.baseUrl,
     required this.tokenProvider,
     required this.userIdProvider,
@@ -38,6 +38,10 @@ class NovelRuntime {
   final RuntimeKickedCallback? onKicked;
   final NovelEndpointConfig endpoints;
   final String fallbackBackgroundAsset;
+
+  // 每创建一个新的剧情 Controller 就推进代次。旧 Controller 的 WebSocket
+  // 即使在路由替换后才收到 kicked，也不能再触发全局登出。
+  int _controllerGeneration = 0;
 
   /// 当路由缺少 scenarioId/sessionId 时，自动跳转到的路由名。
   final String invalidRouteFallbackName;
@@ -189,6 +193,14 @@ class NovelRuntime {
     required String scenarioId,
     required String sessionId,
   }) {
+    final generation = ++_controllerGeneration;
+
+    Future<void> handleKickedForThisController() async {
+      if (generation != _controllerGeneration) return;
+      final callback = onKicked;
+      if (callback != null) await callback();
+    }
+
     final backend = HttpNovelBackend(
       baseUrl: baseUrl,
       tokenProvider: tokenProvider,
@@ -201,7 +213,7 @@ class NovelRuntime {
       path: endpoints.webSocket,
       tokenProvider: tokenProvider,
       userIdProvider: userIdProvider,
-      onKicked: onKicked,
+      onKicked: handleKickedForThisController,
     );
     return NovelGameController(
       scenarioId: scenarioId,

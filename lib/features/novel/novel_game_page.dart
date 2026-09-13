@@ -82,6 +82,10 @@ class _NovelGamePageState extends State<NovelGamePage>
   String _characterFocusKey = '';
   int _characterFocusRequestId = 0;
 
+  // 只有从剧情中的人物头像 / 当前说话人头像进入人物页时为 true。
+  // 右侧一级导航进入人物页时必须为 false，这样人物页不显示左上角返回。
+  bool _characterOpenedFromAvatar = false;
+
   bool _characterSetupOpen = false;
   bool _openingOpen = false;
   bool _fateOpen = false;
@@ -243,25 +247,33 @@ class _NovelGamePageState extends State<NovelGamePage>
       return;
     }
     if (state == AppLifecycleState.resumed && controller.isInitialized) {
-      // 恢复前台时不能只重连 WebSocket；后台期间可能错过任意推送。
-      // 如果运行中已经进入自动恢复流程，就把待执行的退避重试提前到现在，
-      // 避免与 recoverAfterResume() 再并发发起一套重复恢复请求。
-      if (_sceneRecoveryInFlight) {
-        // 当前恢复请求已经在跑，等待它自行收敛。
-      } else if (_sceneRecoveryOriginalError.isNotEmpty ||
-          controller.lastError.trim().isNotEmpty) {
-        _sceneRecoveryTimer?.cancel();
-        _sceneRecoveryTimer = null;
-        _syncSceneRecovery(immediate: true);
-      } else {
-        // 没有已知错误时仍执行原有的前台权威状态刷新。
-        unawaited(controller.recoverAfterResume());
-      }
-      unawaited(controller.bgm.init(
-        controller.bgm.currentIntensity,
-        controller.bgm.currentSceneMode,
-      ));
-      unawaited(_syncActiveWeatherAudio(force: true));
+      // 原生方向切换也可能产生 inactive -> resumed。pushReplacement 期间旧页面
+      // 尚未 dispose，但已经不是当前路由；它绝不能再次重连旧世界的私有 WS。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !controller.isInitialized) return;
+        final route = ModalRoute.of(context);
+        if (route == null || !route.isCurrent) return;
+
+        // 恢复前台时不能只重连 WebSocket；后台期间可能错过任意推送。
+        // 如果运行中已经进入自动恢复流程，就把待执行的退避重试提前到现在，
+        // 避免与 recoverAfterResume() 再并发发起一套重复恢复请求。
+        if (_sceneRecoveryInFlight) {
+          // 当前恢复请求已经在跑，等待它自行收敛。
+        } else if (_sceneRecoveryOriginalError.isNotEmpty ||
+            controller.lastError.trim().isNotEmpty) {
+          _sceneRecoveryTimer?.cancel();
+          _sceneRecoveryTimer = null;
+          _syncSceneRecovery(immediate: true);
+        } else {
+          // 没有已知错误时仍执行原有的前台权威状态刷新。
+          unawaited(controller.recoverAfterResume());
+        }
+        unawaited(controller.bgm.init(
+          controller.bgm.currentIntensity,
+          controller.bgm.currentSceneMode,
+        ));
+        unawaited(_syncActiveWeatherAudio(force: true));
+      });
     }
   }
 
@@ -1994,7 +2006,15 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   void _selectPrimaryTab(_NovelPrimaryTab tab) {
-    if (_primaryTab == tab) return;
+    // 这个方法代表“一级导航 / 页面内导航”的普通切页，不是头像快捷入口。
+    // 即使当前已经在人物页，再点右侧人物入口也要清掉头像入口标记，
+    // 让左上角返回立即消失。
+    if (_primaryTab == tab) {
+      if (_characterOpenedFromAvatar) {
+        setState(() => _characterOpenedFromAvatar = false);
+      }
+      return;
+    }
     FocusManager.instance.primaryFocus?.unfocus();
 
     // 切离剧情页时先立即掐掉连续打字声；NovelDialogPanel.active 随后会
@@ -2008,6 +2028,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     }
 
     setState(() {
+      // 普通导航切页时一律结束“头像快捷进入”上下文。
+      _characterOpenedFromAvatar = false;
       _primaryTab = tab;
       _mountedPrimaryTabs.add(tab);
     });
@@ -2030,6 +2052,7 @@ class _NovelGamePageState extends State<NovelGamePage>
       // focusRequestId 保证即使已经停留在人物页，再点一次头像也会重新聚焦。
       _characterFocusKey = key;
       _characterFocusRequestId++;
+      _characterOpenedFromAvatar = true;
       _primaryTab = _NovelPrimaryTab.characters;
       _mountedPrimaryTabs.add(_NovelPrimaryTab.characters);
     });
@@ -2038,7 +2061,14 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _openHostCharacterArchive() {
     final host = controller.protagonist;
     if (host == null) {
-      _selectPrimaryTab(_NovelPrimaryTab.characters);
+      // 仍然是从左上角人物头像触发，只是暂时没有可聚焦的主角数据。
+      FocusManager.instance.primaryFocus?.unfocus();
+      unawaited(controller.bgm.stopTypingSound());
+      setState(() {
+        _characterOpenedFromAvatar = true;
+        _primaryTab = _NovelPrimaryTab.characters;
+        _mountedPrimaryTabs.add(_NovelPrimaryTab.characters);
+      });
       return;
     }
     _focusCharacterInArchive(host);
@@ -2058,6 +2088,10 @@ class _NovelGamePageState extends State<NovelGamePage>
           controller: controller,
           focusCharacterKey: _characterFocusKey,
           focusRequestId: _characterFocusRequestId,
+          // 只有头像快捷进入才显示 <；点击走真正的页面状态回剧情。
+          onBackToStory: _characterOpenedFromAvatar
+              ? () => _selectPrimaryTab(_NovelPrimaryTab.story)
+              : null,
         ),
       _NovelPrimaryTab.team =>
         NovelTeamTab(controller: controller),
