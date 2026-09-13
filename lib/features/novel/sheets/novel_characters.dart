@@ -1430,7 +1430,7 @@ class _CharacterQuickPortraitEditorState
                                             Navigator.of(dialogContext).pop(true),
                                         child: const Center(
                                           child: Text(
-                                            '保存',
+                                            '使用立绘',
                                             style: TextStyle(
                                               color: NovelPalette.accentDark,
                                               fontSize: 12.5,
@@ -1472,6 +1472,194 @@ class _CharacterQuickPortraitEditorState
     );
 
     return decision == true;
+  }
+
+  Future<Uint8List> _buildAutomaticAvatarBytes(
+    String portraitUrl, {
+    int outputSize = 256,
+  }) async {
+    // 自动头像不弹任何 UI：直接读取立绘像素，优先利用透明通道定位人物，
+    // 再截取人物偏上的头肩区域。空白画布本身保持透明，因此 WebP 的 alpha
+    // 会继续保留在最终 PNG 头像里，不会再被合成黑底。
+    final completer = Completer<Uint8List>();
+    final provider = NetworkImage(portraitUrl);
+    final stream = provider.resolve(const ImageConfiguration());
+
+    late ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (info, _) async {
+        if (completer.isCompleted) return;
+        try {
+          final image = info.image;
+          final width = image.width;
+          final height = image.height;
+          if (width <= 0 || height <= 0) {
+            throw StateError('立绘尺寸无效');
+          }
+
+          double sourceLeft = 0;
+          double sourceTop = 0;
+          double sourceSide = math.min(width, height).toDouble() / 1.45;
+          var usedAlphaSubject = false;
+
+          // 透明立绘可以通过 alpha 自动找到人物真实边界。为了避免大图扫描太重，
+          // 最多约每 900px 取一个采样步长；最终裁剪仍然使用原图，不损失精度。
+          final raw = await image.toByteData(format: ImageByteFormat.rawRgba);
+          if (raw != null) {
+            final rgba = raw.buffer.asUint8List(
+              raw.offsetInBytes,
+              raw.lengthInBytes,
+            );
+            final longest = math.max(width, height);
+            final step = math.max(1, (longest / 900).floor());
+
+            var minX = width;
+            var minY = height;
+            var maxX = -1;
+            var maxY = -1;
+
+            for (var y = 0; y < height; y += step) {
+              final rowOffset = y * width * 4;
+              for (var x = 0; x < width; x += step) {
+                final alpha = rgba[rowOffset + x * 4 + 3];
+                if (alpha <= 12) continue;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+              }
+            }
+
+            if (maxX >= minX && maxY >= minY) {
+              final subjectWidth = (maxX - minX + step).toDouble();
+              final subjectHeight = (maxY - minY + step).toDouble();
+              final almostFullCanvas =
+                  subjectWidth >= width * .94 && subjectHeight >= height * .94;
+
+              if (!almostFullCanvas) {
+                // 上一版裁得太紧：人物在头像里显得过大，头顶也容易被切。
+                // 这里扩大取景范围，让人物整体缩小一些，同时把裁剪窗口本身往上移，
+                // 优先保留完整头部和肩膀，减少胸腹区域占比。
+                sourceSide = math.max(
+                  subjectWidth * 1.12,
+                  subjectHeight * .46,
+                );
+                sourceSide = math.min(
+                  sourceSide,
+                  math.min(width, height).toDouble(),
+                );
+
+                final subjectCenterX = (minX + maxX) / 2.0;
+                sourceLeft = (subjectCenterX - sourceSide / 2)
+                    .clamp(0.0, width - sourceSide)
+                    .toDouble();
+
+                // 裁剪窗口往源图上方移动：显示更多头部、少一点下半身。
+                // 额外留约 3% 的透明头顶安全边距，避免发顶被切掉。
+                sourceTop = 0;
+                usedAlphaSubject = true;
+              }
+            }
+          }
+
+          // 无透明边界（例如自带背景图）时也稍微拉远，并把取景区域往上移。
+          if (!usedAlphaSubject) {
+            sourceSide = math.min(width, height).toDouble() / 1.18;
+            sourceLeft = ((width - sourceSide) / 2)
+                .clamp(0.0, width - sourceSide)
+                .toDouble();
+            sourceTop = 0;
+          }
+
+          final recorder = PictureRecorder();
+          final canvas = Canvas(recorder);
+          final sourceRect = Rect.fromLTWH(
+            sourceLeft,
+            sourceTop,
+            sourceSide,
+            sourceSide,
+          );
+          final targetRect = Rect.fromLTWH(
+            0,
+            0,
+            outputSize.toDouble(),
+            outputSize.toDouble(),
+          );
+          final paint = Paint()
+            ..isAntiAlias = true
+            ..filterQuality = FilterQuality.high;
+
+          // PictureRecorder 的初始画布是透明的；只画人物像素即可保留 alpha。
+          canvas.drawImageRect(image, sourceRect, targetRect, paint);
+          final picture = recorder.endRecording();
+          final avatarImage = await picture.toImage(outputSize, outputSize);
+          final encoded = await avatarImage.toByteData(
+            format: ImageByteFormat.png,
+          );
+          if (encoded == null) throw StateError('头像编码失败');
+          final bytes = Uint8List.fromList(
+            encoded.buffer.asUint8List(
+              encoded.offsetInBytes,
+              encoded.lengthInBytes,
+            ),
+          );
+          if (!completer.isCompleted) completer.complete(bytes);
+        } catch (error, stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(error, stackTrace);
+          }
+        } finally {
+          stream.removeListener(listener);
+        }
+      },
+      onError: (Object error, StackTrace? stackTrace) {
+        stream.removeListener(listener);
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace ?? StackTrace.current);
+        }
+      },
+    );
+
+    stream.addListener(listener);
+    return completer.future;
+  }
+
+  Future<void> _autoCropAndSubmitGeneratedAvatar({
+    required NovelGameController controller,
+    required NovelCharacter target,
+    required String targetKey,
+    required String portraitSourceUrl,
+    required String savedPortraitUrl,
+  }) async {
+    // 立绘已经先保存成功。下面整段故意不 await 回主流程：
+    // 自动裁剪 -> 上传头像 -> 仅补写 avatarUrl，任何失败都不回滚立绘。
+    try {
+      final avatarBytes = await _buildAutomaticAvatarBytes(
+        portraitSourceUrl,
+        outputSize: 256,
+      );
+
+      final avatarUrl = await controller.uploadCharacterImage(
+        bytes: avatarBytes,
+        filename: 'avatar_${DateTime.now().millisecondsSinceEpoch}_256.png',
+        contentType: 'image/png',
+      );
+
+      await controller.updateCharacterVisuals(
+        character: target,
+        portraitUrl: savedPortraitUrl,
+        avatarUrl: avatarUrl,
+      );
+      await controller.refreshCharacterStatus();
+    } catch (error) {
+      // 后台头像失败不影响已成功的立绘。只有用户仍停留在该角色时才轻提示。
+      if (!mounted || _characterKey(widget.character) != targetKey) return;
+      setState(() {
+        _errorText = error is NovelBackendException
+            ? '立绘已保存，自动头像上传失败：${error.message}'
+            : '立绘已保存，自动头像上传失败：$error';
+      });
+    }
   }
 
   Future<void> _generatePortrait() async {
@@ -1533,10 +1721,13 @@ class _CharacterQuickPortraitEditorState
         return;
       }
 
+      // 先把立绘本身保存成功。头像不再阻塞这一步：
+      // 这里继续保留角色当前已有头像，随后由独立异步任务自动裁剪 / 上传 / 补写头像。
+      final existingAvatarUrl = target.avatarUrl.trim();
       await widget.controller.updateCharacterVisuals(
         character: target,
         portraitUrl: lightweightPortraitUrl,
-        avatarUrl: result.avatarUrl,
+        avatarUrl: existingAvatarUrl,
       );
       widget.controller.clearMessages();
 
@@ -1547,6 +1738,19 @@ class _CharacterQuickPortraitEditorState
         widget.onPortraitChanged(lightweightPortraitUrl);
       }
 
+      // 立绘到这里已经成功。头像任务立刻丢到后台，不等待刷新、也不再弹任何 UI。
+      // 即使用户马上切页，controller / target 都已经捕获，头像仍会继续自动提交。
+      unawaited(
+        _autoCropAndSubmitGeneratedAvatar(
+          controller: widget.controller,
+          target: target,
+          targetKey: targetKey,
+          portraitSourceUrl: result.portraitUrl,
+          savedPortraitUrl: lightweightPortraitUrl,
+        ),
+      );
+
+      // 当前页面自己的角色状态刷新仍按原流程执行；它不再决定头像任务是否启动。
       await widget.controller.refreshCharacterStatus();
     } catch (error) {
       if (!mounted || requestToken != _requestToken) return;
@@ -1836,6 +2040,7 @@ class _CharacterQuickPortraitEditorState
     );
   }
 }
+
 
 class _CharacterThumbStrip extends StatelessWidget {
   const _CharacterThumbStrip({

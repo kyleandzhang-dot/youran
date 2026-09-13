@@ -1127,7 +1127,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final media = MediaQuery.of(context);
     final landscape = media.size.width > media.size.height;
     final sidebarWidth = landscape
-        ? (media.size.width * .285).clamp(248.0, 340.0).toDouble()
+        ? (media.size.width * .22).clamp(208.0, 264.0).toDouble()
         : 0.0;
 
     return Theme(
@@ -1220,10 +1220,10 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     ),
                     child: ListView(
                       physics: const BouncingScrollPhysics(),
-                      padding: EdgeInsets.fromLTRB(14, 10, 14, _dirty ? 92 : 20),
+                      padding: EdgeInsets.fromLTRB(10, 8, 10, _dirty ? 82 : 14),
                       children: [
                         _buildLandscapeHero(),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 12),
                         _buildVerticalSectionTabs(),
                       ],
                     ),
@@ -1232,23 +1232,23 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 Expanded(
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      final horizontalPadding = constraints.maxWidth >= 900
-                          ? 32.0
-                          : constraints.maxWidth >= 640
-                              ? 24.0
-                              : 16.0;
+                      final horizontalPadding = constraints.maxWidth >= 1100
+                          ? 20.0
+                          : constraints.maxWidth >= 720
+                              ? 16.0
+                              : 12.0;
                       return SingleChildScrollView(
                         physics: const BouncingScrollPhysics(),
                         padding: EdgeInsets.fromLTRB(
                           horizontalPadding,
-                          18,
+                          12,
                           horizontalPadding,
-                          _dirty ? 94 : 24,
+                          _dirty ? 84 : 16,
                         ),
                         child: Align(
                           alignment: Alignment.topCenter,
                           child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 1120),
+                            constraints: const BoxConstraints(maxWidth: 1480),
                             child: _buildCurrentSection(),
                           ),
                         ),
@@ -1266,7 +1266,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Widget _buildLandscapeTopBar() {
     return SizedBox(
-      height: 50,
+      height: 46,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6),
         child: Row(
@@ -1337,8 +1337,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 clipBehavior: Clip.none,
                 children: [
                   Container(
-                    width: 88,
-                    height: 88,
+                    width: 64,
+                    height: 64,
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.04),
                       borderRadius: BorderRadius.circular(14),
@@ -1347,11 +1347,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     child: _coverUrl.isEmpty
                         ? const Icon(
                             Icons.landscape_outlined,
-                            size: 28,
+                            size: 22,
                             color: AppColors.textOnDarkMuted,
                           )
                         : Image.network(
-                            CdnUtil.resize(_coverUrl, width: 240),
+                            CdnUtil.resize(_coverUrl, width: 180),
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) => const Icon(
                               Icons.broken_image_outlined,
@@ -1363,8 +1363,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     right: -5,
                     bottom: -5,
                     child: Container(
-                      width: 28,
-                      height: 28,
+                      width: 24,
+                      height: 24,
                       decoration: BoxDecoration(
                         color: AppColors.accent,
                         borderRadius: BorderRadius.circular(9),
@@ -1372,7 +1372,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                       ),
                       child: _uploadingCover
                           ? const Padding(
-                              padding: EdgeInsets.all(6),
+                              padding: EdgeInsets.all(5),
                               child: CircularProgressIndicator(
                                 strokeWidth: 1.4,
                                 color: Color(0xFF0C0C0C),
@@ -1380,7 +1380,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                             )
                           : const Icon(
                               LucideIcons.camera,
-                              size: 13,
+                              size: 12,
                               color: Color(0xFF0C0C0C),
                             ),
                     ),
@@ -1388,7 +1388,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 ],
               ),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1413,14 +1413,14 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   TextField(
                     controller: _titleController,
                     onChanged: (_) => _markDirty(),
                     maxLines: 2,
                     style: const TextStyle(
                       color: AppColors.textOnDark,
-                      fontSize: 17,
+                      fontSize: 15.5,
                       height: 1.12,
                       fontWeight: FontWeight.w700,
                     ),
@@ -1435,7 +1435,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         Text(
           'ID  ${_id.isEmpty ? widget.scenarioId : _id}',
           maxLines: 1,
@@ -1470,7 +1470,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
                 decoration: BoxDecoration(
                   color: _section == item.$1
                       ? AppColors.accent.withOpacity(.10)
@@ -1770,98 +1770,140 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   }
 
   Widget _buildOverviewSection() {
-    return Column(
-      children: [
-        _sectionCard(
-          title: '基础信息',
-          subtitle: '玩家第一眼看到的世界介绍',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _fieldLabel('标签'),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (var i = 0; i < _tags.length; i++)
-                    GestureDetector(
-                      onTap: () => _editTag(i),
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.04),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _tagLabel(_tags[i]),
-                              style: const TextStyle(
-                                color: AppColors.textOnDark,
-                                fontSize: 12,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            GestureDetector(
-                              onTap: () => _removeTag(i),
-                              child: const Icon(Icons.close_rounded, size: 14, color: AppColors.textOnDarkMuted),
-                            ),
-                          ],
-                        ),
+    Widget buildTagEditor() {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (var i = 0; i < _tags.length; i++)
+            GestureDetector(
+              onTap: () => _editTag(i),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(11, 7, 7, 7),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withOpacity(.035)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _tagLabel(_tags[i]),
+                      style: const TextStyle(
+                        color: AppColors.textOnDark,
+                        fontSize: 11.8,
                       ),
                     ),
-                  InkWell(
-                    onTap: _addTag,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: AppColors.accent.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(8),
+                    const SizedBox(width: 7),
+                    GestureDetector(
+                      onTap: () => _removeTag(i),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 14,
+                        color: AppColors.textOnDarkMuted,
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.add_rounded, size: 14, color: AppColors.accent),
-                          const SizedBox(width: 4),
-                          const Text(
-                            '新增标签',
-                            style: TextStyle(
-                              color: AppColors.accent,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          InkWell(
+            onTap: _addTag,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: AppColors.accent.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.add_rounded, size: 14, color: AppColors.accent),
+                  SizedBox(width: 4),
+                  Text(
+                    '新增标签',
+                    style: TextStyle(
+                      color: AppColors.accent,
+                      fontSize: 11.8,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
-              _fieldLabel('世界设定'),
-              const SizedBox(height: 10),
-              _editorTextField(
-                controller: _descriptionController,
-                hint: '输入世界观描述、时代背景、主要冲突和玩家需要知道的信息…',
-                minLines: 5,
-                maxLines: 10,
-              ),
-              const SizedBox(height: 24),
-              _fieldLabel('开场白'),
-              const SizedBox(height: 10),
-              _editorTextField(
-                controller: _openingController,
-                hint: '玩家进入剧本后看到的第一段话…',
-                minLines: 4,
-                maxLines: 8,
-              ),
-            ],
+            ),
           ),
-        ),
-      ],
+        ],
+      );
+    }
+
+    Widget buildWorldField({required bool wide}) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _fieldLabel('世界设定'),
+          const SizedBox(height: 8),
+          _editorTextField(
+            controller: _descriptionController,
+            hint: '输入世界观描述、时代背景、主要冲突和玩家需要知道的信息…',
+            minLines: wide ? 7 : 5,
+            maxLines: wide ? 14 : 10,
+          ),
+        ],
+      );
+    }
+
+    Widget buildOpeningField({required bool wide}) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _fieldLabel('开场白'),
+          const SizedBox(height: 8),
+          _editorTextField(
+            controller: _openingController,
+            hint: '玩家进入剧本后看到的第一段话…',
+            minLines: wide ? 7 : 4,
+            maxLines: wide ? 14 : 8,
+          ),
+        ],
+      );
+    }
+
+    return _sectionCard(
+      title: '基础信息',
+      subtitle: '优先展示玩家第一眼会看到的内容',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _fieldLabel('标签'),
+          const SizedBox(height: 9),
+          buildTagEditor(),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 720;
+              if (!wide) {
+                return Column(
+                  children: [
+                    buildWorldField(wide: false),
+                    const SizedBox(height: 18),
+                    buildOpeningField(wide: false),
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: buildWorldField(wide: true)),
+                  const SizedBox(width: 12),
+                  Expanded(child: buildOpeningField(wide: true)),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -1869,7 +1911,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final characters = _visibleCharacters;
     return _sectionCard(
       title: '角色',
-      subtitle: '头像、立绘、身份、性格与关系初始值',
+      subtitle: '身份、性格、关系与形象一屏快速查看',
       trailing: TextButton.icon(
         onPressed: _addCharacter,
         icon: const Icon(Icons.add_rounded, size: 16),
@@ -1878,89 +1920,172 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       ),
       child: characters.isEmpty
           ? _emptyState('还没有角色', '添加第一个 NPC 或主角档案')
-          : Column(
-              children: [
-                for (var i = 0; i < characters.length; i++) ...[
-                  _characterRow(characters[i]),
-                  if (i != characters.length - 1)
-                    const SizedBox(height: 8),
-                ],
-              ],
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth;
+                final columns = width >= 1080
+                    ? 3
+                    : width >= 620
+                        ? 2
+                        : 1;
+                const gap = 10.0;
+                final itemWidth = columns == 1
+                    ? width
+                    : (width - gap * (columns - 1)) / columns;
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (final character in characters)
+                      SizedBox(
+                        width: itemWidth,
+                        child: _characterRow(
+                          character,
+                          compact: columns > 1,
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
     );
   }
 
-  Widget _characterRow(Map<String, dynamic> character) {
+  Widget _characterRow(
+    Map<String, dynamic> character, {
+    bool compact = false,
+  }) {
     final realIndex = character['__realIndex'] as int;
     final avatar = character['avatar']?.toString() ?? '';
     final jsonData = _parseMap(character['json_data']);
+    final initialConfig = _parseMap(character['initial_config']);
     final role = character['role']?.toString() ?? 'npc';
+    final identity = jsonData['identity']?.toString().trim() ?? '';
+    final relationship = initialConfig['relationship_status']?.toString().trim() ?? '';
+    final gender = jsonData['gender']?.toString().trim() ?? '';
+    final age = jsonData['age']?.toString().trim() ?? '';
+    final rawTraits = jsonData['personality'];
+    final traits = rawTraits is List
+        ? rawTraits
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .take(compact ? 2 : 3)
+            .toList()
+        : <String>[];
+    final meta = <String>[
+      if (relationship.isNotEmpty) relationship,
+      if (gender.isNotEmpty && gender != '未知') gender,
+      if (age.isNotEmpty) '$age岁',
+      ...traits,
+    ];
+    final avatarSize = compact ? 46.0 : 52.0;
+
     return InkWell(
       onTap: () => _editCharacter(realIndex),
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(compact ? 10 : 12),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.02),
+          color: Colors.white.withOpacity(0.025),
           borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.045)),
         ),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Container(
-              width: 52,
-              height: 52,
+              width: avatarSize,
+              height: avatarSize,
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(compact ? 12 : 14),
               ),
               clipBehavior: Clip.antiAlias,
               child: avatar.isEmpty
-                  ? const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted)
+                  ? const Icon(
+                      Icons.person_outline_rounded,
+                      color: AppColors.textOnDarkMuted,
+                    )
                   : Image.network(
                       CdnUtil.resize(avatar, width: 120),
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const Icon(Icons.person_outline_rounded, color: AppColors.textOnDarkMuted),
+                      errorBuilder: (_, __, ___) => const Icon(
+                        Icons.person_outline_rounded,
+                        color: AppColors.textOnDarkMuted,
+                      ),
                     ),
             ),
-            const SizedBox(width: 16),
+            SizedBox(width: compact ? 11 : 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(
                     children: [
-                      Flexible(
+                      Expanded(
                         child: Text(
                           character['name']?.toString().trim().isNotEmpty == true
                               ? character['name'].toString()
                               : '未命名',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: AppColors.textOnDark, fontSize: 14, fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                            color: AppColors.textOnDark,
+                            fontSize: compact ? 13.2 : 14,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 7),
                       _tinyBadge(role == 'player' ? '主角' : 'NPC'),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   Text(
-                    jsonData['identity']?.toString().trim().isNotEmpty == true
-                        ? jsonData['identity'].toString()
-                        : '尚未设置身份',
+                    identity.isNotEmpty ? identity : '尚未设置身份',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12),
+                    style: TextStyle(
+                      color: identity.isNotEmpty
+                          ? AppColors.textOnDarkMuted
+                          : AppColors.textOnDarkMuted.withOpacity(.65),
+                      fontSize: compact ? 11.3 : 12,
+                    ),
                   ),
+                  if (meta.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      meta.join('  ·  '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppColors.textOnDarkMuted.withOpacity(.82),
+                        fontSize: compact ? 10.3 : 10.8,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-            IconButton(
-              tooltip: '删除',
-              onPressed: () => _removeCharacter(realIndex),
-              icon: const Icon(Icons.close_rounded, size: 18, color: AppColors.textOnDarkMuted),
+            SizedBox(width: compact ? 4 : 8),
+            InkWell(
+              onTap: () => _removeCharacter(realIndex),
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding: EdgeInsets.all(6),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 16,
+                  color: AppColors.textOnDarkMuted,
+                ),
+              ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.textOnDarkMuted, size: 20),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.textOnDarkMuted,
+              size: 18,
+            ),
           ],
         ),
       ),
@@ -1977,60 +2102,121 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     }
 
     final points = _plotPoints;
-    return Column(
-      children: [
-        _sectionCard(
-          title: '主线大纲',
-          subtitle: '从开篇到结局的整体走向',
-          child: _editorTextField(
-            controller: _mainStoryController,
-            hint: '用几段话说明主线目标、关键变化和结局方向…',
-            minLines: 5,
-            maxLines: 12,
-          ),
+
+    Widget buildMainStory(bool wide) {
+      return _sectionCard(
+        title: '主线大纲',
+        subtitle: '从开篇到结局的整体走向',
+        child: _editorTextField(
+          controller: _mainStoryController,
+          hint: '用几段话说明主线目标、关键变化和结局方向…',
+          minLines: wide ? 12 : 5,
+          maxLines: wide ? 24 : 12,
         ),
-        const SizedBox(height: 16),
-        _sectionCard(
-          title: '关键剧情节点',
-          subtitle: 'AI 按顺序推进 · 共 ${points.length} 个节点',
-          trailing: TextButton.icon(
-            onPressed: _addPlotPoint,
-            icon: const Icon(Icons.add_rounded, size: 16),
-            label: const Text('新增'),
-            style: TextButton.styleFrom(foregroundColor: AppColors.accent),
-          ),
-          child: points.isEmpty
-              ? _emptyState('暂无剧情节点', '添加后可以明确每一幕的目标、困境和推进条件')
-              : Column(
-                  children: [
-                    for (var i = 0; i < points.length; i++) ...[
-                      _plotPointCard(i, points[i]),
-                      if (i != points.length - 1) const SizedBox(height: 12),
-                    ],
+      );
+    }
+
+    Widget buildPlotPoints() {
+      return _sectionCard(
+        title: '关键剧情节点',
+        subtitle: 'AI 按顺序推进 · 共 ${points.length} 个节点',
+        trailing: TextButton.icon(
+          onPressed: _addPlotPoint,
+          icon: const Icon(Icons.add_rounded, size: 16),
+          label: const Text('新增'),
+          style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+        ),
+        child: points.isEmpty
+            ? _emptyState('暂无剧情节点', '添加后可以明确每一幕的目标、困境和推进条件')
+            : Column(
+                children: [
+                  for (var i = 0; i < points.length; i++) ...[
+                    _plotPointCard(i, points[i]),
+                    if (i != points.length - 1)
+                      const SizedBox(height: 9),
                   ],
-                ),
-        ),
-      ],
+                ],
+              ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 780;
+        if (!wide) {
+          return Column(
+            children: [
+              buildMainStory(false),
+              const SizedBox(height: 12),
+              buildPlotPoints(),
+            ],
+          );
+        }
+
+        final outlineWidth = (constraints.maxWidth * .33)
+            .clamp(300.0, 420.0)
+            .toDouble();
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: outlineWidth, child: buildMainStory(true)),
+            const SizedBox(width: 12),
+            Expanded(child: buildPlotPoints()),
+          ],
+        );
+      },
     );
   }
 
   Widget _plotPointCard(int index, Map<String, dynamic> point) {
+    String clean(dynamic value) => value?.toString().trim() ?? '';
+
+    final goalValue = clean(point['goal']).isNotEmpty
+        ? clean(point['goal'])
+        : clean(point['state']);
+    final scene = clean(point['scene']);
+    final problem = clean(point['player_facing_problem']).isNotEmpty
+        ? clean(point['player_facing_problem'])
+        : clean(point['tension']);
+    final completion = clean(point['completion_condition']).isNotEmpty
+        ? clean(point['completion_condition'])
+        : clean(point['exit']);
+    final hook = clean(point['hook']);
+    final pacing = clean(point['pacing']);
+    final paceLabel = switch (pacing) {
+      'fast' => '快节奏 · 1轮',
+      'slow' => '慢节奏 · 4轮',
+      _ => '正常 · 2轮',
+    };
+    final primarySummary = <String>[
+      if (scene.isNotEmpty) '地点 · $scene',
+      if (problem.isNotEmpty) '困境 · $problem',
+    ].join('  ·  ');
+    final secondarySummary = <String>[
+      if (completion.isNotEmpty) '完成 · $completion',
+      if (hook.isNotEmpty) '悬念 · $hook',
+    ].join('  ·  ');
+    final summary = <String>[
+      if (primarySummary.isNotEmpty) primarySummary,
+      if (secondarySummary.isNotEmpty) secondarySummary,
+    ];
+
     return ExpansionTile(
-      tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      tilePadding: const EdgeInsets.fromLTRB(12, 2, 8, 2),
+      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
       collapsedShape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide.none,
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.white.withOpacity(.035)),
       ),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide.none,
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: AppColors.accent.withOpacity(.12)),
       ),
-      backgroundColor: Colors.white.withOpacity(0.02),
-      collapsedBackgroundColor: Colors.white.withOpacity(0.02),
+      backgroundColor: Colors.white.withOpacity(0.028),
+      collapsedBackgroundColor: Colors.white.withOpacity(0.022),
       leading: Container(
-        width: 32,
-        height: 32,
+        width: 30,
+        height: 30,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: AppColors.accent.withOpacity(0.12),
@@ -2038,28 +2224,59 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         ),
         child: Text(
           '${index + 1}',
-          style: const TextStyle(color: AppColors.accent, fontSize: 13, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+            color: AppColors.accent,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
       title: Row(
         children: [
           _arcBadge(point['arc']?.toString() ?? '探索'),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
-              (point['goal'] ?? point['state'])?.toString().trim().isNotEmpty == true
-                  ? (point['goal'] ?? point['state']).toString()
-                  : '未填写节点目标',
+              goalValue.isNotEmpty ? goalValue : '未填写节点目标',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.textOnDark, fontSize: 13.5, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                color: AppColors.textOnDark,
+                fontSize: 13.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            onTap: () => _removePlotPoint(index),
+            borderRadius: BorderRadius.circular(7),
+            child: const Padding(
+              padding: EdgeInsets.all(5),
+              child: Icon(
+                Icons.close_rounded,
+                size: 16,
+                color: AppColors.textOnDarkMuted,
+              ),
             ),
           ),
         ],
       ),
-      trailing: IconButton(
-        onPressed: () => _removePlotPoint(index),
-        icon: const Icon(Icons.close_rounded, size: 18, color: AppColors.textOnDarkMuted),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 5),
+        child: Text(
+          summary.isEmpty
+              ? '$paceLabel · 展开补充地点、困境和完成条件'
+              : '$paceLabel · ${summary.first}'
+                  '${summary.length > 1 ? '\n${summary[1]}' : ''}',
+          maxLines: summary.isEmpty ? 1 : 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: AppColors.textOnDarkMuted.withOpacity(.88),
+            fontSize: 10.8,
+            height: 1.35,
+          ),
+        ),
       ),
       children: [
         Row(
@@ -2069,11 +2286,17 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 label: '剧情幕段',
                 value: point['arc']?.toString() ?? '探索',
                 items: const <String>['诱发', '探索', '突转', '至暗', '终章'],
-                labels: const <String>['第一幕 · 开端', '第二幕 · 发展', '第三幕 · 转折', '第四幕 · 低谷', '第五幕 · 结局'],
+                labels: const <String>[
+                  '第一幕 · 开端',
+                  '第二幕 · 发展',
+                  '第三幕 · 转折',
+                  '第四幕 · 低谷',
+                  '第五幕 · 结局',
+                ],
                 onChanged: (value) => _updatePlotPoint(index, 'arc', value),
               ),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: 10),
             Expanded(
               child: _dropdownField(
                 label: '推进节奏',
@@ -2085,7 +2308,6 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             ),
           ],
         ),
-        const SizedBox(height: 16),
         _inlineInitialField(
           label: '这个节点讲什么',
           value: (point['goal'] ?? point['state'])?.toString() ?? '',
@@ -2468,12 +2690,15 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     required Widget child,
     Widget? trailing,
   }) {
+    final size = MediaQuery.sizeOf(context);
+    final dense = size.width > size.height;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(dense ? 16 : 20),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
-        borderRadius: BorderRadius.circular(16),
+        color: Colors.white.withOpacity(0.024),
+        borderRadius: BorderRadius.circular(dense ? 14 : 16),
+        border: Border.all(color: Colors.white.withOpacity(.04)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2485,16 +2710,30 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: const TextStyle(color: AppColors.textOnDark, fontSize: 16, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 6),
-                    Text(subtitle, style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12, height: 1.4)),
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: AppColors.textOnDark,
+                        fontSize: dense ? 15 : 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: dense ? 4 : 6),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: AppColors.textOnDarkMuted,
+                        fontSize: dense ? 11.2 : 12,
+                        height: 1.35,
+                      ),
+                    ),
                   ],
                 ),
               ),
               if (trailing != null) trailing,
             ],
           ),
-          const SizedBox(height: 20),
+          SizedBox(height: dense ? 14 : 18),
           child,
         ],
       ),
@@ -2524,13 +2763,15 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     required ValueChanged<String> onChanged,
     int minLines = 1,
   }) {
+    final size = MediaQuery.sizeOf(context);
+    final dense = size.width > size.height;
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
+      padding: EdgeInsets.only(top: dense ? 12 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _fieldLabel(label),
-          const SizedBox(height: 10),
+          SizedBox(height: dense ? 7 : 10),
           TextFormField(
             initialValue: value,
             onChanged: onChanged,
@@ -2590,27 +2831,44 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   }
 
   InputDecoration _inputDecoration(String hint) {
+    final size = MediaQuery.sizeOf(context);
+    final dense = size.width > size.height;
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(color: AppColors.textOnDarkMuted, fontWeight: FontWeight.w400, fontSize: 13),
+      hintStyle: TextStyle(
+        color: AppColors.textOnDarkMuted,
+        fontWeight: FontWeight.w400,
+        fontSize: dense ? 12.3 : 13,
+      ),
       filled: true,
       fillColor: Colors.white.withOpacity(0.03),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: dense ? 13 : 16,
+        vertical: dense ? 12 : 16,
+      ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(dense ? 10 : 12),
         borderSide: BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppColors.accent.withOpacity(0.4), width: 1),
+        borderRadius: BorderRadius.circular(dense ? 10 : 12),
+        borderSide: BorderSide(
+          color: AppColors.accent.withOpacity(0.4),
+          width: 1,
+        ),
       ),
     );
   }
 
   Widget _emptyState(String title, String subtitle) {
+    final size = MediaQuery.sizeOf(context);
+    final dense = size.width > size.height;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
+      padding: EdgeInsets.symmetric(
+        horizontal: 20,
+        vertical: dense ? 24 : 36,
+      ),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.02),
         borderRadius: BorderRadius.circular(16),
@@ -2997,6 +3255,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
   late final TextEditingController _portraitUrl;
   late final TextEditingController _affection;
   late final TextEditingController _stress;
+  late final TextEditingController _relationship;
   bool _uploadingAvatar = false;
   bool _uploadingPortrait = false;
 
@@ -3044,6 +3303,9 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     _portraitUrl = TextEditingController(text: _character['portrait']?.toString() ?? '');
     _affection = TextEditingController(text: (initialConfig['affection'] ?? 0).toString());
     _stress = TextEditingController(text: (initialConfig['stress'] ?? 0).toString());
+    _relationship = TextEditingController(
+      text: initialConfig['relationship_status']?.toString() ?? '陌生',
+    );
   }
 
   @override
@@ -3061,6 +3323,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       _portraitUrl,
       _affection,
       _stress,
+      _relationship,
     ]) {
       controller.dispose();
     }
@@ -3104,7 +3367,9 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     final initialConfig = _initialConfig;
     initialConfig['affection'] = num.tryParse(_affection.text) ?? 0;
     initialConfig['stress'] = num.tryParse(_stress.text) ?? 0;
-    initialConfig['relationship_status'] = initialConfig['relationship_status'] ?? '陌生';
+    initialConfig['relationship_status'] = _relationship.text.trim().isEmpty
+        ? '陌生'
+        : _relationship.text.trim();
 
     _character['name'] = _name.text.trim();
     _character['avatar'] = _avatarUrl.text.trim();
@@ -3122,6 +3387,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     final media = MediaQuery.of(context);
     final bottomInset = media.viewInsets.bottom;
     final size = media.size;
+    final availableHeight = math.max(320.0, size.height - bottomInset).toDouble();
     final landscape = size.width > size.height;
     final portrait = _portraitUrl.text.trim();
     final avatar = _avatarUrl.text.trim();
@@ -3131,12 +3397,10 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       duration: const Duration(milliseconds: 180),
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Container(
-        height: landscape ? size.height * .96 : size.height * 0.94,
+        height: landscape ? availableHeight : availableHeight * 0.94,
         decoration: BoxDecoration(
           color: _bg,
-          borderRadius: landscape
-              ? const BorderRadius.vertical(top: Radius.circular(18))
-              : BorderRadius.zero,
+          borderRadius: BorderRadius.zero,
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -3215,8 +3479,8 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
   Widget _buildLandscapeCharacterEditor(String portrait, String avatar) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final leftWidth = (constraints.maxWidth * .37)
-            .clamp(270.0, 420.0)
+        final leftWidth = (constraints.maxWidth * .28)
+            .clamp(220.0, 320.0)
             .toDouble();
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3224,13 +3488,13 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             SizedBox(
               width: leftWidth,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 10, 14),
+                padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
                 child: Column(
                   children: [
                     Expanded(
                       child: _buildPortraitEditor(portrait, fill: true),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     _buildIdentityEditor(avatar, compact: true),
                   ],
                 ),
@@ -3244,7 +3508,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             Expanded(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(14, 12, 16, 32),
+                padding: const EdgeInsets.fromLTRB(10, 10, 12, 20),
                 child: _buildCharacterSettingsEditor(compact: true),
               ),
             ),
@@ -3285,15 +3549,40 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       ],
                     ),
                   )
-                : Image.network(
-                    CdnUtil.resize(portrait, width: fill ? 640 : 800),
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const Center(
-                      child: Icon(
-                        Icons.broken_image_outlined,
-                        color: AppColors.textOnDarkMuted,
+                : Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // 背景保持铺满，避免 contain 模式产生突兀的空白；
+                      // 前景立绘则完整显示，不再裁掉角色头部、脚部或身体两侧。
+                      ImageFiltered(
+                        imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                        child: Transform.scale(
+                          scale: 1.08,
+                          child: Image.network(
+                            CdnUtil.resize(portrait, width: fill ? 720 : 900),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                const SizedBox.shrink(),
+                          ),
+                        ),
                       ),
-                    ),
+                      ColoredBox(color: Colors.black.withOpacity(0.28)),
+                      Padding(
+                        padding: EdgeInsets.all(fill ? 6 : 8),
+                        child: Image.network(
+                          CdnUtil.resize(portrait, width: fill ? 960 : 1200),
+                          fit: BoxFit.contain,
+                          alignment: Alignment.bottomCenter,
+                          filterQuality: FilterQuality.high,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              color: AppColors.textOnDarkMuted,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
           ),
           if (_uploadingPortrait)
@@ -3411,20 +3700,21 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
   }
 
   Widget _buildCharacterSettingsEditor({bool compact = false}) {
-    return _card(
-      compact: compact,
-      child: Column(
+    Widget buildBasics() {
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SheetTitle('角色设定', compact: compact),
-          SizedBox(height: compact ? 12 : 16),
           Row(
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
                   value: _genderValue,
                   dropdownColor: const Color(0xFF161616),
-                  decoration: _decoration('性别', compact: compact),
+                  decoration: _decoration(
+                    '性别',
+                    compact: compact,
+                    label: '性别',
+                  ),
                   icon: const Icon(
                     Icons.expand_more_rounded,
                     size: 18,
@@ -3448,11 +3738,61 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       _jsonData['gender'] = value ?? '未知',
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
-                child: _field(_age, '年龄', compact: compact),
+                child: _field(
+                  _age,
+                  '年龄',
+                  compact: compact,
+                  label: '年龄',
+                ),
               ),
             ],
+          ),
+          SizedBox(height: compact ? 10 : 12),
+          _field(
+            _relationship,
+            '例如：陌生 / 同伴 / 恋人',
+            compact: compact,
+            label: '初始关系',
+          ),
+          SizedBox(height: compact ? 10 : 12),
+          Row(
+            children: [
+              Expanded(
+                child: _field(
+                  _affection,
+                  '0',
+                  compact: compact,
+                  label: '初始好感',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _field(
+                  _stress,
+                  '0',
+                  compact: compact,
+                  label: '初始压力',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: compact ? 10 : 12),
+          _field(
+            _greeting,
+            '角色第一次出场时说什么？',
+            minLines: 2,
+            compact: compact,
+            label: '开场台词',
           ),
           SizedBox(height: compact ? 10 : 12),
           _field(
@@ -3460,6 +3800,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             '外貌特征',
             minLines: compact ? 2 : 3,
             compact: compact,
+            label: '外貌',
           ),
           SizedBox(height: compact ? 10 : 12),
           _field(
@@ -3467,8 +3808,16 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             '背景 / 人设',
             minLines: compact ? 3 : 4,
             compact: compact,
+            label: '背景 / 人设',
           ),
-          SizedBox(height: compact ? 12 : 16),
+        ],
+      );
+    }
+
+    Widget buildTraitsAndVoice() {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           _listTagsEditor('性格标签', 'personality', compact: compact),
           SizedBox(height: compact ? 12 : 16),
           _listTagsEditor('喜欢', 'likes', compact: compact),
@@ -3482,6 +3831,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             '秘密 / 隐藏信息',
             minLines: compact ? 2 : 3,
             compact: compact,
+            label: '秘密 / 隐藏信息',
           ),
           SizedBox(height: compact ? 10 : 12),
           _field(
@@ -3489,6 +3839,40 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             '对话示例',
             minLines: compact ? 3 : 4,
             compact: compact,
+            label: '对话示例',
+          ),
+        ],
+      );
+    }
+
+    return _card(
+      compact: compact,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _SheetTitle('角色设定', compact: compact),
+          SizedBox(height: compact ? 12 : 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (compact && constraints.maxWidth >= 520) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: buildBasics()),
+                    const SizedBox(width: 12),
+                    Expanded(child: buildTraitsAndVoice()),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  buildBasics(),
+                  SizedBox(height: compact ? 14 : 18),
+                  buildTraitsAndVoice(),
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -3575,8 +3959,9 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     return Container(
       padding: EdgeInsets.all(compact ? 14 : 20),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
-        borderRadius: BorderRadius.circular(compact ? 14 : 16),
+        color: Colors.white.withOpacity(0.024),
+        borderRadius: BorderRadius.circular(compact ? 12 : 16),
+        border: Border.all(color: Colors.white.withOpacity(.04)),
       ),
       child: child,
     );
@@ -3587,23 +3972,43 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     String hint, {
     int minLines = 1,
     bool compact = false,
+    String? label,
+    TextInputType? keyboardType,
   }) {
     return TextField(
       controller: controller,
       minLines: minLines,
       maxLines: minLines == 1 ? 1 : 8,
+      keyboardType: keyboardType,
       style: TextStyle(
         color: AppColors.textOnDark,
         fontSize: compact ? 12.4 : 13.5,
         height: compact ? 1.4 : 1.5,
       ),
-      decoration: _decoration(hint, compact: compact),
+      decoration: _decoration(
+        hint,
+        compact: compact,
+        label: label,
+      ),
     );
   }
 
-  InputDecoration _decoration(String hint, {bool compact = false}) {
+  InputDecoration _decoration(
+    String hint, {
+    bool compact = false,
+    String? label,
+  }) {
     return InputDecoration(
       hintText: hint,
+      labelText: label,
+      floatingLabelBehavior: label == null
+          ? FloatingLabelBehavior.never
+          : FloatingLabelBehavior.auto,
+      labelStyle: TextStyle(
+        color: AppColors.textOnDarkMuted,
+        fontSize: compact ? 11.3 : 12,
+      ),
+      floatingLabelStyle: const TextStyle(color: AppColors.accent),
       hintStyle: TextStyle(
         color: AppColors.textOnDarkMuted,
         fontSize: compact ? 12 : 13,
@@ -3611,15 +4016,15 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       filled: true,
       fillColor: Colors.white.withOpacity(0.03),
       contentPadding: EdgeInsets.symmetric(
-        horizontal: compact ? 13 : 16,
-        vertical: compact ? 12 : 16,
+        horizontal: compact ? 12 : 16,
+        vertical: compact ? 11 : 16,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(compact ? 10 : 12),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.circular(compact ? 9 : 12),
+        borderSide: BorderSide(color: Colors.white.withOpacity(.025)),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(compact ? 10 : 12),
+        borderRadius: BorderRadius.circular(compact ? 9 : 12),
         borderSide: BorderSide(color: AppColors.accent.withOpacity(0.4)),
       ),
     );

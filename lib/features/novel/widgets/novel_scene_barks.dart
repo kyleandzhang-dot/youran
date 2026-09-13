@@ -165,8 +165,15 @@ class NovelSceneBarkActor {
       );
       final kind = _string(raw['kind'] ?? raw['type'] ?? raw['category'], defaultKind);
       final role = _string(raw['role'] ?? raw['title'] ?? raw['description'] ?? raw['identity']);
+      // 附近角色头像与人物页左侧角色栏保持一致：
+      // 优先拿完整立绘做头肩特写；没有立绘时才退回现成 avatar。
       final avatarUrl = _string(
-        raw['avatar_url'] ?? raw['avatarUrl'] ?? raw['avatar'] ?? raw['portrait_url'] ?? raw['portraitUrl'] ?? raw['portrait'],
+        raw['portrait_url'] ??
+            raw['portraitUrl'] ??
+            raw['portrait'] ??
+            raw['avatar_url'] ??
+            raw['avatarUrl'] ??
+            raw['avatar'],
       );
       final priority = _int(raw['priority'], defaultPriority);
       final source = _string(raw['source']);
@@ -442,7 +449,8 @@ class NovelRightSceneDock extends StatelessWidget {
 
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.compactChrome;
-    final targetWidth = compact ? 88.0 : 104.0;
+    // 附近角色头像放大后，同步加宽人物列，避免姓名/头像被挤压。
+    final targetWidth = compact ? 104.0 : 124.0;
     final exploreWidth = compact ? 38.0 : 42.0;
     final horizontalGap = exploreVisible && targets.isNotEmpty
         ? (compact ? 8.0 : 10.0)
@@ -725,7 +733,7 @@ class NovelTalkTargetBar extends StatelessWidget {
 
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.compactChrome;
-    final width = compact ? 88.0 : 104.0;
+    final width = compact ? 104.0 : 124.0;
     final fallbackHeight = viewport.shortWide
         ? 142.0
         : (viewport.phoneWidth ? 220.0 : 300.0);
@@ -735,8 +743,9 @@ class NovelTalkTargetBar extends StatelessWidget {
         final maxHeight = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : fallbackHeight;
-        final itemHeight = compact ? 30.0 : 34.0;
-        final itemGap = compact ? 6.0 : 7.0;
+        // 头像由 27/31 放大到 34/40；行高同步增加，点击区域也更容易点。
+        final itemHeight = compact ? 38.0 : 44.0;
+        final itemGap = compact ? 7.0 : 8.0;
         final naturalListHeight = targets.length * itemHeight +
             math.max(0, targets.length - 1) * itemGap;
         final listHeight = math.min(naturalListHeight, maxHeight);
@@ -798,17 +807,25 @@ class _TalkTargetChip extends StatelessWidget {
   final VoidCallback onTap;
 
   Widget _avatar() {
-    final size = compact ? 27.0 : 31.0;
+    // 右侧附近角色头像本体加大；外层 NovelGamePage 还会根据手机布局整体缩放。
+    final size = compact ? 34.0 : 40.0;
     final url = actor.avatarUrl.trim();
     Widget image;
     if (url.startsWith('http://') || url.startsWith('https://')) {
-      image = Image.network(
-        url,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => _initial(size),
+      image = Transform.scale(
+        // 与人物页左侧角色栏统一：锁定图片顶部并放大，稳定显示头肩区域。
+        scale: 1.42,
+        alignment: Alignment.topCenter,
+        child: Image.network(
+          url,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          alignment: Alignment.topCenter,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.high,
+          errorBuilder: (_, __, ___) => _initial(size),
+        ),
       );
     } else {
       image = _initial(size);
@@ -817,10 +834,28 @@ class _TalkTargetChip extends StatelessWidget {
     return AnimatedScale(
       duration: const Duration(milliseconds: 150),
       curve: Curves.easeOutCubic,
-      scale: selected ? 1.035 : 1,
-      child: SizedBox(
+      scale: selected ? 1.045 : 1,
+      child: Container(
         width: size,
         height: size,
+        // 场景背景较亮时头像边缘容易融进去；加一圈轻量白描边。
+        foregroundDecoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withOpacity(selected ? .72 : .40),
+            width: selected ? 1.15 : .85,
+          ),
+        ),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withOpacity(selected ? .24 : .16),
+              blurRadius: 7,
+              offset: const Offset(0, 1.5),
+            ),
+          ],
+        ),
         child: ClipOval(child: image),
       ),
     );
@@ -852,8 +887,7 @@ class _TalkTargetChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rowWidth = compact ? 88.0 : 104.0;
-    final nameWidth = compact ? 52.0 : 64.0;
+    final rowWidth = compact ? 104.0 : 124.0;
     return Semantics(
       button: true,
       selected: selected,
@@ -865,18 +899,35 @@ class _TalkTargetChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(7),
           splashColor: Colors.white.withOpacity(.035),
           highlightColor: Colors.white.withOpacity(.018),
-          child: SizedBox(
+          child: Container(
             width: rowWidth,
-            height: compact ? 30.0 : 34.0,
+            height: compact ? 38.0 : 44.0,
+            // 只铺一层非常浅的暗色遮罩，托住姓名和头像；
+            // 不做厚重卡片，仍让场景背景透出来。
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(9),
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: <Color>[
+                  Colors.black.withOpacity(selected ? .045 : .025),
+                  Colors.black.withOpacity(selected ? .16 : .105),
+                ],
+              ),
+              border: Border.all(
+                color: Colors.white.withOpacity(selected ? .13 : .055),
+                width: .6,
+              ),
+            ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 1),
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
               child: Row(
                 mainAxisSize: MainAxisSize.max,
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: <Widget>[
-                  SizedBox(
-                    width: nameWidth,
+                  Expanded(
+                    // 名字占用剩余空间；窄屏时自动省略，绝不挤压右侧大头像。
                     child: Text(
                       actor.cleanName,
                       maxLines: 1,
@@ -884,7 +935,7 @@ class _TalkTargetChip extends StatelessWidget {
                       textAlign: TextAlign.right,
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: compact ? 9.2 : 9.9,
+                        fontSize: compact ? 9.8 : 10.6,
                         height: 1.05,
                         fontWeight:
                             selected ? FontWeight.w700 : FontWeight.w600,
@@ -899,7 +950,7 @@ class _TalkTargetChip extends StatelessWidget {
                       ),
                     ),
                   ),
-                  SizedBox(width: compact ? 5 : 6),
+                  SizedBox(width: compact ? 6 : 7),
                   _avatar(),
                 ],
               ),

@@ -1834,6 +1834,18 @@ class YoranBattleCompanion {
 
   static YoranBattleCompanion? fromState(dynamic raw) {
     final data = YoranBattleSkill._stringMap(raw);
+    final characterAsset = YoranBattleSkill._stringMap(
+      data['character_asset'] ?? data['characterAsset'],
+    );
+
+    String firstNonEmpty(Iterable<dynamic> values) {
+      for (final value in values) {
+        final text = '${value ?? ''}'.trim();
+        if (text.isNotEmpty) return text;
+      }
+      return '';
+    }
+
     final id = '${data['character_instance_id'] ?? data['id'] ?? ''}'.trim();
     final name = '${data['name'] ?? ''}'.trim();
     if (id.isEmpty || name.isEmpty) return null;
@@ -1845,11 +1857,29 @@ class YoranBattleCompanion {
         if (skill != null && skill.id.isNotEmpty) skills.add(skill);
       }
     }
+
+    final avatar = firstNonEmpty(<dynamic>[
+      data['avatar_url'],
+      data['avatarUrl'],
+      data['avatar'],
+      characterAsset['avatar_url'],
+      characterAsset['avatarUrl'],
+      characterAsset['avatar'],
+    ]);
+    final portrait = firstNonEmpty(<dynamic>[
+      data['portrait_url'],
+      data['portraitUrl'],
+      data['portrait'],
+      characterAsset['portrait_url'],
+      characterAsset['portraitUrl'],
+      characterAsset['portrait'],
+    ]);
+
     return YoranBattleCompanion(
       id: id,
       name: name,
-      avatar: '${data['avatar_url'] ?? ''}'.trim(),
-      portrait: '${data['portrait_url'] ?? ''}'.trim(),
+      avatar: avatar,
+      portrait: portrait,
       skills: skills,
       star: YoranBattleSkill._asInt(data['star']).clamp(0, 10).toInt(),
     );
@@ -1921,9 +1951,8 @@ Future<void> _precacheCompanionBattleImages(
     final assistSource = companion.portrait.trim().isNotEmpty
         ? companion.portrait
         : companion.avatar;
-    final avatarSource = companion.avatar.trim().isNotEmpty
-        ? companion.avatar
-        : companion.portrait;
+    // 小头像预热也只使用 avatar，避免把立绘缓存成头像候选。
+    final avatarSource = companion.avatar.trim();
     queue(assistSource, assistCacheWidth);
     queue(avatarSource, avatarCacheWidth);
   }
@@ -2400,8 +2429,59 @@ class YoranGeneratedBattleSetup {
     final runtime = YoranBattleSkill._stringMap(opponent['runtime_state']);
     final basicAttack = YoranBattleSkill._stringMap(stats['basic_attack']);
     final matchup = YoranBattleSkill._stringMap(design['matchup']);
-    final playerAsset = YoranBattleSkill._stringMap(player['character_asset']);
-    final enemyAsset = YoranBattleSkill._stringMap(opponent['character_asset']);
+    final playerAsset = YoranBattleSkill._stringMap(
+      player['character_asset'] ?? player['characterAsset'],
+    );
+    final playerVisuals = YoranBattleSkill._stringMap(
+      player['visuals'] ?? player['visual'],
+    );
+    final playerCharacter = YoranBattleSkill._stringMap(player['character']);
+    final enemyAsset = YoranBattleSkill._stringMap(
+      opponent['character_asset'] ?? opponent['characterAsset'],
+    );
+
+    String firstNonEmpty(Iterable<dynamic> values) {
+      for (final value in values) {
+        final text = _string(value);
+        if (text.isNotEmpty) return text;
+      }
+      return '';
+    }
+
+    final resolvedPlayerAvatar = firstNonEmpty(<dynamic>[
+      playerAsset['avatar_url'],
+      playerAsset['avatarUrl'],
+      playerAsset['avatar'],
+      player['avatar_url'],
+      player['avatarUrl'],
+      player['avatar'],
+      playerVisuals['avatar_url'],
+      playerVisuals['avatarUrl'],
+      playerVisuals['avatar'],
+      playerCharacter['avatar_url'],
+      playerCharacter['avatarUrl'],
+      playerCharacter['avatar'],
+      json['player_avatar_url'],
+      json['playerAvatarUrl'],
+      json['player_avatar'],
+    ]);
+    final resolvedPlayerPortrait = firstNonEmpty(<dynamic>[
+      playerAsset['portrait_url'],
+      playerAsset['portraitUrl'],
+      playerAsset['portrait'],
+      player['portrait_url'],
+      player['portraitUrl'],
+      player['portrait'],
+      playerVisuals['portrait_url'],
+      playerVisuals['portraitUrl'],
+      playerVisuals['portrait'],
+      playerCharacter['portrait_url'],
+      playerCharacter['portraitUrl'],
+      playerCharacter['portrait'],
+      json['player_portrait_url'],
+      json['playerPortraitUrl'],
+      json['player_portrait'],
+    ]);
 
     final opponentName = _string(opponent['name']);
     if (opponentName.isEmpty) {
@@ -2435,8 +2515,8 @@ class YoranGeneratedBattleSetup {
           : (_string(assessedPlayer['name']).isNotEmpty
               ? _string(assessedPlayer['name'])
               : '玩家'),
-      playerAvatar: _string(playerAsset['avatar_url']),
-      playerPortrait: _string(playerAsset['portrait_url']),
+      playerAvatar: resolvedPlayerAvatar,
+      playerPortrait: resolvedPlayerPortrait,
       playerSkills: playerSkills,
       companions: _companions(player['companions']),
       playerItems: _items(playerAssets),
@@ -2753,12 +2833,14 @@ class _YoranGeneratedBattleLoaderPageState
         playerName: setup.playerName.trim().isNotEmpty
             ? setup.playerName.trim()
             : widget.playerName,
-        playerAvatar: setup.playerAvatar.trim().isNotEmpty
-            ? setup.playerAvatar.trim()
-            : widget.playerAvatar,
-        playerPortrait: setup.playerPortrait.trim().isNotEmpty
-            ? setup.playerPortrait.trim()
-            : widget.playerPortrait,
+        // 外层若已经持有当前角色最新头像，优先使用本地值；
+        // 战斗快照只作为兜底，避免旧快照/错误字段把头像覆盖成立绘。
+        playerAvatar: widget.playerAvatar.trim().isNotEmpty
+            ? widget.playerAvatar.trim()
+            : setup.playerAvatar.trim(),
+        playerPortrait: widget.playerPortrait.trim().isNotEmpty
+            ? widget.playerPortrait.trim()
+            : setup.playerPortrait.trim(),
         enemyName: setup.enemy.name,
         enemyPortrait: setup.enemy.portrait,
         enemies: <YoranBattleEnemy>[setup.enemy],
@@ -6940,9 +7022,11 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           Expanded(
             child: _BattleStatusBar(
               name: widget.playerName,
-              portrait: widget.playerAvatar.trim().isNotEmpty
-                  ? widget.playerAvatar
-                  : widget.playerPortrait,
+              // 与角色页左侧头像轨保持一致：立绘优先，头像兜底，
+              // 再由 _BattleStatusBar 顶部对齐放大裁成头肩头像。
+              portrait: widget.playerPortrait.trim().isNotEmpty
+                  ? widget.playerPortrait
+                  : widget.playerAvatar,
               hp: _playerHp,
               maxHp: _playerMaxHp,
               qi: _playerQi,   
@@ -7439,7 +7523,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     bool vertical = false,
     bool dense = false,
   }) {
-    final avatarSize = dense ? 32.0 : (large ? 42.0 : 38.0);
+    final avatarSize = dense ? 40.0 : (large ? 52.0 : 46.0);
     return Flex(
       direction: vertical ? Axis.vertical : Axis.horizontal,
       mainAxisSize: MainAxisSize.min,
@@ -7451,9 +7535,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             .where((skill) => !_usedCompanionSkillIds.contains(skill.id))
             .length;
         final allUsed = remaining == 0;
-        final source = companion.avatar.trim().isNotEmpty
-            ? companion.avatar
-            : companion.portrait;
+        // 与角色页左侧头像轨保持一致：立绘优先，头像兜底。
+        final source = companion.portrait.trim().isNotEmpty
+            ? companion.portrait.trim()
+            : companion.avatar.trim();
         final fallback = Center(
           child: Text(
             companion.name.isEmpty
@@ -7512,18 +7597,25 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     children: <Widget>[
                       Opacity(
                         opacity: allUsed ? .30 : 1,
-                        child: ClipOval(
-                          child: source.isEmpty
-                              ? fallback
-                              : _BattleImage(
-                                  source: source,
-                                  fallback: fallback,
-                                  logicalWidth: avatarSize,
-                                  maxCacheWidth:
-                                      dense ? 128 : (large ? 168 : 152),
-                                  fit: BoxFit.cover,
+                        child: source.isEmpty
+                            ? fallback
+                            : ClipOval(
+                                child: Transform.scale(
+                                  // 完全照角色页左侧头像轨：顶部对齐并放大 1.42 倍，
+                                  // 让圆形头像稳定显示头部和肩部。
+                                  scale: 1.42,
+                                  alignment: Alignment.topCenter,
+                                  child: _BattleImage(
+                                    source: source,
+                                    fallback: fallback,
+                                    logicalWidth: avatarSize,
+                                    maxCacheWidth:
+                                        dense ? 160 : (large ? 208 : 184),
+                                    fit: BoxFit.cover,
+                                    alignment: Alignment.topCenter,
+                                  ),
                                 ),
-                        ),
+                              ),
                       ),
                       if (_companionAssistUsedThisRound && !allUsed)
                         Positioned(
@@ -9050,6 +9142,9 @@ class _BattleStatusBar extends StatelessWidget {
     required this.damageAnimation,
     this.healAnimation,
     this.isGuarding = false,
+    // 保留旧版本字段，避免 Flutter hot reload 因 const 类字段被移除而拒绝重载。
+    // 当前头像构图已统一，不再依赖该字段。
+    this.imageIsPortraitFallback = false,
   });
 
   final String name;
@@ -9064,6 +9159,7 @@ class _BattleStatusBar extends StatelessWidget {
   final Animation<double> damageAnimation;
   final Animation<double>? healAnimation;
   final bool isGuarding;
+  final bool imageIsPortraitFallback;
 
   @override
   Widget build(BuildContext context) {
@@ -9092,23 +9188,27 @@ class _BattleStatusBar extends StatelessWidget {
           ),
         );
 
-        // HUD 头像直接展示内容本身，不再套黑色底板或描边框。
-        // 只保留轻微圆角裁切，避免头像像一枚独立的 App 图标。
+        // HUD 小头像与角色页左侧头像轨使用同一套构图：
+        // 圆形裁切 + 顶部对齐 + 1.42 倍放大 + cover，只保留头肩区域。
         Widget avatarWidget = SizedBox(
           width: 42,
           height: 42,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(7),
-            child: portrait.isNotEmpty
-                ? _BattleImage(
-                    source: portrait,
-                    fallback: avatarFallback,
-                    logicalWidth: 42,
-                    maxCacheWidth: 168,
-                    fit: BoxFit.cover,
-                  )
-                : avatarFallback,
-          ),
+          child: portrait.isNotEmpty
+              ? ClipOval(
+                  child: Transform.scale(
+                    scale: 1.42,
+                    alignment: Alignment.topCenter,
+                    child: _BattleImage(
+                      source: portrait,
+                      fallback: avatarFallback,
+                      logicalWidth: 42,
+                      maxCacheWidth: 168,
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topCenter,
+                    ),
+                  ),
+                )
+              : avatarFallback,
         );
 
         Widget infoWidget = Expanded(

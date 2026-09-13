@@ -4,6 +4,65 @@ part of '../novel_widgets.dart';
 // 对外入口：NovelChoiceDock / NovelSideArchiveBar / NovelCinematicControls
 // 内部实现：行内选项、底部控制、剧情进度、滑动回看与电影模式。
 
+/// 统一判断当前是否真的已经来到本轮 AI 回复的最后一句。
+///
+/// `hasNext` 在流式生成/句子列表刚更新的边界帧里可能会提前变为 false，
+/// 直接拿它切换“最终句 UI”会造成倒数第二句就隐藏右侧导航、提前露出附近角色。
+/// 这里优先从最后一条 assistant 消息的完整文本估算句数，再用
+/// `currentSentenceIndex` 做最终确认；拿不到完整文本时才退回旧的 hasNext 语义。
+bool novelIsActualLastSentence(NovelGameController controller) {
+  if (controller.isGenerating) return false;
+
+  final rawText = _novelAssistantMessageText(controller.lastAssistantMessage);
+  final sentenceCount = _novelEstimatedSentenceCount(rawText);
+  if (sentenceCount > 1) {
+    final index =
+        controller.currentSentenceIndex.clamp(0, sentenceCount - 1).toInt();
+    return index >= sentenceCount - 1;
+  }
+
+  return !controller.hasNext;
+}
+
+String _novelAssistantMessageText(dynamic message) {
+  if (message == null) return '';
+
+  dynamic value;
+  try {
+    value = message.content;
+  } catch (_) {}
+  if (value is String && value.trim().isNotEmpty) return value.trim();
+
+  try {
+    value = message.text;
+  } catch (_) {}
+  if (value is String && value.trim().isNotEmpty) return value.trim();
+
+  try {
+    value = message.message;
+  } catch (_) {}
+  if (value is String && value.trim().isNotEmpty) return value.trim();
+
+  return '';
+}
+
+int _novelEstimatedSentenceCount(String text) {
+  final source = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
+  if (source.isEmpty) return 0;
+
+  // 与中文视觉小说文本的自然阅读节奏保持一致：句号/问号/叹号和换行都可结束一句。
+  // 连续标点按同一个句尾处理，避免“！！”“？！”被重复计数。
+  final parts = source.split(RegExp(r'(?:[。！？!?]+|\n+)'));
+  var count = 0;
+  for (final part in parts) {
+    final meaningful = part
+        .replaceAll(RegExp(r'''[\s“”‘’"'「」『』（）()【】\[\]]+'''), '')
+        .trim();
+    if (meaningful.isNotEmpty) count++;
+  }
+  return count == 0 ? 1 : count;
+}
+
 class NovelChoiceDockActionScope extends InheritedWidget {
   const NovelChoiceDockActionScope({
     super.key,
@@ -132,7 +191,6 @@ class _NovelFloatingSurroundingsActionState
   Widget build(BuildContext context) {
     final scope = widget.scope;
     final compact = widget.compact;
-    final media = MediaQuery.of(context);
     final hitSize = compact ? 42.0 : 48.0;
     final coreSize = compact ? 29.0 : 33.0;
     final haloSize = compact ? 34.0 : 39.0;
@@ -140,17 +198,9 @@ class _NovelFloatingSurroundingsActionState
         ? '探索中'
         : (scope.label.trim().isEmpty ? '探索周围' : scope.label.trim());
 
-    // 这个按钮原先由 Reader 锚在右侧，会和右边的附近角色区互相压。
-    // 现在把【整个组件 + 点击热区】一起平移到左侧安全区。
-    // endBleed 是旧的右侧视觉补偿，这里一并抵消，避免只挪图标不挪点击区域。
-    final leftInset = media.padding.left + (compact ? 12.0 : 16.0);
-    final assumedRightInset = media.padding.right + (compact ? 12.0 : 16.0);
-    final assumedRightX = media.size.width - assumedRightInset - hitSize;
-    final moveToLeft = leftInset - assumedRightX - widget.endBleed;
-
-    return Transform.translate(
-      offset: Offset(moveToLeft, 0),
-      child: Semantics(
+    // 探索按钮的位置由 Reader / 父布局负责。
+    // 不再按整屏宽度二次平移，避免在带裁剪的父布局中被移出可视区域。
+    return Semantics(
       button: true,
       enabled: !scope.loading,
       label: semanticLabel,
@@ -250,8 +300,7 @@ class _NovelFloatingSurroundingsActionState
             ),
           ),
         ),
-      ),
-    );
+      );
   }
 }
 
@@ -601,11 +650,13 @@ class _NovelDialogFooter extends StatelessWidget {
     // 会被重复预留两次甚至三次，真机可用高度会明显少于电脑预览。
     const safeBottom = 0.0;
 
-    // 核心逻辑：精准判断右侧导航栏是否显示
-    final showBottomNav = controller.storyStarted && 
-                          !controller.isCinematic && 
-                          (controller.hasNext || controller.isGenerating) && 
-                          !keyboardVisible;
+    // 最终句 UI 必须等“实际最后一句”才切换，不能再单独依赖 hasNext。
+    // 否则 hasNext 在句子边界提前翻 false 时，会出现倒数第二句就收起右栏的问题。
+    final actualLastSentence = novelIsActualLastSentence(controller);
+    final showBottomNav = controller.storyStarted &&
+        !controller.isCinematic &&
+        (!actualLastSentence || controller.isGenerating) &&
+        !keyboardVisible;
     
     // 计算右侧需要避让的宽度（导航图标宽度 + 间距）
     // PC 输入区本身已经居中并限制宽度，不需要再为了最右侧 HUD 整体左移。

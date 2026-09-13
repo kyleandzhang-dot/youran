@@ -3109,7 +3109,11 @@ class NovelGameController extends ChangeNotifier {
       throw const NovelBackendException('剧本数据尚未加载');
     }
 
+    // 背包是按当前 session 读取的；穿戴也必须把同一个 session 传给后端。
+    // HttpNovelBackend 会把它作为 session_id 放进请求体，和强化链路保持一致，
+    // 避免后端仅凭 scenario instance + item_id 查不到当前存档里的装备。
     await backend.equipItem(
+      sessionId: sessionId,
       scenarioInstanceId: scenarioInstanceId,
       itemId: itemId,
       equipped: equipped,

@@ -2542,9 +2542,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 // 附近角色在手机上原本偏小；整体轻量放大头像、姓名和点击区。
                                 // 以右上角为缩放锚点，右侧基线保持不变，不会再往 HUD 外侧挤。
                                 child: Transform.scale(
+                                  // 右侧“附近角色”整体再放大一档，让头像和姓名更清楚。
+                                  // 以右上角为锚点，避免放大后继续向屏幕外偏移。
                                   scale: shortWide
-                                      ? 1.16
-                                      : (compact ? 1.14 : 1.0),
+                                      ? 1.30
+                                      : (compact ? 1.26 : 1.10),
                                   alignment: Alignment.topRight,
                                   child: NovelRightSceneDock(
                                     targets: _talkTargets,

@@ -1144,6 +1144,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     final fallbackAsset = host?.gender.trim() == '女'
         ? 'assets/images/female.webp'
         : 'assets/images/male.webp';
+    final avatarExtent = landscape ? 46.0 : 56.0;
 
     final metaTags = [identity, level, condition]
         .where((s) => s.isNotEmpty)
@@ -1161,8 +1162,8 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
             children: <Widget>[
               hasAvatar
                   ? Container(
-                      width: landscape ? 46 : 56,
-                      height: landscape ? 46 : 56,
+                      width: avatarExtent,
+                      height: avatarExtent,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
@@ -1192,17 +1193,34 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                         ),
                       ),
                     )
-                  : SizedBox(
-                      // 本地默认头像直接显示，不画头像框、边框或阴影。
-                      // BoxFit.contain 保证图片始终完整限制在原头像区域内，绝不越界。
-                      width: landscape ? 46 : 56,
-                      height: landscape ? 46 : 56,
-                      child: Image.asset(
-                        fallbackAsset,
-                        fit: BoxFit.contain,
-                        alignment: Alignment.center,
-                        filterQuality: FilterQuality.high,
-                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  : SizedBox.square(
+                      dimension: avatarExtent,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          // 本地静态头像完全跟随头像区域自适应：
+                          // 不写死 4/5px，而是按当前头像框尺寸计算安全内缩；
+                          // BoxFit.contain 会继续根据图片自身宽高比取最大可用尺寸，
+                          // 因此横图、竖图、方图都完整显示，不拉伸、不裁切、不越界。
+                          final side = math.min(
+                            constraints.maxWidth,
+                            constraints.maxHeight,
+                          );
+                          final inset = side * .09;
+
+                          return Padding(
+                            padding: EdgeInsets.all(inset),
+                            child: Image.asset(
+                              fallbackAsset,
+                              width: double.infinity,
+                              height: double.infinity,
+                              fit: BoxFit.contain,
+                              alignment: Alignment.center,
+                              filterQuality: FilterQuality.high,
+                              errorBuilder: (_, __, ___) =>
+                                  const SizedBox.shrink(),
+                            ),
+                          );
+                        },
                       ),
                     ),
               SizedBox(width: landscape ? 10 : 12),
