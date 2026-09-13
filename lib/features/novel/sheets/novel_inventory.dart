@@ -1140,7 +1140,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     final avatar = (host?.portraitUrl.trim().isNotEmpty ?? false)
         ? host!.portraitUrl.trim()
         : (host?.avatarUrl.trim() ?? '');
-    final hasAvatar = avatar.isNotEmpty;
     final fallbackAsset = host?.gender.trim() == '女'
         ? 'assets/images/female.webp'
         : 'assets/images/male.webp';
@@ -1160,69 +1159,13 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
-              hasAvatar
-                  ? Container(
-                      width: avatarExtent,
-                      height: avatarExtent,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: _inventoryGold.withOpacity(landscape ? .24 : .42),
-                          width: landscape ? .7 : 1,
-                        ),
-                        boxShadow: <BoxShadow>[
-                          BoxShadow(
-                            color: _inventoryBlue.withOpacity(landscape ? .10 : .22),
-                            blurRadius: landscape ? 9 : 16,
-                          ),
-                        ],
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: ClipRect(
-                        child: Transform.scale(
-                          // 只有真实远端头像继续使用圆框和头部聚焦效果。
-                          scale: landscape ? 1.82 : 1.88,
-                          alignment: const Alignment(0, -0.38),
-                          child: NovelArtwork(
-                            url: CdnUtil.resize(avatar, width: 320),
-                            assetCandidates: <String>[fallbackAsset],
-                            fit: BoxFit.cover,
-                            alignment: const Alignment(0, -1.3),
-                            fallbackText: name,
-                          ),
-                        ),
-                      ),
-                    )
-                  : SizedBox.square(
-                      dimension: avatarExtent,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          // 本地静态头像完全跟随头像区域自适应：
-                          // 不写死 4/5px，而是按当前头像框尺寸计算安全内缩；
-                          // BoxFit.contain 会继续根据图片自身宽高比取最大可用尺寸，
-                          // 因此横图、竖图、方图都完整显示，不拉伸、不裁切、不越界。
-                          final side = math.min(
-                            constraints.maxWidth,
-                            constraints.maxHeight,
-                          );
-                          final inset = side * .09;
-
-                          return Padding(
-                            padding: EdgeInsets.all(inset),
-                            child: Image.asset(
-                              fallbackAsset,
-                              width: double.infinity,
-                              height: double.infinity,
-                              fit: BoxFit.contain,
-                              alignment: Alignment.center,
-                              filterQuality: FilterQuality.high,
-                              errorBuilder: (_, __, ___) =>
-                                  const SizedBox.shrink(),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
+              _InventoryHeroAvatar(
+                avatar: avatar,
+                fallbackAsset: fallbackAsset,
+                extent: avatarExtent,
+                landscape: landscape,
+                name: name,
+              ),
               SizedBox(width: landscape ? 10 : 12),
               Expanded(
                 child: Column(
@@ -1950,6 +1893,307 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
               letterSpacing: 0.8,
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// 背包页主角头像。
+///
+/// 关键点：远端地址存在，并不代表屏幕上最终显示的一定是远端图。
+/// NovelArtwork 的 assetCandidates 会在远端加载失败时显示本地默认图；如果
+/// fallback 仍位于 Transform.scale 内，本地图也会被一起放大裁切。
+///
+/// 这里先单独探测远端图：只有远端图真正解码成功后才启用头部聚焦。
+/// 加载中或失败都直接显示本地静态图，而且本地图会读取真实像素宽高，
+/// 按宽高比计算“可完整放进圆框”的最大矩形，因此不会被圆形头像框截角。
+class _InventoryHeroAvatar extends StatefulWidget {
+  const _InventoryHeroAvatar({
+    required this.avatar,
+    required this.fallbackAsset,
+    required this.extent,
+    required this.landscape,
+    required this.name,
+  });
+
+  final String avatar;
+  final String fallbackAsset;
+  final double extent;
+  final bool landscape;
+  final String name;
+
+  @override
+  State<_InventoryHeroAvatar> createState() => _InventoryHeroAvatarState();
+}
+
+class _InventoryHeroAvatarState extends State<_InventoryHeroAvatar> {
+  ImageStream? _remoteStream;
+  ImageStreamListener? _remoteListener;
+  String _remoteUrl = '';
+  bool _remoteLoaded = false;
+
+  bool get _hasRemote =>
+      widget.avatar.startsWith('http://') ||
+      widget.avatar.startsWith('https://');
+
+  String get _localAsset => widget.avatar.startsWith('assets/')
+      ? widget.avatar
+      : widget.fallbackAsset;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncRemoteProbe();
+  }
+
+  @override
+  void didUpdateWidget(covariant _InventoryHeroAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.avatar != widget.avatar) {
+      _syncRemoteProbe(force: true);
+    }
+  }
+
+  void _syncRemoteProbe({bool force = false}) {
+    if (!_hasRemote) {
+      _detachRemoteProbe();
+      _remoteUrl = '';
+      _remoteLoaded = false;
+      return;
+    }
+
+    final url = CdnUtil.resize(widget.avatar, width: 320);
+    if (!force && url == _remoteUrl && _remoteStream != null) return;
+
+    _detachRemoteProbe();
+    _remoteUrl = url;
+    _remoteLoaded = false;
+
+    final provider = NetworkImage(url);
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    final listener = ImageStreamListener(
+      (ImageInfo _, bool __) {
+        if (!mounted || _remoteLoaded) return;
+        setState(() => _remoteLoaded = true);
+      },
+      onError: (Object _, StackTrace? __) {
+        if (!mounted || !_remoteLoaded) return;
+        setState(() => _remoteLoaded = false);
+      },
+    );
+
+    _remoteStream = stream;
+    _remoteListener = listener;
+    stream.addListener(listener);
+  }
+
+  void _detachRemoteProbe() {
+    final stream = _remoteStream;
+    final listener = _remoteListener;
+    if (stream != null && listener != null) {
+      stream.removeListener(listener);
+    }
+    _remoteStream = null;
+    _remoteListener = null;
+  }
+
+  @override
+  void dispose() {
+    _detachRemoteProbe();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasRemote && _remoteLoaded) {
+      return Container(
+        width: widget.extent,
+        height: widget.extent,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: _inventoryGold.withOpacity(widget.landscape ? .24 : .42),
+            width: widget.landscape ? .7 : 1,
+          ),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: _inventoryBlue.withOpacity(widget.landscape ? .10 : .22),
+              blurRadius: widget.landscape ? 9 : 16,
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ClipRect(
+          child: Transform.scale(
+            // 仅在远端图片已经真实解码成功时才启用聚焦放大。
+            scale: widget.landscape ? 1.82 : 1.88,
+            alignment: const Alignment(0, -0.38),
+            child: NovelArtwork(
+              url: _remoteUrl,
+              // 不再把本地默认图放进这个 Transform.scale 里。
+              assetCandidates: const <String>[],
+              fit: BoxFit.cover,
+              alignment: const Alignment(0, -1.3),
+              fallbackText: widget.name,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return _ResolutionAwareLocalAvatar(
+      asset: _localAsset,
+      fallbackAsset: widget.fallbackAsset,
+      extent: widget.extent,
+      landscape: widget.landscape,
+    );
+  }
+}
+
+class _ResolutionAwareLocalAvatar extends StatefulWidget {
+  const _ResolutionAwareLocalAvatar({
+    required this.asset,
+    required this.fallbackAsset,
+    required this.extent,
+    required this.landscape,
+  });
+
+  final String asset;
+  final String fallbackAsset;
+  final double extent;
+  final bool landscape;
+
+  @override
+  State<_ResolutionAwareLocalAvatar> createState() =>
+      _ResolutionAwareLocalAvatarState();
+}
+
+class _ResolutionAwareLocalAvatarState
+    extends State<_ResolutionAwareLocalAvatar> {
+  ImageStream? _assetStream;
+  ImageStreamListener? _assetListener;
+  double? _pixelWidth;
+  double? _pixelHeight;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _resolveAssetSize();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ResolutionAwareLocalAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset != widget.asset) {
+      _resolveAssetSize(force: true);
+    }
+  }
+
+  void _resolveAssetSize({bool force = false}) {
+    final provider = AssetImage(widget.asset);
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    if (!force && stream.key == _assetStream?.key) return;
+
+    _detachAssetListener();
+    _pixelWidth = null;
+    _pixelHeight = null;
+
+    final listener = ImageStreamListener(
+      (ImageInfo info, bool _) {
+        if (!mounted) return;
+        final width = info.image.width.toDouble();
+        final height = info.image.height.toDouble();
+        if (width <= 0 || height <= 0) return;
+        setState(() {
+          _pixelWidth = width;
+          _pixelHeight = height;
+        });
+      },
+    );
+
+    _assetStream = stream;
+    _assetListener = listener;
+    stream.addListener(listener);
+  }
+
+  void _detachAssetListener() {
+    final stream = _assetStream;
+    final listener = _assetListener;
+    if (stream != null && listener != null) {
+      stream.removeListener(listener);
+    }
+    _assetStream = null;
+    _assetListener = null;
+  }
+
+  @override
+  void dispose() {
+    _detachAssetListener();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sourceWidth = _pixelWidth;
+    final sourceHeight = _pixelHeight;
+
+    // 把完整矩形图片放进圆框时，不能只做 BoxFit.contain：
+    // contain 是“矩形放进正方形”，图片四角仍可能落在圆外被 ClipOval 截掉。
+    // 这里根据真实像素宽高计算圆的内接矩形。
+    var drawWidth = widget.extent * .68;
+    var drawHeight = widget.extent * .68;
+    if (sourceWidth != null && sourceHeight != null) {
+      final diagonal = math.sqrt(
+        sourceWidth * sourceWidth + sourceHeight * sourceHeight,
+      );
+      if (diagonal > 0) {
+        const safety = .96;
+        final scale = widget.extent * safety / diagonal;
+        drawWidth = sourceWidth * scale;
+        drawHeight = sourceHeight * scale;
+      }
+    }
+
+    return Container(
+      width: widget.extent,
+      height: widget.extent,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: _inventoryGold.withOpacity(widget.landscape ? .24 : .42),
+          width: widget.landscape ? .7 : 1,
+        ),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: _inventoryBlue.withOpacity(widget.landscape ? .10 : .22),
+            blurRadius: widget.landscape ? 9 : 16,
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      alignment: Alignment.center,
+      child: SizedBox(
+        width: drawWidth,
+        height: drawHeight,
+        child: Image.asset(
+          widget.asset,
+          fit: BoxFit.contain,
+          alignment: Alignment.center,
+          filterQuality: FilterQuality.high,
+          errorBuilder: (_, __, ___) {
+            if (widget.asset == widget.fallbackAsset) {
+              return const SizedBox.shrink();
+            }
+            return Image.asset(
+              widget.fallbackAsset,
+              fit: BoxFit.contain,
+              alignment: Alignment.center,
+              filterQuality: FilterQuality.high,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            );
+          },
         ),
       ),
     );
