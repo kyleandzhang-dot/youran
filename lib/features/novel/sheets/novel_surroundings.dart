@@ -2317,8 +2317,15 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     }
     final nextSceneKey = stringValue(payload['scene_key']).trim();
     final sceneChanged = nextSceneKey != _remoteSceneKey;
+    final incomingSeed = intValue(payload['scene_seed']);
     _remoteSceneKey = nextSceneKey;
-    _seed = intValue(payload['scene_seed']);
+
+    // 同一个场景内保持走路地图的 seed 稳定。
+    // 部分状态刷新可能暂时缺少 scene_seed，或返回不同 seed；如果每次都覆盖，
+    // 地形和物体位置会整张重排，随后角色会像“从另一侧穿过去”一样瞬移。
+    if (sceneChanged || _seed == 0) {
+      _seed = incomingSeed;
+    }
     _tiles = _generateRemoteMap(payload);
     _revealed
       ..clear()
@@ -3732,11 +3739,75 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
 
     final current = Offset(_playerWorldX, _playerDepth * worldHeight);
     if (!_walkPointInsideTerrain(current)) {
-      final nearest = _walkTerrain.reduce((a, b) =>
-          (a.center - current).distanceSquared <= (b.center - current).distanceSquared ? a : b);
-      _playerWorldX = nearest.center.dx.clamp(horizontalMargin, maxX).toDouble();
-      _playerDepth = (nearest.center.dy / worldHeight).clamp(minDepth, maxDepth).toDouble();
+      // 尺寸变化后当前位置偶尔会刚好落到新地形边界之外。
+      // 旧逻辑会直接吸到“最近地形块中心”，位移可能非常大，看起来像横向穿越。
+      // 现在只投影回最近的合法边缘，保留玩家原来的大致位置。
+      final corrected = _nearestWalkablePoint(
+        current,
+        horizontalMargin: horizontalMargin,
+        maxX: maxX,
+        minY: minDepth * worldHeight,
+        maxY: maxDepth * worldHeight,
+      );
+      _playerWorldX = corrected.dx;
+      _playerDepth = (corrected.dy / worldHeight)
+          .clamp(minDepth, maxDepth)
+          .toDouble();
     }
+  }
+
+  Offset _nearestWalkablePoint(
+    Offset point, {
+    required double horizontalMargin,
+    required double maxX,
+    required double minY,
+    required double maxY,
+  }) {
+    if (_walkTerrain.isEmpty) {
+      return Offset(
+        point.dx.clamp(horizontalMargin, maxX).toDouble(),
+        point.dy.clamp(minY, maxY).toDouble(),
+      );
+    }
+
+    Offset? best;
+    var bestDistance = double.infinity;
+
+    for (final blob in _walkTerrain) {
+      final dx = point.dx - blob.center.dx;
+      final dy = point.dy - blob.center.dy;
+      final cosA = math.cos(-blob.rotation);
+      final sinA = math.sin(-blob.rotation);
+      final localX = dx * cosA - dy * sinA;
+      final localY = dx * sinA + dy * cosA;
+      final rx = math.max(1.0, blob.radiusX * .88);
+      final ry = math.max(1.0, blob.radiusY * .88);
+      final normalized = math.sqrt(
+        (localX * localX) / (rx * rx) +
+            (localY * localY) / (ry * ry),
+      );
+
+      final scale = normalized <= 1.0 ? 1.0 : .985 / normalized;
+      final projectedX = localX * scale;
+      final projectedY = localY * scale;
+      final cosBack = math.cos(blob.rotation);
+      final sinBack = math.sin(blob.rotation);
+      final candidate = Offset(
+        (blob.center.dx + projectedX * cosBack - projectedY * sinBack)
+            .clamp(horizontalMargin, maxX)
+            .toDouble(),
+        (blob.center.dy + projectedX * sinBack + projectedY * cosBack)
+            .clamp(minY, maxY)
+            .toDouble(),
+      );
+      final distance = (candidate - point).distanceSquared;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = candidate;
+      }
+    }
+
+    return best ?? point;
   }
 
   Offset _walkTilePoint(int index, double worldWidth, double worldHeight) {
@@ -4233,39 +4304,20 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   }
 
   Widget _walkPlayerFallback() {
-    return Align(
+    final protagonist = widget.controller.protagonist;
+    final isFemale = protagonist?.gender.trim() == '女';
+    final localAsset = isFemale
+        ? 'assets/images/female.webp'
+        : 'assets/images/male.webp';
+
+    // 没有用户立绘/头像时直接使用项目本地男女主角资源。
+    // 不再显示黑色“主角”占位块；本地资源本身加载失败时宁可留空。
+    return Image.asset(
+      localAsset,
+      fit: BoxFit.contain,
       alignment: Alignment.bottomCenter,
-      child: Container(
-        width: widget.embedded ? 36 : 42,
-        height: widget.embedded ? 70 : 82,
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(.92),
-          borderRadius: const BorderRadius.vertical(
-            top: Radius.circular(18),
-            bottom: Radius.circular(7),
-          ),
-          border: Border.all(
-            color: Colors.white.withOpacity(.18),
-            width: .8,
-          ),
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: Colors.black.withOpacity(.46),
-              blurRadius: 12,
-              offset: const Offset(0, 7),
-            ),
-          ],
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          '主角',
-          style: TextStyle(
-            color: Colors.white.withOpacity(.74),
-            fontSize: 9,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ),
+      filterQuality: FilterQuality.high,
+      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
     );
   }
 
@@ -4275,8 +4327,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     final portraitBytes = _previewPortraitBytes;
     final protagonist = widget.controller.protagonist;
 
-    // 立绘优先级：开发预览手动立绘 > protagonist.portraitUrl > avatarUrl > 黑白占位。
-    // portraitUrl 加载失败时继续回退 avatar，而不是直接丢成占位图。
+    // 立绘优先级：开发预览手动立绘 > protagonist.portraitUrl > avatarUrl > 本地男女资源。
+    // portrait / avatar 加载失败时也继续回退本地资源，不再显示“主角”占位块。
     final protagonistPortrait = protagonist?.portraitUrl.trim() ?? '';
     final protagonistAvatar = protagonist?.avatarUrl.trim() ?? '';
     final playerHeight = _walkPlayerBaseHeight(_walkViewportHeight);

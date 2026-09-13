@@ -3095,10 +3095,23 @@ class NovelGameController extends ChangeNotifier {
   }
 
   Future<void> setEquipped(NovelInventoryItem item, bool equipped) async {
-    if (scenario == null) return;
+    // 与强化保持一致：优先使用后端返回的原始装备 ID。
+    // NovelInventoryItem.id 可能经过前端归一化，直接拿它请求后端会导致
+    // 穿戴/卸下时出现“物品不存在”，而强化却能正常找到同一件装备。
+    final rawItemId = stringValue(
+      item.raw['id'] ?? item.raw['item_id'] ?? item.raw['itemId'],
+    ).trim();
+    final itemId = rawItemId.isNotEmpty ? rawItemId : item.id.trim();
+    if (itemId.isEmpty) {
+      throw const NovelBackendException('装备ID不能为空');
+    }
+    if (scenario == null) {
+      throw const NovelBackendException('剧本数据尚未加载');
+    }
+
     await backend.equipItem(
       scenarioInstanceId: scenarioInstanceId,
-      itemId: item.id,
+      itemId: itemId,
       equipped: equipped,
     );
     await refreshInventory();

@@ -1134,10 +1134,13 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     final level = stringValue(status['level']).trim();
     final condition = widget.controller.protagonistCondition.trim();
     // 游戏内头像统一从立绘截取：优先 portrait，缺失时再退回 avatar。
-    // 背包头像需要更聚焦头部，因此在圆形裁切中再上移并放大。
+    // 只有真实远端头像存在时才做头部聚焦（放大 + 上移）。
+    // 如果没有真实头像、只能使用本地男女默认资源，则保持原始构图居中显示，
+    // 不再套用放大和上移，避免默认资源被过度裁切。
     final avatar = (host?.portraitUrl.trim().isNotEmpty ?? false)
         ? host!.portraitUrl.trim()
         : (host?.avatarUrl.trim() ?? '');
+    final hasAvatar = avatar.isNotEmpty;
     final fallbackAsset = host?.gender.trim() == '女'
         ? 'assets/images/female.webp'
         : 'assets/images/male.webp';
@@ -1173,22 +1176,29 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   ],
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: ClipRect(
-                  child: Transform.scale(
-                    // 继续放大，但不再以图片最顶部作为缩放锚点，
-                    // 避免头顶留白被放大后把整张脸推出圆形裁切区。
-                    scale: landscape ? 1.82 : 1.88,
-                    alignment: const Alignment(0, -0.38),
-                    child: NovelArtwork(
-                      url: CdnUtil.resize(avatar, width: 320),
-                      assetCandidates: <String>[fallbackAsset],
-                      fit: BoxFit.cover,
-                      // 仍然偏上取景，但保留脸部，不再死贴 topCenter。
-                      alignment: const Alignment(0, -1.3),
-                      fallbackText: name,
-                    ),
-                  ),
-                ),
+                child: hasAvatar
+                    ? ClipRect(
+                        child: Transform.scale(
+                          // 真实头像继续沿用当前的头部聚焦效果。
+                          scale: landscape ? 1.82 : 1.88,
+                          alignment: const Alignment(0, -0.38),
+                          child: NovelArtwork(
+                            url: CdnUtil.resize(avatar, width: 320),
+                            assetCandidates: <String>[fallbackAsset],
+                            fit: BoxFit.cover,
+                            alignment: const Alignment(0, -1.3),
+                            fallbackText: name,
+                          ),
+                        ),
+                      )
+                    : NovelArtwork(
+                        // 没有真实头像时使用本地默认资源：不放大、不上移。
+                        url: '',
+                        assetCandidates: <String>[fallbackAsset],
+                        fit: BoxFit.contain,
+                        alignment: Alignment.center,
+                        fallbackText: name,
+                      ),
               ),
               SizedBox(width: landscape ? 10 : 12),
               Expanded(

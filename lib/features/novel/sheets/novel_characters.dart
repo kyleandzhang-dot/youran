@@ -494,15 +494,15 @@ class _CharacterArchiveHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     if (dense) {
       if (onBack == null && onClose == null) return const SizedBox(height: 7);
+
+      // 横屏只压缩内容排版，不压缩系统级导航控件。
+      // 返回按钮始终保留标准手机 48dp 触控区域，避免横屏下变得过小难点。
       return SizedBox(
-        height: 34,
+        height: 48,
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: <Widget>[
-            if (onBack != null)
-              _CharacterBackButton(
-                onTap: onBack!,
-                compact: true,
-              ),
+            if (onBack != null) _CharacterBackButton(onTap: onBack!),
             const Spacer(),
             if (onClose != null)
               _CharacterHeaderButton(
@@ -516,66 +516,66 @@ class _CharacterArchiveHeader extends StatelessWidget {
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 13, 12, 6),
-      child: Row(
-        children: <Widget>[
-          if (onBack != null) ...<Widget>[
-            _CharacterBackButton(onTap: onBack!),
-            const SizedBox(width: 8),
-          ],
-          const Expanded(
-            child: Text(
-              '人物',
-              style: TextStyle(
-                color: Color(0xFF272824),
-                fontSize: 23,
-                height: 1,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.2,
+    return SizedBox(
+      height: 56,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            if (onBack != null) ...<Widget>[
+              _CharacterBackButton(onTap: onBack!),
+              const SizedBox(width: 4),
+            ],
+            const Expanded(
+              child: Text(
+                '人物',
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Color(0xFF272824),
+                  fontSize: 23,
+                  height: 1,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                ),
               ),
             ),
-          ),
-          if (onClose != null)
-            _CharacterHeaderButton(
-              tooltip: '关闭',
-              icon: Icons.close_rounded,
-              onTap: onClose,
-            ),
-        ],
+            if (onClose != null)
+              _CharacterHeaderButton(
+                tooltip: '关闭',
+                icon: Icons.close_rounded,
+                onTap: onClose,
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class _CharacterBackButton extends StatelessWidget {
-  const _CharacterBackButton({
-    required this.onTap,
-    this.compact = false,
-  });
+  const _CharacterBackButton({required this.onTap});
 
   final VoidCallback onTap;
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    final dimension = compact ? 30.0 : 36.0;
-    return Tooltip(
-      message: '返回剧情',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: SizedBox(
-          width: dimension,
-          height: dimension,
-          child: Center(
-            child: Icon(
-              Icons.arrow_back_ios_new_rounded,
-              size: compact ? 14 : 16,
-              color: _archiveTextSoft,
-            ),
-          ),
+    // 使用 Flutter 自带的 BackButtonIcon，让箭头跟随手机平台/文字方向，
+    // 同时固定 48dp 触控区域；横竖屏都保持同一套导航规格。
+    return IconButton(
+      tooltip: '返回剧情',
+      onPressed: onTap,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.standard,
+      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+      icon: const IconTheme(
+        data: IconThemeData(
+          size: 22,
+          color: _archiveTextSoft,
         ),
+        child: BackButtonIcon(),
       ),
     );
   }

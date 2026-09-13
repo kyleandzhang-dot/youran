@@ -23,9 +23,10 @@ class NovelChoicePanel extends StatelessWidget {
     final mediaSize = MediaQuery.sizeOf(context);
     final portrait = mediaSize.height >= mediaSize.width;
 
-    // 竖屏时给最后一个选择框和底部输入框留极小间隙，
-    // 避免两边框贴在一起看起来像重叠；横屏保持现有布局不变。
-    final bottomGap = portrait ? 2.0 : 0.0;
+    // 选项区与底部输入框始终保留独立的视觉间距。
+    // 横屏空间更扁，边框贴在一起会特别明显，因此横屏主动留出 8dp；
+    // 竖屏继续保持原来的轻量 2dp 间距。
+    final bottomGap = portrait ? 2.0 : 8.0;
 
     // 明确吃满父级可用宽度，让剧情选项区与底部输入区保持一致的横向尺度。
     return Padding(
