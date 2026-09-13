@@ -184,7 +184,7 @@ class GameDrawer extends StatelessWidget {
                       progress: createWorldProgress,
                       step: createWorldStep,
                       hasError: createWorldError,
-                      worldCount: games.length,
+                      games: games,
                       onCreateWorld: onCreateWorld,
                       onRefreshWorld: onRefreshWorld,
                       onCheckCompleted: onCheckWorldCreationCompleted,
@@ -494,7 +494,7 @@ class _CreationProgressSlot extends StatefulWidget {
     required this.progress,
     required this.step,
     required this.hasError,
-    required this.worldCount,
+    required this.games,
     required this.onCreateWorld,
     this.onRefreshWorld,
     this.onCheckCompleted,
@@ -504,7 +504,7 @@ class _CreationProgressSlot extends StatefulWidget {
   final double progress;
   final String step;
   final bool hasError;
-  final int worldCount;
+  final List<GameData> games;
   final VoidCallback onCreateWorld;
   final Future<void> Function()? onRefreshWorld;
   final Future<bool> Function()? onCheckCompleted;
@@ -514,15 +514,90 @@ class _CreationProgressSlot extends StatefulWidget {
 }
 
 class _CreationProgressSlotState extends State<_CreationProgressSlot> {
+  // 剧本主体完成后，封面仍可能在 image-service 后台生成。
+  // 不要继续把“创建世界”进度条卡住，而是用递增间隔轻量重拉世界列表；
+  // 总共只追约 2 分半，拿到真实封面后立即停止。
+  static const List<Duration> _coverRefreshSchedule = <Duration>[
+    Duration(seconds: 2),
+    Duration(seconds: 3),
+    Duration(seconds: 5),
+    Duration(seconds: 8),
+    Duration(seconds: 12),
+    Duration(seconds: 18),
+    Duration(seconds: 25),
+    Duration(seconds: 35),
+    Duration(seconds: 45),
+  ];
+
   Timer? _pollTimer;
+  Timer? _coverRefreshTimer;
   bool _checking = false;
   bool _resolvedLocally = false;
+  bool _coverRefreshActive = false;
+  int _coverRefreshIndex = 0;
   late int _worldCountAtStart;
+  Map<String, int> _worldBaselineCounts = <String, int>{};
+
+  String _worldIdentity(GameData game) {
+    // GameData 当前没有 scenarioId，因此用标题 + 分类做“本轮新增项”识别。
+    // 用计数而不是 Set，允许用户存在同名世界。
+    return '${game.title.trim()}\u0000${game.category.trim()}';
+  }
+
+  Map<String, int> _countWorldIdentities(Iterable<GameData> games) {
+    final counts = <String, int>{};
+    for (final game in games) {
+      final key = _worldIdentity(game);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  void _captureWorldBaseline() {
+    _worldCountAtStart = widget.games.length;
+    _worldBaselineCounts = _countWorldIdentities(widget.games);
+  }
+
+  List<GameData> _newWorldsSinceBaseline() {
+    if (widget.games.isEmpty) return const <GameData>[];
+
+    final seen = <String, int>{};
+    final added = <GameData>[];
+    for (final game in widget.games) {
+      final key = _worldIdentity(game);
+      final occurrence = (seen[key] ?? 0) + 1;
+      seen[key] = occurrence;
+      final existedCount = _worldBaselineCounts[key] ?? 0;
+      if (occurrence > existedCount) added.add(game);
+    }
+    return added;
+  }
+
+  bool _looksLikePendingGeneratedCover(String rawUrl) {
+    final url = rawUrl.trim().toLowerCase();
+    if (url.isEmpty) return true;
+
+    // user-service 在真正 Z Image 封面回写前会返回默认封面。
+    // 同时兼容其它常见占位命名，避免以后更换默认 CDN 路径时失效。
+    return url.contains('/default/cover') ||
+        url.contains('default_cover') ||
+        url.contains('default-cover') ||
+        url.contains('/placeholder') ||
+        url.contains('placeholder.');
+  }
+
+  bool _newWorldCoverIsReady() {
+    final added = _newWorldsSinceBaseline();
+    if (added.isEmpty) return false;
+    return added.every(
+      (game) => !_looksLikePendingGeneratedCover(game.imageUrl),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
-    _worldCountAtStart = widget.worldCount;
+    _captureWorldBaseline();
     _configurePolling();
   }
 
@@ -530,18 +605,16 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
   void didUpdateWidget(covariant _CreationProgressSlot oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // 新一轮创建开始时重新建立基线。
+    // 新一轮创建开始：保存创建前的世界快照，用于之后只追踪本轮新增世界的封面。
     if (widget.isCreatingWorld && !oldWidget.isCreatingWorld) {
       _resolvedLocally = false;
-      _worldCountAtStart = widget.worldCount;
+      _stopCoverRefresh();
+      _captureWorldBaseline();
       _configurePolling();
     }
 
-    // 外层已经收到完成状态：先结束本地轮询，再补一次最终列表刷新。
-    //
-    // 之前这里仅停止轮询。如果外层先把 isCreatingWorld 切成 false，
-    // 新世界虽然已经落库，但最后一次 onRefreshWorld 可能根本没有执行，
-    // 导致「世界」列表一直停留在创建前的旧 games 数据。
+    // 外层已经收到“剧本主体完成”：创建 UI 立即结束并刷新列表；
+    // 封面是后处理，不再阻塞创建完成状态。
     if (!widget.isCreatingWorld && oldWidget.isCreatingWorld) {
       _resolvedLocally = false;
       _pollTimer?.cancel();
@@ -553,14 +626,19 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
             unawaited(_refreshAfterExternalCompletion());
           }
         });
+      } else {
+        _stopCoverRefresh();
       }
     }
 
-    // 即使完成事件丢失，只要刷新后世界数量增加，也判定创建已落库。
+    // 即使完成事件丢失，只要刷新后世界数量增加，也判定剧本主体已经落库。
     if (widget.isCreatingWorld &&
         !_resolvedLocally &&
-        widget.worldCount > _worldCountAtStart) {
+        widget.games.length > _worldCountAtStart) {
       _markResolved();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _startCoverRefreshTracking();
+      });
     }
 
     // 100% 本身就是强完成信号：马上再向后端/列表核对一次。
@@ -575,6 +653,11 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
         (oldWidget.onRefreshWorld != widget.onRefreshWorld ||
             oldWidget.onCheckCompleted != widget.onCheckCompleted)) {
       _configurePolling();
+    }
+
+    // 父层任何一次世界列表刷新只要已经带回真实封面，立即结束后处理轮询。
+    if (_coverRefreshActive && _newWorldCoverIsReady()) {
+      _stopCoverRefresh();
     }
   }
 
@@ -597,10 +680,91 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
     if (refresh == null) return;
 
     try {
+      // 第一次立即刷新负责让新世界本身马上出现在列表。
       await refresh();
     } catch (e) {
       debugPrint('创建世界完成后的最终列表刷新失败：$e');
+    } finally {
+      if (!mounted || widget.hasError) return;
+      // 给父层 setState/rebuild 一个很短的窗口；即使这帧还没更新，
+      // 后面的有界追刷也会继续，不会漏掉异步封面。
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (mounted) _startCoverRefreshTracking();
     }
+  }
+
+  void _startCoverRefreshTracking() {
+    if (!mounted || widget.hasError || widget.onRefreshWorld == null) return;
+
+    if (_newWorldCoverIsReady()) {
+      _stopCoverRefresh();
+      return;
+    }
+    if (_coverRefreshActive) return;
+
+    _coverRefreshActive = true;
+    _coverRefreshIndex = 0;
+    _scheduleNextCoverRefresh();
+  }
+
+  void _scheduleNextCoverRefresh() {
+    _coverRefreshTimer?.cancel();
+    _coverRefreshTimer = null;
+
+    if (!mounted || !_coverRefreshActive || widget.hasError) {
+      _stopCoverRefresh();
+      return;
+    }
+    if (_coverRefreshIndex >= _coverRefreshSchedule.length) {
+      debugPrint('新世界封面追刷结束：达到最大等待窗口');
+      _stopCoverRefresh();
+      return;
+    }
+
+    final delay = _coverRefreshSchedule[_coverRefreshIndex++];
+    _coverRefreshTimer = Timer(
+      delay,
+      () => unawaited(_refreshCoverOnce()),
+    );
+  }
+
+  Future<void> _refreshCoverOnce() async {
+    if (!mounted || !_coverRefreshActive || widget.hasError) {
+      _stopCoverRefresh();
+      return;
+    }
+
+    final refresh = widget.onRefreshWorld;
+    if (refresh == null) {
+      _stopCoverRefresh();
+      return;
+    }
+
+    try {
+      await refresh();
+    } catch (e) {
+      // 封面只是后处理；临时刷新失败不影响已经成功创建的世界。
+      debugPrint('等待新世界封面时刷新失败：$e');
+    }
+
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    if (!mounted) return;
+
+    if (_newWorldCoverIsReady()) {
+      debugPrint('新世界封面已刷新到列表');
+      _stopCoverRefresh();
+      return;
+    }
+
+    _scheduleNextCoverRefresh();
+  }
+
+  void _stopCoverRefresh() {
+    _coverRefreshTimer?.cancel();
+    _coverRefreshTimer = null;
+    _coverRefreshActive = false;
+    _coverRefreshIndex = 0;
   }
 
   Future<void> _syncCreationState() async {
@@ -621,6 +785,7 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
         if (completed) {
           _markResolved();
           await widget.onRefreshWorld?.call();
+          if (mounted) _startCoverRefreshTracking();
           return;
         }
       }
@@ -632,6 +797,7 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
       // 如果流式进度已经明确到 100%，刷新一次后不再让 UI 永久卡住。
       if (mounted && widget.progress >= 100 && !widget.hasError) {
         _markResolved();
+        _startCoverRefreshTracking();
       }
     } catch (e) {
       debugPrint('创建世界状态同步失败：$e');
@@ -650,6 +816,7 @@ class _CreationProgressSlotState extends State<_CreationProgressSlot> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _coverRefreshTimer?.cancel();
     super.dispose();
   }
 

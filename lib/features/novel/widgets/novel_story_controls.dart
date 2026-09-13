@@ -132,6 +132,7 @@ class _NovelFloatingSurroundingsActionState
   Widget build(BuildContext context) {
     final scope = widget.scope;
     final compact = widget.compact;
+    final media = MediaQuery.of(context);
     final hitSize = compact ? 42.0 : 48.0;
     final coreSize = compact ? 29.0 : 33.0;
     final haloSize = compact ? 34.0 : 39.0;
@@ -139,7 +140,17 @@ class _NovelFloatingSurroundingsActionState
         ? '探索中'
         : (scope.label.trim().isEmpty ? '探索周围' : scope.label.trim());
 
-    return Semantics(
+    // 这个按钮原先由 Reader 锚在右侧，会和右边的附近角色区互相压。
+    // 现在把【整个组件 + 点击热区】一起平移到左侧安全区。
+    // endBleed 是旧的右侧视觉补偿，这里一并抵消，避免只挪图标不挪点击区域。
+    final leftInset = media.padding.left + (compact ? 12.0 : 16.0);
+    final assumedRightInset = media.padding.right + (compact ? 12.0 : 16.0);
+    final assumedRightX = media.size.width - assumedRightInset - hitSize;
+    final moveToLeft = leftInset - assumedRightX - widget.endBleed;
+
+    return Transform.translate(
+      offset: Offset(moveToLeft, 0),
+      child: Semantics(
       button: true,
       enabled: !scope.loading,
       label: semanticLabel,
@@ -150,9 +161,7 @@ class _NovelFloatingSurroundingsActionState
           onTap: scope.loading ? null : scope.onTap,
           child: SizedBox.square(
             dimension: hitSize,
-            child: Transform.translate(
-              offset: Offset(widget.endBleed, 0),
-              child: RepaintBoundary(
+            child: RepaintBoundary(
                 child: AnimatedBuilder(
                 animation: _pulse,
                 builder: (context, _) {
@@ -262,17 +271,21 @@ class NovelChoiceDock extends StatelessWidget {
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.narrowWidth;
     final shortViewport = viewport.shortViewport;
+    final choiceHeight = shortViewport ? 38.0 : (compact ? 42.0 : 44.0);
 
-    // 选择区改成输入框上方的一条轻量横向操作带：
-    // 不再显示“请做出你的选择”标题、菱形和装饰线，避免抢剧情画面。
-    return SizedBox(
-      width: double.infinity,
-      height: shortViewport ? 38 : (compact ? 42 : 44),
-      child: _InlineNovelChoices(
-        choices: choices,
-        onSelected: onSelected,
-        onCustomInput: () {},
-        onContinue: () {},
+    // 主剧情真正使用的是 NovelChoiceDock。
+    // 竖屏和横屏都固定保留 8dp，避免最后一排选择框和输入框边线贴死。
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: SizedBox(
+        width: double.infinity,
+        height: choiceHeight,
+        child: _InlineNovelChoices(
+          choices: choices,
+          onSelected: onSelected,
+          onCustomInput: () {},
+          onContinue: () {},
+        ),
       ),
     );
   }

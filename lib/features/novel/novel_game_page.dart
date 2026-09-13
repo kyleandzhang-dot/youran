@@ -1174,7 +1174,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         final compact = media.size.width <= 600;
         final footerBaseHeight = compact ? 52.0 : 54.0;
         final footerOuterGap = compact ? 4.0 : 6.0;
-        final choiceBottomGap = compact ? 4.0 : 5.0;
+        const choiceBottomGap = 8.0;
         final bottom = media.viewPadding.bottom +
             footerBaseHeight +
             footerOuterGap +
@@ -2477,7 +2477,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                         : math.min(720.0, constraints.maxWidth),
                                     child: NovelChoiceDockActionScope(
                                       // 探索入口属于剧情阅读舞台，不再塞进附近角色列表。
-                                      // 只在最后一页由 Reader 放到正文右上方。
+                                      // 只在最后一页由 Reader 放到正文左侧。
                                       visible: rightSceneExploreVisible,
                                       label: controller.surroundingsActionLabel,
                                       attention: controller.surroundingsNeedsAttention,
@@ -2539,20 +2539,28 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 // 时间牌改为上下两层后高度更高；人物/探索从它下方留出呼吸感。
                                 top: shortWide ? 106 : 136,
                                 bottom: shortWide ? 84 : 212,
-                                child: NovelRightSceneDock(
-                                  targets: _talkTargets,
-                                  selectedActorId: _targetSceneActor?.id ?? '',
-                                  onSelected: _handleTalkTargetTap,
-                                  onClear: _clearTargetSceneActor,
-                                  // 探索入口已经移入剧情正文舞台；右侧 Dock 只负责附近角色。
-                                  exploreVisible: false,
-                                  exploreLabel: '',
-                                  exploreAttention:
-                                      controller.surroundingsNeedsAttention,
-                                  exploreLoading:
-                                      controller.isSurroundingsLoading,
-                                  onExplore: () => _selectPrimaryTab(
-                                    _NovelPrimaryTab.surroundings,
+                                // 附近角色在手机上原本偏小；整体轻量放大头像、姓名和点击区。
+                                // 以右上角为缩放锚点，右侧基线保持不变，不会再往 HUD 外侧挤。
+                                child: Transform.scale(
+                                  scale: shortWide
+                                      ? 1.16
+                                      : (compact ? 1.14 : 1.0),
+                                  alignment: Alignment.topRight,
+                                  child: NovelRightSceneDock(
+                                    targets: _talkTargets,
+                                    selectedActorId: _targetSceneActor?.id ?? '',
+                                    onSelected: _handleTalkTargetTap,
+                                    onClear: _clearTargetSceneActor,
+                                    // 探索入口已经移入剧情正文舞台；右侧 Dock 只负责附近角色。
+                                    exploreVisible: false,
+                                    exploreLabel: '',
+                                    exploreAttention:
+                                        controller.surroundingsNeedsAttention,
+                                    exploreLoading:
+                                        controller.isSurroundingsLoading,
+                                    onExplore: () => _selectPrimaryTab(
+                                      _NovelPrimaryTab.surroundings,
+                                    ),
                                   ),
                                 ),
                               ),

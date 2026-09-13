@@ -20,13 +20,8 @@ class NovelChoicePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mediaSize = MediaQuery.sizeOf(context);
-    final portrait = mediaSize.height >= mediaSize.width;
-
-    // 选项区与底部输入框始终保留独立的视觉间距。
-    // 横屏空间更扁，边框贴在一起会特别明显，因此横屏主动留出 8dp；
-    // 竖屏继续保持原来的轻量 2dp 间距。
-    final bottomGap = portrait ? 2.0 : 8.0;
+    // 竖屏、横屏统一保持 8dp：选择框和底部输入框不能再贴边。
+    const bottomGap = 8.0;
 
     // 明确吃满父级可用宽度，让剧情选项区与底部输入区保持一致的横向尺度。
     return Padding(

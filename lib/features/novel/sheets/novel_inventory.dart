@@ -1159,27 +1159,27 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
-              Container(
-                width: landscape ? 46 : 56,
-                height: landscape ? 46 : 56,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: _inventoryGold.withOpacity(landscape ? .24 : .42),
-                    width: landscape ? .7 : 1,
-                  ),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: _inventoryBlue.withOpacity(landscape ? .10 : .22),
-                      blurRadius: landscape ? 9 : 16,
-                    ),
-                  ],
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: hasAvatar
-                    ? ClipRect(
+              hasAvatar
+                  ? Container(
+                      width: landscape ? 46 : 56,
+                      height: landscape ? 46 : 56,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: _inventoryGold.withOpacity(landscape ? .24 : .42),
+                          width: landscape ? .7 : 1,
+                        ),
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: _inventoryBlue.withOpacity(landscape ? .10 : .22),
+                            blurRadius: landscape ? 9 : 16,
+                          ),
+                        ],
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: ClipRect(
                         child: Transform.scale(
-                          // 真实头像继续沿用当前的头部聚焦效果。
+                          // 只有真实远端头像继续使用圆框和头部聚焦效果。
                           scale: landscape ? 1.82 : 1.88,
                           alignment: const Alignment(0, -0.38),
                           child: NovelArtwork(
@@ -1190,16 +1190,21 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                             fallbackText: name,
                           ),
                         ),
-                      )
-                    : NovelArtwork(
-                        // 没有真实头像时使用本地默认资源：不放大、不上移。
-                        url: '',
-                        assetCandidates: <String>[fallbackAsset],
+                      ),
+                    )
+                  : SizedBox(
+                      // 本地默认头像直接显示，不画头像框、边框或阴影。
+                      // BoxFit.contain 保证图片始终完整限制在原头像区域内，绝不越界。
+                      width: landscape ? 46 : 56,
+                      height: landscape ? 46 : 56,
+                      child: Image.asset(
+                        fallbackAsset,
                         fit: BoxFit.contain,
                         alignment: Alignment.center,
-                        fallbackText: name,
+                        filterQuality: FilterQuality.high,
+                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                       ),
-              ),
+                    ),
               SizedBox(width: landscape ? 10 : 12),
               Expanded(
                 child: Column(

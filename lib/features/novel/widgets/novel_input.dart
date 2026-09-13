@@ -945,7 +945,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                     curve: Curves.easeOutCubic,
                     height: contextChips.isEmpty
                         ? 0
-                        : (shortViewport ? 30 : 34),
+                        : (shortViewport ? 39 : 40),
                     child: contextChips.isEmpty
                         ? const SizedBox.shrink()
                         : Padding(
@@ -1473,14 +1473,16 @@ class _TargetActorContextChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = NovelViewportMetrics.of(context).compactChrome;
-    final textColor = Colors.white.withOpacity(.90);
-    final subtleColor = Colors.white.withOpacity(.52);
-    final avatarSize = compact ? 18.0 : 20.0;
-    final prefixHeight = compact ? 25.0 : 28.0;
+    final viewport = NovelViewportMetrics.of(context);
+    final compact = viewport.compactChrome;
+    final shortWide = viewport.shortWide;
+    final textColor = Colors.white.withOpacity(.92);
+    final subtleColor = Colors.white.withOpacity(.58);
+    final avatarSize = shortWide ? 27.0 : (compact ? 25.0 : 27.0);
+    final prefixHeight = shortWide ? 35.0 : (compact ? 33.0 : 36.0);
 
     return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: compact ? 140 : 168),
+      constraints: BoxConstraints(maxWidth: shortWide ? 204 : (compact ? 190 : 224)),
       child: Container(
         height: prefixHeight,
         padding: EdgeInsets.only(
@@ -1502,7 +1504,7 @@ class _TargetActorContextChip extends StatelessWidget {
               '对',
               style: TextStyle(
                 color: subtleColor,
-                fontSize: compact ? 10.4 : 11.0,
+                fontSize: shortWide ? 11.5 : (compact ? 11.3 : 11.8),
                 height: 1,
                 fontWeight: FontWeight.w500,
               ),
@@ -1521,9 +1523,9 @@ class _TargetActorContextChip extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: textColor,
-                  fontSize: compact ? 10.8 : 11.5,
+                  fontSize: shortWide ? 13.0 : (compact ? 12.6 : 13.2),
                   height: 1,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                   letterSpacing: .05,
                 ),
               ),
@@ -1533,7 +1535,7 @@ class _TargetActorContextChip extends StatelessWidget {
               '说：',
               style: TextStyle(
                 color: subtleColor,
-                fontSize: compact ? 10.4 : 11.0,
+                fontSize: shortWide ? 11.5 : (compact ? 11.3 : 11.8),
                 height: 1,
                 fontWeight: FontWeight.w500,
               ),
@@ -1548,12 +1550,12 @@ class _TargetActorContextChip extends StatelessWidget {
                   splashColor: Colors.white.withOpacity(.055),
                   highlightColor: Colors.white.withOpacity(.035),
                   child: SizedBox(
-                    width: compact ? 21 : 23,
+                    width: shortWide ? 27 : (compact ? 25 : 28),
                     height: prefixHeight,
                     child: Center(
                       child: Icon(
                         Icons.close_rounded,
-                        size: compact ? 13.5 : 14.5,
+                        size: shortWide ? 15.5 : (compact ? 15 : 16),
                         color: Colors.white.withOpacity(.62),
                       ),
                     ),

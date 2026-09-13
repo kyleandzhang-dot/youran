@@ -995,7 +995,6 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
           desktopMode: controller.desktopMode,
         );
         final compact = viewport.compactContent;
-        final compactChrome = viewport.compactChrome;
         final shortViewport = viewport.shortViewport;
         final shortWide = viewport.shortWide;
         // 正文始终保持左右对称，不为右侧悬浮按钮预留宽度。
@@ -1034,25 +1033,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             !keyboardActive &&
             surroundingsAction?.visible == true;
 
-        // 探索按钮的可见圆形右缘与右侧场景 HUD 共用同一条基线：
-        // 手机/紧凑布局 6px，常规布局 14px。按钮仍属于正文布局，
-        // 所以正文高度变化只会把它一起向上推，不会覆盖文字。
-        final sceneHudRightInset = compactChrome ? 6.0 : 14.0;
-        double centeredStoryActionEndBleed(double horizontalPadding) {
-          final innerWidth = math.max(
-            0.0,
-            constraints.maxWidth - horizontalPadding * 2,
-          );
-          final contentWidth = math.min(650.0, innerWidth);
-          final contentRightInset =
-              math.max(0.0, (constraints.maxWidth - contentWidth) / 2);
-          final desiredBleed =
-              math.max(0.0, contentRightInset - sceneHudRightInset);
-          // 点击热区保持原位，只让可见图形轻微越出正文宽度。
-          // 上限保证指南针中心仍处在原点击热区内。
-          final maxBleed = compactChrome || shortWide ? 17.0 : 20.0;
-          return desiredBleed.clamp(0.0, maxBleed).toDouble();
-        }
+        // 探索入口改到剧情舞台左侧，不再向右侧 HUD 做视觉越界。
+        // 保留这个小函数是为了兼容现有调用点，同时明确关闭右移偏移。
+        double centeredStoryActionEndBleed(double _) => 0.0;
         // 外层 NovelGamePage 已经用 SafeArea 消化系统底部安全区。
         // 此处再加 viewPadding.bottom 会在 iPhone 上重复占位。
         const navigationHeight = 0.0;
@@ -1069,7 +1052,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         final footerHeight = navigationHeight +
             (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
         // 底部整块调查舞台当前隐藏，bottomReservedHeight 通常为 0。
-        // “可探索”已经改为右侧居中悬浮入口，不参与底部布局高度计算。
+        // “可探索”已经改为左侧悬浮入口，不参与底部布局高度计算。
         final reservedBottom = keyboardActive
             ? 0.0
             : math.max(0.0, widget.bottomReservedHeight);
@@ -1083,13 +1066,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             : 0.0;
 
         // 最后一条选择与自由输入框之间只保留轻微呼吸距离。
-        final choiceBottomGap = shortViewport ? 3.0 : (compact ? 4.0 : 5.0);
+        const choiceBottomGap = 8.0;
 
         // 正文与选择区之间只留一条很小的安全距离。
         final contentChoiceGap = shortViewport ? 4.0 : (compact ? 5.0 : 6.0);
 
         // 剧情文字统一向屏幕底部收：只给输入栏 / 系统安全区留少量呼吸距离。
-        // 右侧“可探索”是独立浮层，不再参与正文的底部高度计算。
+        // 左侧“可探索”是独立浮层，不再参与正文的底部高度计算。
         final dialogGap = shortViewport ? 10.0 : (compact ? 18.0 : 24.0);
         final panelBottom = footerBottom + footerHeight + dialogGap;
 
@@ -1656,7 +1639,7 @@ class _NovelNarrationSurface extends StatelessWidget {
               // 探索按钮属于正文布局本身：始终占据正文上方的真实空间。
               // 正文高度变化时会一起重新布局，因此不会再与文字重叠。
               Align(
-                alignment: Alignment.centerRight,
+                alignment: Alignment.centerLeft,
                 child: storyAction!,
               ),
               SizedBox(height: shortWide ? 3 : (compact ? 5 : 7)),
@@ -1739,7 +1722,7 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
           children: <Widget>[
             if (storyAction != null) ...<Widget>[
               Align(
-                alignment: Alignment.centerRight,
+                alignment: Alignment.centerLeft,
                 child: storyAction!,
               ),
               SizedBox(height: shortWide ? 3 : (compact ? 5 : 7)),
@@ -2094,7 +2077,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
       child: dialogueContent,
     );
 
-    final sceneHudRightInset = compactChrome ? 6.0 : 14.0;
+    final sceneHudLeftInset = compactChrome ? 6.0 : 14.0;
     final horizontalReadingAlignment = wideDialogueLayout
         ? Alignment.centerRight
         : (isHost ? Alignment.centerLeft : Alignment.centerRight);
@@ -2104,7 +2087,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
       onTap: onTap,
       child: Align(
         // 探索入口和对白合成一个垂直块：入口永远在文字上方，
-        // 但横向独立贴右侧 HUD 基线，不再被对白宽度带进去。
+        // 横向独立贴左侧安全边距，不再与右侧附近角色区域争空间。
         alignment:
             choices.isNotEmpty ? Alignment.bottomCenter : Alignment.center,
         child: Column(
@@ -2113,9 +2096,9 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
           children: <Widget>[
             if (storyAction != null) ...<Widget>[
               Padding(
-                padding: EdgeInsets.only(right: sceneHudRightInset),
+                padding: EdgeInsets.only(left: sceneHudLeftInset),
                 child: Align(
-                  alignment: Alignment.centerRight,
+                  alignment: Alignment.centerLeft,
                   child: storyAction!,
                 ),
               ),
