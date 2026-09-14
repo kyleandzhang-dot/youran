@@ -36,7 +36,7 @@ class ApiClient {
   ///    defaultValue: 'https://yoran.freedreamky.com/api/v1',
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://172.20.10.3:3000/api/v1',
+    defaultValue: 'http://192.168.1.3:3000/api/v1',
   );
 
   static final Object _suppressUnauthorizedRefreshZoneKey = Object();
