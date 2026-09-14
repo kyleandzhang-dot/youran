@@ -20,8 +20,8 @@ class NovelChoicePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 竖屏、横屏统一保持 8dp：选择框和底部输入框不能再贴边。
-    const bottomGap = 8.0;
+    // 竖屏、横屏只保留 2dp 呼吸距离，让选择框几乎贴近底部输入框。
+    const bottomGap = 2.0;
 
     // 明确吃满父级可用宽度，让剧情选项区与底部输入区保持一致的横向尺度。
     return Padding(

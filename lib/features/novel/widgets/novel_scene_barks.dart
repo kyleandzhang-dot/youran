@@ -12,6 +12,7 @@ class NovelSceneBarkActor {
     this.kind = 'ambient',
     this.role = '',
     this.avatarUrl = '',
+    this.portraitUrl = '',
     this.priority = 50,
     this.source = '',
     this.ephemeral = false,
@@ -22,6 +23,7 @@ class NovelSceneBarkActor {
   final String kind;
   final String role;
   final String avatarUrl;
+  final String portraitUrl;
   final int priority;
   /// scene_presence / speaker_pending / interactive_local 等后端诊断来源。
   final String source;
@@ -71,6 +73,7 @@ class NovelSceneBarkActor {
         'kind': kind,
         if (role.trim().isNotEmpty) 'role': role,
         if (avatarUrl.trim().isNotEmpty) 'avatar_url': avatarUrl,
+        if (portraitUrl.trim().isNotEmpty) 'portrait_url': portraitUrl,
         'priority': priority,
         if (source.trim().isNotEmpty) 'source': source,
         if (ephemeral) 'ephemeral': true,
@@ -165,15 +168,19 @@ class NovelSceneBarkActor {
       );
       final kind = _string(raw['kind'] ?? raw['type'] ?? raw['category'], defaultKind);
       final role = _string(raw['role'] ?? raw['title'] ?? raw['description'] ?? raw['identity']);
-      // 附近角色头像与人物页左侧角色栏保持一致：
-      // 优先拿完整立绘做头肩特写；没有立绘时才退回现成 avatar。
+      // 可对话角色同时保留“游戏头像”和“顶部立绘”两套地址。
+      // 展示层优先尝试 avatar；avatar 缺失或加载失败时再用 portrait。
       final avatarUrl = _string(
+        raw['avatar_url'] ??
+            raw['avatarUrl'] ??
+            raw['avatar'],
+      );
+      final portraitUrl = _string(
         raw['portrait_url'] ??
             raw['portraitUrl'] ??
             raw['portrait'] ??
-            raw['avatar_url'] ??
-            raw['avatarUrl'] ??
-            raw['avatar'],
+            raw['tachie'] ??
+            raw['sprite_url'],
       );
       final priority = _int(raw['priority'], defaultPriority);
       final source = _string(raw['source']);
@@ -188,6 +195,7 @@ class NovelSceneBarkActor {
           kind: kind,
           role: role,
           avatarUrl: avatarUrl,
+          portraitUrl: portraitUrl,
           priority: priority,
           source: source,
           ephemeral: ephemeral,
@@ -807,28 +815,53 @@ class _TalkTargetChip extends StatelessWidget {
   final VoidCallback onTap;
 
   Widget _avatar() {
-    // 右侧附近角色头像本体加大；外层 NovelGamePage 还会根据手机布局整体缩放。
+    // 右上角“可对话角色”与人物页底部人物条使用同一套取图规则：
+    // 1. 有真正的游戏头像时先显示 avatarUrl；
+    // 2. avatarUrl 为空、与 portraitUrl 相同，或网络加载失败时，改用顶部立绘；
+    // 3. 立绘也没有/加载失败，最后才显示姓名首字。
+    //
+    // 注意：不能只用 avatarUrl.isNotEmpty 判断“有头像”。历史数据里可能
+    // 把立绘 URL 原样写进 avatarUrl，也可能残留已经失效的头像 URL。
     final size = compact ? 34.0 : 40.0;
-    final url = actor.avatarUrl.trim();
+    final avatarUrl = actor.avatarUrl.trim();
+    final portraitUrl = actor.portraitUrl.trim();
+    final hasIndependentAvatar = avatarUrl.isNotEmpty &&
+        (portraitUrl.isEmpty || avatarUrl != portraitUrl);
+
+    Widget portraitFallback() => _portraitImage(size, portraitUrl);
+
     Widget image;
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      image = Transform.scale(
-        // 与人物页左侧角色栏统一：锁定图片顶部并放大，稳定显示头肩区域。
-        scale: 1.42,
+    if (!hasIndependentAvatar) {
+      image = portraitFallback();
+    } else if (avatarUrl.startsWith('http://') ||
+        avatarUrl.startsWith('https://')) {
+      // 头像直接请求原始 URL，不再做额外 CDN resize。真正加载失败时，
+      // errorBuilder 才能可靠地进入“顶部立绘”这一级回退。
+      image = Image.network(
+        avatarUrl,
+        key: ValueKey<String>('talk-avatar-${actor.id}-$avatarUrl'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
         alignment: Alignment.topCenter,
-        child: Image.network(
-          url,
-          width: size,
-          height: size,
-          fit: BoxFit.cover,
-          alignment: Alignment.topCenter,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.high,
-          errorBuilder: (_, __, ___) => _initial(size),
-        ),
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => portraitFallback(),
+      );
+    } else if (avatarUrl.startsWith('assets/')) {
+      image = Image.asset(
+        avatarUrl,
+        key: ValueKey<String>('talk-avatar-${actor.id}-$avatarUrl'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => portraitFallback(),
       );
     } else {
-      image = _initial(size);
+      // 不认识的头像地址不硬撑：直接进入顶部立绘回退。
+      image = portraitFallback();
     }
 
     return AnimatedScale(
@@ -859,6 +892,45 @@ class _TalkTargetChip extends StatelessWidget {
         child: ClipOval(child: image),
       ),
     );
+  }
+
+  Widget _portraitImage(double size, String portraitUrl) {
+    if (portraitUrl.startsWith('http://') || portraitUrl.startsWith('https://')) {
+      return Transform.scale(
+        scale: 1.42,
+        alignment: Alignment.topCenter,
+        child: Image.network(
+          portraitUrl,
+          key: ValueKey<String>('talk-portrait-${actor.id}-$portraitUrl'),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          alignment: Alignment.topCenter,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.high,
+          errorBuilder: (_, __, ___) => _initial(size),
+        ),
+      );
+    }
+
+    if (portraitUrl.startsWith('assets/')) {
+      return Transform.scale(
+        scale: 1.42,
+        alignment: Alignment.topCenter,
+        child: Image.asset(
+          portraitUrl,
+          key: ValueKey<String>('talk-portrait-${actor.id}-$portraitUrl'),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          alignment: Alignment.topCenter,
+          filterQuality: FilterQuality.high,
+          errorBuilder: (_, __, ___) => _initial(size),
+        ),
+      );
+    }
+
+    return _initial(size);
   }
 
   Widget _initial(double size) {

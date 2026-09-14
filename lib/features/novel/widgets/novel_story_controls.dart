@@ -320,21 +320,21 @@ class NovelChoiceDock extends StatelessWidget {
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.narrowWidth;
     final shortViewport = viewport.shortViewport;
-    final choiceHeight = shortViewport ? 38.0 : (compact ? 42.0 : 44.0);
+    final shortWide = viewport.shortWide;
+    // 横屏只保留 30dp 的选择条高度；竖屏继续沿用原尺寸。
+    final choiceHeight = shortWide
+        ? 30.0
+        : (shortViewport ? 38.0 : (compact ? 42.0 : 44.0));
 
-    // 主剧情真正使用的是 NovelChoiceDock。
-    // 竖屏和横屏都固定保留 8dp，避免最后一排选择框和输入框边线贴死。
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: SizedBox(
-        width: double.infinity,
-        height: choiceHeight,
-        child: _InlineNovelChoices(
-          choices: choices,
-          onSelected: onSelected,
-          onCustomInput: () {},
-          onContinue: () {},
-        ),
+    // 底部间距统一交给 NovelDialogPanel 外层控制，避免这里和外层重复叠加。
+    return SizedBox(
+      width: double.infinity,
+      height: choiceHeight,
+      child: _InlineNovelChoices(
+        choices: choices,
+        onSelected: onSelected,
+        onCustomInput: () {},
+        onContinue: () {},
       ),
     );
   }

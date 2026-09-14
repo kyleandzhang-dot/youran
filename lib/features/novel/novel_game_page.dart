@@ -531,6 +531,87 @@ class _NovelGamePageState extends State<NovelGamePage>
     ].join('\u0001');
   }
 
+  NovelCharacter? _characterForSceneActor(NovelSceneBarkActor actor) {
+    final characters = controller.scenario?.characters;
+    if (characters == null || characters.isEmpty) return null;
+
+    final actorId = actor.id.trim();
+    final actorName = actor.cleanName.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+    NovelCharacter? nameMatch;
+
+    for (final entry in characters.entries) {
+      final character = entry.value;
+      if (character.isMain) continue;
+
+      final entryId = entry.key.trim();
+      final characterId = character.id.trim();
+      if (actorId.isNotEmpty &&
+          ((entryId.isNotEmpty && entryId == actorId) ||
+              (characterId.isNotEmpty && characterId == actorId))) {
+        return character;
+      }
+
+      if (actorName.isNotEmpty) {
+        final characterName =
+            character.name.trim().replaceAll(RegExp(r'\s+'), '').toLowerCase();
+        if (characterName == actorName) {
+          nameMatch ??= character;
+        }
+      }
+    }
+
+    return nameMatch;
+  }
+
+  NovelSceneBarkActor _resolveSceneActorVisuals(NovelSceneBarkActor actor) {
+    final character = _characterForSceneActor(actor);
+    if (character == null) return actor;
+
+    // 场景接口经常只返回 conversation target 的 id/name，真正的游戏头像和
+    // 人物页顶部立绘保存在 scenario.characters。这里把两份数据合并：
+    // 游戏头像优先；没有头像时保留 portraitUrl 给右上角头像组件做二级回退。
+    final gameAvatar = character.avatarUrl.trim();
+    final gamePortrait = character.portraitUrl.trim();
+    final resolvedAvatar =
+        gameAvatar.isNotEmpty ? gameAvatar : actor.avatarUrl.trim();
+    final resolvedPortrait =
+        gamePortrait.isNotEmpty ? gamePortrait : actor.portraitUrl.trim();
+
+    if (resolvedAvatar == actor.avatarUrl.trim() &&
+        resolvedPortrait == actor.portraitUrl.trim()) {
+      return actor;
+    }
+
+    return NovelSceneBarkActor(
+      id: actor.id,
+      name: actor.name,
+      kind: actor.kind,
+      role: actor.role,
+      avatarUrl: resolvedAvatar,
+      portraitUrl: resolvedPortrait,
+      priority: actor.priority,
+      source: actor.source,
+      ephemeral: actor.ephemeral,
+    );
+  }
+
+  List<NovelSceneBarkActor> get _resolvedTalkTargets => _talkTargets
+      .map(_resolveSceneActorVisuals)
+      .toList(growable: false);
+
+  NovelSceneBarkActor? get _resolvedTargetSceneActor {
+    final actor = _targetSceneActor;
+    return actor == null ? null : _resolveSceneActorVisuals(actor);
+  }
+
+  String get _resolvedTargetSceneActorImageUrl {
+    final actor = _resolvedTargetSceneActor;
+    if (actor == null) return '';
+    final avatar = actor.avatarUrl.trim();
+    if (avatar.isNotEmpty) return avatar;
+    return actor.portraitUrl.trim();
+  }
+
   void _scheduleSceneBarkRefresh({bool force = false}) {
     _sceneBarkRefreshTimer?.cancel();
     _sceneBarkRefreshTimer = Timer(
@@ -575,13 +656,13 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   void _handleSceneBarkTap(NovelSceneBark bark) {
     if (!bark.clickable || bark.actor.cleanName.isEmpty) return;
-    setState(() => _targetSceneActor = bark.actor);
+    setState(() => _targetSceneActor = _resolveSceneActorVisuals(bark.actor));
     _inputFocusNode.requestFocus();
   }
 
   void _handleTalkTargetTap(NovelSceneBarkActor actor) {
     if (actor.cleanName.isEmpty) return;
-    setState(() => _targetSceneActor = actor);
+    setState(() => _targetSceneActor = _resolveSceneActorVisuals(actor));
     _inputFocusNode.requestFocus();
   }
 
@@ -1174,7 +1255,7 @@ class _NovelGamePageState extends State<NovelGamePage>
         final compact = media.size.width <= 600;
         final footerBaseHeight = compact ? 52.0 : 54.0;
         final footerOuterGap = compact ? 4.0 : 6.0;
-        const choiceBottomGap = 8.0;
+        const choiceBottomGap = 2.0;
         final bottom = media.viewPadding.bottom +
             footerBaseHeight +
             footerOuterGap +
@@ -2514,7 +2595,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       targetActorName:
                                           _targetSceneActor?.cleanName ?? '',
                                       targetActorAvatarUrl:
-                                          _targetSceneActor?.avatarUrl ?? '',
+                                          _resolvedTargetSceneActorImageUrl,
                                       targetActorPlaceholder:
                                           _targetSceneActor?.inputPlaceholder ?? '',
                                       onClearTargetActor: _clearTargetSceneActor,
@@ -2549,8 +2630,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       : (compact ? 1.26 : 1.10),
                                   alignment: Alignment.topRight,
                                   child: NovelRightSceneDock(
-                                    targets: _talkTargets,
-                                    selectedActorId: _targetSceneActor?.id ?? '',
+                                    targets: _resolvedTalkTargets,
+                                    selectedActorId:
+                                        _resolvedTargetSceneActor?.id ?? '',
                                     onSelected: _handleTalkTargetTap,
                                     onClear: _clearTargetSceneActor,
                                     // 探索入口已经移入剧情正文舞台；右侧 Dock 只负责附近角色。

@@ -1062,11 +1062,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         // 选择区已经改成输入框上方的单行横向滑动条。
         // 无论有几个选项都只占一行，不能再按“选项数量 × 卡片高度”把正文往上顶。
         final choiceDockHeight = canShowChoices
-            ? (shortViewport ? 38.0 : (compact ? 42.0 : 44.0))
+            ? (shortWide
+                ? 30.0
+                : (shortViewport ? 38.0 : (compact ? 42.0 : 44.0)))
             : 0.0;
 
-        // 最后一条选择与自由输入框之间只保留轻微呼吸距离。
-        const choiceBottomGap = 8.0;
+        // 选择条和底部输入框只留 2dp；NovelChoiceDock 内部不再额外加 bottom padding。
+        const choiceBottomGap = 2.0;
 
         // 正文与选择区之间只留一条很小的安全距离。
         final contentChoiceGap = shortViewport ? 4.0 : (compact ? 5.0 : 6.0);
