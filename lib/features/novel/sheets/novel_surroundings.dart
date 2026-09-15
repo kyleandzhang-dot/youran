@@ -168,9 +168,23 @@ IconData? _surroundRewardFallbackIcon(String itemType) {
     'gift' => Icons.local_florist_rounded,
     'lucky_card' => Icons.eco_rounded,
     'skill_book' => Icons.menu_book_rounded,
+    'cat_eye_stone' => Icons.visibility_rounded,
+    'enhance_stone' => Icons.diamond_outlined,
     'blind_box' => Icons.redeem_rounded,
     _ => null,
   };
+}
+
+bool _isSurroundSystemRewardType(String itemType) {
+  return const <String>{
+    'score',
+    'gift',
+    'lucky_card',
+    'skill_book',
+    'cat_eye_stone',
+    'enhance_stone',
+    'blind_box',
+  }.contains(itemType.trim().toLowerCase());
 }
 
 String _surroundSpecialRewardType(JsonMap reward) => stringValue(
@@ -1409,7 +1423,7 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
       _activeId = id;
       _info = _SurroundInfo(
         title: def.label,
-        text: '正在放入背包…',
+        text: '正在拾取…',
       );
     });
     if (widget.developerPreview) {
@@ -1422,8 +1436,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
         _customPositions.remove(id);
         _activeId = _preset.rootId;
         _info = _SurroundInfo(
-          title: '已放入背包',
-          text: '「${def.label}」已放入背包。（开发者预览，不写入存档）',
+          title: '拾取完成',
+          text: '已拾取「${def.label}」。（开发者预览，不写入存档）',
           gain: <String>[id],
         );
       });
@@ -1439,8 +1453,8 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
         reward['type'] ?? reward['item_type'],
       ).trim().toLowerCase();
       final isScore = rewardType == 'score';
-      final isRareShopItem =
-          rewardType == 'gift' || rewardType == 'lucky_card';
+      final isBlindBox = rewardType == 'blind_box';
+      final isSystemReward = _isSurroundSystemRewardType(rewardType);
       final rewardAmount = intValue(
         reward['score'] ?? reward['quantity'],
         1,
@@ -1449,62 +1463,34 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
         reward['image_asset'],
         _surroundRewardAsset(rewardType),
       ).trim();
-      final bonusRewards = (payload['bonus_rewards'] is List
-              ? payload['bonus_rewards'] as List
-              : const <dynamic>[])
-          .map(asJsonMap)
-          .where((item) => item.isNotEmpty)
-          .toList(growable: false);
-      final blindBoxes = bonusRewards
-          .where((bonus) => _surroundSpecialRewardType(bonus) == 'blind_box')
-          .toList(growable: false);
-      final displayBonuses = bonusRewards
-          .where((bonus) => _surroundSpecialRewardType(bonus) != 'blind_box')
-          .toList(growable: false);
-      final bonusLabels = displayBonuses.map((bonus) {
-        final name = stringValue(bonus['name'], '额外奖励');
-        final amount = intValue(bonus['score'] ?? bonus['quantity'], 1);
-        return '$name ×$amount';
-      }).toList(growable: false);
-      final bonusAssets = displayBonuses
-          .map((bonus) => stringValue(
-                bonus['image_asset'],
-                _surroundRewardAsset(stringValue(
-                  bonus['type'] ?? bonus['item_type'],
-                )),
-              ).trim())
-          .toList(growable: false);
+
       setState(() {
         _collecting.remove(id);
         _info = _SurroundInfo(
-          title: isScore
-              ? '获得星块'
-              : isRareShopItem
-                  ? '稀有发现'
+          title: isBlindBox
+              ? '发现福袋'
+              : isSystemReward
+                  ? '拾取奖励'
                   : '已放入背包',
-          text: (isScore || isRareShopItem
-              ? '探索中发现$rewardName ×$rewardAmount。'
-              : '「$rewardName」已放入背包。') +
-              (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。') +
-              (blindBoxes.isEmpty ? '' : ' 还发现了福袋！'),
+          text: isBlindBox
+              ? '拾取「福袋」，刮开查看奖励。'
+              : isScore
+                  ? '拾取星块 ×$rewardAmount。'
+                  : isSystemReward
+                      ? '拾取$rewardName${rewardAmount > 1 ? ' ×$rewardAmount' : ''}。'
+                      : '「$rewardName」已放入背包。',
           gain: <String>[id],
         );
       });
       _showCollectedToast(
-        bonusLabels.isEmpty
-            ? rewardName
-            : '$rewardName + ${bonusLabels.join('、')}',
+        rewardName,
         assetPath: rewardAsset,
-        assetPaths: bonusAssets,
         rewardType: rewardType,
-        rewardTypes: displayBonuses
-            .map(_surroundSpecialRewardType)
-            .toList(growable: false),
         scoreAmount: isScore ? rewardAmount : 0,
         quantity: rewardAmount,
       );
-      for (final blindBox in blindBoxes) {
-        await _showSurroundBlindBoxScratch(context, widget.controller, blindBox);
+      if (isBlindBox) {
+        await _showSurroundBlindBoxScratch(context, widget.controller, reward);
         if (!mounted) return;
       }
     } catch (_) {
@@ -2248,6 +2234,11 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   Offset? _walkObjectPointerStart;
   bool _walkObjectPointerMoved = false;
 
+  // 地图背景只在真正识别为拖动后才显示浮动摇杆。
+  // 物品触摸会额外屏蔽当前 pointer sequence，避免拾取点击把摇杆中心搬到物品位置。
+  Offset? _walkJoystickPendingCenter;
+  bool _walkSuppressJoystickForObjectGesture = false;
+
   bool get _remote => !widget.developerPreview;
 
   @override
@@ -2281,6 +2272,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       'assets/images/gift.webp',
       'assets/images/lucky_card.webp',
       'assets/images/skill_book.webp',
+      'assets/images/cat_eye_stone.webp',
+      'assets/images/enhance_stone.webp',
       'assets/images/blind_box.webp',
     ]) {
       unawaited(
@@ -3282,8 +3275,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         reward['type'] ?? reward['item_type'],
       ).trim().toLowerCase();
       final isScore = rewardType == 'score';
-      final isRareShopItem =
-          rewardType == 'gift' || rewardType == 'lucky_card';
+      final isBlindBox = rewardType == 'blind_box';
+      final isSystemReward = _isSurroundSystemRewardType(rewardType);
       final quantity = intValue(
         reward['score'] ?? reward['quantity'],
         1,
@@ -3294,67 +3287,34 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         _surroundRewardAsset(rewardType),
       ).trim();
       final newScore = intValue(reward['new_score'], -1);
-      final bonusRewards = (payload['bonus_rewards'] is List
-              ? payload['bonus_rewards'] as List
-              : const <dynamic>[])
-          .map(asJsonMap)
-          .where((item) => item.isNotEmpty)
-          .toList(growable: false);
-      final blindBoxes = bonusRewards
-          .where((bonus) => _surroundSpecialRewardType(bonus) == 'blind_box')
-          .toList(growable: false);
-      final displayBonuses = bonusRewards
-          .where((bonus) => _surroundSpecialRewardType(bonus) != 'blind_box')
-          .toList(growable: false);
-      final bonusLabels = displayBonuses.map((bonus) {
-        final bonusName = stringValue(bonus['name'], '额外奖励');
-        final bonusAmount = intValue(bonus['score'] ?? bonus['quantity'], 1);
-        return '$bonusName ×$bonusAmount';
-      }).toList(growable: false);
-      final bonusAssets = displayBonuses
-          .map((bonus) => stringValue(
-                bonus['image_asset'],
-                _surroundRewardAsset(stringValue(
-                  bonus['type'] ?? bonus['item_type'],
-                )),
-              ).trim())
-          .toList(growable: false);
-      final bonusScore = displayBonuses
-          .where((bonus) => _surroundSpecialRewardType(bonus) == 'score')
-          .map((bonus) => intValue(bonus['new_score'], -1))
-          .fold<int>(-1, (current, value) => math.max(current, value).toInt());
-      final blindBoxScore = blindBoxes
-          .map((bonus) => asJsonMap(bonus['reveal']))
-          .where((reveal) => _surroundSpecialRewardType(reveal) == 'score')
-          .map((reveal) => intValue(reveal['new_score'], -1))
-          .fold<int>(-1, (current, value) => math.max(current, value).toInt());
+      final reveal = isBlindBox ? asJsonMap(reward['reveal']) : <String, dynamic>{};
+      final revealScore = _surroundSpecialRewardType(reveal) == 'score'
+          ? intValue(reveal['new_score'], -1)
+          : -1;
+
       setState(() {
         if (isScore && newScore >= 0) _scoreOverride = newScore;
-        if (bonusScore >= 0) _scoreOverride = bonusScore;
-        if (blindBoxScore >= 0) _scoreOverride = blindBoxScore;
-        if (!isScore && !isRareShopItem) {
+        if (revealScore >= 0) _scoreOverride = revealScore;
+        if (!isSystemReward) {
           _addItem(name, amount: quantity, quality: quality);
         }
-        _message = (isScore || isRareShopItem
-            ? '探索中发现$name ×$quantity。'
-            : '获得「$name${quantity > 1 ? ' ×$quantity' : ''}」· ${_qualityLabel(quality)}。') +
-            (bonusLabels.isEmpty ? '' : ' 额外发现：${bonusLabels.join('、')}。') +
-            (blindBoxes.isEmpty ? '' : ' 还发现了福袋！');
+        _message = isBlindBox
+            ? '拾取「福袋」，刮开查看奖励。'
+            : isScore
+                ? '拾取星块 ×$quantity。'
+                : isSystemReward
+                    ? '拾取$name${quantity > 1 ? ' ×$quantity' : ''}。'
+                    : '获得「$name${quantity > 1 ? ' ×$quantity' : ''}」· ${_qualityLabel(quality)}。';
       });
       _showRemoteRewardToast(
         text: isScore
             ? '获得星块 ×$quantity'
-            : '获得$name${quantity > 1 ? ' ×$quantity' : ''}' +
-                (bonusLabels.isEmpty ? '' : ' + ${bonusLabels.join('、')}'),
+            : '获得$name${quantity > 1 ? ' ×$quantity' : ''}',
         assetPath: rewardAsset,
-        assetPaths: bonusAssets,
         rewardType: rewardType,
-        rewardTypes: displayBonuses
-            .map(_surroundSpecialRewardType)
-            .toList(growable: false),
       );
-      for (final blindBox in blindBoxes) {
-        await _showSurroundBlindBoxScratch(context, widget.controller, blindBox);
+      if (isBlindBox) {
+        await _showSurroundBlindBoxScratch(context, widget.controller, reward);
         if (!mounted) return;
       }
     } catch (_) {
@@ -3946,12 +3906,23 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
 
   void _beginWalkObjectPointer(int index, PointerDownEvent event) {
     // 触摸从物品上开始时，这一整次 pointer sequence 都优先解释为“点击物品”。
-    // 这样手机上的微小滑动不会被底层浮动摇杆抢走。
+    // Listener 与父级 PanGestureRecognizer 会同时看到同一个 pointer；因此这里不仅
+    // 结束当前摇杆，还持续屏蔽到 PointerUp/Cancel 后的下一帧，覆盖手势竞技场的
+    // 延迟回调窗口，避免拾取时摇杆瞬间跳到物品位置。
+    _walkSuppressJoystickForObjectGesture = true;
+    _walkJoystickPendingCenter = null;
     _endFloatingWalkJoystick();
     _walkObjectPointerId = event.pointer;
     _walkObjectPointerIndex = index;
     _walkObjectPointerStart = event.position;
     _walkObjectPointerMoved = false;
+  }
+
+  void _releaseWalkObjectJoystickBlockAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _walkObjectPointerActive) return;
+      _walkSuppressJoystickForObjectGesture = false;
+    });
   }
 
   void _updateWalkObjectPointer(PointerMoveEvent event) {
@@ -3976,6 +3947,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     _walkObjectPointerIndex = null;
     _walkObjectPointerStart = null;
     _walkObjectPointerMoved = false;
+    _releaseWalkObjectJoystickBlockAfterFrame();
 
     if (shouldTap) _tapTile(index);
   }
@@ -3986,12 +3958,31 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     _walkObjectPointerIndex = null;
     _walkObjectPointerStart = null;
     _walkObjectPointerMoved = false;
+    _releaseWalkObjectJoystickBlockAfterFrame();
   }
 
-  void _beginFloatingWalkJoystick(DragDownDetails details) {
-    if (!widget.movementEnabled || _walkObjectPointerActive) return;
+  void _armFloatingWalkJoystick(DragDownDetails details) {
+    if (!widget.movementEnabled ||
+        _walkObjectPointerActive ||
+        _walkSuppressJoystickForObjectGesture) {
+      _walkJoystickPendingCenter = null;
+      return;
+    }
+    // PointerDown 只记录潜在中心，不显示摇杆。普通点击因此不会让摇杆跳位。
+    _walkJoystickPendingCenter = details.localPosition;
+  }
+
+  void _beginFloatingWalkJoystick(DragStartDetails details) {
+    if (!widget.movementEnabled ||
+        _walkObjectPointerActive ||
+        _walkSuppressJoystickForObjectGesture) {
+      _walkJoystickPendingCenter = null;
+      return;
+    }
+    final center = _walkJoystickPendingCenter ?? details.localPosition;
+    _walkJoystickPendingCenter = null;
     setState(() {
-      _walkJoystickCenter = details.localPosition;
+      _walkJoystickCenter = center;
       _walkJoystickKnobOffset = Offset.zero;
       _walkInput = Offset.zero;
     });
@@ -4000,6 +3991,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   void _updateFloatingWalkJoystick(DragUpdateDetails details) {
     if (!widget.movementEnabled ||
         _walkObjectPointerActive ||
+        _walkSuppressJoystickForObjectGesture ||
         _walkJoystickCenter == null) {
       return;
     }
@@ -4022,6 +4014,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   }
 
   void _endFloatingWalkJoystick() {
+    _walkJoystickPendingCenter = null;
     if (_walkJoystickCenter == null && _walkInput == Offset.zero) return;
     setState(() {
       _walkJoystickCenter = null;
@@ -4541,7 +4534,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         return ClipRect(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onPanDown: _beginFloatingWalkJoystick,
+            onPanDown: _armFloatingWalkJoystick,
+            onPanStart: _beginFloatingWalkJoystick,
             onPanUpdate: _updateFloatingWalkJoystick,
             onPanEnd: (_) => _endFloatingWalkJoystick(),
             onPanCancel: _endFloatingWalkJoystick,

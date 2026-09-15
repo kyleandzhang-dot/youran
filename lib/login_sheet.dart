@@ -366,9 +366,19 @@ AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适�
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
+    final media = MediaQuery.of(context);
+    final size = media.size;
     final compact = size.width < 600;
     final narrow = size.width < 390;
+    final landscape = size.width > size.height;
+    final landscapeCompact = landscape && size.height < 520;
+    final useLandscapeSplit = landscape && size.width >= 540;
+
+    final horizontalPadding = landscape
+        ? (size.width < 700 ? 18.0 : 28.0)
+        : (compact ? 22.0 : 34.0);
+    final topPadding = landscape ? 12.0 : (compact ? 18.0 : 24.0);
+    final bottomPadding = landscape ? 14.0 : (compact ? 24.0 : 30.0);
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -390,50 +400,86 @@ AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适�
           SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
+                final minContentHeight =
+                    (constraints.maxHeight - topPadding - bottomPadding)
+                        .clamp(0.0, double.infinity)
+                        .toDouble();
+
                 return SingleChildScrollView(
                   keyboardDismissBehavior:
-                      ScrollViewKeyboardDismissBehavior
-                          .onDrag,
-                  physics:
-                      const BouncingScrollPhysics(),
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  physics: const BouncingScrollPhysics(),
                   padding: EdgeInsets.fromLTRB(
-                    compact ? 22 : 34,
-                    compact ? 18 : 24,
-                    compact ? 22 : 34,
-                    compact ? 24 : 30,
+                    horizontalPadding,
+                    topPadding,
+                    horizontalPadding,
+                    bottomPadding,
                   ),
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight:
-                          constraints.maxHeight -
-                              (compact ? 56 : 80),
-                    ),
+                    constraints: BoxConstraints(minHeight: minContentHeight),
                     child: Align(
-                      alignment: compact
-                          ? const Alignment(0, -0.34)
-                          : const Alignment(0, -0.28),
-                      child: ConstrainedBox(
-                        // 缩小最大宽度，让输入框不会太长
-                        constraints:
-                            const BoxConstraints(
-                          maxWidth: 320,
-                        ),
-                        child: Column(
-                          mainAxisSize:
-                              MainAxisSize.min,
-                          children: <Widget>[
-                            _buildBrand(
-                              compact: compact,
-                              narrow: narrow,
+                      alignment: landscape
+                          ? Alignment.center
+                          : (compact
+                              ? const Alignment(0, -0.34)
+                              : const Alignment(0, -0.28)),
+                      child: useLandscapeSplit
+                          ? ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 760),
+                              child: LayoutBuilder(
+                                builder: (context, rowConstraints) {
+                                  final formWidth =
+                                      (rowConstraints.maxWidth * .50)
+                                          .clamp(286.0, 320.0)
+                                          .toDouble();
+                                  final gap = rowConstraints.maxWidth < 620
+                                      ? 22.0
+                                      : 42.0;
+
+                                  return Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: Center(
+                                          child: _buildBrand(
+                                            compact:
+                                                compact || landscapeCompact,
+                                            narrow: narrow || size.height < 380,
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox(width: gap),
+                                      SizedBox(
+                                        width: formWidth,
+                                        child: _buildForm(),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            )
+                          : ConstrainedBox(
+                              constraints:
+                                  const BoxConstraints(maxWidth: 320),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  _buildBrand(
+                                    compact: compact || landscapeCompact,
+                                    narrow: narrow ||
+                                        (landscape && size.height < 380),
+                                  ),
+                                  SizedBox(
+                                    height: landscape
+                                        ? 18
+                                        : (compact ? 28 : 34),
+                                  ),
+                                  _buildForm(),
+                                ],
+                              ),
                             ),
-                            SizedBox(
-                              height:
-                                  compact ? 28 : 34,
-                            ),
-                            _buildForm(),
-                          ],
-                        ),
-                      ),
                     ),
                   ),
                 );

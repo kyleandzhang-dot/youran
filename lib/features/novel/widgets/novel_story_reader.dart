@@ -60,7 +60,7 @@ class NovelDialogPanel extends StatefulWidget {
 enum _NovelLineMode { narration, npc, protagonist }
 
 // 混合句不再在同一个舞台里按逐字进度切换“正文 / 对白”。
-// 前置正文、角色对白、后置正文各自成为一个真正的阅读子页。
+// 前置正文、角色对白、后置正文各自成为真正的阅读子页；横屏长正文还能继续细分。
 enum _NovelMixedPageKind { leadingNarration, dialogue, trailingNarration }
 
 class _NovelMixedReaderPage {
@@ -70,7 +70,144 @@ class _NovelMixedReaderPage {
   final String text;
 }
 
-List<_NovelMixedReaderPage> _novelMixedReaderPages(NovelSentence? sentence) {
+/// 手机横屏正文不再依赖一个矮小滚动框硬塞全文，而是把同一个
+/// narration sentence 拆成若干“视觉阅读页”。业务层 sentence 不变，
+/// 因此不会影响存档、选项触发、历史记录或后端返回结构。
+List<String> _novelPaginateNarrationText(String text) {
+  final source = text
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .trim();
+  if (source.isEmpty) return const <String>[];
+
+  // 约等于横屏 600dp 正文宽度下的 3~4 个视觉行。
+  // softLimit 负责自然节奏，hardLimit 只在异常长句时兜底。
+  const softLimit = 112;
+  const hardLimit = 148;
+  const minFill = 72;
+
+  List<String> splitStrongSentences(String paragraph) {
+    final result = <String>[];
+    final buffer = StringBuffer();
+    const strongStops = '。！？!?';
+    for (final rune in paragraph.runes) {
+      final char = String.fromCharCode(rune);
+      buffer.write(char);
+      if (strongStops.contains(char)) {
+        final value = buffer.toString().trim();
+        if (value.isNotEmpty) result.add(value);
+        buffer.clear();
+      }
+    }
+    final tail = buffer.toString().trim();
+    if (tail.isNotEmpty) result.add(tail);
+    return result.isEmpty ? <String>[paragraph.trim()] : result;
+  }
+
+  List<String> splitLongUnit(String value) {
+    final runes = value.runes.toList(growable: false);
+    if (runes.length <= hardLimit) return <String>[value];
+
+    final result = <String>[];
+    var start = 0;
+    const weakStops = '，、；：,;:';
+    while (start < runes.length) {
+      final remaining = runes.length - start;
+      if (remaining <= hardLimit) {
+        result.add(String.fromCharCodes(runes.sublist(start)).trim());
+        break;
+      }
+
+      var cut = start + hardLimit;
+      final earliest = start + (hardLimit * .58).round();
+      for (var i = cut - 1; i >= earliest; i--) {
+        final char = String.fromCharCode(runes[i]);
+        if (weakStops.contains(char)) {
+          cut = i + 1;
+          break;
+        }
+      }
+      result.add(String.fromCharCodes(runes.sublist(start, cut)).trim());
+      start = cut;
+    }
+    return result.where((value) => value.isNotEmpty).toList(growable: false);
+  }
+
+  final paragraphs = source
+      .split(RegExp(r'\n+'))
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toList(growable: false);
+
+  final pages = <String>[];
+  final current = StringBuffer();
+  var currentRunes = 0;
+  var paragraphsOnPage = 0;
+
+  void flushPage() {
+    final value = current.toString().trim();
+    if (value.isNotEmpty) pages.add(value);
+    current.clear();
+    currentRunes = 0;
+    paragraphsOnPage = 0;
+  }
+
+  for (final paragraph in paragraphs) {
+    final units = <String>[];
+    for (final sentence in splitStrongSentences(paragraph)) {
+      units.addAll(splitLongUnit(sentence));
+    }
+
+    var paragraphStartedOnCurrentPage = false;
+    for (final unit in units) {
+      if (unit.isEmpty) continue;
+      final unitRunes = unit.runes.length;
+      final startsNewParagraph = !paragraphStartedOnCurrentPage;
+      final separator = current.isNotEmpty && startsNewParagraph ? '\n\n' : '';
+      final projected = currentRunes + separator.runes.length + unitRunes;
+
+      final paragraphLimitReached = current.isNotEmpty &&
+          startsNewParagraph &&
+          paragraphsOnPage >= 2 &&
+          currentRunes >= minFill;
+      final lengthLimitReached = current.isNotEmpty &&
+          projected > softLimit &&
+          (currentRunes >= minFill || projected > hardLimit);
+
+      if (paragraphLimitReached || lengthLimitReached) {
+        flushPage();
+        paragraphStartedOnCurrentPage = false;
+      }
+
+      if (!paragraphStartedOnCurrentPage) {
+        if (current.isNotEmpty) {
+          current.write('\n\n');
+          currentRunes += 2;
+        }
+        paragraphsOnPage++;
+        paragraphStartedOnCurrentPage = true;
+      }
+      current.write(unit);
+      currentRunes += unitRunes;
+    }
+  }
+
+  flushPage();
+  return pages.isEmpty ? <String>[source] : pages;
+}
+
+bool _novelSentenceLooksLikeStandaloneNarration(NovelSentence sentence) {
+  final type = sentence.type.toLowerCase().trim();
+  return !sentence.hasMixedContent &&
+      !sentence.isProtagonist &&
+      sentence.speakerName.trim().isEmpty &&
+      (sentence.isNarration || type == 'narration' || type == 'action');
+}
+
+List<_NovelMixedReaderPage> _novelMixedReaderPages(
+  NovelSentence? sentence, {
+  bool paginateNarration = false,
+}) {
   if (sentence == null || !sentence.hasMixedContent) {
     return const <_NovelMixedReaderPage>[];
   }
@@ -80,31 +217,46 @@ List<_NovelMixedReaderPage> _novelMixedReaderPages(NovelSentence? sentence) {
   final dialogue = _sanitizeNovelStreamingText(sentence.text);
   final trailing = _sanitizeNovelStreamingText(sentence.trailingNarration);
 
-  if (_novelVisibleNarrationText(leading).trim().isNotEmpty) {
-    pages.add(_NovelMixedReaderPage(
-      kind: _NovelMixedPageKind.leadingNarration,
-      text: leading,
-    ));
+  void addNarrationPages(_NovelMixedPageKind kind, String text) {
+    if (_novelVisibleNarrationText(text).trim().isEmpty) return;
+    final narrationPages = paginateNarration
+        ? _novelPaginateNarrationText(text)
+        : <String>[text];
+    for (final page in narrationPages) {
+      if (page.trim().isEmpty) continue;
+      pages.add(_NovelMixedReaderPage(kind: kind, text: page));
+    }
   }
+
+  addNarrationPages(_NovelMixedPageKind.leadingNarration, leading);
   if (dialogue.trim().isNotEmpty) {
     pages.add(_NovelMixedReaderPage(
       kind: _NovelMixedPageKind.dialogue,
       text: dialogue,
     ));
   }
-  if (_novelVisibleNarrationText(trailing).trim().isNotEmpty) {
-    pages.add(_NovelMixedReaderPage(
-      kind: _NovelMixedPageKind.trailingNarration,
-      text: trailing,
-    ));
-  }
+  addNarrationPages(_NovelMixedPageKind.trailingNarration, trailing);
 
   return pages;
 }
 
-int _novelReaderPageCount(NovelSentence sentence) {
-  final mixedPages = _novelMixedReaderPages(sentence);
-  return mixedPages.isEmpty ? 1 : mixedPages.length;
+int _novelReaderPageCount(
+  NovelSentence sentence, {
+  bool paginateNarration = false,
+}) {
+  final mixedPages = _novelMixedReaderPages(
+    sentence,
+    paginateNarration: paginateNarration,
+  );
+  if (mixedPages.isNotEmpty) return mixedPages.length;
+
+  if (paginateNarration &&
+      _novelSentenceLooksLikeStandaloneNarration(sentence)) {
+    final text = _sanitizeNovelSentenceReaderText(sentence);
+    final pages = _novelPaginateNarrationText(text);
+    if (pages.isNotEmpty) return pages.length;
+  }
+  return 1;
 }
 
 class _NovelDialogPanelState extends State<NovelDialogPanel>
@@ -116,7 +268,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   String _lastRevealMessageKey = '';
   int _lastRevealSentenceIndex = -1;
   int _mixedPageIndex = 0;
-  bool _enterPreviousSentenceAtLastMixedPage = false;
+  int _narrationPageIndex = 0;
+  bool _compactNarrationPaging = false;
+  bool _enterPreviousSentenceAtLastReaderPage = false;
   // 用户主动点“快速显示”后，当前页后续 SSE 继续补长时也保持全文直出 + 静音。
   // 用 identity 而不是全局 bool，进入下一句会自动恢复正常逐字与打字音。
   String _skippedRevealIdentity = '';
@@ -183,10 +337,25 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final next = MediaQuery.of(context).disableAnimations;
-    if (next != _animationsDisabled) {
-      _animationsDisabled = next;
-      _syncReveal(force: true);
+    final media = MediaQuery.of(context);
+    final nextAnimationsDisabled = media.disableAnimations;
+    final nextCompactNarrationPaging = NovelViewportMetrics.fromMediaQuery(
+      media,
+      desktopMode: controller.desktopMode,
+    ).shortWide;
+
+    final animationsChanged =
+        nextAnimationsDisabled != _animationsDisabled;
+    final pagingChanged =
+        nextCompactNarrationPaging != _compactNarrationPaging;
+
+    _animationsDisabled = nextAnimationsDisabled;
+    _compactNarrationPaging = nextCompactNarrationPaging;
+
+    if (animationsChanged || pagingChanged) {
+      // 横竖屏切换只改变“视觉分页”，尽量继承当前已经显示的文字；
+      // 只有系统动画开关变化时才强制重新同步逐字状态。
+      _syncReveal(force: animationsChanged);
     }
   }
 
@@ -326,29 +495,102 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     return 'assistant-message';
   }
 
+  List<_NovelMixedReaderPage> _mixedReaderPagesForCurrentSentence() {
+    return _novelMixedReaderPages(
+      controller.currentSentence,
+      paginateNarration: _compactNarrationPaging,
+    );
+  }
+
   int _safeMixedPageIndex(List<_NovelMixedReaderPage> pages) {
     if (pages.isEmpty) return 0;
     return _mixedPageIndex.clamp(0, pages.length - 1).toInt();
   }
 
+  bool _currentSentenceUsesNarrationPaging(NovelSentence? sentence) {
+    if (!_compactNarrationPaging ||
+        sentence == null ||
+        sentence.hasMixedContent) {
+      return false;
+    }
+
+    final controllerSpeaker = controller.currentSpeakerName.trim();
+    final sentenceSpeaker = sentence.speakerName.trim();
+    final character = controller.currentSpeakerCharacter;
+    final type = sentence.type.toLowerCase().trim();
+    final hasSpeaker =
+        controllerSpeaker.isNotEmpty || sentenceSpeaker.isNotEmpty || character != null;
+
+    return !hasSpeaker &&
+        (sentence.isNarration || type == 'narration' || type == 'action');
+  }
+
+  List<String> _narrationPagesForCurrentSentence() {
+    final sentence = controller.currentSentence;
+    final full = _sanitizeNovelSentenceReaderText(sentence);
+    if (!_currentSentenceUsesNarrationPaging(sentence)) {
+      return <String>[full];
+    }
+    final pages = _novelPaginateNarrationText(full);
+    return pages.isEmpty ? <String>[full] : pages;
+  }
+
+  int _safeNarrationPageIndex(List<String> pages) {
+    if (pages.isEmpty) return 0;
+    return _narrationPageIndex.clamp(0, pages.length - 1).toInt();
+  }
+
+  bool get _hasNextNarrationReaderPage {
+    final sentence = controller.currentSentence;
+    if (!_currentSentenceUsesNarrationPaging(sentence)) return false;
+    final pages = _narrationPagesForCurrentSentence();
+    return pages.length > 1 &&
+        _safeNarrationPageIndex(pages) < pages.length - 1;
+  }
+
+  bool get _hasPreviousNarrationReaderPage {
+    final sentence = controller.currentSentence;
+    if (!_currentSentenceUsesNarrationPaging(sentence)) return false;
+    final pages = _narrationPagesForCurrentSentence();
+    return pages.length > 1 && _safeNarrationPageIndex(pages) > 0;
+  }
+
+  void _setNarrationReaderPage(int nextIndex) {
+    final pages = _narrationPagesForCurrentSentence();
+    if (pages.length <= 1) return;
+    final target = nextIndex.clamp(0, pages.length - 1).toInt();
+    if (target == _safeNarrationPageIndex(pages)) return;
+
+    if (mounted) {
+      setState(() => _narrationPageIndex = target);
+    } else {
+      _narrationPageIndex = target;
+    }
+    _syncReveal(force: true);
+  }
+
   bool get _hasNextMixedReaderPage {
-    final pages = _novelMixedReaderPages(controller.currentSentence);
+    final pages = _mixedReaderPagesForCurrentSentence();
     return pages.isNotEmpty && _safeMixedPageIndex(pages) < pages.length - 1;
   }
 
   bool get _hasPreviousMixedReaderPage {
-    final pages = _novelMixedReaderPages(controller.currentSentence);
+    final pages = _mixedReaderPagesForCurrentSentence();
     return pages.isNotEmpty && _safeMixedPageIndex(pages) > 0;
   }
 
   bool get _canMoveNextReaderPage =>
-      _hasNextMixedReaderPage || controller.hasNext;
+      _hasNextMixedReaderPage ||
+      _hasNextNarrationReaderPage ||
+      controller.hasNext;
 
   bool get _canMovePreviousReaderPage =>
-      _hasPreviousMixedReaderPage || controller.hasPrevious;
+      _hasPreviousMixedReaderPage ||
+      _hasPreviousNarrationReaderPage ||
+      controller.hasPrevious;
 
   void _setMixedReaderPage(int nextIndex) {
-    final pages = _novelMixedReaderPages(controller.currentSentence);
+    final pages = _mixedReaderPagesForCurrentSentence();
     if (pages.isEmpty) return;
     final target = nextIndex.clamp(0, pages.length - 1).toInt();
     if (target == _safeMixedPageIndex(pages)) return;
@@ -405,33 +647,61 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     // 这样正文、对白、后置正文翻页时会各自拥有独立逐字进度和打字音状态。
     final sentenceIdentity =
         '$messageKey|${controller.currentSentenceIndex}|${sentence?.speakerName ?? ''}|${sentence?.type ?? ''}';
-    final mixedPages = _novelMixedReaderPages(sentence);
+    final mixedPages = _novelMixedReaderPages(
+      sentence,
+      paginateNarration: _compactNarrationPaging,
+    );
+    final usesNarrationPaging =
+        mixedPages.isEmpty && _currentSentenceUsesNarrationPaging(sentence);
+    final narrationPages = usesNarrationPaging
+        ? _narrationPagesForCurrentSentence()
+        : <String>[];
 
     if (sentenceIdentity != _lastSentenceIdentity) {
       _lastSentenceIdentity = sentenceIdentity;
-      if (_enterPreviousSentenceAtLastMixedPage && mixedPages.isNotEmpty) {
-        _mixedPageIndex = mixedPages.length - 1;
+      if (_enterPreviousSentenceAtLastReaderPage) {
+        if (mixedPages.isNotEmpty) {
+          _mixedPageIndex = mixedPages.length - 1;
+          _narrationPageIndex = 0;
+        } else if (usesNarrationPaging && narrationPages.isNotEmpty) {
+          _mixedPageIndex = 0;
+          _narrationPageIndex = narrationPages.length - 1;
+        } else {
+          _mixedPageIndex = 0;
+          _narrationPageIndex = 0;
+        }
       } else {
         _mixedPageIndex = 0;
+        _narrationPageIndex = 0;
       }
-      _enterPreviousSentenceAtLastMixedPage = false;
+      _enterPreviousSentenceAtLastReaderPage = false;
     } else if (mixedPages.isNotEmpty) {
       _mixedPageIndex = _safeMixedPageIndex(mixedPages);
+      _narrationPageIndex = 0;
     } else {
       _mixedPageIndex = 0;
+      _narrationPageIndex = usesNarrationPaging
+          ? _safeNarrationPageIndex(narrationPages)
+          : 0;
     }
 
     final activeMixedPage = mixedPages.isEmpty
         ? null
         : mixedPages[_safeMixedPageIndex(mixedPages)];
+    final activeNarrationPage = usesNarrationPaging && narrationPages.isNotEmpty
+        ? narrationPages[_safeNarrationPageIndex(narrationPages)]
+        : null;
 
-    // 混合句只把“当前子页”的文字送进逐字系统；绝不再把三段拼成一个显示流。
+    // 混合句继续使用原有子页；纯旁白在手机横屏额外拥有“视觉子页”。
+    // 后端 sentence 本身完全不变。
     final full = sentence?.hasMixedContent == true
         ? (activeMixedPage?.text ?? '')
-        : _sanitizeNovelSentenceReaderText(sentence);
-    final pageToken = activeMixedPage == null
-        ? (sentence?.hasMixedContent == true ? 'mixed-empty' : 'single')
-        : '${activeMixedPage.kind.name}:$_mixedPageIndex';
+        : (activeNarrationPage ?? _sanitizeNovelSentenceReaderText(sentence));
+    final pageToken = activeMixedPage != null
+        ? '${activeMixedPage.kind.name}:$_mixedPageIndex'
+        : activeNarrationPage != null
+            ? 'narration:$_narrationPageIndex'
+            : (sentence?.hasMixedContent == true ? 'mixed-empty' : 'single');
     final identity = '$sentenceIdentity|$pageToken';
 
     final structuralPreservedLength = !force && identity != _lastIdentity
@@ -642,9 +912,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       return;
     }
 
-    // 当前子页已经读完：只要后面的混合子页已经生成，就先翻子页。
-    // 即使整条 SSE 还没完全结束，也不再让后续阶段自动顶掉当前内容。
-    if (_hasNextMixedReaderPage) {
+    // 当前阅读页已经读完：混合句子页 / 横屏正文视觉子页都优先翻页，
+    // 只有当前 sentence 的最后一页结束后才允许进入真正的下一句。
+    if (_hasNextMixedReaderPage || _hasNextNarrationReaderPage) {
       unawaited(_goNextAfterTypingStops());
       return;
     }
@@ -671,6 +941,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
     if (_hasNextMixedReaderPage) {
       _setMixedReaderPage(_mixedPageIndex + 1);
+      return;
+    }
+    if (_hasNextNarrationReaderPage) {
+      _setNarrationReaderPage(_narrationPageIndex + 1);
       return;
     }
 
@@ -780,9 +1054,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       if (direction < 0) {
         if (_hasNextMixedReaderPage) {
           _mixedPageIndex = _safeMixedPageIndex(
-                _novelMixedReaderPages(controller.currentSentence),
+                _mixedReaderPagesForCurrentSentence(),
               ) +
               1;
+          _syncReveal(force: true);
+        } else if (_hasNextNarrationReaderPage) {
+          final pages = _narrationPagesForCurrentSentence();
+          _narrationPageIndex = _safeNarrationPageIndex(pages) + 1;
           _syncReveal(force: true);
         } else {
           controller.goNext();
@@ -791,13 +1069,18 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       } else {
         if (_hasPreviousMixedReaderPage) {
           _mixedPageIndex = _safeMixedPageIndex(
-                _novelMixedReaderPages(controller.currentSentence),
+                _mixedReaderPagesForCurrentSentence(),
               ) -
               1;
           _syncReveal(force: true);
+        } else if (_hasPreviousNarrationReaderPage) {
+          final pages = _narrationPagesForCurrentSentence();
+          _narrationPageIndex = _safeNarrationPageIndex(pages) - 1;
+          _syncReveal(force: true);
         } else {
-          // 从下一条历史记录右滑回来时，若上一条是混合句，应落在它的最后子页。
-          _enterPreviousSentenceAtLastMixedPage = true;
+          // 从下一条历史记录右滑回来时，上一条无论是混合句还是
+          // 被拆开的横屏旁白，都应落在它的最后一个阅读子页。
+          _enterPreviousSentenceAtLastReaderPage = true;
           controller.goPrevious();
           _syncReveal(force: true);
         }
@@ -938,7 +1221,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             ? _NovelLineMode.protagonist
             : _NovelLineMode.npc;
 
-    final mixedPages = _novelMixedReaderPages(sentence);
+    final mixedPages = _novelMixedReaderPages(
+      sentence,
+      paginateNarration: _compactNarrationPaging,
+    );
     final mixedPageIndex = _safeMixedPageIndex(mixedPages);
     final activeMixedPage =
         mixedPages.isEmpty ? null : mixedPages[mixedPageIndex];
@@ -953,9 +1239,20 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         mixedPages.isNotEmpty && mixedPageIndex < mixedPages.length - 1;
     final hasPreviousMixedReaderPage =
         mixedPages.isNotEmpty && mixedPageIndex > 0;
-    final readerHasNext = hasNextMixedReaderPage || controller.hasNext;
-    final readerHasPrevious =
-        hasPreviousMixedReaderPage || controller.hasPrevious;
+    final narrationPages = _narrationPagesForCurrentSentence();
+    final narrationPageIndex = _safeNarrationPageIndex(narrationPages);
+    final narrationPagingActive =
+        _currentSentenceUsesNarrationPaging(sentence) && narrationPages.length > 1;
+    final hasNextNarrationReaderPage = narrationPagingActive &&
+        narrationPageIndex < narrationPages.length - 1;
+    final hasPreviousNarrationReaderPage =
+        narrationPagingActive && narrationPageIndex > 0;
+    final readerHasNext = hasNextMixedReaderPage ||
+        hasNextNarrationReaderPage ||
+        controller.hasNext;
+    final readerHasPrevious = hasPreviousMixedReaderPage ||
+        hasPreviousNarrationReaderPage ||
+        controller.hasPrevious;
 
     final affection = mode == _NovelLineMode.npc ? character?.affection : null;
     final affectionPulse = mode == _NovelLineMode.npc
@@ -979,6 +1276,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         !controller.isGenerating &&
         !_revealing;
     final inputEnabled = !hasNextMixedReaderPage &&
+        !hasNextNarrationReaderPage &&
         !controller.isGenerating &&
         !_revealing &&
         !controller.isCinematic &&
@@ -1096,11 +1394,17 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                 .clamp(0.0, availableHeight)
                 .toDouble();
 
-        // 进度条也按“真正阅读页”计数：一个混合 sentence 可以占 2~3 页。
-        var readerPageIndex = mixedPages.isEmpty ? 0 : mixedPageIndex;
+        // 进度条按真正的“阅读页”计数：混合 sentence 与手机横屏自动拆开的
+        // 纯旁白都属于阅读子页，但业务层 sentence 数量保持不变。
+        var readerPageIndex = mixedPages.isNotEmpty
+            ? mixedPageIndex
+            : (narrationPagingActive ? narrationPageIndex : 0);
         var readerPageTotal = 0;
         for (var i = 0; i < controller.sentences.length; i++) {
-          final pageCount = _novelReaderPageCount(controller.sentences[i]);
+          final pageCount = _novelReaderPageCount(
+            controller.sentences[i],
+            paginateNarration: _compactNarrationPaging,
+          );
           if (i < controller.currentSentenceIndex) {
             readerPageIndex += pageCount;
           }
@@ -1290,8 +1594,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         alignment: Alignment.bottomCenter,
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
-                            maxWidth: 650,
-                            maxHeight: availableHeight * .52,
+                            // 横屏旁白现在靠视觉分页控制单页信息量，容器可以适度放宽。
+                            maxWidth: shortWide ? 600.0 : 650.0,
+                            maxHeight:
+                                availableHeight * (shortWide ? .46 : .52),
                           ),
                           child: _NovelMixedNarrationSurface(
                             displayTextListenable: _displayTextNotifier,
@@ -1334,7 +1640,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         // 内容增加时只向上扩展，不会跑到屏幕中间悬空。
                         alignment: Alignment.bottomCenter,
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 650),
+                          constraints: BoxConstraints(
+                            // 有选项时沿用同一套横屏正文宽度。
+                            maxWidth: shortWide ? 600.0 : 650.0,
+                          ),
                           child: _NovelNarrationSurface(
                             key: ValueKey<String>('narration-${controller.currentSentenceIndex}'),
                             displayTextListenable: _displayTextNotifier,
@@ -1385,8 +1694,11 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         ),
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
-                            maxWidth: 650,
-                            maxHeight: availableHeight * .60,
+                            // 普通正文的横屏信息量由自动视觉分页控制；
+                            // 容器保持足够呼吸感，不再靠极窄窗口制造“少字”。
+                            maxWidth: shortWide ? 600.0 : 650.0,
+                            maxHeight:
+                                availableHeight * (shortWide ? .50 : .60),
                           ),
                           child: _NovelNarrationSurface(
                             key: ValueKey<String>('narration-${controller.currentSentenceIndex}'),
