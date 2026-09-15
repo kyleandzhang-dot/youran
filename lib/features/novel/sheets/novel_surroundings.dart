@@ -143,6 +143,8 @@ String _surroundRewardAsset(String itemType) {
     'gift' => 'assets/images/gift.webp',
     'lucky_card' => 'assets/images/lucky_card.webp',
     'skill_book' => 'assets/images/skill_book.webp',
+    'cat_eye_stone' => 'assets/images/cat_eye_stone.webp',
+    'enhance_stone' => 'assets/images/enhance_stone.webp',
     'blind_box' => 'assets/images/blind_box.webp',
     _ => '',
   };
@@ -2333,7 +2335,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
               ? payload['grid_revealed'] as List
               : const <dynamic>[20])
           .map(intValue));
-    // 走路探索版不再读取 grid_energy：客户端探索没有体力限制。
+    // 自由走路不在本地预扣体力；真正的格子 reveal 仍由后端 grid_energy 权威校验。
     _completed = stringValue(payload['status']) == 'exhausted';
     if (sceneChanged) {
       _bag.clear();
@@ -3142,35 +3144,103 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     }
   }
 
+  bool _remoteNodeIsVisible(String nodeId) {
+    final cleanNodeId = nodeId.trim();
+    if (cleanNodeId.isEmpty) return false;
+    final rawVisible = widget.controller.surroundingsData['visible'];
+    if (rawVisible is! List) return false;
+    return rawVisible.any(
+      (value) => stringValue(value).trim() == cleanNodeId,
+    );
+  }
+
+  Future<void> _revealRemotePathTo(int targetIndex) async {
+    if (_revealed.contains(targetIndex)) return;
+
+    final revealed = Set<int>.of(_revealed);
+    if (revealed.isEmpty) revealed.add(_startIndex);
+
+    var current = revealed.reduce((best, candidate) {
+      final bestDistance = _gridDistance(best, targetIndex);
+      final candidateDistance = _gridDistance(candidate, targetIndex);
+      return candidateDistance < bestDistance ? candidate : best;
+    });
+
+    final newlyRevealed = <int>[];
+    while (current != targetIndex) {
+      final currentRow = _rowOf(current);
+      final currentColumn = _columnOf(current);
+      final targetRow = _rowOf(targetIndex);
+      final targetColumn = _columnOf(targetIndex);
+      final rowStep = targetRow == currentRow
+          ? 0
+          : targetRow > currentRow
+              ? 1
+              : -1;
+      final columnStep = targetColumn == currentColumn
+          ? 0
+          : targetColumn > currentColumn
+              ? 1
+              : -1;
+      final nextIndex =
+          (currentRow + rowStep) * _columns + currentColumn + columnStep;
+
+      if (!revealed.contains(nextIndex)) {
+        await widget.controller.investigateSurroundNode('grid_$nextIndex');
+        if (!mounted) return;
+        revealed.add(nextIndex);
+        newlyRevealed.add(nextIndex);
+      }
+      current = nextIndex;
+    }
+
+    if (newlyRevealed.isNotEmpty && mounted) {
+      setState(() {
+        _revealed.addAll(newlyRevealed);
+        _walkSensed.addAll(newlyRevealed);
+      });
+    }
+  }
+
   Future<void> _tapRemoteTile(int index) async {
     if (widget.controller.isSurroundingsActionRunning) return;
-
-    // 前台没有“调查”步骤。第一次点真实对象时，后台静默完成 investigate，
-    // 同一次点击继续执行拾取 / 搜刮 / 交战，不让玩家多点一次。
-    if (!_revealed.contains(index)) {
-      try {
-        await widget.controller.investigateSurroundNode('grid_$index');
-        if (!mounted) return;
-        setState(() {
-          _revealed.add(index);
-          _walkSensed.add(index);
-        });
-      } catch (_) {
-        if (!mounted) return;
-        setState(() {
-          _message = widget.controller.surroundingsError.trim().isEmpty
-              ? '这里暂时无法处理，请重试。'
-              : widget.controller.surroundingsError.trim();
-        });
-        return;
-      }
-    }
 
     if (index == _startIndex) {
       setState(() => _message = '这里是探索起点。继续向场景深处走动。');
       return;
     }
-    final tile = _tileAt(index);
+
+    var tile = _tileAt(index);
+
+    // `visible` 是后端对节点“当前可交互”的权威状态；`grid_revealed` 只是
+    // 格子揭露进度。已经 visible 的奖励/遭遇直接进入对应动作，避免在真正
+    // claim / encounter 前重复 investigate。尚未 visible 的目标则把玩家实际
+    // 已走过的探索进度按连续格子路径同步给后端，满足其 frontier 校验。
+    final nodeAlreadyVisible = _remoteNodeIsVisible(tile.nodeId);
+    if (!_revealed.contains(index)) {
+      if (nodeAlreadyVisible) {
+        setState(() {
+          _revealed.add(index);
+          _walkSensed.add(index);
+        });
+      } else {
+        try {
+          await _revealRemotePathTo(index);
+          if (!mounted) return;
+          // reveal 会刷新 surroundingsData；重新读取，避免继续使用旧 tile。
+          tile = _tileAt(index);
+        } catch (_) {
+          if (!mounted) return;
+          setState(() {
+            _message = widget.controller.surroundingsError.trim().isEmpty
+                ? '这里暂时无法处理，请重试。'
+                : widget.controller.surroundingsError.trim();
+          });
+          return;
+        }
+      }
+    }
+
     if (tile.nodeId.isEmpty) {
       setState(() => _message = '这里暂时没有发现可以带走的东西。');
       return;

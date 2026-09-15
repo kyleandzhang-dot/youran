@@ -472,93 +472,87 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
                 SizedBox(
                   width: cardWidth,
                   height: cardHeight,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.zero,
-                    child: _AdaptiveBackdropBlur(
-                      sigma: 12,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () => widget.onSelected(entry.value),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => widget.onSelected(entry.value),
+                      borderRadius: BorderRadius.zero,
+                      splashColor: Colors.white.withOpacity(.07),
+                      highlightColor: Colors.white.withOpacity(.03),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compact ? 9 : 11,
+                        ),
+                        decoration: BoxDecoration(
+                          // primary 只负责排序/语义，不改变按钮颜色。
+                          // 所有剧情选项保持统一视觉，类型差异只由图标表达。
+                          color: _ChoiceColors.card,
                           borderRadius: BorderRadius.zero,
-                          splashColor: Colors.white.withOpacity(.07),
-                          highlightColor: Colors.white.withOpacity(.03),
-                          child: Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: compact ? 9 : 11,
-                            ),
-                            decoration: BoxDecoration(
-                              // primary 只负责排序/语义，不改变按钮颜色。
-                              // 所有剧情选项保持统一视觉，类型差异只由图标表达。
-                              color: _ChoiceColors.card,
-                              borderRadius: BorderRadius.zero,
-                              border: Border.all(
-                                color: shortWide
-                                    ? Colors.white.withOpacity(.24)
-                                    : _ChoiceColors.border,
-                                width: shortWide ? .85 : .65,
+                          border: Border.all(
+                            color: shortWide
+                                ? Colors.white.withOpacity(.24)
+                                : _ChoiceColors.border,
+                            width: shortWide ? .85 : .65,
+                          ),
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            Container(
+                              width: compact ? 20 : 21,
+                              height: compact ? 20 : 21,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: _ChoiceColors.numberBg,
+                                borderRadius: BorderRadius.circular(2),
+                                border: Border.all(
+                                  color: shortWide
+                                      ? Colors.white.withOpacity(.34)
+                                      : _ChoiceColors.numberBorder,
+                                  width: shortWide ? .8 : .65,
+                                ),
+                              ),
+                              child: Text(
+                                '${entry.key + 1}',
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(.72),
+                                  fontSize: compact ? 10.5 : 11,
+                                  height: 1,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
-                            child: Row(
-                              children: <Widget>[
-                                Container(
-                                  width: compact ? 20 : 21,
-                                  height: compact ? 20 : 21,
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: _ChoiceColors.numberBg,
-                                    borderRadius: BorderRadius.circular(2),
-                                    border: Border.all(
-                                      color: shortWide
-                                          ? Colors.white.withOpacity(.34)
-                                          : _ChoiceColors.numberBorder,
-                                      width: shortWide ? .8 : .65,
-                                    ),
-                                  ),
-                                  child: Text(
-                                    '${entry.key + 1}',
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.72),
-                                      fontSize: compact ? 10.5 : 11,
-                                      height: 1,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: compact ? 6 : 7),
-                                Opacity(
-                                  opacity: .82,
-                                  child: _buildChoiceIcon(
-                                    entry.value,
-                                    compact: compact,
-                                  ),
-                                ),
-                                SizedBox(width: compact ? 6 : 7),
-                                Expanded(
-                                  child: Text(
-                                    entry.value.text,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.left,
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.80),
-                                      fontSize: compact ? 12.2 : 12.8,
-                                      height: 1.15,
-                                      fontWeight: FontWeight.w500,
-                                      letterSpacing: .02,
-                                      shadows: const <Shadow>[
-                                        Shadow(
-                                          color: Color(0x88000000),
-                                          blurRadius: 3,
-                                          offset: Offset(0, 1),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
+                            SizedBox(width: compact ? 6 : 7),
+                            Opacity(
+                              opacity: .82,
+                              child: _buildChoiceIcon(
+                                entry.value,
+                                compact: compact,
+                              ),
                             ),
-                          ),
+                            SizedBox(width: compact ? 6 : 7),
+                            Expanded(
+                              child: Text(
+                                entry.value.text,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.left,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(.80),
+                                  fontSize: compact ? 12.2 : 12.8,
+                                  height: 1.15,
+                                  fontWeight: FontWeight.w500,
+                                  letterSpacing: .02,
+                                  shadows: const <Shadow>[
+                                    Shadow(
+                                      color: Color(0x88000000),
+                                      blurRadius: 3,
+                                      offset: Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

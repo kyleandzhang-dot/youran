@@ -17,6 +17,7 @@ class NovelInputBar extends StatefulWidget {
     required this.onSend,
     this.targetActorName = '',
     this.targetActorAvatarUrl = '',
+    this.targetActorPortraitUrl = '',
     this.targetActorPlaceholder = '',
     this.onClearTargetActor,
     this.onLayoutHeightChanged,
@@ -33,6 +34,7 @@ class NovelInputBar extends StatefulWidget {
   final ValueChanged<String> onSend;
   final String targetActorName;
   final String targetActorAvatarUrl;
+  final String targetActorPortraitUrl;
   final String targetActorPlaceholder;
   final VoidCallback? onClearTargetActor;
   /// 可选：输入区总高度发生变化时通知宿主。
@@ -870,6 +872,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
         _TargetActorContextChip(
           name: targetActorName,
           avatarUrl: widget.targetActorAvatarUrl.trim(),
+          portraitUrl: widget.targetActorPortraitUrl.trim(),
           onClear: widget.onClearTargetActor,
         ),
       for (final item in referencedItems) _buildReferencedItemChip(item),
@@ -962,7 +965,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                   ClipRRect(
                     borderRadius: BorderRadius.zero,
                     child: _AdaptiveBackdropBlur(
-                      sigma: glassActive ? 10 : 16,
+                      sigma: glassActive ? 3 : 0,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 170),
                         constraints: BoxConstraints(
@@ -978,9 +981,9 @@ class _NovelInputBarState extends State<NovelInputBar> {
                         decoration: BoxDecoration(
                           color: glassActive
                               ? Colors.black.withOpacity(
-                                  lowPowerEffects ? .22 : (focused ? .16 : .12),
+                                  lowPowerEffects ? .20 : (focused ? .18 : .14),
                                 )
-                              : Colors.white.withOpacity(speechBusy ? .075 : .04),
+                              : Colors.black.withOpacity(speechBusy ? .10 : .08),
                           borderRadius: BorderRadius.zero,
                           border: Border.all(
                             // 竖屏、横屏、电脑统一使用同一套高可见度边线，
@@ -989,8 +992,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                 ? NovelPalette.accent.withOpacity(.72)
                                 : Colors.white.withOpacity(
                                     focused
-                                        ? .36
-                                        : (glassActive ? .28 : .20),
+                                        ? .22
+                                        : (glassActive ? .16 : .12),
                                   ),
                             width: speechBusy ? .9 : .85,
                           ),
@@ -1464,11 +1467,13 @@ class _TargetActorContextChip extends StatelessWidget {
   const _TargetActorContextChip({
     required this.name,
     this.avatarUrl = '',
+    this.portraitUrl = '',
     this.onClear,
   });
 
   final String name;
   final String avatarUrl;
+  final String portraitUrl;
   final VoidCallback? onClear;
 
   @override
@@ -1513,6 +1518,7 @@ class _TargetActorContextChip extends StatelessWidget {
             _TargetActorMiniAvatar(
               name: name,
               avatarUrl: avatarUrl,
+              portraitUrl: portraitUrl,
               size: avatarSize,
             ),
             const SizedBox(width: 5),
@@ -1574,40 +1580,139 @@ class _TargetActorMiniAvatar extends StatelessWidget {
   const _TargetActorMiniAvatar({
     required this.name,
     required this.avatarUrl,
+    required this.portraitUrl,
     required this.size,
   });
 
   final String name;
   final String avatarUrl;
+  final String portraitUrl;
   final double size;
 
-  @override
-  Widget build(BuildContext context) {
-    final cleanAvatar = avatarUrl.trim();
-    final initial = name.trim().isEmpty ? '' : name.trim().substring(0, 1);
-    final radius = BorderRadius.circular(5);
-
-    if (cleanAvatar.isNotEmpty) {
-      return ClipRRect(
-        borderRadius: radius,
-        child: Image.network(
-          cleanAvatar,
-          width: size,
-          height: size,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _AvatarFallback(
-            initial: initial,
-            size: size,
-            radius: radius,
-          ),
-        ),
-      );
-    }
-
+  Widget _initialFallback() {
+    final cleanName = name.trim();
+    final initial = cleanName.isEmpty
+        ? '？'
+        : String.fromCharCodes(cleanName.runes.take(1));
     return _AvatarFallback(
       initial: initial,
       size: size,
-      radius: radius,
+      radius: BorderRadius.circular(size / 2),
+    );
+  }
+
+  Widget _portraitFallback(String cleanPortrait) {
+    Widget image;
+    if (cleanPortrait.startsWith('http://') ||
+        cleanPortrait.startsWith('https://')) {
+      image = Image.network(
+        cleanPortrait,
+        key: ValueKey<String>('target-portrait-$cleanPortrait'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => _initialFallback(),
+      );
+    } else if (cleanPortrait.startsWith('assets/')) {
+      image = Image.asset(
+        cleanPortrait,
+        key: ValueKey<String>('target-portrait-$cleanPortrait'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => _initialFallback(),
+      );
+    } else {
+      return _initialFallback();
+    }
+
+    // 和右侧“附近角色”保持同一套立绘回退：放大并从顶部居中裁切，
+    // 小圆头像里优先看到脸部 + 上半身，而不是整张立绘缩成一个小人。
+    return Transform.scale(
+      scale: 1.42,
+      alignment: Alignment.topCenter,
+      child: image,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // NovelGamePage 为了不扩散修改 NovelDialogPanel / footer 的接口，
+    // 会把 avatar + portrait 封装进既有 targetActorAvatarUrl 字符串。
+    // 其它旧调用仍可继续直接传普通 URL，完全向后兼容。
+    var cleanAvatar = avatarUrl.trim();
+    var cleanPortrait = portraitUrl.trim();
+    const sourceMarker = 'novel-target\u001F';
+    if (avatarUrl.startsWith(sourceMarker)) {
+      final parts = avatarUrl.split('\u001F');
+      cleanAvatar = parts.length > 1 ? parts[1].trim() : '';
+      if (cleanPortrait.isEmpty && parts.length > 2) {
+        cleanPortrait = parts[2].trim();
+      }
+    }
+
+    final hasIndependentAvatar = cleanAvatar.isNotEmpty &&
+        (cleanPortrait.isEmpty || cleanAvatar != cleanPortrait);
+
+    Widget portraitFallback() => _portraitFallback(cleanPortrait);
+
+    Widget image;
+    if (!hasIndependentAvatar) {
+      image = portraitFallback();
+    } else if (cleanAvatar.startsWith('http://') ||
+        cleanAvatar.startsWith('https://')) {
+      image = Image.network(
+        cleanAvatar,
+        key: ValueKey<String>('target-avatar-$cleanAvatar'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => portraitFallback(),
+      );
+    } else if (cleanAvatar.startsWith('assets/')) {
+      image = Image.asset(
+        cleanAvatar,
+        key: ValueKey<String>('target-avatar-$cleanAvatar'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (_, __, ___) => portraitFallback(),
+      );
+    } else {
+      image = portraitFallback();
+    }
+
+    return Container(
+      width: size,
+      height: size,
+      foregroundDecoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white.withOpacity(.40),
+          width: .8,
+        ),
+      ),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withOpacity(.16),
+            blurRadius: 6,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: ClipOval(child: image),
     );
   }
 }

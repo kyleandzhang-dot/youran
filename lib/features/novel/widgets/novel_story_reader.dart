@@ -1878,6 +1878,15 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
         ? 26.0
         : (compact ? 9.0 : (wideDialogueLayout ? 120.0 : 20.0));
 
+    // 这里按真实屏幕方向判断横屏，不再依赖 useDesktopDialogue。
+    // 当前横屏普通剧情分支仍然是 NPC 对白靠右、主角对白靠左；
+    // 因此只把 NPC 的右侧对白往左收，主角原本的左侧构图保持不动。
+    // 真正 PC 的 wideDialogueLayout 仍沿用既有镜头，避免对白侵入左侧大立绘。
+    final isLandscape = screen.width > screen.height;
+    final landscapeNpcLeftShift = isLandscape && !wideDialogueLayout && !isHost
+        ? (screen.width * .08).clamp(72.0, 156.0).toDouble()
+        : 0.0;
+
     final portraitFacingGap = shortWide
         ? 10.0
         : (compact ? 7.0 : (wideDialogueLayout ? 16.0 : 12.0));
@@ -2107,7 +2116,10 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
               SizedBox(height: shortWide ? 3 : (compact ? 5 : 7)),
             ],
             Padding(
-              padding: EdgeInsets.symmetric(horizontal: outerHorizontal),
+              padding: EdgeInsets.only(
+                left: outerHorizontal,
+                right: outerHorizontal + landscapeNpcLeftShift,
+              ),
               child: Align(
                 alignment: horizontalReadingAlignment,
                 child: Padding(

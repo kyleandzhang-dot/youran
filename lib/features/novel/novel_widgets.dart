@@ -32,7 +32,6 @@ part 'widgets/novel_story_controls.dart';
 part 'widgets/novel_scene_barks.dart';
 part 'widgets/novel_input.dart';
 part 'widgets/novel_feedback_overlays.dart';
-part 'widgets/novel_choice_panel.dart';
 part 'widgets/novel_widget_previews.dart';
 
 

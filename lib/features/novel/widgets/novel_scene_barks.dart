@@ -457,11 +457,12 @@ class NovelRightSceneDock extends StatelessWidget {
 
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.compactChrome;
-    // 附近角色头像放大后，同步加宽人物列，避免姓名/头像被挤压。
-    final targetWidth = compact ? 104.0 : 124.0;
+    final shortWide = viewport.shortWide;
+    // 横屏单独压缩附近角色列：竖屏继续保持原尺寸，横屏减少占用并提高同屏人数。
+    final targetWidth = shortWide ? 94.0 : (compact ? 104.0 : 124.0);
     final exploreWidth = compact ? 38.0 : 42.0;
     final horizontalGap = exploreVisible && targets.isNotEmpty
-        ? (compact ? 8.0 : 10.0)
+        ? (shortWide ? 6.0 : (compact ? 8.0 : 10.0))
         : 0.0;
     final totalWidth = targetWidth +
         (exploreVisible ? exploreWidth + horizontalGap : 0.0);
@@ -741,8 +742,9 @@ class NovelTalkTargetBar extends StatelessWidget {
 
     final viewport = NovelViewportMetrics.of(context);
     final compact = viewport.compactChrome;
-    final width = compact ? 104.0 : 124.0;
-    final fallbackHeight = viewport.shortWide
+    final shortWide = viewport.shortWide;
+    final width = shortWide ? 94.0 : (compact ? 104.0 : 124.0);
+    final fallbackHeight = shortWide
         ? 142.0
         : (viewport.phoneWidth ? 220.0 : 300.0);
 
@@ -751,9 +753,10 @@ class NovelTalkTargetBar extends StatelessWidget {
         final maxHeight = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : fallbackHeight;
-        // 头像由 27/31 放大到 34/40；行高同步增加，点击区域也更容易点。
-        final itemHeight = compact ? 38.0 : 44.0;
-        final itemGap = compact ? 7.0 : 8.0;
+        // 横屏使用独立紧凑规格：32dp 行高 + 4dp 间距，142dp 高度可完整容纳 4 人。
+        // 竖屏继续沿用原来的大头像/大行高，不改变既有观感。
+        final itemHeight = shortWide ? 32.0 : (compact ? 38.0 : 44.0);
+        final itemGap = shortWide ? 4.0 : (compact ? 7.0 : 8.0);
         final naturalListHeight = targets.length * itemHeight +
             math.max(0, targets.length - 1) * itemGap;
         final listHeight = math.min(naturalListHeight, maxHeight);
@@ -785,7 +788,16 @@ class NovelTalkTargetBar extends StatelessWidget {
                         selected: selectedActorId.trim().isNotEmpty &&
                             selectedActorId.trim() == targets[i].id.trim(),
                         compact: compact,
-                        onTap: () => onSelected(targets[i]),
+                        shortWide: shortWide,
+                        onTap: () {
+                          final isSelected = selectedActorId.trim().isNotEmpty &&
+                              selectedActorId.trim() == targets[i].id.trim();
+                          if (isSelected && onClear != null) {
+                            onClear!();
+                            return;
+                          }
+                          onSelected(targets[i]);
+                        },
                       ),
                       if (i != targets.length - 1)
                         SizedBox(height: itemGap),
@@ -806,12 +818,14 @@ class _TalkTargetChip extends StatelessWidget {
     required this.actor,
     required this.selected,
     required this.compact,
+    required this.shortWide,
     required this.onTap,
   });
 
   final NovelSceneBarkActor actor;
   final bool selected;
   final bool compact;
+  final bool shortWide;
   final VoidCallback onTap;
 
   Widget _avatar() {
@@ -822,7 +836,7 @@ class _TalkTargetChip extends StatelessWidget {
     //
     // 注意：不能只用 avatarUrl.isNotEmpty 判断“有头像”。历史数据里可能
     // 把立绘 URL 原样写进 avatarUrl，也可能残留已经失效的头像 URL。
-    final size = compact ? 34.0 : 40.0;
+    final size = shortWide ? 29.0 : (compact ? 34.0 : 40.0);
     final avatarUrl = actor.avatarUrl.trim();
     final portraitUrl = actor.portraitUrl.trim();
     final hasIndependentAvatar = avatarUrl.isNotEmpty &&
@@ -945,7 +959,7 @@ class _TalkTargetChip extends StatelessWidget {
           initial,
           style: TextStyle(
             color: Colors.white.withOpacity(selected ? .98 : .92),
-            fontSize: compact ? 13.0 : 14.0,
+            fontSize: shortWide ? 11.5 : (compact ? 13.0 : 14.0),
             height: 1,
             fontWeight: FontWeight.w700,
             shadows: const <Shadow>[
@@ -959,73 +973,54 @@ class _TalkTargetChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rowWidth = compact ? 104.0 : 124.0;
+    final rowWidth = shortWide ? 94.0 : (compact ? 104.0 : 124.0);
     return Semantics(
       button: true,
       selected: selected,
-      label: '和${actor.cleanName}说话',
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(7),
-          splashColor: Colors.white.withOpacity(.035),
-          highlightColor: Colors.white.withOpacity(.018),
-          child: Container(
-            width: rowWidth,
-            height: compact ? 38.0 : 44.0,
-            // 只铺一层非常浅的暗色遮罩，托住姓名和头像；
-            // 不做厚重卡片，仍让场景背景透出来。
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(9),
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: <Color>[
-                  Colors.black.withOpacity(selected ? .045 : .025),
-                  Colors.black.withOpacity(selected ? .16 : .105),
-                ],
-              ),
-              border: Border.all(
-                color: Colors.white.withOpacity(selected ? .13 : .055),
-                width: .6,
-              ),
+      label: selected ? '取消和${actor.cleanName}说话' : '和${actor.cleanName}说话',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: SizedBox(
+          width: rowWidth,
+          height: shortWide ? 32.0 : (compact ? 38.0 : 44.0),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: shortWide ? 2 : 3,
+              vertical: 1,
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-              child: Row(
-                mainAxisSize: MainAxisSize.max,
-                mainAxisAlignment: MainAxisAlignment.end,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: <Widget>[
-                  Expanded(
-                    // 名字占用剩余空间；窄屏时自动省略，绝不挤压右侧大头像。
-                    child: Text(
-                      actor.cleanName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: compact ? 9.8 : 10.6,
-                        height: 1.05,
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w600,
-                        letterSpacing: .02,
-                        shadows: const <Shadow>[
-                          Shadow(
-                            color: Color(0x99000000),
-                            blurRadius: 5,
-                            offset: Offset(0, 1),
-                          ),
-                        ],
-                      ),
+            child: Row(
+              mainAxisSize: MainAxisSize.max,
+              mainAxisAlignment: MainAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: <Widget>[
+                Expanded(
+                  // 名字占用剩余空间；窄屏时自动省略，绝不挤压右侧大头像。
+                  child: Text(
+                    actor.cleanName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: shortWide ? 9.2 : (compact ? 9.8 : 10.6),
+                      height: 1.05,
+                      fontWeight:
+                          selected ? FontWeight.w700 : FontWeight.w600,
+                      letterSpacing: .02,
+                      shadows: const <Shadow>[
+                        Shadow(
+                          color: Color(0x99000000),
+                          blurRadius: 5,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
                     ),
                   ),
-                  SizedBox(width: compact ? 6 : 7),
-                  _avatar(),
-                ],
-              ),
+                ),
+                SizedBox(width: shortWide ? 5 : (compact ? 6 : 7)),
+                _avatar(),
+              ],
             ),
           ),
         ),

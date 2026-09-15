@@ -42,6 +42,33 @@ class NovelTopHud extends StatelessWidget {
     final avatarSize = shortWide ? 32.0 : (compact ? 35.0 : 38.0);
     final buttonDimension = shortWide ? 34.0 : (compact ? 36.0 : 38.0);
 
+    // 横屏的故事时间收进右上角工具区，紧挨积分左侧。
+    // 直接读取 Controller 现有 storyClock，不新增 NovelTopHud 构造参数。
+    final storyClock = controller.storyClock;
+    final showStoryTime = controller.desktopMode &&
+        controller.storyStarted &&
+        !controller.isCinematic &&
+        MediaQuery.viewInsetsOf(context).bottom <= 0 &&
+        storyClock.enabled;
+    final storyDayLabel = showStoryTime
+        ? (storyClock.dayLabel.trim().isNotEmpty
+            ? storyClock.dayLabel.trim()
+            : '第${storyClock.dayIndex < 1 ? 1 : storyClock.dayIndex}天')
+        : '';
+    final storyPeriodLabel = showStoryTime
+        ? (storyClock.timeDescription.trim().isNotEmpty
+            ? storyClock.timeDescription.trim()
+            : switch (storyClock.periodKey) {
+                'morning' => '早晨',
+                'noon' => '中午',
+                'afternoon' => '下午',
+                'evening' => '傍晚',
+                'night' => '夜晚',
+                'midnight' => '深夜',
+                _ => '',
+              })
+        : '';
+
     return AnimatedOpacity(
       opacity: generating ? .42 : 1,
       duration: const Duration(milliseconds: 420),
@@ -114,6 +141,14 @@ class NovelTopHud extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
+                if (storyDayLabel.isNotEmpty) ...<Widget>[
+                  _NovelTopStoryTimeLabel(
+                    dayLabel: storyDayLabel,
+                    periodLabel: storyPeriodLabel,
+                    shortWide: shortWide,
+                  ),
+                  SizedBox(width: shortWide ? 6 : 8),
+                ],
                 NovelScoreChip(
                   score: controller.score,
                   onTap: onOpenStore,
@@ -131,6 +166,81 @@ class NovelTopHud extends StatelessWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 横屏顶部右侧的轻量故事时间。
+/// 与积分处于同一工具区，只作为弱提示，不使用卡片、边框或独立悬浮层。
+class _NovelTopStoryTimeLabel extends StatelessWidget {
+  const _NovelTopStoryTimeLabel({
+    required this.dayLabel,
+    required this.periodLabel,
+    required this.shortWide,
+  });
+
+  final String dayLabel;
+  final String periodLabel;
+  final bool shortWide;
+
+  @override
+  Widget build(BuildContext context) {
+    final day = dayLabel.trim();
+    final period = periodLabel.trim();
+    if (day.isEmpty) return const SizedBox.shrink();
+
+    return IgnorePointer(
+      child: Semantics(
+        label: period.isEmpty ? '故事时间 $day' : '故事时间 $day $period',
+        child: SizedBox(
+          width: shortWide ? 104 : 122,
+          child: Text.rich(
+            TextSpan(
+              children: <InlineSpan>[
+                TextSpan(
+                  text: day,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.76),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (period.isNotEmpty) ...<InlineSpan>[
+                  TextSpan(
+                    text: '  ·  ',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.28),
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                  TextSpan(
+                    text: period,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.48),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              fontFamily: 'WenJinMinchoP0',
+              fontSize: shortWide ? 9.2 : 9.8,
+              height: 1,
+              letterSpacing: .34,
+              shadows: const <Shadow>[
+                Shadow(
+                  color: Color(0x8A000000),
+                  blurRadius: 5,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -379,6 +489,7 @@ class NovelLocationHud extends StatelessWidget {
     super.key,
     required this.title,
     this.subtitle = '',
+    this.dayLabel = '',
     this.onTap,
     this.loading = false,
     this.showMapGlyph = false,
@@ -386,6 +497,11 @@ class NovelLocationHud extends StatelessWidget {
 
   final String title;
   final String subtitle;
+
+  /// 兼容上一版热重载结构保留；当前不参与地点 HUD 绘制。
+  /// 竖屏已恢复旧版布局，故事时间由剧情页面右侧时间戳展示。
+  final String dayLabel;
+
   final VoidCallback? onTap;
   final bool loading;
   final bool showMapGlyph;

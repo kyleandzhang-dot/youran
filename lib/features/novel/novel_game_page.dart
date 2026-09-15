@@ -604,12 +604,17 @@ class _NovelGamePageState extends State<NovelGamePage>
     return actor == null ? null : _resolveSceneActorVisuals(actor);
   }
 
-  String get _resolvedTargetSceneActorImageUrl {
+  String get _resolvedTargetSceneActorImageSource {
     final actor = _resolvedTargetSceneActor;
     if (actor == null) return '';
+
+    // 继续复用 NovelDialogPanel 已有的 targetActorAvatarUrl 通道，避免为了
+    // 头像/立绘回退新增跨层参数。Unit Separator 不会出现在正常 URL 中，
+    // NovelInputBar 会在最末端解出 avatar + portrait 两个独立来源。
     final avatar = actor.avatarUrl.trim();
-    if (avatar.isNotEmpty) return avatar;
-    return actor.portraitUrl.trim();
+    final portrait = actor.portraitUrl.trim();
+    if (avatar.isEmpty && portrait.isEmpty) return '';
+    return 'novel-target\u001F$avatar\u001F$portrait';
   }
 
   void _scheduleSceneBarkRefresh({bool force = false}) {
@@ -2456,9 +2461,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                               ),
                             ),
 
-                            // 故事时间属于“场景信息”，不再挤在顶部系统工具栏。
-                            // 它始终停在右侧场景轴上；最后一页时附近角色会从它下方接入。
+                            // 标准/竖屏模式沿用旧版右侧故事时间戳。
+                            // 沉浸/横屏模式的时间改由 NovelTopHud 放在积分左侧，
+                            // 不再悬浮在画面中央，避免打断场景沉浸感。
                             if (!_immersiveInputMode &&
+                                !desktopMode &&
                                 controller.storyStarted &&
                                 !controller.isCinematic &&
                                 !keyboardActive &&
@@ -2595,7 +2602,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       targetActorName:
                                           _targetSceneActor?.cleanName ?? '',
                                       targetActorAvatarUrl:
-                                          _resolvedTargetSceneActorImageUrl,
+                                          _resolvedTargetSceneActorImageSource,
                                       targetActorPlaceholder:
                                           _targetSceneActor?.inputPlaceholder ?? '',
                                       onClearTargetActor: _clearTargetSceneActor,
