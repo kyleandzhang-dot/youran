@@ -1143,6 +1143,14 @@ class NovelStreamEvent {
   final String errorMessage;
   final int? statusCode;
   final JsonMap raw;
+
+  /// 统一后的后端错误码。前端业务只认这个 code，不匹配厂商拒绝文案。
+  String get code => stringValue(raw['code']).trim().toUpperCase();
+
+  bool get retryable => boolValue(raw['retryable']);
+
+  /// error 事件缺省按“未知”处理；MODEL_REFUSAL/CONTENT_BLOCKED 后端会明确传 false。
+  bool get storyStateChanged => boolValue(raw['story_state_changed'], true);
 }
 
 class NovelSocketEvent {

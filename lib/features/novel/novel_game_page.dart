@@ -279,6 +279,19 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   void _onControllerChanged() {
     if (!mounted) return;
+
+    // 生成拒绝是“非剧情事件”。在任何 scene recovery / bark refresh / overlay
+    // 同步之前先消费，确保这一帧只负责恢复本地快照并给玩家提示。
+    final generationNotice = controller.takeGenerationNotice();
+    if (generationNotice != null) {
+      _lastGeneratingForBarks = controller.isGenerating;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showGenerationNotice(generationNotice);
+      });
+      return;
+    }
+
     _syncSceneArrival();
     _syncSceneRecovery();
     _syncSceneBarksAfterControllerChange();
@@ -287,6 +300,26 @@ class _NovelGamePageState extends State<NovelGamePage>
       _processOverlayRequests();
       unawaited(_syncActiveWeatherAudio());
     });
+  }
+
+  void _showGenerationNotice(JsonMap notice) {
+    if (!mounted) return;
+    final message = stringValue(notice['message']).trim();
+    if (message.isEmpty) return;
+
+    // MODEL_REFUSAL / MODEL_CONTENT_BLOCKED 是非破坏性生成失败：
+    // 只弹一次轻提示，不刷新页面、不 reload history、不触发场景恢复。
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(milliseconds: 3200),
+        ),
+      );
   }
 
   bool get _sceneRecoveryActive => _sceneRecoveryOriginalError.isNotEmpty;

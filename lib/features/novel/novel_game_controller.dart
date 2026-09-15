@@ -475,6 +475,10 @@ class NovelGameController extends ChangeNotifier {
   String lastError = '';
   String infoMessage = '';
   String timeSkipLabel = '';
+
+  // Writer/provider 拒绝是“生成失败态”，不是场景错误。
+  // 单独保存一次性通知，绝不能塞进 lastError，否则 NovelGamePage 会误启动场景恢复。
+  JsonMap? _pendingGenerationNotice;
   int currentTurn = 0;
   int currentSentenceIndex = 0;
   int luckyCardCount = 0;
@@ -513,6 +517,13 @@ class NovelGameController extends ChangeNotifier {
       if (messages[i].role == NovelMessageRole.assistant) return messages[i];
     }
     return null;
+  }
+
+  /// 页面消费后即清空，不进入 lastError，也不会触发任何历史/场景刷新。
+  JsonMap? takeGenerationNotice() {
+    final notice = _pendingGenerationNotice;
+    _pendingGenerationNotice = null;
+    return notice == null ? null : Map<String, dynamic>.from(notice);
   }
 
   NovelPendingBattleStart? consumePendingBattleStart() {
@@ -1968,14 +1979,19 @@ class NovelGameController extends ChangeNotifier {
     final recoveryBaselineAssistantId =
         _latestAssistantIn(preGenerationMessages)?.id ?? '';
 
-    // 对话选项提交前保存一份完整的前端 UI 快照。
-    // 仅在“尚未收到任何后端有效流事件”时使用，避免网络预连接失败后
-    // 丢失原剧情、原选项或误扣幸运卡。
-    final rollbackMessages =
-        restoreUiOnEarlyFailure ? preGenerationMessages : null;
-    final rollbackChoices = restoreUiOnEarlyFailure
-        ? List<NovelChoice>.of(choices)
-        : null;
+    // 所有生成都保留一个纯前端快照。普通网络早失败仍按旧 restoreUiOnEarlyFailure
+    // 规则恢复；MODEL_REFUSAL / MODEL_CONTENT_BLOCKED 则无条件恢复，因为服务端保证
+    // story_state_changed=false，本轮在故事世界里从未发生。
+    final rollbackMessages = List<NovelMessage>.of(preGenerationMessages);
+    if (rollbackMessages.isNotEmpty) {
+      final tail = rollbackMessages.last;
+      if (tail.role == NovelMessageRole.user &&
+          tail.isTemporary &&
+          tail.status.trim().toLowerCase() == 'sending') {
+        rollbackMessages.removeLast();
+      }
+    }
+    final rollbackChoices = List<NovelChoice>.of(choices);
     final rollbackChoicesVisible = choicesVisible;
     final rollbackPlayerHint = playerHint;
     final rollbackSentenceIndex = currentSentenceIndex;
@@ -2042,11 +2058,8 @@ class NovelGameController extends ChangeNotifier {
 
     var receivedServerProgress = false;
 
-    void restoreEarlyChoiceUi() {
-      if (!restoreUiOnEarlyFailure ||
-          receivedServerProgress ||
-          rollbackMessages == null ||
-          rollbackChoices == null) {
+    void restorePreGenerationUi({bool force = false}) {
+      if (!force && (!restoreUiOnEarlyFailure || receivedServerProgress)) {
         return;
       }
 
@@ -2125,7 +2138,7 @@ class NovelGameController extends ChangeNotifier {
             throw NovelBackendException(
               event.errorMessage.isEmpty ? '生成失败' : event.errorMessage,
               statusCode: event.statusCode,
-              code: stringValue(event.raw['code']),
+              code: event.code,
               details: event.raw,
             );
           case NovelStreamEventType.ignored:
@@ -2137,7 +2150,7 @@ class NovelGameController extends ChangeNotifier {
         final rollbackEarlyChoice =
             restoreUiOnEarlyFailure && !receivedServerProgress;
         if (rollbackEarlyChoice) {
-          restoreEarlyChoiceUi();
+          restorePreGenerationUi();
         } else {
           isGenerating = false;
           _rebuildSentences();
@@ -2157,10 +2170,43 @@ class NovelGameController extends ChangeNotifier {
       }
     } on NovelBackendException catch (error) {
       if (generationId != _generationId) return;
+
+      final errorCode = error.code.trim().toUpperCase();
+      final errorDetails = asJsonMap(error.details);
+      final isNonMutatingModelRefusal =
+          const <String>{'MODEL_REFUSAL', 'MODEL_CONTENT_BLOCKED'}
+                  .contains(errorCode) &&
+              !boolValue(errorDetails['story_state_changed']);
+
+      if (isNonMutatingModelRefusal) {
+        // 这是唯一必须“强制回到发起前 UI”的失败类型。拒绝正文没有落库，
+        // 也没有任何权威状态结算，因此绝不调用任何权威恢复或场景刷新接口。
+        restorePreGenerationUi(force: true);
+        // Dice 是 Writer 前的瞬时视觉反馈；拒绝轮不成立时一并撤掉，避免玩家
+        // 误以为这次行动已经被剧情系统正式结算。骰子算法与权威结果本身不改。
+        _diceTimer?.cancel();
+        _diceTimer = null;
+        showDice = false;
+        diceRoll = null;
+        lastError = '';
+        insufficientBalance = false;
+        _pendingGenerationNotice = <String, dynamic>{
+          'code': errorCode,
+          'message': error.message.trim().isEmpty
+              ? '当前模型拒绝生成，可能触发敏感内容；剧情未发生变化。'
+              : error.message.trim(),
+          'retryable': boolValue(errorDetails['retryable'], true),
+          'story_state_changed': false,
+          'model': stringValue(errorDetails['model']),
+        };
+        _notify();
+        return;
+      }
+
       final rollbackEarlyChoice =
           restoreUiOnEarlyFailure && !receivedServerProgress;
       if (rollbackEarlyChoice) {
-        restoreEarlyChoiceUi();
+        restorePreGenerationUi();
       } else {
         _flushStreamText(notify: false);
         isGenerating = false;
@@ -2188,7 +2234,7 @@ class NovelGameController extends ChangeNotifier {
       final rollbackEarlyChoice =
           restoreUiOnEarlyFailure && !receivedServerProgress;
       if (rollbackEarlyChoice) {
-        restoreEarlyChoiceUi();
+        restorePreGenerationUi();
       } else {
         _flushStreamText(notify: false);
         isGenerating = false;
