@@ -215,6 +215,61 @@ class NovelSceneBarkActor {
   }
 }
 
+/// Lightweight bridge between the right-side nearby-character dock and the
+/// visual-novel stage.  This is intentionally UI-only: the authoritative actor
+/// source remains conversation_targets; we merely mirror its portrait-capable
+/// actors so the reading stage can keep them visibly present.
+class _NovelSceneStageSnapshot {
+  _NovelSceneStageSnapshot({
+    required List<NovelSceneBarkActor> targets,
+    required this.selectedActorId,
+  }) : targets = List<NovelSceneBarkActor>.unmodifiable(targets);
+
+  final List<NovelSceneBarkActor> targets;
+  final String selectedActorId;
+
+  String get signature => <String>[
+        selectedActorId.trim(),
+        for (final actor in targets)
+          '${actor.id.trim()}|${actor.cleanName}|${actor.portraitUrl.trim()}|${actor.priority}',
+      ].join('||');
+}
+
+final ValueNotifier<_NovelSceneStageSnapshot> _novelSceneStageSnapshot =
+    ValueNotifier<_NovelSceneStageSnapshot>(
+  _NovelSceneStageSnapshot(
+    targets: const <NovelSceneBarkActor>[],
+    selectedActorId: '',
+  ),
+);
+
+void _publishNovelSceneStageSnapshot(
+  List<NovelSceneBarkActor> targets,
+  String selectedActorId,
+) {
+  // Groups/crowds remain environmental UI.  The main stage is reserved for
+  // named individuals that actually have a portrait, otherwise the screen
+  // quickly becomes a wall of tiny sprites.
+  final portraitTargets = targets
+      .where((actor) => !actor.isGroup && actor.portraitUrl.trim().isNotEmpty)
+      .take(6)
+      .toList(growable: false);
+  final next = _NovelSceneStageSnapshot(
+    targets: portraitTargets,
+    selectedActorId: selectedActorId.trim(),
+  );
+
+  if (_novelSceneStageSnapshot.value.signature == next.signature) return;
+
+  // NovelRightSceneDock is a StatelessWidget.  Publishing after the current
+  // frame avoids mutating a notifier while Flutter is in the middle of build.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_novelSceneStageSnapshot.value.signature != next.signature) {
+      _novelSceneStageSnapshot.value = next;
+    }
+  });
+}
+
 class NovelSceneBark {
   const NovelSceneBark({
     required this.id,
@@ -453,73 +508,82 @@ class NovelRightSceneDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (targets.isEmpty && !exploreVisible) return const SizedBox.shrink();
-
+    _publishNovelSceneStageSnapshot(targets, selectedActorId);
     final viewport = NovelViewportMetrics.of(context);
+
+    final media = MediaQuery.of(context);
+    final keyboardVisible = media.viewInsets.bottom > 0;
+    final phoneFormFactor =
+        math.min(media.size.width, media.size.height) <= 600.0;
+
+    // 只在“手机软键盘已经真实弹出”时让右侧角色栏让位。
+    // 仅仅 focus 输入框但键盘尚未出现时，角色栏保持原样。
+    final hideForMobileKeyboard = phoneFormFactor && keyboardVisible;
+    if (hideForMobileKeyboard || (targets.isEmpty && !exploreVisible)) {
+      return const SizedBox.shrink();
+    }
+
     final compact = viewport.compactChrome;
-    final shortWide = viewport.shortWide;
-    // 横屏单独压缩附近角色列：竖屏继续保持原尺寸，横屏减少占用并提高同屏人数。
-    final targetWidth = shortWide ? 94.0 : (compact ? 104.0 : 124.0);
-    final exploreWidth = compact ? 38.0 : 42.0;
-    final horizontalGap = exploreVisible && targets.isNotEmpty
-        ? (shortWide ? 6.0 : (compact ? 8.0 : 10.0))
-        : 0.0;
-    final totalWidth = targetWidth +
-        (exploreVisible ? exploreWidth + horizontalGap : 0.0);
-    final fallbackHeight = viewport.shortWide
-        ? 150.0
-        : (viewport.phoneWidth ? 236.0 : 314.0);
+        final shortWide = viewport.shortWide;
+        final targetWidth = shortWide ? 94.0 : (compact ? 104.0 : 124.0);
+        final exploreWidth = compact ? 38.0 : 42.0;
+        final horizontalGap = exploreVisible && targets.isNotEmpty
+            ? (shortWide ? 6.0 : (compact ? 8.0 : 10.0))
+            : 0.0;
+        final totalWidth = targetWidth +
+            (exploreVisible ? exploreWidth + horizontalGap : 0.0);
+        final fallbackHeight = viewport.shortWide
+            ? 150.0
+            : (viewport.phoneWidth ? 236.0 : 314.0);
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final maxHeight = constraints.maxHeight.isFinite
-            ? constraints.maxHeight
-            : fallbackHeight;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final maxHeight = constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : fallbackHeight;
 
-        // 探索是“场景动作”，不再接在人物头像列表最下面。
-        // 它独立浮在人物列左侧，避免看起来像又一个角色槽位。
-        return RepaintBoundary(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: totalWidth,
-              maxHeight: maxHeight,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                if (exploreVisible)
-                  Padding(
-                    padding: EdgeInsets.only(top: compact ? 3 : 4),
-                    child: _SceneExploreAction(
-                      label: exploreLabel,
-                      attention: exploreAttention,
-                      loading: exploreLoading,
-                      compact: compact,
-                      onTap: onExplore,
-                    ),
-                  ),
-                if (exploreVisible && targets.isNotEmpty)
-                  SizedBox(width: horizontalGap),
-                if (targets.isNotEmpty)
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: targetWidth,
-                      maxHeight: maxHeight,
-                    ),
-                    child: NovelTalkTargetBar(
-                      targets: targets,
-                      selectedActorId: selectedActorId,
-                      onSelected: onSelected,
-                      onClear: onClear,
-                    ),
-                  ),
-              ],
-            ),
-          ),
+            return RepaintBoundary(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: totalWidth,
+                  maxHeight: maxHeight,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    if (exploreVisible)
+                      Padding(
+                        padding: EdgeInsets.only(top: compact ? 3 : 4),
+                        child: _SceneExploreAction(
+                          label: exploreLabel,
+                          attention: exploreAttention,
+                          loading: exploreLoading,
+                          compact: compact,
+                          onTap: onExplore,
+                        ),
+                      ),
+                    if (exploreVisible && targets.isNotEmpty)
+                      SizedBox(width: horizontalGap),
+                    if (targets.isNotEmpty)
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: targetWidth,
+                          maxHeight: maxHeight,
+                        ),
+                        child: NovelTalkTargetBar(
+                          targets: targets,
+                          selectedActorId: selectedActorId,
+                          onSelected: onSelected,
+                          onClear: onClear,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
-      },
-    );
   }
 }
 

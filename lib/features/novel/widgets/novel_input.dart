@@ -65,7 +65,6 @@ class _NovelInputBarState extends State<NovelInputBar> {
   final LayerLink _inventoryLink = LayerLink();
   OverlayEntry? _inventoryOverlay;
   bool _inventoryRefreshing = false;
-  String _inventoryCategory = '物品';
   final Set<String> _referencedItemNames = <String>{};
   final GlobalKey _layoutMeasureKey = GlobalKey();
   double _lastReportedLayoutHeight = -1;
@@ -129,7 +128,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
       ...data.consumables,
     ]) {
       if (item.quantity <= 0 || item.isEquipped) continue;
-      if (item.itemType.trim().toLowerCase() == 'lucky_card') continue;
+      if (_isReferenceRestrictedItem(item)) continue;
       final key = item.id.trim().isNotEmpty
           ? 'id:${item.id.trim()}'
           : '${item.itemType.trim()}:${item.name.trim()}';
@@ -166,6 +165,52 @@ class _NovelInputBarState extends State<NovelInputBar> {
       'lower',
       'feet',
       'back',
+    }.contains(type);
+  }
+
+  bool _isReferenceStoreItem(NovelInventoryItem item) {
+    final type = item.itemType.trim().toLowerCase();
+
+    // 商城页明确使用的“特殊机会”类型不进入自由行动引用。
+    // gift 也属于商城可兑换类型；这里宁可收紧，避免把商城能力卡当作
+    // 剧情现场可拿出来使用的普通背包物品。
+    if (const <String>{
+      'fate_card',
+      'revert_card',
+      'gift',
+      'skill_book',
+      'image_card',
+      'lucky_card',
+    }.contains(type)) {
+      return true;
+    }
+
+    // 只读取“已经存在”的商城快照做名称排除，绝不为了引用主动请求商城。
+    // 用户之前打开过商城时，可以进一步挡住未来新增但 itemType 普通的商城物品。
+    final gameController = widget.gameController;
+    final name = item.name.trim().toLowerCase();
+    if (gameController == null || name.isEmpty) return false;
+    return gameController.shopItems.any(
+      (shopItem) => shopItem.name.trim().toLowerCase() == name,
+    );
+  }
+
+  bool _isReferenceRestrictedItem(NovelInventoryItem item) {
+    if (_isReferenceEquipment(item) || _isReferenceStoreItem(item)) return true;
+    final type = item.itemType.trim().toLowerCase();
+    return const <String>{
+      'quest',
+      'quest_item',
+      'mission',
+      'mission_item',
+      'blind_box',
+      'special',
+      'special_item',
+      'key',
+      'key_item',
+      'event',
+      'event_item',
+      'token',
     }.contains(type);
   }
 
@@ -216,9 +261,11 @@ class _NovelInputBarState extends State<NovelInputBar> {
     _inventoryRefreshing = true;
     _inventoryOverlay?.markNeedsBuild();
     try {
+      // 引用入口只刷新背包，绝不顺带请求商城。
+      // 商城接口可能依赖当前页面之外的上下文；从输入栏触发会引入无关的 null 参数风险。
       await gameController.refreshInventory(notify: false);
     } catch (_) {
-      // 引用面板刷新失败时保留 Controller 当前已有的背包快照，不打断输入。
+      // 刷新失败时保留 Controller 当前已有的背包快照，不打断输入。
     } finally {
       _inventoryRefreshing = false;
       _inventoryOverlay?.markNeedsBuild();
@@ -238,14 +285,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
         final screenWidth = MediaQuery.sizeOf(overlayContext).width;
         final panelWidth = math.min(318.0, math.max(244.0, screenWidth - 24));
         final items = _referenceableInventoryItems();
-        const categoryLabels = <String>['物品', '装备'];
-        if (!categoryLabels.contains(_inventoryCategory)) {
-          _inventoryCategory = '物品';
-        }
-        final visibleItems = items.where((item) {
-          final equipment = _isReferenceEquipment(item);
-          return _inventoryCategory == '装备' ? equipment : !equipment;
-        }).toList();
+        final visibleItems = items;
         final selectedCount = items.where(_isItemReferenced).length;
 
         return Stack(
@@ -268,6 +308,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                   width: panelWidth,
                   constraints: const BoxConstraints(maxHeight: 300),
                   decoration: const BoxDecoration(
+                    // 引用物品恢复原来的浅色面板：它是一个短暂的选择器，
+                    // 用白色填充比深色悬浮卡更清爽，也更容易扫读物品列表。
                     color: Color(0xFFFFFFFF),
                     boxShadow: <BoxShadow>[
                       BoxShadow(
@@ -305,7 +347,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                         ? '当前没有可引用物品'
                                         : selectedCount > 0
                                             ? '已选择 $selectedCount 件 · 再次点击取消'
-                                            : '选择要在本次行动中使用的物品',
+                                            : '只显示可在本次行动中使用的普通物品',
                                     style: const TextStyle(
                                       color: Color(0xFF7B848B),
                                       fontSize: 10.2,
@@ -350,83 +392,11 @@ class _NovelInputBarState extends State<NovelInputBar> {
                           ],
                         ),
                       ),
-                      if (categoryLabels.length > 1)
-                        SizedBox(
-                          height: 38,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Row(
-                              children: <Widget>[
-                                for (var index = 0;
-                                    index < categoryLabels.length;
-                                    index++) ...<Widget>[
-                                  if (index > 0) const SizedBox(width: 22),
-                                  Builder(
-                                    builder: (context) {
-                                      final label = categoryLabels[index];
-                                      final selected = label == _inventoryCategory;
-                                      return InkWell(
-                                        onTap: () {
-                                          if (_inventoryCategory == label) return;
-                                          setState(() => _inventoryCategory = label);
-                                          _inventoryOverlay?.markNeedsBuild();
-                                        },
-                                        borderRadius: BorderRadius.zero,
-                                        splashColor: const Color(0x08000000),
-                                        highlightColor: const Color(0x04000000),
-                                        child: SizedBox(
-                                          height: 38,
-                                          child: Column(
-                                            mainAxisAlignment: MainAxisAlignment.end,
-                                            children: <Widget>[
-                                              Text(
-                                                label,
-                                                style: TextStyle(
-                                                  color: selected
-                                                      ? const Color(0xFF1C2227)
-                                                      : const Color(0xFF9AA2A8),
-                                                  fontSize: 11,
-                                                  fontWeight: selected
-                                                      ? FontWeight.w700
-                                                      : FontWeight.w500,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 7),
-                                              AnimatedContainer(
-                                                duration: const Duration(milliseconds: 140),
-                                                width: selected ? 22 : 0,
-                                                height: 2,
-                                                color: selected
-                                                    ? NovelPalette.accent
-                                                    : Colors.transparent,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
                       if (items.isEmpty && !_inventoryRefreshing)
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 28),
                           child: Text(
                             '背包里暂无可引用物品',
-                            style: TextStyle(
-                              color: Color(0xFF8B949B),
-                              fontSize: 11,
-                            ),
-                          ),
-                        )
-                      else if (visibleItems.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24),
-                          child: Text(
-                            '该分类暂无可引用物品',
                             style: TextStyle(
                               color: Color(0xFF8B949B),
                               fontSize: 11,
@@ -670,7 +640,6 @@ class _NovelInputBarState extends State<NovelInputBar> {
       _speechFinishing = commit && !tooShort;
     }
 
-    var speechCommitted = false;
     try {
       if (!commit || tooShort) {
         final starting = _startFuture;
@@ -706,7 +675,6 @@ class _NovelInputBarState extends State<NovelInputBar> {
 
         if (finalText.trim().isNotEmpty) {
           _commitSpeechText(sessionId, finalText);
-          speechCommitted = true;
         }
       }
     } on TimeoutException {
@@ -745,10 +713,9 @@ class _NovelInputBarState extends State<NovelInputBar> {
         _isListening = false;
         _speechFinishing = false;
       });
-      // 误触 / 太短 / 无声时不要自动重新聚焦输入框，避免弹键盘阻碍再次按住语音。
-      if (speechCommitted) {
-        widget.focusNode.requestFocus();
-      }
+      // 语音识别成功后也不主动弹出软键盘：文字保留在输入框里，
+      // 用户可以直接再次按住麦克风追加第二段；需要修改时再点正文进入键盘编辑。
+      // 这样“说一段 → 再说一段 → 最后发送”和“说完后手动改字”都顺畅。
     }
   }
 
@@ -979,23 +946,26 @@ class _NovelInputBarState extends State<NovelInputBar> {
                           shortViewport ? 4 : 6,
                         ),
                         decoration: BoxDecoration(
-                          color: glassActive
-                              ? Colors.black.withOpacity(
-                                  lowPowerEffects ? .20 : (focused ? .18 : .14),
-                                )
-                              : Colors.black.withOpacity(speechBusy ? .10 : .08),
+                          // 自由输入是整套界面里唯一保留明确“操作框”的区域。
+                          // 平时只留一层很淡的黑玻璃与白色描边；聚焦时描边才抬亮，
+                          // 和上方无框剧情选项形成清楚的交互层级。
+                          color: Colors.black.withOpacity(
+                            speechBusy
+                                ? .10
+                                : (focused
+                                    ? (lowPowerEffects ? .13 : .12)
+                                    : (glassActive ? .09 : .045)),
+                          ),
                           borderRadius: BorderRadius.zero,
                           border: Border.all(
-                            // 竖屏、横屏、电脑统一使用同一套高可见度边线，
-                            // 不再让非横屏模式显得灰暗或线条偏细。
                             color: speechBusy
-                                ? NovelPalette.accent.withOpacity(.72)
+                                ? NovelPalette.accent.withOpacity(.68)
                                 : Colors.white.withOpacity(
                                     focused
-                                        ? .22
-                                        : (glassActive ? .16 : .12),
+                                        ? .30
+                                        : (glassActive ? .19 : .115),
                                   ),
-                            width: speechBusy ? .9 : .85,
+                            width: speechBusy ? .95 : .85,
                           ),
                         ),
                         child: Row(
@@ -1013,18 +983,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                       width: shortViewport ? 29 : 32,
                                       height: shortViewport ? 30 : 34,
                                       alignment: Alignment.center,
-                                      decoration: BoxDecoration(
-                                        color: inventoryPickerOpen
-                                            ? Colors.white.withOpacity(.075)
-                                            : Colors.white.withOpacity(.025),
-                                        borderRadius: BorderRadius.zero,
-                                        border: Border.all(
-                                          color: inventoryPickerOpen
-                                              ? Colors.white.withOpacity(.30)
-                                              : Colors.white.withOpacity(.08),
-                                          width: .75,
-                                        ),
-                                      ),
+                                      // “+” 不再拥有自己的小方框；它只是统一输入栏里的一个动作。
                                       child: Material(
                                         color: Colors.transparent,
                                         child: InkWell(
@@ -1032,8 +991,9 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                               ? _toggleInventoryPicker
                                               : null,
                                           borderRadius: BorderRadius.zero,
-                                          splashColor: Colors.white.withOpacity(.08),
-                                          highlightColor: Colors.white.withOpacity(.055),
+                                          splashColor: Colors.white.withOpacity(.055),
+                                          highlightColor: Colors.white.withOpacity(.035),
+                                          hoverColor: Colors.white.withOpacity(.025),
                                           child: Center(
                                             child: AnimatedDefaultTextStyle(
                                               duration: const Duration(milliseconds: 140),
@@ -1041,7 +1001,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                                 color: inventoryPickerOpen
                                                     ? Colors.white.withOpacity(.96)
                                                     : Colors.white.withOpacity(
-                                                        widget.enabled && !speechBusy ? .60 : .26,
+                                                        widget.enabled && !speechBusy ? .58 : .24,
                                                       ),
                                                 fontSize: shortViewport ? 18 : 20,
                                                 height: 1,
@@ -1058,39 +1018,6 @@ class _NovelInputBarState extends State<NovelInputBar> {
                               ),
                               const SizedBox(width: 4),
                             ],
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 1),
-                              child: Listener(
-                                behavior: HitTestBehavior.opaque,
-                                onPointerDown: micEnabled
-                                    ? (_) => unawaited(_beginHoldListening())
-                                    : null,
-                                onPointerUp: micEnabled
-                                    ? (_) => unawaited(_finishHoldListening())
-                                    : null,
-                                onPointerCancel: micEnabled
-                                    ? (_) => unawaited(_finishHoldListening(commit: false))
-                                    : null,
-                                child: AnimatedOpacity(
-                                  duration: const Duration(milliseconds: 120),
-                                  opacity: micEnabled ? 1 : .42,
-                                  child: AnimatedScale(
-                                    scale: speaking ? 1.08 : 1,
-                                    duration: const Duration(milliseconds: 120),
-                                    child: SizedBox(
-                                      width: shortViewport ? 32 : 36,
-                                      height: shortViewport ? 32 : 36,
-                                      child: CustomPaint(
-                                        painter: _CutoutVoiceWavePainter(
-                                          speaking: speaking,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
                             Expanded(
                               child: Focus(
                                 onKeyEvent: _handleInputKey,
@@ -1146,45 +1073,37 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 6),
+                            const SizedBox(width: 4),
+                            // 手机端把语音放在输入框右侧内部：它始终是“继续输入”的次级动作。
+                            // 有可发送内容时，发送箭头再出现在它右边作为主动作；录音中发送键自动隐藏。
                             Padding(
                               padding: const EdgeInsets.only(bottom: 1),
-                              child: AnimatedOpacity(
-                                duration: const Duration(milliseconds: 150),
-                                opacity: canSend ? 1 : .34,
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 180),
-                                  curve: Curves.easeOutCubic,
-                                  width: shortViewport ? 31 : 34,
-                                  height: shortViewport ? 31 : 34,
-                                  decoration: BoxDecoration(
-                                    // 发送按钮使用纯白强调色，不再沿用全局绿色 accent。
-                                    color: canSend
-                                        ? Colors.white
-                                        : Colors.white.withOpacity(.055),
-                                    borderRadius: BorderRadius.zero,
-                                    border: Border.all(
-                                      color: canSend
-                                          ? Colors.white.withOpacity(.96)
-                                          : Colors.white.withOpacity(.10),
-                                      width: .65,
-                                    ),
-                                  ),
-                                  child: Material(
-                                    color: Colors.transparent,
-                                    child: InkWell(
-                                      borderRadius: BorderRadius.zero,
-                                      onTap: canSend ? _submit : null,
-                                      splashColor: Colors.black.withOpacity(.08),
-                                      highlightColor: Colors.black.withOpacity(.055),
-                                      hoverColor: Colors.black.withOpacity(.035),
-                                      child: Center(
-                                        child: Icon(
-                                          Icons.arrow_upward_rounded,
-                                          size: shortViewport ? 16 : 17,
-                                          color: canSend
-                                              ? const Color(0xFF111512)
-                                              : Colors.white.withOpacity(.52),
+                              child: Listener(
+                                behavior: HitTestBehavior.opaque,
+                                onPointerDown: micEnabled
+                                    ? (_) => unawaited(_beginHoldListening())
+                                    : null,
+                                onPointerUp: micEnabled
+                                    ? (_) => unawaited(_finishHoldListening())
+                                    : null,
+                                onPointerCancel: micEnabled
+                                    ? (_) => unawaited(_finishHoldListening(commit: false))
+                                    : null,
+                                child: AnimatedOpacity(
+                                  duration: const Duration(milliseconds: 120),
+                                  opacity: !micEnabled
+                                      ? .30
+                                      : (speaking ? 1.0 : (canSend ? .58 : .88)),
+                                  child: AnimatedScale(
+                                    scale: speaking ? 1.08 : 1,
+                                    duration: const Duration(milliseconds: 120),
+                                    curve: Curves.easeOutCubic,
+                                    child: SizedBox(
+                                      width: shortViewport ? 30 : 33,
+                                      height: shortViewport ? 30 : 33,
+                                      child: CustomPaint(
+                                        painter: _CutoutVoiceWavePainter(
+                                          speaking: speaking,
                                         ),
                                       ),
                                     ),
@@ -1192,6 +1111,45 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                 ),
                               ),
                             ),
+                            if (canSend && !speechBusy) ...<Widget>[
+                              const SizedBox(width: 2),
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 1),
+                                child: AnimatedScale(
+                                  duration: const Duration(milliseconds: 150),
+                                  curve: Curves.easeOutCubic,
+                                  scale: canSend ? 1.0 : .96,
+                                  child: SizedBox(
+                                    width: shortViewport ? 31 : 34,
+                                    height: shortViewport ? 31 : 34,
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.zero,
+                                        onTap: _submit,
+                                        splashColor: Colors.white.withOpacity(.06),
+                                        highlightColor: Colors.white.withOpacity(.035),
+                                        hoverColor: Colors.white.withOpacity(.025),
+                                        child: Center(
+                                          child: Icon(
+                                            Icons.arrow_upward_rounded,
+                                            size: shortViewport ? 17 : 18,
+                                            color: Colors.white.withOpacity(.96),
+                                            shadows: const <Shadow>[
+                                              Shadow(
+                                                color: Color(0x66000000),
+                                                blurRadius: 4,
+                                                offset: Offset(0, 1),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -1241,19 +1199,16 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
                 : const Color(0xFFFAFBFA);
 
     return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: Tooltip(
-        message: description.isEmpty ? widget.typeLabel : description,
-        waitDuration: const Duration(milliseconds: 320),
-        preferBelow: false,
-        child: AnimatedScale(
-          scale: _pressed ? .99 : 1,
-          duration: const Duration(milliseconds: 90),
-          curve: Curves.easeOutCubic,
-          child: AnimatedContainer(
+      onEnter: (_) {
+        if (!_hovered && mounted) setState(() => _hovered = true);
+      },
+      onExit: (_) {
+        if (_hovered && mounted) setState(() => _hovered = false);
+      },
+      child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
             curve: Curves.easeOutCubic,
+            // 恢复原来的浅白填充，不再使用深灰黑卡片。
             color: background,
             child: Material(
               color: Colors.transparent,
@@ -1280,9 +1235,8 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
                                 color: const Color(0xFF1C2227),
                                 fontSize: 12.2,
                                 height: 1.15,
-                                fontWeight: active
-                                    ? FontWeight.w700
-                                    : FontWeight.w600,
+                                fontWeight:
+                                    active ? FontWeight.w700 : FontWeight.w600,
                                 letterSpacing: .2,
                               ),
                               child: Text(
@@ -1340,8 +1294,6 @@ class _InventoryReferenceTileState extends State<_InventoryReferenceTile> {
                 ),
               ),
             ),
-          ),
-        ),
       ),
     );
   }
@@ -1368,92 +1320,91 @@ class _ReferencedInventoryChipState extends State<_ReferencedInventoryChip> {
 
   @override
   Widget build(BuildContext context) {
-    final description = widget.description.trim();
+    // 这里刻意不使用 Tooltip：Tooltip 会创建 OverlayPortal；在桌面端 hover、
+    // 父级布局同时变化时，部分 Flutter 版本会触发 debugNeedsLayout 断言。
+    // 引用标签只做 paint 层的颜色反馈，不在 hover 时改变尺寸或创建新 Overlay。
+    final background = _pressed
+        ? Colors.white.withOpacity(.10)
+        : (_hovered ? Colors.white.withOpacity(.07) : Colors.white.withOpacity(.035));
+    final borderColor = Colors.white.withOpacity(
+      _pressed ? .24 : (_hovered ? .19 : .12),
+    );
+    final foreground = Colors.white.withOpacity(
+      _pressed || _hovered ? .96 : .82,
+    );
+
     return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: Tooltip(
-        message: description.isEmpty ? widget.name : description,
-        waitDuration: const Duration(milliseconds: 320),
-        preferBelow: false,
-        child: AnimatedScale(
-          scale: _pressed ? .97 : 1,
-          duration: const Duration(milliseconds: 80),
-          curve: Curves.easeOutCubic,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: widget.onRemove,
-              onHighlightChanged: (value) {
-                if (mounted) setState(() => _pressed = value);
-              },
-              borderRadius: BorderRadius.zero,
-              splashColor: Colors.white.withOpacity(.075),
-              highlightColor: Colors.white.withOpacity(.05),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 120),
-                height: 26,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: _pressed
-                      ? Colors.white.withOpacity(.085)
-                      : _hovered
-                          ? Colors.white.withOpacity(.055)
-                          : Colors.white.withOpacity(.028),
-                  borderRadius: BorderRadius.zero,
-                  border: Border.all(
-                    color: Colors.white.withOpacity(
-                      _pressed ? .34 : (_hovered ? .24 : .105),
+      onEnter: (_) {
+        if (!_hovered && mounted) setState(() => _hovered = true);
+      },
+      onExit: (_) {
+        if (_hovered && mounted) setState(() => _hovered = false);
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: widget.onRemove,
+          onHighlightChanged: (value) {
+            if (mounted && _pressed != value) setState(() => _pressed = value);
+          },
+          borderRadius: BorderRadius.circular(7),
+          splashColor: Colors.white.withOpacity(.045),
+          highlightColor: Colors.white.withOpacity(.025),
+          hoverColor: Colors.transparent,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 110),
+            curve: Curves.easeOutCubic,
+            height: 26,
+            padding: const EdgeInsets.symmetric(horizontal: 9),
+            decoration: BoxDecoration(
+              // 输入框上方的引用标签保持“透明玻璃”而非实体白块。
+              color: background,
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(color: borderColor, width: .7),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 136),
+                  child: AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 110),
+                    style: TextStyle(
+                      color: foreground,
+                      fontSize: 10.4,
+                      height: 1,
+                      fontWeight: FontWeight.w600,
+                      shadows: const <Shadow>[
+                        Shadow(
+                          color: Color(0x99000000),
+                          blurRadius: 4,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
                     ),
-                    width: .75,
+                    child: Text(
+                      widget.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 120),
-                      width: 2,
-                      height: 14,
-                      color: Colors.white.withOpacity(
-                        _hovered || _pressed ? .78 : .42,
-                      ),
+                const SizedBox(width: 7),
+                Text(
+                  '×',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(
+                      _pressed || _hovered ? .90 : .52,
                     ),
-                    const SizedBox(width: 7),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 128),
-                      child: AnimatedDefaultTextStyle(
-                        duration: const Duration(milliseconds: 120),
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(
-                            _hovered || _pressed ? .97 : .78,
-                          ),
-                          fontSize: 10.4,
-                          height: 1,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        child: Text(
-                          widget.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    Text(
-                      '×',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(
-                          _hovered || _pressed ? .92 : .40,
-                        ),
-                        fontSize: 12.5,
-                        height: 1,
-                        fontWeight: FontWeight.w400,
-                      ),
-                    ),
-                  ],
+                    fontSize: 12.5,
+                    height: 1,
+                    fontWeight: FontWeight.w400,
+                    shadows: const <Shadow>[
+                      Shadow(color: Color(0x77000000), blurRadius: 3),
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
         ),
@@ -1461,7 +1412,6 @@ class _ReferencedInventoryChipState extends State<_ReferencedInventoryChip> {
     );
   }
 }
-
 
 class _TargetActorContextChip extends StatelessWidget {
   const _TargetActorContextChip({

@@ -340,13 +340,6 @@ class NovelChoiceDock extends StatelessWidget {
   }
 }
 
-class _ChoiceColors {
-  static const Color card = Color(0x0AFFFFFF);
-  static const Color border = Color(0x1AFFFFFF);
-  static const Color numberBg = Color(0x0AFFFFFF);
-  static const Color numberBorder = Color(0x38FFFFFF);
-}
-
 class _InlineNovelChoices extends StatefulWidget {
   const _InlineNovelChoices({
     required this.choices,
@@ -366,15 +359,31 @@ class _InlineNovelChoices extends StatefulWidget {
 
 class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
   final ScrollController _scrollController = ScrollController();
+  Timer? _commitTimer;
+  int? _selectedIndex;
+  bool _selectionLocked = false;
+
+  @override
+  void didUpdateWidget(covariant _InlineNovelChoices oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldSignature = oldWidget.choices.map((choice) => choice.text).join('\u0001');
+    final newSignature = widget.choices.map((choice) => choice.text).join('\u0001');
+    if (oldSignature != newSignature) {
+      _commitTimer?.cancel();
+      _selectedIndex = null;
+      _selectionLocked = false;
+    }
+  }
 
   @override
   void dispose() {
+    _commitTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
 
   void _handleChoicePanUpdate(DragUpdateDetails details) {
-    if (!_scrollController.hasClients) return;
+    if (_selectionLocked || !_scrollController.hasClients) return;
     final position = _scrollController.position;
     final nextOffset = (_scrollController.offset - details.delta.dx)
         .clamp(position.minScrollExtent, position.maxScrollExtent)
@@ -383,30 +392,20 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
     _scrollController.jumpTo(nextOffset);
   }
 
-  IconData _fallbackIconFor(NovelChoice choice) {
-    if (choice.isBattle) return Icons.flash_on_rounded;
-    if (choice.isAction) return Icons.casino_outlined;
-    if (choice.isProgress) return Icons.arrow_forward_rounded;
-    return Icons.chat_bubble_outline_rounded;
-  }
+  void _selectChoice(int index, NovelChoice choice) {
+    if (_selectionLocked) return;
+    setState(() {
+      _selectedIndex = index;
+      _selectionLocked = true;
+    });
 
-  Widget _buildChoiceIcon(NovelChoice choice, {required bool compact}) {
-    final size = compact ? 18.0 : 20.0;
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Image.asset(
-        choice.iconPath,
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-        gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => Icon(
-          _fallbackIconFor(choice),
-          size: size,
-          color: Colors.white.withOpacity(.62),
-        ),
-      ),
-    );
+    // 先让当前决定“落下”一瞬：当前项保持明亮，其余项快速退场，
+    // 再提交给 Controller。玩家感受到的是自己做出了决定，而不是点了按钮。
+    _commitTimer?.cancel();
+    _commitTimer = Timer(const Duration(milliseconds: 155), () {
+      if (!mounted) return;
+      widget.onSelected(choice);
+    });
   }
 
   double _choiceWidth({
@@ -414,27 +413,25 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
     required int count,
     required bool compact,
   }) {
-    // 选择条与底部输入框共用同一条左边界，不再额外缩进。
-    // 右侧只留很小的滑动呼吸区，避免最后一张贴死屏幕边缘。
+    // 仍沿用单行横滑结构，但去掉卡片之后适度增加文字呼吸宽度。
     final rightPadding = compact ? 7.0 : 9.0;
-    final gap = compact ? 6.0 : 7.0;
+    final gap = compact ? 10.0 : 14.0;
     final viewport = math.max(0.0, availableWidth - rightPadding);
 
-    // 1~2 个选择时尽量并排填满，但保持“轻量按钮”而不是大卡片。
     if (count == 1) {
-      return (viewport * (compact ? .64 : .48))
-          .clamp(compact ? 172.0 : 190.0, compact ? 238.0 : 280.0)
+      return (viewport * (compact ? .72 : .54))
+          .clamp(compact ? 186.0 : 220.0, compact ? 270.0 : 340.0)
           .toDouble();
     }
     if (count == 2) {
       return ((viewport - gap) / 2)
-          .clamp(compact ? 142.0 : 158.0, compact ? 210.0 : 250.0)
+          .clamp(compact ? 154.0 : 180.0, compact ? 230.0 : 300.0)
           .toDouble();
     }
 
-    // 3 个及以上固定为“一排横滑”，刻意露出下一张的一部分，提示用户可左右滑动。
-    return (viewport * (compact ? .46 : .31))
-        .clamp(compact ? 146.0 : 166.0, compact ? 188.0 : 210.0)
+    // 三个以上仍刻意露出下一项的一部分，保留“可以横向继续看”的暗示。
+    return (viewport * (compact ? .49 : .34))
+        .clamp(compact ? 158.0 : 184.0, compact ? 214.0 : 252.0)
         .toDouble();
   }
 
@@ -445,13 +442,15 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
     final compact = viewport.narrowWidth;
     final shortViewport = viewport.shortViewport;
     final shortWide = viewport.shortWide;
-    final cardHeight = shortViewport ? 38.0 : (compact ? 42.0 : 44.0);
-    final gap = shortViewport ? 5.0 : (compact ? 6.0 : 7.0);
+    final choiceHeight = shortWide
+        ? 30.0
+        : (shortViewport ? 38.0 : (compact ? 42.0 : 44.0));
+    final gap = shortViewport ? 7.0 : (compact ? 10.0 : 14.0);
     final rightPadding = shortViewport ? 6.0 : (compact ? 7.0 : 9.0);
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final cardWidth = _choiceWidth(
+        final choiceWidth = _choiceWidth(
           availableWidth: constraints.maxWidth,
           count: choices.length,
           compact: compact,
@@ -460,9 +459,11 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
         final scrollView = SingleChildScrollView(
           controller: _scrollController,
           scrollDirection: Axis.horizontal,
-          physics: const BouncingScrollPhysics(),
+          physics: _selectionLocked
+              ? const NeverScrollableScrollPhysics()
+              : const BouncingScrollPhysics(),
           clipBehavior: Clip.none,
-          // 左侧 0：和下方输入框严格对齐。
+          // 左侧继续与输入框共用同一条视觉基线。
           padding: EdgeInsets.only(right: rightPadding),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -470,92 +471,17 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
               for (final entry in choices.asMap().entries) ...<Widget>[
                 if (entry.key > 0) SizedBox(width: gap),
                 SizedBox(
-                  width: cardWidth,
-                  height: cardHeight,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => widget.onSelected(entry.value),
-                      borderRadius: BorderRadius.zero,
-                      splashColor: Colors.white.withOpacity(.07),
-                      highlightColor: Colors.white.withOpacity(.03),
-                      child: Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: compact ? 9 : 11,
-                        ),
-                        decoration: BoxDecoration(
-                          // primary 只负责排序/语义，不改变按钮颜色。
-                          // 所有剧情选项保持统一视觉，类型差异只由图标表达。
-                          color: _ChoiceColors.card,
-                          borderRadius: BorderRadius.zero,
-                          border: Border.all(
-                            color: shortWide
-                                ? Colors.white.withOpacity(.24)
-                                : _ChoiceColors.border,
-                            width: shortWide ? .85 : .65,
-                          ),
-                        ),
-                        child: Row(
-                          children: <Widget>[
-                            Container(
-                              width: compact ? 20 : 21,
-                              height: compact ? 20 : 21,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: _ChoiceColors.numberBg,
-                                borderRadius: BorderRadius.circular(2),
-                                border: Border.all(
-                                  color: shortWide
-                                      ? Colors.white.withOpacity(.34)
-                                      : _ChoiceColors.numberBorder,
-                                  width: shortWide ? .8 : .65,
-                                ),
-                              ),
-                              child: Text(
-                                '${entry.key + 1}',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(.72),
-                                  fontSize: compact ? 10.5 : 11,
-                                  height: 1,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            SizedBox(width: compact ? 6 : 7),
-                            Opacity(
-                              opacity: .82,
-                              child: _buildChoiceIcon(
-                                entry.value,
-                                compact: compact,
-                              ),
-                            ),
-                            SizedBox(width: compact ? 6 : 7),
-                            Expanded(
-                              child: Text(
-                                entry.value.text,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.left,
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(.80),
-                                  fontSize: compact ? 12.2 : 12.8,
-                                  height: 1.15,
-                                  fontWeight: FontWeight.w500,
-                                  letterSpacing: .02,
-                                  shadows: const <Shadow>[
-                                    Shadow(
-                                      color: Color(0x88000000),
-                                      blurRadius: 3,
-                                      offset: Offset(0, 1),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  width: choiceWidth,
+                  height: choiceHeight,
+                  child: _ImmersiveNovelChoiceItem(
+                    choice: entry.value,
+                    compact: compact,
+                    shortWide: shortWide,
+                    selected: _selectedIndex == entry.key,
+                    dimmed:
+                        _selectedIndex != null && _selectedIndex != entry.key,
+                    enabled: !_selectionLocked,
+                    onTap: () => _selectChoice(entry.key, entry.value),
                   ),
                 ),
               ],
@@ -571,8 +497,6 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
                 child: scrollView,
               );
 
-        // 不显示底部滚动条；手机上手指落在选项区域时，优先横向拖动选项，
-        // 避免被外层剧情页滚动手势抢走。
         return ScrollConfiguration(
           behavior: ScrollConfiguration.of(context).copyWith(
             scrollbars: false,
@@ -587,6 +511,178 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
           child: scrollableChoices,
         );
       },
+    );
+  }
+}
+
+/// 沉浸式剧情选项：视觉上只是一句“此刻可以做出的决定”，
+/// 交互上仍保留完整的大热区、键盘焦点、鼠标 Hover 和按压反馈。
+class _ImmersiveNovelChoiceItem extends StatefulWidget {
+  const _ImmersiveNovelChoiceItem({
+    required this.choice,
+    required this.compact,
+    required this.shortWide,
+    required this.selected,
+    required this.dimmed,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final NovelChoice choice;
+  final bool compact;
+  final bool shortWide;
+  final bool selected;
+  final bool dimmed;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  State<_ImmersiveNovelChoiceItem> createState() =>
+      _ImmersiveNovelChoiceItemState();
+}
+
+class _ImmersiveNovelChoiceItemState
+    extends State<_ImmersiveNovelChoiceItem> {
+  bool _hovered = false;
+  bool _focused = false;
+  bool _pressed = false;
+
+  bool get _active => widget.selected || _hovered || _focused || _pressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    final duration = reduceMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 150);
+    final compact = widget.compact;
+    final shortWide = widget.shortWide;
+    final active = _active && !widget.dimmed;
+
+    final opacity = widget.dimmed
+        ? .24
+        : widget.selected
+            ? 1.0
+            : active
+                ? .99
+                : .90;
+    final fontSize = shortWide
+        ? 11.7
+        : (compact ? 12.4 : 13.0);
+
+    return Semantics(
+      button: true,
+      selected: widget.selected,
+      enabled: widget.enabled,
+      label: widget.choice.text,
+      child: AnimatedOpacity(
+        duration: duration,
+        curve: Curves.easeOutCubic,
+        opacity: opacity,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: widget.enabled ? widget.onTap : null,
+            onHover: (value) {
+              if (_hovered == value || !mounted) return;
+              setState(() => _hovered = value);
+            },
+            onFocusChange: (value) {
+              if (_focused == value || !mounted) return;
+              setState(() => _focused = value);
+            },
+            onHighlightChanged: (value) {
+              if (_pressed == value || !mounted) return;
+              setState(() => _pressed = value);
+            },
+            splashColor: Colors.white.withOpacity(.035),
+            highlightColor: Colors.transparent,
+            hoverColor: Colors.transparent,
+            focusColor: Colors.transparent,
+            child: AnimatedContainer(
+              duration: duration,
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.only(
+                left: active ? (compact ? 5.0 : 6.0) : 0,
+                right: compact ? 7.0 : 9.0,
+              ),
+              decoration: BoxDecoration(
+                // 默认 / Hover 都不画卡片；只有手指或鼠标真正按下时
+                // 才出现极淡的一层光，作为触摸反馈。
+                color: _pressed && !widget.dimmed
+                    ? const Color(0xFFF1C36A).withOpacity(.045)
+                    : Colors.transparent,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: <Widget>[
+                  SizedBox(
+                    width: compact ? 14.0 : 16.0,
+                    child: AnimatedOpacity(
+                      duration: duration,
+                      opacity: active ? 1 : 0,
+                      child: Text(
+                        '›',
+                        style: TextStyle(
+                          color: const Color(0xFFF1C36A).withOpacity(
+                            widget.selected ? .96 : .82,
+                          ),
+                          fontSize: compact ? 15.0 : 16.5,
+                          height: 1,
+                          fontWeight: FontWeight.w500,
+                          shadows: const <Shadow>[
+                            Shadow(
+                              color: Color(0xB3000000),
+                              blurRadius: 5,
+                              offset: Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: compact ? 4.0 : 5.0),
+                  Expanded(
+                    child: AnimatedDefaultTextStyle(
+                      duration: duration,
+                      curve: Curves.easeOutCubic,
+                      style: TextStyle(
+                        color: widget.selected
+                            ? const Color(0xFFF1C36A).withOpacity(.96)
+                            : active
+                                ? const Color(0xFFFFF7DD)
+                                : const Color(0xFFF4F1E8).withOpacity(.95),
+                        fontSize: fontSize,
+                        height: shortWide ? 1.08 : 1.16,
+                        fontWeight:
+                            active ? FontWeight.w600 : FontWeight.w500,
+                        letterSpacing: active ? .08 : .02,
+                        shadows: const <Shadow>[
+                          Shadow(
+                            color: Color(0xC0000000),
+                            blurRadius: 5,
+                            offset: Offset(0, 1),
+                          ),
+                          Shadow(
+                            color: Color(0x66000000),
+                            blurRadius: 10,
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        widget.choice.text,
+                        maxLines: shortWide ? 1 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.left,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -608,6 +704,7 @@ class _NovelDialogFooter extends StatelessWidget {
     this.targetActorAvatarUrl = '',
     this.targetActorPlaceholder = '',
     this.onClearTargetActor,
+    this.onInputLayoutHeightChanged,
   });
 
   final NovelGameController controller;
@@ -625,6 +722,7 @@ class _NovelDialogFooter extends StatelessWidget {
   final String targetActorAvatarUrl;
   final String targetActorPlaceholder;
   final VoidCallback? onClearTargetActor;
+  final ValueChanged<double>? onInputLayoutHeightChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -698,6 +796,7 @@ class _NovelDialogFooter extends StatelessWidget {
                     targetActorAvatarUrl: targetActorAvatarUrl,
                     targetActorPlaceholder: targetActorPlaceholder,
                     onClearTargetActor: onClearTargetActor,
+                    onLayoutHeightChanged: onInputLayoutHeightChanged,
                   ),
                 ),
               ],

@@ -70,6 +70,307 @@ class _NovelMixedReaderPage {
   final String text;
 }
 
+class _NovelStageActorVisual {
+  const _NovelStageActorVisual({
+    required this.id,
+    required this.name,
+    required this.portraitUrl,
+    required this.active,
+    required this.selected,
+    required this.protagonist,
+  });
+
+  final String id;
+  final String name;
+  final String portraitUrl;
+  final bool active;
+  final bool selected;
+  final bool protagonist;
+
+  _NovelStageActorVisual copyWith({
+    String? portraitUrl,
+    bool? active,
+    bool? selected,
+  }) {
+    return _NovelStageActorVisual(
+      id: id,
+      name: name,
+      portraitUrl: portraitUrl ?? this.portraitUrl,
+      active: active ?? this.active,
+      selected: selected ?? this.selected,
+      protagonist: protagonist,
+    );
+  }
+}
+
+bool _novelSameStageName(String a, String b) {
+  final left = a.trim().toLowerCase();
+  final right = b.trim().toLowerCase();
+  return left.isNotEmpty && right.isNotEmpty && left == right;
+}
+
+List<_NovelStageActorVisual> _novelBuildPresenceActors({
+  required _NovelSceneStageSnapshot snapshot,
+  required bool showAmbientPresence,
+  required bool dialoguePageActive,
+  required String speaker,
+  required String currentPortraitUrl,
+  required bool protagonistSpeaking,
+  required String protagonistName,
+  required int maxActors,
+}) {
+  final activeName = dialoguePageActive ? speaker.trim() : '';
+  final selectedId = snapshot.selectedActorId.trim();
+  final actors = <_NovelStageActorVisual>[];
+
+  if (showAmbientPresence) {
+    for (final actor in snapshot.targets) {
+      final cleanPortrait = actor.portraitUrl.trim();
+      if (cleanPortrait.isEmpty || actor.isGroup) continue;
+      actors.add(
+        _NovelStageActorVisual(
+          id: actor.id.trim(),
+          name: actor.cleanName,
+          portraitUrl: cleanPortrait,
+          active: _novelSameStageName(actor.cleanName, activeName),
+          selected: selectedId.isNotEmpty && actor.id.trim() == selectedId,
+          protagonist: false,
+        ),
+      );
+    }
+  }
+
+  final cleanCurrentPortrait = currentPortraitUrl.trim();
+  if (dialoguePageActive && cleanCurrentPortrait.isNotEmpty) {
+    final existingIndex = actors.indexWhere(
+      (actor) => _novelSameStageName(actor.name, activeName),
+    );
+    if (existingIndex >= 0) {
+      actors[existingIndex] = actors[existingIndex].copyWith(
+        portraitUrl: cleanCurrentPortrait,
+        active: true,
+      );
+    } else {
+      final synthetic = _NovelStageActorVisual(
+        id: protagonistSpeaking ? '__protagonist__' : '__speaker__:$activeName',
+        name: activeName.isNotEmpty
+            ? activeName
+            : (protagonistSpeaking ? protagonistName.trim() : '角色'),
+        portraitUrl: cleanCurrentPortrait,
+        active: true,
+        selected: false,
+        protagonist: protagonistSpeaking,
+      );
+      // Player stays on the right edge; a newly introduced NPC enters from the
+      // left.  This keeps the basic VN left/right grammar without making
+      // already-present characters teleport every time the speaker changes.
+      if (protagonistSpeaking) {
+        actors.add(synthetic);
+      } else {
+        actors.insert(0, synthetic);
+      }
+    }
+  }
+
+  if (actors.isEmpty) return const <_NovelStageActorVisual>[];
+
+  // With no explicit speaker (narration), clicking a nearby character gives a
+  // softer focus state.  During dialogue, the actual speaker always wins.
+  final hasActiveSpeaker = actors.any((actor) => actor.active);
+  final normalized = actors
+      .map(
+        (actor) => actor.copyWith(
+          active: hasActiveSpeaker ? actor.active : actor.selected,
+        ),
+      )
+      .toList(growable: true);
+
+  if (normalized.length <= maxActors) return normalized;
+
+  // Always keep the focused actor.  Fill the remaining slots by the stable
+  // conversation-target order so idle characters do not shuffle around.
+  final focused = normalized.where((actor) => actor.active).toList();
+  final result = <_NovelStageActorVisual>[];
+  for (final actor in normalized) {
+    if (result.length >= maxActors) break;
+    if (focused.isNotEmpty && actor.active) continue;
+    result.add(actor);
+  }
+  if (focused.isNotEmpty) {
+    final focus = focused.first;
+    if (protagonistSpeaking) {
+      if (result.length >= maxActors) result.removeLast();
+      result.add(focus);
+    } else {
+      if (result.length >= maxActors) result.removeLast();
+      result.insert(0, focus);
+    }
+  }
+  return result.take(maxActors).toList(growable: false);
+}
+
+class _NovelPresenceStage extends StatelessWidget {
+  const _NovelPresenceStage({
+    required this.actors,
+    required this.stageSize,
+    required this.reservedBottom,
+    required this.wideDialogueLayout,
+    required this.shortWide,
+    required this.compact,
+  });
+
+  final List<_NovelStageActorVisual> actors;
+  final Size stageSize;
+  final double reservedBottom;
+  final bool wideDialogueLayout;
+  final bool shortWide;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    if (actors.isEmpty) return const SizedBox.shrink();
+
+    final singleActor = actors.length == 1;
+    late final double portraitWidth;
+    late final double portraitHeightRatio;
+    late final double sinkRatio;
+
+    if (singleActor) {
+      // Preserve the previous close-up language when there is only one usable
+      // portrait.  Multi-character staging only scales down when it has to.
+      if (wideDialogueLayout) {
+        final widthBased =
+            (stageSize.width * .55).clamp(550.0, 960.0).toDouble();
+        final heightBased =
+            (stageSize.height * 1.05).clamp(500.0, 1000.0).toDouble();
+        portraitWidth = math.min(widthBased, heightBased);
+        portraitHeightRatio = 1.25;
+        sinkRatio = .45;
+      } else if (shortWide) {
+        portraitWidth = math
+            .min(stageSize.width * .55, stageSize.height * 1.22)
+            .clamp(330.0, 520.0)
+            .toDouble();
+        portraitHeightRatio = 1.25;
+        sinkRatio = .45;
+      } else {
+        const double minStage = 320.0;
+        const double maxStage = 600.0;
+        final t = ((stageSize.width - minStage) / (maxStage - minStage))
+            .clamp(0.0, 1.0);
+        final widthRatio = lerpDouble(1.00, .82, t)!;
+        final minPortraitWidth = lerpDouble(350.0, 420.0, t)!;
+        final maxPortraitWidth = lerpDouble(500.0, 600.0, t)!;
+        portraitWidth = (stageSize.width * widthRatio)
+            .clamp(minPortraitWidth, maxPortraitWidth)
+            .toDouble();
+        portraitHeightRatio = 1.22;
+        sinkRatio = lerpDouble(.24, .16, t)!;
+      }
+    } else if (wideDialogueLayout) {
+      portraitWidth = math
+          .min(stageSize.width * .36, stageSize.height * .88)
+          .clamp(330.0, 560.0)
+          .toDouble();
+      portraitHeightRatio = 1.25;
+      sinkRatio = .43;
+    } else if (shortWide) {
+      portraitWidth = math
+          .min(stageSize.width * .36, stageSize.height * 1.08)
+          .clamp(230.0, 380.0)
+          .toDouble();
+      portraitHeightRatio = 1.25;
+      sinkRatio = .44;
+    } else {
+      // Phone portrait deliberately overlaps the figures.  Making every actor
+      // small enough to fit side-by-side destroys the visual-novel close-up.
+      portraitWidth = (stageSize.width * .76).clamp(270.0, 410.0).toDouble();
+      portraitHeightRatio = 1.22;
+      sinkRatio = .20;
+    }
+
+    final portraitHeight = portraitWidth * portraitHeightRatio;
+    final sinkOffset = -(portraitHeight * sinkRatio);
+    final centers = switch (actors.length) {
+      1 => <double>[actors.first.protagonist ? .72 : .24],
+      2 => <double>[.24, .72],
+      _ => <double>[.13, .50, .84],
+    };
+
+    Widget actorWidget(_NovelStageActorVisual actor, int index) {
+      final focused = actor.active;
+      final selected = actor.selected;
+      final opacity = focused ? 1.0 : (selected ? .82 : .58);
+      final scale = focused ? 1.035 : (selected ? .985 : .94);
+      final verticalOffset = focused ? -0.018 : (selected ? 0.0 : .018);
+      final dimStrength = focused ? 0.0 : (selected ? .08 : .22);
+      final centerX = centers[index.clamp(0, centers.length - 1)];
+      final left = stageSize.width * centerX - portraitWidth / 2;
+
+      return Positioned(
+        key: ValueKey<String>('presence-position|${actor.id}|${actor.portraitUrl}'),
+        left: left,
+        bottom: reservedBottom + sinkOffset,
+        width: portraitWidth,
+        height: portraitHeight,
+        child: IgnorePointer(
+          child: AnimatedSlide(
+            offset: Offset(0, verticalOffset),
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            child: AnimatedScale(
+              scale: scale,
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.bottomCenter,
+              child: AnimatedOpacity(
+                opacity: opacity,
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                child: ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    Colors.black.withOpacity(dimStrength),
+                    BlendMode.srcATop,
+                  ),
+                  child: _NovelPortraitMotion(
+                    key: ValueKey<String>(
+                      'presence-motion|${actor.id}|${actor.portraitUrl}',
+                    ),
+                    speaking: focused,
+                    alignRight: centerX >= .5,
+                    child: _StagePortraitArtwork(
+                      url: actor.portraitUrl,
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topCenter,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Draw inactive figures first and the focused speaker last.  The tiny
+    // z-order change reads as "stepping forward" without any hard camera cut.
+    final indexed = <({int index, _NovelStageActorVisual actor})>[
+      for (var i = 0; i < actors.length; i++) (index: i, actor: actors[i]),
+    ]..sort((a, b) {
+        final aDepth = a.actor.active ? 2 : (a.actor.selected ? 1 : 0);
+        final bDepth = b.actor.active ? 2 : (b.actor.selected ? 1 : 0);
+        return aDepth.compareTo(bDepth);
+      });
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        for (final entry in indexed) actorWidget(entry.actor, entry.index),
+      ],
+    );
+  }
+}
+
 /// 手机横屏正文不再依赖一个矮小滚动框硬塞全文，而是把同一个
 /// narration sentence 拆成若干“视觉阅读页”。业务层 sentence 不变，
 /// 因此不会影响存档、选项触发、历史记录或后端返回结构。
@@ -287,6 +588,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   bool _swipeTransitioning = false;
   bool _animationsDisabled = false;
   int _lastTextSpeedCps = -1;
+  double _measuredInputBarHeight = 0;
   late final AnimationController _swipeController;
 
   NovelGameController get controller => widget.controller;
@@ -409,6 +711,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
       return;
     }
     if (_revealing) _scheduleReveal();
+  }
+
+  void _handleInputLayoutHeightChanged(double height) {
+    final safeHeight = height.isFinite ? math.max(0.0, height) : 0.0;
+    if ((_measuredInputBarHeight - safeHeight).abs() < .5) return;
+    if (!mounted) return;
+    setState(() => _measuredInputBarHeight = safeHeight);
   }
 
   double _adaptiveFooterHeight({
@@ -1270,6 +1579,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         );
 
     final targetActorActive = widget.targetActorName.trim().isNotEmpty;
+    // 选中角色进入“对某人说”模式时，剧情仍作为上下文存在，但退到第二层。
+    // 真正的交互焦点交给目标角色与自由输入，不把屏幕突然清空成聊天 App。
+    final storyContextOpacity = targetActorActive ? .50 : 1.0;
     final canShowChoices = !targetActorActive &&
         controller.choices.isNotEmpty &&
         !readerHasNext &&
@@ -1331,14 +1643,12 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             !keyboardActive &&
             surroundingsAction?.visible == true;
 
-        // 探索入口改到剧情舞台左侧，不再向右侧 HUD 做视觉越界。
-        // 保留这个小函数是为了兼容现有调用点，同时明确关闭右移偏移。
-        double centeredStoryActionEndBleed(double _) => 0.0;
+        // “探索周围”是独立的场景 HUD，不参与旁白/对白正文布局。
         // 外层 NovelGamePage 已经用 SafeArea 消化系统底部安全区。
         // 此处再加 viewPadding.bottom 会在 iPhone 上重复占位。
         const navigationHeight = 0.0;
         final inputContextVisible = targetActorActive;
-        final composerHeight = composerVisible
+        final estimatedComposerHeight = composerVisible
             ? _adaptiveFooterHeight(
                   availableWidth: constraints.maxWidth,
                   compact: compact,
@@ -1346,6 +1656,11 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   choicesVisible: canShowChoices,
                   inputContextVisible: inputContextVisible,
                 )
+            : 0.0;
+        // NovelInputBar 会把“目标角色 / 已引用物品 / 多行输入”造成的真实高度
+        // 回报给 Reader。选项和剧情统一使用真实高度让位，避免引用胶囊覆盖选择条。
+        final composerHeight = composerVisible
+            ? math.max(estimatedComposerHeight, _measuredInputBarHeight)
             : 0.0;
         final footerHeight = navigationHeight +
             (composerVisible ? composerHeight + (compact ? 4.0 : 6.0) : 0.0);
@@ -1426,154 +1741,56 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             child: Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
-              // 当前角色半身立绘。
-              // 500×800 原图只显示顶部约 64%，避免把完整全身硬塞进画面。
-              // NPC 靠左；主角/玩家靠右。
-              if (dialoguePageActive && portraitUrl.isNotEmpty)
-                Builder(
-                  builder: (context) {
-                    // 使用当前剧情舞台的真实尺寸，而不是全局 MediaQuery。
-                    // 这样 PC 全宽舞台 / Web 手机预览 / 未来桌面窗口都不会出现
-                    // “算的是整屏宽度，实际却被父级约束成 720px”的错位。
-                    final stageSize = Size(constraints.maxWidth, availableHeight);
+              // 场景人物舞台：附近的重要角色常驻；当前说话者提亮、前移，
+              // 其余人物退暗。回看历史时不套用“当前场景”的旁人，只保留该页说话者。
+              ValueListenableBuilder<_NovelSceneStageSnapshot>(
+                valueListenable: _novelSceneStageSnapshot,
+                builder: (context, stageSnapshot, _) {
+                  final stageActors = _novelBuildPresenceActors(
+                    snapshot: stageSnapshot,
+                    showAmbientPresence:
+                        !readerHasNext && !controller.isCinematic,
+                    dialoguePageActive: dialoguePageActive && !targetActorActive,
+                    speaker: speaker,
+                    currentPortraitUrl: portraitUrl,
+                    protagonistSpeaking: mode == _NovelLineMode.protagonist,
+                    protagonistName: controller.protagonistName,
+                    maxActors: (!shortWide && compact) ? 2 : 3,
+                  );
+                  if (stageActors.isEmpty) return const SizedBox.shrink();
 
-                    // 手机竖屏、手机横屏与真正桌面使用不同镜头语言。
-                    // wideDialogueLayout 已由统一 viewport metrics 决定；手机横屏
-                    // 即使 controller.desktopMode=true，也不会误套用 PC 立绘尺寸。
-                    late final double portraitWidth;
-                    late final double portraitHeightRatio;
-                    late final double sinkRatio;
-                    late final double edgePush;
-
-                    if (wideDialogueLayout) {
-                      final widthBased =
-                          (stageSize.width * .55).clamp(550.0, 960.0).toDouble();
-                      final heightBased =
-                          (stageSize.height * 1.05).clamp(500.0, 1000.0).toDouble();
-                      portraitWidth = math.min(widthBased, heightBased);
-                      portraitHeightRatio = 1.25;
-                      sinkRatio = 0.45;
-                      edgePush = 0.08;
-                    } else if (shortWide) {
-                      // 手机横屏也使用接近 PC 的“大半身”镜头：
-                      // 先按横向舞台放大人物，再把下半身明显沉到屏幕下方。
-                      // 不直接复用 PC 的 550px 最小宽度，避免矮屏设备头部被顶出画面。
-                      final widthBased = stageSize.width * .55;
-                      final heightBased = stageSize.height * 1.22;
-                      portraitWidth = math
-                          .min(widthBased, heightBased)
-                          .clamp(330.0, 520.0)
-                          .toDouble();
-                      portraitHeightRatio = 1.25;
-                      sinkRatio = .45;
-                      edgePush = .06;
-                    } else {
-                      // 手机竖屏保持近景感，但降低固定最小宽度，避免小屏上人物
-                      // 与对白/HUD 互相挤压。
-                      const double minStage = 320.0;
-                      const double maxStage = 600.0;
-                      final double t = ((stageSize.width - minStage) /
-                              (maxStage - minStage))
-                          .clamp(0.0, 1.0);
-                      final widthRatio = lerpDouble(1.00, .82, t)!;
-                      final minPortraitWidth = lerpDouble(350.0, 420.0, t)!;
-                      final maxPortraitWidth = lerpDouble(500.0, 600.0, t)!;
-                      portraitWidth = (stageSize.width * widthRatio)
-                          .clamp(minPortraitWidth, maxPortraitWidth)
-                          .toDouble();
-                      portraitHeightRatio = 1.22;
-                      sinkRatio = lerpDouble(.24, .16, t)!;
-                      edgePush = lerpDouble(.28, .16, t)!;
-                    }
-
-                    final fullPortraitHeight = portraitWidth * portraitHeightRatio;
-                    // PC 镜头固定：所有正在说话的角色都从左侧入镜。
-                    // 手机仍保留 NPC 左 / 主角右的原有构图。
-                    final showOnRight = !wideDialogueLayout &&
-                        mode == _NovelLineMode.protagonist;
-                    final sinkOffset = -(fullPortraitHeight * sinkRatio);
-                    final npcLeftOffset = -(portraitWidth * edgePush);
-                    final protagonistRightOffset = -(portraitWidth * edgePush);
-
-                    return Positioned(
-                      // 最后一页展开底部调查区时，人物立绘以调查区上沿作为新的
-                      // “屏幕底部”，避免腿部和底部调查角色互相压在一起。
-                      bottom: reservedBottom + sinkOffset,
-                      left: showOnRight ? null : npcLeftOffset,
-                      right: showOnRight ? protagonistRightOffset : null,
-                      child: ValueListenableBuilder<String>(
-                        valueListenable: _displayTextNotifier,
-                        builder: (context, _, __) {
-                          // 当前页是否为对白页已经由分页状态决定，不再由逐字进度切阶段。
-                          return TweenAnimationBuilder<double>(
-                            key: ValueKey<String>(
-                              'portrait-dialogue-phase|${controller.currentSentenceIndex}|$portraitUrl',
-                            ),
-                            tween: Tween<double>(begin: 0, end: 1),
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeOutCubic,
-                            builder: (context, value, child) {
-                              return Opacity(
-                                opacity: value,
-                                child: Transform.translate(
-                                  offset: Offset(
-                                    (showOnRight ? 1 : -1) *
-                                        (1 - value) *
-                                        portraitWidth *
-                                        .035,
-                                    (1 - value) * 3,
-                                  ),
-                                  child: child,
-                                ),
-                              );
-                            },
-                            child: _withSwipeMotion(
-                              IgnorePointer(
-                                child: SizedBox(
-                                  width: portraitWidth,
-                                  height: fullPortraitHeight,
-                                  child: AnimatedSwitcher(
-                                    duration: const Duration(milliseconds: 360),
-                                    switchInCurve: Curves.easeOutCubic,
-                                    switchOutCurve: Curves.easeInCubic,
-                                    // 呼吸和前倾会略微超出原始图片边界；这里不裁切，
-                                    // 避免头发顶部随着呼吸出现一条生硬的切线。
-                                    layoutBuilder:
-                                        (currentChild, previousChildren) => Stack(
-                                      alignment: Alignment.center,
-                                      clipBehavior: Clip.none,
-                                      children: <Widget>[
-                                        ...previousChildren,
-                                        if (currentChild != null) currentChild,
-                                      ],
-                                    ),
-                                    transitionBuilder: (child, animation) =>
-                                        FadeTransition(
-                                      opacity: animation,
-                                      child: child,
-                                    ),
-                                    child: _NovelPortraitMotion(
-                                      key: ValueKey<String>(
-                                        'portrait-motion|$portraitUrl',
-                                      ),
-                                      speaking: true,
-                                      alignRight: showOnRight,
-                                      child: _StagePortraitArtwork(
-                                        url: portraitUrl,
-                                        fit: BoxFit.cover,
-                                        alignment: Alignment.topCenter,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              stageSize.width,
-                            ),
-                          );
-                        },
+                  final stageSize = Size(constraints.maxWidth, availableHeight);
+                  return Positioned.fill(
+                    child: _withSwipeMotion(
+                      _NovelPresenceStage(
+                        actors: stageActors,
+                        stageSize: stageSize,
+                        reservedBottom: reservedBottom,
+                        wideDialogueLayout: wideDialogueLayout,
+                        shortWide: shortWide,
+                        compact: compact,
                       ),
-                    );
-                  },
+                      stageSize.width,
+                    ),
+                  );
+                },
+              ),
+
+              // “探索周围”属于场景操作，而不是正文内容。
+              // 固定在屏幕左侧安全区，不再随着旁白/对白的高度、分页或对齐一起移动。
+              if (surroundingsActionVisible)
+                Positioned(
+                  left: compact ? 8.0 : 14.0,
+                  top: math.max(
+                    MediaQuery.paddingOf(context).top +
+                        viewport.topContentReserve +
+                        (shortWide ? 8.0 : 14.0),
+                    availableHeight * (shortWide ? .30 : .38),
+                  ),
+                  child: _NovelFloatingSurroundingsAction(
+                    scope: surroundingsAction!,
+                    compact: compact || shortWide,
+                  ),
                 ),
 
               // 混合句现在是真正分页：当前子页是正文时只构建正文层。
@@ -1585,7 +1802,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   // 就飘到屏幕上方；这样流式打字时视觉重心始终稳定。
                   top: canShowChoices ? choiceContentTop : 0,
                   bottom: canShowChoices ? choiceContentBottom : panelBottom,
-                  child: _withSwipeMotion(
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    opacity: storyContextOpacity,
+                    child: IgnorePointer(
+                      ignoring: targetActorActive,
+                      child: _withSwipeMotion(
                     Padding(
                       padding: EdgeInsets.symmetric(
                         horizontal: compact ? 20 : 34,
@@ -1594,31 +1817,25 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         alignment: Alignment.bottomCenter,
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
-                            // 横屏旁白现在靠视觉分页控制单页信息量，容器可以适度放宽。
-                            maxWidth: shortWide ? 600.0 : 650.0,
+                            // 横屏普通旁白收窄成感知字幕，给人物与环境留出更大的视觉主舞台。
+                            maxWidth: shortWide ? 520.0 : 560.0,
                             maxHeight:
-                                availableHeight * (shortWide ? .46 : .52),
+                                availableHeight * (shortWide ? .40 : .46),
                           ),
                           child: _NovelMixedNarrationSurface(
                             displayTextListenable: _displayTextNotifier,
                             isRevealing: _revealing,
                             fontFamily: controller.settings.fontFamily,
                             fontSize: controller.settings.fontSize,
-                            storyAction: surroundingsActionVisible
-                                ? _NovelFloatingSurroundingsAction(
-                                    scope: surroundingsAction!,
-                                    compact: compact || shortWide,
-                                    endBleed: centeredStoryActionEndBleed(
-                                      compact ? 20.0 : 34.0,
-                                    ),
-                                  )
-                                : null,
+                            storyAction: null,
                             onTap: _handleStoryTap,
                           ),
                         ),
                       ),
                     ),
                     screen.width,
+                      ),
+                    ),
                   ),
                 ),
 
@@ -1629,7 +1846,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     right: narrationRightSafeWidth,
                     top: choiceContentTop,
                     bottom: choiceContentBottom,
-                    child: _withSwipeMotion(
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      opacity: storyContextOpacity,
+                      child: IgnorePointer(
+                        ignoring: targetActorActive,
+                        child: _withSwipeMotion(
                       Padding(
                         // 右侧 HUD 只占窄列，正文仍保持主体居中。
                         padding: EdgeInsets.symmetric(
@@ -1641,8 +1864,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         alignment: Alignment.bottomCenter,
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
-                            // 有选项时沿用同一套横屏正文宽度。
-                            maxWidth: shortWide ? 600.0 : 650.0,
+                            // 有选项时仍沿用同一套收窄后的感知字幕宽度。
+                            maxWidth: shortWide ? 520.0 : 560.0,
                           ),
                           child: _NovelNarrationSurface(
                             key: ValueKey<String>('narration-${controller.currentSentenceIndex}'),
@@ -1655,15 +1878,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                             hasNext: readerHasNext,
                             choices: controller.choices,
                             playerHint: controller.playerHint,
-                            storyAction: surroundingsActionVisible
-                                ? _NovelFloatingSurroundingsAction(
-                                    scope: surroundingsAction!,
-                                    compact: compact || shortWide,
-                                    endBleed: centeredStoryActionEndBleed(
-                                      compact ? 16.0 : 30.0,
-                                    ),
-                                  )
-                                : null,
+                            storyAction: null,
                             onSelected: controller.selectChoice,
                             onCustomInput: () => widget.focusNode.requestFocus(),
                             onForceContinue: widget.onForceContinue,
@@ -1673,6 +1888,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         ),
                       ),
                       screen.width,
+                        ),
+                      ),
                     ),
                   )
                 else
@@ -1682,7 +1899,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     top: 0,
                     bottom: footerHeight + footerBottom +
                         (compact ? 18.0 : 24.0),
-                    child: _withSwipeMotion(
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      opacity: storyContextOpacity,
+                      child: IgnorePointer(
+                        ignoring: targetActorActive,
+                        child: _withSwipeMotion(
                       Align(
                         // 普通剧情不再悬在屏幕中央，统一从底部向上生长。
                         // 这里本身没有灰色/半透明背景，只保留文字与轻量阴影。
@@ -1695,10 +1918,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
                             // 普通正文的横屏信息量由自动视觉分页控制；
-                            // 容器保持足够呼吸感，不再靠极窄窗口制造“少字”。
-                            maxWidth: shortWide ? 600.0 : 650.0,
+                            // 收窄阅读列并降低高度，让玩家先看人物/环境，再读取必要的感知信息。
+                            maxWidth: shortWide ? 520.0 : 560.0,
                             maxHeight:
-                                availableHeight * (shortWide ? .50 : .60),
+                                availableHeight * (shortWide ? .42 : .48),
                           ),
                           child: _NovelNarrationSurface(
                             key: ValueKey<String>('narration-${controller.currentSentenceIndex}'),
@@ -1711,15 +1934,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                             hasNext: readerHasNext,
                             choices: const <NovelChoice>[],
                             playerHint: controller.playerHint,
-                            storyAction: surroundingsActionVisible
-                                ? _NovelFloatingSurroundingsAction(
-                                    scope: surroundingsAction!,
-                                    compact: compact || shortWide,
-                                    endBleed: centeredStoryActionEndBleed(
-                                      compact ? 16.0 : 30.0,
-                                    ),
-                                  )
-                                : null,
+                            storyAction: null,
                             onSelected: controller.selectChoice,
                             onCustomInput: () => widget.focusNode.requestFocus(),
                             onForceContinue: widget.onForceContinue,
@@ -1729,6 +1944,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                         ),
                       ),
                       screen.width,
+                        ),
+                      ),
                     ),
                   ),
               if (dialoguePageActive)
@@ -1761,7 +1978,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                             ),
                           );
                         },
-                        child: _withSwipeMotion(
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          opacity: storyContextOpacity,
+                          child: IgnorePointer(
+                            ignoring: targetActorActive,
+                            child: _withSwipeMotion(
                           _NovelCharacterDialogueSurface(
                                 key: ValueKey<String>(
                                   '${mode.name}-${controller.currentSentenceIndex}-$speaker',
@@ -1792,12 +2015,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                                 showPlayerHint: !_revealing &&
                                     !readerHasNext &&
                                     !controller.isGenerating,
-                                storyAction: surroundingsActionVisible
-                                    ? _NovelFloatingSurroundingsAction(
-                                        scope: surroundingsAction!,
-                                        compact: compact || shortWide,
-                                      )
-                                    : null,
+                            storyAction: null,
                                 maxPanelHeight: canShowChoices
                                     ? choiceAvailableContentHeight
                                     : availableHeight *
@@ -1810,6 +2028,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                                 onOpenPortrait: widget.onOpenPortrait,
                           ),
                           screen.width,
+                            ),
+                          ),
                         ),
                       );
                     },
@@ -1860,6 +2080,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   targetActorAvatarUrl: widget.targetActorAvatarUrl,
                   targetActorPlaceholder: widget.targetActorPlaceholder,
                   onClearTargetActor: widget.onClearTargetActor,
+                  onInputLayoutHeightChanged: _handleInputLayoutHeightChanged,
                 ),
               ),
               if (_showSwipeHint &&
@@ -1965,24 +2186,38 @@ class _NovelNarrationSurface extends StatelessWidget {
                 duration: const Duration(milliseconds: 600),
                 curve: Curves.easeOutCubic,
                 builder: (context, glow, child) {
+                  // 普通旁白是“玩家此刻感知到的信息”，不是画面的主角。
+                  // 降低字号/字重/字距并移除白色发光，让场景与人物先进入视线。
                   final style = TextStyle(
-                    color: const Color(0xFFF3F4F6),
+                    color: const Color(0xE6F3F4F6),
                     fontFamily: fontFamily,
-                    fontSize: fontSize + 2,
-                    height: 1.90,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: .55,
+                    fontSize: fontSize + .4,
+                    height: shortWide ? 1.56 : (compact ? 1.62 : 1.68),
+                    fontWeight: FontWeight.w400,
+                    letterSpacing: .22,
                     shadows: <Shadow>[
-                      Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
-                      Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
+                      Shadow(
+                        color: Color.lerp(
+                          const Color(0x8A000000),
+                          const Color(0xB0000000),
+                          glow,
+                        )!,
+                        blurRadius: 5,
+                        offset: const Offset(0, 1),
+                      ),
+                      const Shadow(
+                        color: Color(0x4D000000),
+                        blurRadius: 14,
+                        offset: Offset(0, 3),
+                      ),
                     ],
                   );
                   return _NovelNarrationParagraphText(
                     value: value.isEmpty ? emptyTextFallback : value,
                     style: style,
-                    textAlign:
-                        shortWide ? TextAlign.center : TextAlign.left,
-                    paragraphSpacing: compact ? 9 : 11,
+                    // 普通旁白统一左对齐，更像环境/感知字幕，而不是小说标题。
+                    textAlign: TextAlign.left,
+                    paragraphSpacing: compact ? 7 : 9,
                   );
                 },
               ),
@@ -2054,30 +2289,29 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
               curve: Curves.easeOutCubic,
               builder: (context, entrance, child) {
                 final glow = isRevealing ? 1.0 : 0.0;
+                // 混合句里的旁白也使用同一套“感知字幕”层级，
+                // 避免在人物对白前后突然切回大号小说正文。
                 final style = TextStyle(
-                  color: const Color(0xFFF3F4F6),
+                  color: const Color(0xE6F3F4F6),
                   fontFamily: fontFamily,
-                  fontSize: fontSize + 1.4,
-                  height: 1.86,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: .48,
+                  fontSize: fontSize + .25,
+                  height: shortWide ? 1.54 : (compact ? 1.60 : 1.66),
+                  fontWeight: FontWeight.w400,
+                  letterSpacing: .20,
                   shadows: <Shadow>[
                     Shadow(
                       color: Color.lerp(
-                        const Color(0x99000000),
-                        const Color(0xD9000000),
+                        const Color(0x8A000000),
+                        const Color(0xB0000000),
                         glow,
                       )!,
-                      blurRadius: 6 - 2 * glow,
+                      blurRadius: 5,
                       offset: const Offset(0, 1),
                     ),
-                    Shadow(
-                      color: Color.lerp(
-                        const Color(0x66000000),
-                        const Color(0x80FFFFFF),
-                        glow,
-                      )!,
-                      blurRadius: 12,
+                    const Shadow(
+                      color: Color(0x4D000000),
+                      blurRadius: 14,
+                      offset: Offset(0, 3),
                     ),
                   ],
                 );
@@ -2089,8 +2323,7 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
                     child: _NovelNarrationParagraphText(
                       value: value,
                       style: style,
-                      textAlign:
-                          shortWide ? TextAlign.center : TextAlign.left,
+                      textAlign: TextAlign.left,
                     ),
                   ),
                 );

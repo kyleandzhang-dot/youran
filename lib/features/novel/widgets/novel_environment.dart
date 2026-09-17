@@ -1683,8 +1683,8 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
   @override
   Widget build(BuildContext context) {
-    // 让原画本身保持亮度：普通场景不再全屏压黑。
-    // 天气负责天气的暗度，人物出现只做极轻的景深分离。
+    // AI 背景统一后处理只发生在世界背景层内部：人物、正文、选项、输入框
+    // 都不进入这条链路。时间 / 天气仍然在后面叠加，保留原有昼夜语义。
     final weatherDim = switch (widget.weatherEffect) {
       NovelWeatherEffect.thunderstorm => .18,
       NovelWeatherEffect.heavyRain => .09,
@@ -1694,24 +1694,42 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     };
     final dim = math.max(
       weatherDim,
-      widget.characterPresent ? .04 : .0,
+      widget.characterPresent ? .025 : .0,
     );
-    final blur = widget.characterPresent ? 2.2 : 0.0;
+
+    // 原来人物出现时整张背景 blur=2.2，会连中心主体一起明显变糊。
+    // 现在只留极轻的空气柔化；手机低功耗路径本身不会执行 ImageFiltered。
+    final blur = widget.characterPresent ? .65 : 0.0;
 
     // Do not keep the previous parallax painter alive during scene changes.
     // Its ui.Image handles belong to this State and are disposed/replaced when
     // the next Depth result arrives; a direct swap avoids an outgoing painter
     // trying to sample an already released GPU image.
-    final backgroundLayer = _parallaxReady
+    final rawBackgroundLayer = _parallaxReady
         ? _buildParallaxSurface(blur)
         : _buildLegacyBackgroundLayer(blur);
+
+    // 轻微降饱和 + 极轻暖化。矩阵只处理背景本体，不碰时间 / 天气颜色，
+    // 因此不同来源的 AI 图会更接近同一套美术语言，又不会被统一染黄。
+    final backgroundLayer = ColorFiltered(
+      colorFilter: const ColorFilter.matrix(<double>[
+        .9448, .0596, .0116, 0, 0,
+        .0299, .9587, .0114, 0, 0,
+        .0295, .0578, .8977, 0, 0,
+        0, 0, 0, 1, 0,
+      ]),
+      child: rawBackgroundLayer,
+    );
 
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
+        // 1. 继续全屏铺满；只在背景本体内部做统一色彩处理。
         ClipRect(
           child: RepaintBoundary(child: backgroundLayer),
         ),
+
+        // 2. 原有时间 / 天气保持原顺序，避免统一滤镜破坏夜晚、雨雪等语义。
         NovelTimeOverlay(
           period: widget.timePeriod,
           weatherEffect: widget.weatherEffect,
@@ -1723,37 +1741,65 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         ),
         if (widget.weatherEffect != NovelWeatherEffect.none)
           NovelWeatherOverlay(effect: widget.weatherEffect),
-        DecoratedBox(
+
+        // 3. 中央主体基本不压；从约 70% 半径以后才逐步进入四周雾暗。
+        // 这层主要压住 AI 背景常见的边缘高频细节，不会形成明显黑框。
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -.08),
+              radius: 1.12,
+              stops: <double>[.38, .70, .88, 1],
+              colors: <Color>[
+                Colors.transparent,
+                Colors.transparent,
+                Color(0x100A0C0E),
+                Color(0x2A050708),
+              ],
+            ),
+          ),
+        ),
+
+        // 4. 横屏两侧再加极淡的空气层，让左右 HUD / 人物附近少一点杂讯。
+        // 中间 60% 完全透明，因此场景主体和远景焦点仍然清楚。
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              stops: <double>[0, .20, .80, 1],
+              colors: <Color>[
+                Color(0x0D0A0C0D),
+                Colors.transparent,
+                Colors.transparent,
+                Color(0x0D0A0C0D),
+              ],
+            ),
+          ),
+        ),
+
+        // 5. 底部只在后 40% 开始渐暗，专门给正文 / 选项 / 输入区留对比度。
+        // 比旧版 .38 的整底压黑更晚、更柔，不会让场景像套了黑色对话框。
+        const DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              stops: const <double>[0, .45, 1],
+              stops: <double>[0, .58, .80, 1],
               colors: <Color>[
                 Colors.transparent,
-                const Color(0xFF0F172A).withOpacity(.08),
-                const Color(0xFF0F172A).withOpacity(.38),
+                Colors.transparent,
+                Color(0x18070A0D),
+                Color(0x46050709),
               ],
             ),
           ),
         ),
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(0, -.12),
-              radius: 1.03,
-              stops: <double>[.46, .82, 1],
-              colors: <Color>[
-                Colors.transparent,
-                Color(0x0D000000),
-                Color(0x2E000000),
-              ],
-            ),
-          ),
-        ),
+
+        // 保留生成中的轻微光感，但不让它成为长期滤镜。
         IgnorePointer(
           child: AnimatedOpacity(
-            opacity: widget.isGenerating ? .18 : .07,
+            opacity: widget.isGenerating ? .15 : .045,
             duration: const Duration(milliseconds: 600),
             child: const DecoratedBox(
               decoration: BoxDecoration(
@@ -1761,9 +1807,9 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: <Color>[
-                    Color(0x16FFFFFF),
+                    Color(0x12FFFFFF),
                     Colors.transparent,
-                    Color(0x12000000),
+                    Color(0x0C000000),
                   ],
                 ),
               ),
