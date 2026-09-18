@@ -103,112 +103,6 @@ class _NovelStageActorVisual {
   }
 }
 
-bool _novelSameStageName(String a, String b) {
-  final left = a.trim().toLowerCase();
-  final right = b.trim().toLowerCase();
-  return left.isNotEmpty && right.isNotEmpty && left == right;
-}
-
-List<_NovelStageActorVisual> _novelBuildPresenceActors({
-  required _NovelSceneStageSnapshot snapshot,
-  required bool showAmbientPresence,
-  required bool dialoguePageActive,
-  required String speaker,
-  required String currentPortraitUrl,
-  required bool protagonistSpeaking,
-  required String protagonistName,
-  required int maxActors,
-}) {
-  final activeName = dialoguePageActive ? speaker.trim() : '';
-  final selectedId = snapshot.selectedActorId.trim();
-  final actors = <_NovelStageActorVisual>[];
-
-  if (showAmbientPresence) {
-    for (final actor in snapshot.targets) {
-      final cleanPortrait = actor.portraitUrl.trim();
-      if (cleanPortrait.isEmpty || actor.isGroup) continue;
-      actors.add(
-        _NovelStageActorVisual(
-          id: actor.id.trim(),
-          name: actor.cleanName,
-          portraitUrl: cleanPortrait,
-          active: _novelSameStageName(actor.cleanName, activeName),
-          selected: selectedId.isNotEmpty && actor.id.trim() == selectedId,
-          protagonist: false,
-        ),
-      );
-    }
-  }
-
-  final cleanCurrentPortrait = currentPortraitUrl.trim();
-  if (dialoguePageActive && cleanCurrentPortrait.isNotEmpty) {
-    final existingIndex = actors.indexWhere(
-      (actor) => _novelSameStageName(actor.name, activeName),
-    );
-    if (existingIndex >= 0) {
-      actors[existingIndex] = actors[existingIndex].copyWith(
-        portraitUrl: cleanCurrentPortrait,
-        active: true,
-      );
-    } else {
-      final synthetic = _NovelStageActorVisual(
-        id: protagonistSpeaking ? '__protagonist__' : '__speaker__:$activeName',
-        name: activeName.isNotEmpty
-            ? activeName
-            : (protagonistSpeaking ? protagonistName.trim() : '角色'),
-        portraitUrl: cleanCurrentPortrait,
-        active: true,
-        selected: false,
-        protagonist: protagonistSpeaking,
-      );
-      // Player stays on the right edge; a newly introduced NPC enters from the
-      // left.  This keeps the basic VN left/right grammar without making
-      // already-present characters teleport every time the speaker changes.
-      if (protagonistSpeaking) {
-        actors.add(synthetic);
-      } else {
-        actors.insert(0, synthetic);
-      }
-    }
-  }
-
-  if (actors.isEmpty) return const <_NovelStageActorVisual>[];
-
-  // With no explicit speaker (narration), clicking a nearby character gives a
-  // softer focus state.  During dialogue, the actual speaker always wins.
-  final hasActiveSpeaker = actors.any((actor) => actor.active);
-  final normalized = actors
-      .map(
-        (actor) => actor.copyWith(
-          active: hasActiveSpeaker ? actor.active : actor.selected,
-        ),
-      )
-      .toList(growable: true);
-
-  if (normalized.length <= maxActors) return normalized;
-
-  // Always keep the focused actor.  Fill the remaining slots by the stable
-  // conversation-target order so idle characters do not shuffle around.
-  final focused = normalized.where((actor) => actor.active).toList();
-  final result = <_NovelStageActorVisual>[];
-  for (final actor in normalized) {
-    if (result.length >= maxActors) break;
-    if (focused.isNotEmpty && actor.active) continue;
-    result.add(actor);
-  }
-  if (focused.isNotEmpty) {
-    final focus = focused.first;
-    if (protagonistSpeaking) {
-      if (result.length >= maxActors) result.removeLast();
-      result.add(focus);
-    } else {
-      if (result.length >= maxActors) result.removeLast();
-      result.insert(0, focus);
-    }
-  }
-  return result.take(maxActors).toList(growable: false);
-}
-
 class _NovelPresenceStage extends StatelessWidget {
   const _NovelPresenceStage({
     required this.actors,
@@ -1544,6 +1438,25 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     final dialoguePageActive = isMixedSentence
         ? activeMixedPage?.kind == _NovelMixedPageKind.dialogue
         : mode != _NovelLineMode.narration;
+    final currentPortraitUrl = controller.currentPortraitUrl.trim();
+    final stageActors = dialoguePageActive && currentPortraitUrl.isNotEmpty
+        ? <_NovelStageActorVisual>[
+            _NovelStageActorVisual(
+              id: character?.id.trim().isNotEmpty == true
+                  ? character!.id.trim()
+                  : (sentence?.characterId.trim().isNotEmpty == true
+                      ? sentence!.characterId.trim()
+                      : speaker),
+              name: speaker.isNotEmpty
+                  ? speaker
+                  : (isHost ? controller.protagonistName : '角色'),
+              portraitUrl: currentPortraitUrl,
+              active: true,
+              selected: false,
+              protagonist: isHost,
+            ),
+          ]
+        : const <_NovelStageActorVisual>[];
     final hasNextMixedReaderPage =
         mixedPages.isNotEmpty && mixedPageIndex < mixedPages.length - 1;
     final hasPreviousMixedReaderPage =
@@ -1567,16 +1480,6 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     final affectionPulse = mode == _NovelLineMode.npc
         ? controller.affectionPulseFor(character, speaker)
         : null;
-
-    // 剧情页人物层只显示真正的立绘，不再把头像/首字母当成立绘顶上去。
-    final portraitUrl = <String>[
-      controller.currentPortraitUrl,
-      character?.portraitUrl ?? '',
-      sentence?.portraitUrl ?? '',
-    ].map((value) => value.trim()).firstWhere(
-          (value) => value.isNotEmpty,
-          orElse: () => '',
-        );
 
     final targetActorActive = widget.targetActorName.trim().isNotEmpty;
     // 选中角色进入“对某人说”模式时，剧情仍作为上下文存在，但退到第二层。
@@ -1711,9 +1614,16 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
         // 进度条按真正的“阅读页”计数：混合 sentence 与手机横屏自动拆开的
         // 纯旁白都属于阅读子页，但业务层 sentence 数量保持不变。
-        var readerPageIndex = mixedPages.isNotEmpty
+        final sentenceReaderPageIndex = mixedPages.isNotEmpty
             ? mixedPageIndex
             : (narrationPagingActive ? narrationPageIndex : 0);
+        final sentenceReaderPageTotal = sentence == null
+            ? 1
+            : _novelReaderPageCount(
+                sentence,
+                paginateNarration: _compactNarrationPaging,
+              );
+        var readerPageIndex = sentenceReaderPageIndex;
         var readerPageTotal = 0;
         for (var i = 0; i < controller.sentences.length; i++) {
           final pageCount = _novelReaderPageCount(
@@ -1728,6 +1638,22 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         if (readerPageTotal <= 0) readerPageTotal = 1;
         readerPageIndex = readerPageIndex.clamp(0, readerPageTotal - 1).toInt();
 
+        // Publish the exact visual reader page (including mixed dialogue/narration
+        // sub-pages) to the controller. Capture the sentence identity together with
+        // the page numbers: the callback runs after the frame, so page data from the
+        // previous sentence must never be applied to a newly selected sentence.
+        final readerSentenceIndex = controller.currentSentenceIndex;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          controller.setReaderPagePosition(
+            readerPageIndex,
+            readerPageTotal,
+            sentencePageIndex: sentenceReaderPageIndex,
+            sentencePageTotal: sentenceReaderPageTotal,
+            sentenceIndex: readerSentenceIndex,
+          );
+        });
+
         return GestureDetector(
           // 整个对话舞台都能接收横滑，而不是只有命中内部文字/按钮时才生效。
           behavior: HitTestBehavior.translucent,
@@ -1741,40 +1667,19 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             child: Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
-              // 场景人物舞台：附近的重要角色常驻；当前说话者提亮、前移，
-              // 其余人物退暗。回看历史时不套用“当前场景”的旁人，只保留该页说话者。
-              ValueListenableBuilder<_NovelSceneStageSnapshot>(
-                valueListenable: _novelSceneStageSnapshot,
-                builder: (context, stageSnapshot, _) {
-                  final stageActors = _novelBuildPresenceActors(
-                    snapshot: stageSnapshot,
-                    showAmbientPresence:
-                        !readerHasNext && !controller.isCinematic,
-                    dialoguePageActive: dialoguePageActive && !targetActorActive,
-                    speaker: speaker,
-                    currentPortraitUrl: portraitUrl,
-                    protagonistSpeaking: mode == _NovelLineMode.protagonist,
-                    protagonistName: controller.protagonistName,
-                    maxActors: (!shortWide && compact) ? 2 : 3,
-                  );
-                  if (stageActors.isEmpty) return const SizedBox.shrink();
-
-                  final stageSize = Size(constraints.maxWidth, availableHeight);
-                  return Positioned.fill(
-                    child: _withSwipeMotion(
-                      _NovelPresenceStage(
-                        actors: stageActors,
-                        stageSize: stageSize,
-                        reservedBottom: reservedBottom,
-                        wideDialogueLayout: wideDialogueLayout,
-                        shortWide: shortWide,
-                        compact: compact,
-                      ),
-                      stageSize.width,
-                    ),
-                  );
-                },
-              ),
+              // Character dialogue uses the authoritative portrait resolved by
+              // NovelGameController.currentPortraitUrl. No dynamic field guessing here.
+              if (stageActors.isNotEmpty)
+                Positioned.fill(
+                  child: _NovelPresenceStage(
+                    actors: stageActors,
+                    stageSize: Size(constraints.maxWidth, availableHeight),
+                    reservedBottom: panelBottom,
+                    wideDialogueLayout: wideDialogueLayout,
+                    shortWide: shortWide,
+                    compact: compact,
+                  ),
+                ),
 
               // “探索周围”属于场景操作，而不是正文内容。
               // 固定在屏幕左侧安全区，不再随着旁白/对白的高度、分页或对齐一起移动。

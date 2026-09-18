@@ -292,6 +292,15 @@ class NovelHudEvent {
   final String tone;
 }
 
+/// 小说首次进入流程只有一个权威状态，避免 showOpening / storyStarted /
+/// showCharacterSetup 三个布尔值互相打架。
+enum NovelLaunchPhase {
+  characterSetup,
+  opening,
+  startingNarrative,
+  story,
+}
+
 /// 好感变化不再使用全屏 HUD 卡片。
 /// 事件会暂存在 Controller，等对应角色真正出现在当前对白时，
 /// 再让角色名旁边的爱心与数字做一次局部放大反馈。
@@ -455,9 +464,7 @@ class NovelGameController extends ChangeNotifier {
   bool isRecoveringConnection = false;
   bool _authoritativeRecoveryPending = false;
   bool isReverting = false;
-  bool storyStarted = false;
-  bool showCharacterSetup = false;
-  bool showOpening = false;
+  NovelLaunchPhase _launchPhase = NovelLaunchPhase.characterSetup;
   bool showEnding = false;
   bool showEndingIntro = false;
   bool isCinematic = false;
@@ -468,6 +475,26 @@ class NovelGameController extends ChangeNotifier {
   bool taskCompleted = false;
   bool insufficientBalance = false;
   bool luckyCardActive = false;
+
+  NovelLaunchPhase get launchPhase => _launchPhase;
+  bool get showCharacterSetup => _launchPhase == NovelLaunchPhase.characterSetup;
+  bool get showOpening => _launchPhase == NovelLaunchPhase.opening;
+  bool get isStartingNarrative =>
+      _launchPhase == NovelLaunchPhase.startingNarrative;
+  bool get storyStarted =>
+      _launchPhase == NovelLaunchPhase.startingNarrative ||
+      _launchPhase == NovelLaunchPhase.story;
+
+  /// “故事正在展开”只属于正文生成，不属于 Storyboard 图片生成。
+  /// 新一轮第一张可阅读页到达后立即隐藏。
+  bool get showStoryBrewing =>
+      storyStarted && isGenerating && !_generationHasReadablePage && !showDice;
+
+  void _setLaunchPhase(NovelLaunchPhase next, {bool notify = true}) {
+    if (_launchPhase == next) return;
+    _launchPhase = next;
+    if (notify) _notify();
+  }
 
   String protagonistCondition = '健康';
   List<dynamic> protagonistInjuries = <dynamic>[];
@@ -482,6 +509,17 @@ class NovelGameController extends ChangeNotifier {
   int currentTurn = 0;
   int currentSentenceIndex = 0;
   int luckyCardCount = 0;
+
+  // Storyboard is keyed by AI message id (= backend turn_id). Older async image
+  // completions may still arrive after a newer turn starts, so never keep one
+  // global image URL that can be overwritten by a stale turn.
+  final Map<String, JsonMap> _storyboardTurns = <String, JsonMap>{};
+  int _readerPageIndex = 0;
+  int _readerPageTotal = 1;
+  int _readerSentencePageIndex = 0;
+  int _readerSentencePageTotal = 1;
+  int _readerSentenceIndex = -1;
+  String _readerPageTurnId = '';
 
   StreamSubscription<NovelSocketEvent>? _socketSubscription;
   Timer? _diceTimer;
@@ -510,6 +548,7 @@ class NovelGameController extends ChangeNotifier {
   int _hudEventSerial = 0;
   int _affectionPulseSerial = 0;
   int _generationId = 0;
+  bool _generationHasReadablePage = false;
   bool _disposed = false;
 
   NovelMessage? get lastAssistantMessage {
@@ -556,6 +595,464 @@ class NovelGameController extends ChangeNotifier {
       return null;
     }
     return sentences[currentSentenceIndex];
+  }
+
+  String get currentStoryboardTurnId => lastAssistantMessage?.id.trim() ?? '';
+
+  JsonMap get currentStoryboard {
+    final turnId = currentStoryboardTurnId;
+    if (turnId.isEmpty) return const <String, dynamic>{};
+    final live = _storyboardTurns[turnId];
+    if (live != null && live.isNotEmpty) return live;
+    final stored = asJsonMap(lastAssistantMessage?.customAttributes['storyboard']);
+    if (stored.isNotEmpty) return stored;
+    return const <String, dynamic>{};
+  }
+
+  JsonMap _storyboardSheet(JsonMap payload, int sheetIndex) {
+    final raw = payload['sheets'];
+    if (raw is List) {
+      for (final item in raw) {
+        final row = asJsonMap(item);
+        if (intValue(row['sheet_index']) == sheetIndex) return row;
+      }
+    } else if (raw is Map) {
+      final direct = asJsonMap(raw['$sheetIndex']);
+      if (direct.isNotEmpty) return direct;
+      for (final value in raw.values) {
+        final row = asJsonMap(value);
+        if (intValue(row['sheet_index']) == sheetIndex) return row;
+      }
+    }
+    return const <String, dynamic>{};
+  }
+
+  String _storyboardImageUrlFromSheet(JsonMap sheet) => stringValue(
+        sheet['image_url'] ?? sheet['imageUrl'] ?? sheet['url'],
+      ).trim();
+
+  List<MapEntry<int, JsonMap>> _storyboardSheetEntries(JsonMap payload) {
+    final byIndex = <int, JsonMap>{};
+    final raw = payload['sheets'];
+    if (raw is List) {
+      for (final item in raw) {
+        final row = asJsonMap(item);
+        final index = intValue(row['sheet_index'] ?? row['sheetIndex']);
+        if (index > 0) byIndex[index] = row;
+      }
+    } else if (raw is Map) {
+      for (final entry in raw.entries) {
+        final row = asJsonMap(entry.value);
+        final index = intValue(
+          row['sheet_index'] ?? row['sheetIndex'] ?? entry.key,
+        );
+        if (index > 0) byIndex[index] = row;
+      }
+    }
+    final entries = byIndex.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return entries;
+  }
+
+  String storyboardSheetUrl(int sheetIndex) =>
+      _storyboardImageUrlFromSheet(_storyboardSheet(currentStoryboard, sheetIndex));
+
+  List<String> get currentStoryboardSheetUrls => _storyboardSheetEntries(currentStoryboard)
+      .map((entry) => _storyboardImageUrlFromSheet(entry.value))
+      .where((url) => url.isNotEmpty)
+      .toList(growable: false);
+
+  bool get hasCurrentStoryboard => currentStoryboardSheetUrls.isNotEmpty;
+
+  int _firstAvailableStoryboardSheetIndex(JsonMap payload) {
+    for (final entry in _storyboardSheetEntries(payload)) {
+      if (_storyboardImageUrlFromSheet(entry.value).isNotEmpty) return entry.key;
+    }
+    return 0;
+  }
+
+  String _latestStoryboardImageUrlFromPayload(JsonMap payload) {
+    final entries = _storyboardSheetEntries(payload);
+    for (final entry in entries.reversed) {
+      final url = _storyboardImageUrlFromSheet(entry.value);
+      if (url.isNotEmpty) return url;
+    }
+    return stringValue(
+      payload['image_url'] ?? payload['imageUrl'] ?? payload['scene_image_url'],
+    ).trim();
+  }
+
+  /// Resolve a logical storyboard shot to its rendered sheet.
+  /// Newer backends may render one final sheet even when shot metadata is incomplete;
+  /// older clients incorrectly assumed shot_id == sheet_index, which could leave a
+  /// valid image permanently invisible. Prefer explicit sheet metadata, then fall
+  /// back to the only available sheet when the turn contains exactly one image.
+  String storyboardImageUrlForShot(int shotId) {
+    if (shotId <= 0) return '';
+    final entries = _storyboardSheetEntries(currentStoryboard);
+    for (final entry in entries) {
+      final row = entry.value;
+      final meta = asJsonMap(row['storyboard']);
+      final linkedShotIds = <int>{};
+
+      void collectShotIds(dynamic raw) {
+        if (raw is! List) return;
+        for (final item in raw) {
+          if (item is Map) {
+            final id = intValue(asJsonMap(item)['shot_id']);
+            if (id > 0) linkedShotIds.add(id);
+          } else {
+            final id = intValue(item);
+            if (id > 0) linkedShotIds.add(id);
+          }
+        }
+      }
+
+      collectShotIds(row['shot_ids']);
+      collectShotIds(meta['render_shot_ids']);
+      collectShotIds(meta['shots']);
+      final primaryShotId = intValue(meta['primary_shot_id']);
+      if (primaryShotId > 0) linkedShotIds.add(primaryShotId);
+
+      if (linkedShotIds.contains(shotId)) {
+        final url = _storyboardImageUrlFromSheet(row);
+        if (url.isNotEmpty) return url;
+      }
+    }
+
+    // Legacy mapping: shot N -> sheet N.
+    final direct = storyboardSheetUrl(shotId);
+    if (direct.isNotEmpty) return direct;
+
+    // Current single-image contract: one valid sheet is sufficient even when the
+    // timing/shot association payload was lost or arrived out of order.
+    final urls = entries
+        .map((entry) => _storyboardImageUrlFromSheet(entry.value))
+        .where((url) => url.isNotEmpty)
+        .toList(growable: false);
+    return urls.length == 1 ? urls.first : '';
+  }
+
+  bool get _currentStoryboardUsesEarlySafeSingleImage {
+    final payload = currentStoryboard;
+    if (payload.isEmpty) return false;
+    final mode = stringValue(payload['mode']).trim();
+    final revealPolicy = stringValue(
+      payload['reveal_policy'] ?? payload['revealPolicy'],
+    ).trim();
+    final contractVersion = stringValue(
+      payload['style_contract_version'] ?? payload['styleContractVersion'],
+    ).trim();
+
+    // Current protocol: one rendered frame is directed exclusively from source segment 0.
+    // It is therefore spoiler-safe as soon as the image URL exists; do not let a stale
+    // reader-page callback keep a successfully generated frame hidden forever.
+    if (mode == 'single_storyboard_image' &&
+        (revealPolicy == 'first_safe_segment' || contractVersion == 'v2')) {
+      return true;
+    }
+
+    final shots = currentStoryboardShots;
+    if (shots.length == 1 && currentStoryboardSheetUrls.length == 1) {
+      final revealAfter = intValue(
+        shots.first['reveal_after_segment'] ?? shots.first['source_segment_end'],
+        -1,
+      );
+      // Live sheet_update events keep the storyboard metadata nested under the sheet,
+      // so the top-level mode can legitimately be empty. One sheet + one shot + reveal 0
+      // is the protocol-level proof that this is an early-safe single image.
+      return revealAfter == 0;
+    }
+    return false;
+  }
+
+  String get currentStoryboardDisplayCandidateUrl {
+    final shotId = currentStoryboardShotId;
+    if (shotId > 0) {
+      final unlocked = storyboardImageUrlForShot(shotId);
+      if (unlocked.isNotEmpty) return unlocked;
+    }
+
+    final readyImage = currentStoryboardReadyImageUrl;
+    if (readyImage.isEmpty) return '';
+
+    // New single-image storyboards only depict the first safe source segment, so the
+    // URL itself is enough to promote the image. This intentionally bypasses ONLY the
+    // fragile UI page clock, not story safety.
+    if (_currentStoryboardUsesEarlySafeSingleImage) return readyImage;
+
+    // Legacy safety net: if the user has already advanced to the final sentence, never
+    // leave a completed current-turn image permanently hidden because the final sub-page
+    // callback was dropped during a rebuild/swipe.
+    if (!hasNext && boolValue(currentStoryboard['ready'])) return readyImage;
+
+    return '';
+  }
+
+  /// A ready current-turn image independent of reveal timing. This is only a recovery
+  /// source for malformed/missing timeline metadata; callers must not use it to bypass
+  /// a valid anti-spoiler reveal checkpoint.
+  String get currentStoryboardReadyImageUrl =>
+      _latestStoryboardImageUrlFromPayload(currentStoryboard);
+
+  /// Best already-persisted visual for recovering a remounted stage. The current
+  /// unlocked shot always wins; otherwise walk older ready turns/messages backwards.
+  /// This never unlocks a future current-turn shot merely to avoid a placeholder.
+  String get latestAvailableStoryboardImageUrl {
+    final current = currentStoryboardDisplayCandidateUrl;
+    if (current.isNotEmpty) return current;
+
+    final currentTurnId = currentStoryboardTurnId;
+    // Async image jobs can finish out of order. Map insertion order therefore is NOT
+    // visual chronology: a slow old turn may arrive last and must not become the recovery
+    // image. Sort by authoritative turn_number (then numeric turn id) instead.
+    final cachedEntries = _storyboardTurns.entries.toList(growable: false)
+      ..sort((a, b) {
+        final aTurn = intValue(
+          a.value['turn_number'] ?? a.value['turnNumber'],
+          int.tryParse(a.key) ?? 0,
+        );
+        final bTurn = intValue(
+          b.value['turn_number'] ?? b.value['turnNumber'],
+          int.tryParse(b.key) ?? 0,
+        );
+        return bTurn.compareTo(aTurn);
+      });
+    for (final entry in cachedEntries) {
+      if (entry.key == currentTurnId) continue;
+      final url = _latestStoryboardImageUrlFromPayload(entry.value);
+      if (url.isNotEmpty) return url;
+    }
+
+    for (final message in messages.reversed) {
+      if (message.role != NovelMessageRole.assistant) continue;
+      if (message.id.trim() == currentTurnId) continue;
+      final payload = asJsonMap(message.customAttributes['storyboard']);
+      if (payload.isEmpty) continue;
+      final url = _latestStoryboardImageUrlFromPayload(payload);
+      if (url.isNotEmpty) return url;
+    }
+    return '';
+  }
+
+  /// Storyboard playback uses the same deterministic source-segment clock as Speaker.
+  /// A shot becomes visible only after its reveal checkpoint has been fully read.
+  /// This intentionally prefers a slightly late visual reveal over showing a future
+  /// character/event before the user has seen it in text.
+  List<JsonMap> get currentStoryboardShots {
+    final payload = currentStoryboard;
+    final byId = <int, JsonMap>{};
+
+    void collect(dynamic raw) {
+      if (raw is! List) return;
+      for (final item in raw) {
+        final row = asJsonMap(item);
+        final shotId = intValue(row['shot_id']);
+        if (shotId > 0) byId[shotId] = row;
+      }
+    }
+
+    collect(payload['shots']);
+    final sheets = payload['sheets'];
+    if (sheets is List) {
+      for (final item in sheets) {
+        final sheet = asJsonMap(item);
+        collect(asJsonMap(sheet['storyboard'])['shots']);
+      }
+    } else if (sheets is Map) {
+      for (final value in sheets.values) {
+        final sheet = asJsonMap(value);
+        collect(asJsonMap(sheet['storyboard'])['shots']);
+      }
+    }
+
+    final entries = byId.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return entries.map((entry) => entry.value).toList(growable: false);
+  }
+
+  int get _storyboardCompletedSourceSegment {
+    if (sentences.isEmpty || currentSentenceIndex < 0) return -1;
+    var completed = -1;
+
+    // Storyboard playback is driven only by the visual reader position.
+    // Typewriter/reveal state must never move the visual clock backwards: otherwise
+    // a shot can appear for one frame and disappear as soon as the new page starts
+    // revealing its text.
+    final previousCount = currentSentenceIndex.clamp(0, sentences.length).toInt();
+    for (var i = 0; i < previousCount; i++) {
+      final end = sentences[i].storySourceEndSegment;
+      if (end >= 0 && end > completed) completed = end;
+    }
+
+    final current = currentSentence;
+    if (current == null) return completed;
+
+    // setReaderPagePosition is published after the frame. During a sentence swipe,
+    // the old sentence's sub-page index can therefore survive for one frame. Bind
+    // page metadata to the exact sentence index so stale page state can never unlock
+    // a shot for the newly selected sentence.
+    final turnId = currentStoryboardTurnId;
+    final readerPositionKnown =
+        _readerPageTurnId == turnId &&
+        _readerSentenceIndex == currentSentenceIndex;
+    final atLastSentencePage = readerPositionKnown &&
+        _readerSentencePageTotal > 0 &&
+        _readerSentencePageIndex >= _readerSentencePageTotal - 1;
+
+    // Reaching the visual reader page is enough to select its storyboard frame.
+    // Do not couple this to isReaderRevealing: reveal animation is presentation, not
+    // chronology. This keeps the selected shot stable while text types in.
+    if (atLastSentencePage) {
+      final end = current.storySourceEndSegment;
+      if (end >= 0 && end > completed) completed = end;
+    }
+    return completed;
+  }
+
+  int get currentStoryboardShotId {
+    final shots = currentStoryboardShots;
+    final fallbackSheet = _firstAvailableStoryboardSheetIndex(currentStoryboard);
+
+    // A valid rendered image must never become permanently invisible just because a
+    // sheet update arrived without its optional shot timeline metadata.
+    if (shots.isEmpty) return fallbackSheet;
+
+    final completedSegment = _storyboardCompletedSourceSegment;
+    var unlockedShot = 0;
+    var hasUsableTimeline = false;
+    for (final shot in shots) {
+      final shotId = intValue(shot['shot_id']);
+      final revealAfter = intValue(
+        shot['reveal_after_segment'] ?? shot['source_segment_end'],
+        -1,
+      );
+      if (shotId <= 0 || revealAfter < 0) continue;
+      hasUsableTimeline = true;
+      if (completedSegment >= 0 &&
+          revealAfter <= completedSegment &&
+          storyboardImageUrlForShot(shotId).isNotEmpty &&
+          shotId > unlockedShot) {
+        unlockedShot = shotId;
+      }
+    }
+
+    // If timeline metadata exists, preserve anti-spoiler behavior: before the reveal
+    // checkpoint return 0 and let the UI keep the previous successful world frame.
+    if (hasUsableTimeline) return unlockedShot;
+
+    // Metadata exists but none of it can drive playback. Showing the already-rendered
+    // sheet is safer than leaving the user on a permanent black placeholder.
+    return fallbackSheet;
+  }
+
+  bool get isCurrentStoryboardGenerating {
+    final payload = currentStoryboard;
+    return boolValue(payload['generating']) ||
+        (isGenerating && !boolValue(payload['ready']));
+  }
+
+  void setReaderPagePosition(
+    int index,
+    int total, {
+    int sentencePageIndex = 0,
+    int sentencePageTotal = 1,
+    int sentenceIndex = -1,
+  }) {
+    final safeTotal = total < 1 ? 1 : total;
+    final safeIndex = index.clamp(0, safeTotal - 1).toInt();
+    final safeSentenceTotal = sentencePageTotal < 1 ? 1 : sentencePageTotal;
+    final safeSentencePageIndex =
+        sentencePageIndex.clamp(0, safeSentenceTotal - 1).toInt();
+    final safeSentenceIndex = sentenceIndex < 0
+        ? currentSentenceIndex
+        : sentenceIndex.clamp(0, sentences.isEmpty ? 0 : sentences.length - 1).toInt();
+    final turnId = currentStoryboardTurnId;
+    if (_readerPageIndex == safeIndex &&
+        _readerPageTotal == safeTotal &&
+        _readerSentencePageIndex == safeSentencePageIndex &&
+        _readerSentencePageTotal == safeSentenceTotal &&
+        _readerSentenceIndex == safeSentenceIndex &&
+        _readerPageTurnId == turnId) {
+      return;
+    }
+    _readerPageIndex = safeIndex;
+    _readerPageTotal = safeTotal;
+    _readerSentencePageIndex = safeSentencePageIndex;
+    _readerSentencePageTotal = safeSentenceTotal;
+    _readerSentenceIndex = safeSentenceIndex;
+    _readerPageTurnId = turnId;
+    debugPrint(
+      '[StoryboardClock] turn=$turnId sentence=$safeSentenceIndex '
+      'subPage=$safeSentencePageIndex/$safeSentenceTotal '
+      'readerPage=$safeIndex/$safeTotal shot=$currentStoryboardShotId',
+    );
+    _notify();
+  }
+
+  void _mergeStoryboardPayload(JsonMap incoming, {bool notify = true}) {
+    final turnId = stringValue(
+      incoming['turn_id'] ?? incoming['message_id'],
+    ).trim();
+    if (turnId.isEmpty) return;
+
+    final existing = Map<String, dynamic>.from(
+      _storyboardTurns[turnId] ?? const <String, dynamic>{},
+    );
+    final bySheet = <int, JsonMap>{};
+
+    void collect(dynamic raw) {
+      if (raw is List) {
+        for (final item in raw) {
+          final row = asJsonMap(item);
+          final index = intValue(row['sheet_index']);
+          if (index > 0) bySheet[index] = Map<String, dynamic>.from(row);
+        }
+      } else if (raw is Map) {
+        for (final value in raw.values) {
+          final row = asJsonMap(value);
+          final index = intValue(row['sheet_index']);
+          if (index > 0) bySheet[index] = Map<String, dynamic>.from(row);
+        }
+      }
+    }
+
+    collect(existing['sheets']);
+    collect(incoming['sheets']);
+
+    final singleSheetIndex = intValue(
+      incoming['sheet_index'] ?? incoming['sheetIndex'],
+    );
+    final singleImageUrl = stringValue(
+      incoming['image_url'] ?? incoming['imageUrl'] ?? incoming['url'],
+    ).trim();
+    if (singleSheetIndex > 0 && singleImageUrl.isNotEmpty) {
+      final previousSheet = bySheet[singleSheetIndex] ?? const <String, dynamic>{};
+      bySheet[singleSheetIndex] = <String, dynamic>{
+        ...previousSheet,
+        'sheet_index': singleSheetIndex,
+        'image_url': singleImageUrl,
+        if (incoming['storyboard'] != null)
+          'storyboard': asJsonMap(incoming['storyboard']),
+      };
+    }
+
+    final sortedEntries = bySheet.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final merged = <String, dynamic>{
+      ...existing,
+      ...incoming,
+      'turn_id': turnId,
+      'sheets': sortedEntries
+          .map((entry) => entry.value)
+          .toList(growable: false),
+    };
+
+    _storyboardTurns[turnId] = merged;
+    while (_storyboardTurns.length > 24) {
+      _storyboardTurns.remove(_storyboardTurns.keys.first);
+    }
+    if (notify) _notify();
   }
 
   // 已经完整生成的页面可立即阅读；后台流继续进入队列，不再锁住翻页。
@@ -819,6 +1316,22 @@ class NovelGameController extends ChangeNotifier {
     return (npc.fold<int>(0, (sum, character) => sum + character.affection) / npc.length).round();
   }
 
+  bool _historyHasStartedNarrative(NovelHistoryResult history) {
+    // `is_first_play` 不是“正文已经开始”的权威信号。角色确认会更新 scenario，
+    // 某些后端链路可能因此提前把它变成 false；只有真实 turn 才代表已进入正文。
+    if (history.currentTurn > 0) return true;
+
+    for (final message in history.messages) {
+      if (message.role != NovelMessageRole.assistant || message.isTemporary) continue;
+      final attrs = message.customAttributes;
+      final turn = intValue(
+        attrs['turn_number'] ?? attrs['turn'] ?? attrs['story_turn'],
+      );
+      if (turn > 0) return true;
+    }
+    return false;
+  }
+
   Future<void> initialize() async {
     if (isInitializing || isInitialized) return;
     isInitializing = true;
@@ -847,17 +1360,18 @@ class NovelGameController extends ChangeNotifier {
       // 当前目标不是进入世界的硬依赖；旧存档也可以由后端 /novel/goal 自动补齐。
       await refreshCurrentGoal(notify: false);
 
-      openingText = history.messages.reversed
-              .where((message) => message.role == NovelMessageRole.assistant)
-              .map((message) => message.content)
-              .firstOrNull ??
-          scenario!.openingMessage;
+      // Opening 只读取剧本自己的 openingMessage。正文历史绝不反向充当序章。
+      openingText = scenario!.openingMessage.trim().isNotEmpty
+          ? scenario!.openingMessage
+          : '故事即将开始。';
 
-      if (history.isFirstPlay) {
-        storyStarted = false;
-        showCharacterSetup = true;
+      final hasStartedNarrative = _historyHasStartedNarrative(history);
+      if (hasStartedNarrative) {
+        _setLaunchPhase(NovelLaunchPhase.story, notify: false);
+      } else if (history.isFirstPlay) {
+        _setLaunchPhase(NovelLaunchPhase.characterSetup, notify: false);
       } else {
-        storyStarted = true;
+        _setLaunchPhase(NovelLaunchPhase.opening, notify: false);
       }
 
       // 核心数据已经就绪，先允许游戏页面进入。
@@ -905,6 +1419,12 @@ class NovelGameController extends ChangeNotifier {
 
     messages = history.messages.where((message) => !message.isTemporary).toList();
     currentTurn = history.currentTurn;
+    // 权威历史只允许把启动流程向前推进：一旦确认已有真实剧情回合，
+    // 无论当前是 Opening 还是重连中的 starting，都统一进入 Story。
+    // turn=0 不做反向迁移，避免回溯第 0 轮时重新弹出 Opening。
+    if (_historyHasStartedNarrative(history)) {
+      _setLaunchPhase(NovelLaunchPhase.story, notify: false);
+    }
     score = NovelScore(total: history.currentScore);
     currentTask = history.currentTask;
     if (history.endingCg.isNotEmpty) {
@@ -934,6 +1454,17 @@ class NovelGameController extends ChangeNotifier {
 
   void _syncUiFromLastMessage(NovelMessage? message) {
     final attributes = message?.customAttributes ?? const <String, dynamic>{};
+    final storedStoryboard = asJsonMap(attributes['storyboard']);
+    if (storedStoryboard.isNotEmpty && message != null) {
+      _mergeStoryboardPayload(
+        <String, dynamic>{
+          ...storedStoryboard,
+          'turn_id': stringValue(storedStoryboard['turn_id'], message.id),
+          'generating': !boolValue(storedStoryboard['ready']),
+        },
+        notify: false,
+      );
+    }
     final rawChoices = attributes['suggested_replies'] ?? attributes['suggestions'];
     if (rawChoices is List) {
       choices = rawChoices.map(NovelChoice.fromDynamic).where((item) => item.text.isNotEmpty).toList();
@@ -2028,6 +2559,7 @@ class NovelGameController extends ChangeNotifier {
     _streamUiTimer = null;
     _pendingStreamText = '';
 
+    _generationHasReadablePage = false;
     isGenerating = true;
     choicesVisible = false;
     choices = <NovelChoice>[];
@@ -2405,6 +2937,9 @@ class NovelGameController extends ChangeNotifier {
     );
     _markLatestUserSuccess();
     _rebuildSentences();
+    if (novelTextHasReadableContent(incoming.readerText)) {
+      _generationHasReadablePage = true;
+    }
 
     // 新页只进入队列，不抢玩家当前正在看的页。第一页首次到达时 index=0
     // 自然可见；之后 Speaker 再快也不会自动跳到最后一页。
@@ -3387,16 +3922,31 @@ class NovelGameController extends ChangeNotifier {
       raw: payload,
     );
     openingText = scenario!.openingMessage.isNotEmpty ? scenario!.openingMessage : openingText;
-    showCharacterSetup = false;
-    showOpening = true;
-    _notify();
+    _setLaunchPhase(NovelLaunchPhase.opening);
   }
 
   Future<void> startNarrative() async {
-    showOpening = false;
-    storyStarted = true;
+    // 首轮启动只允许从 Opening 进入一次。Dialog 只上报“已读完”，
+    // 由 Controller 统一负责状态迁移与生成，避免 UI 自己偷偷触发业务。
+    if (_launchPhase != NovelLaunchPhase.opening || isGenerating) return;
+
+    _setLaunchPhase(NovelLaunchPhase.startingNarrative, notify: false);
+
+    // 开场阶段不应携带任何普通回合交互状态。
+    choices = <NovelChoice>[];
+    choicesVisible = false;
+    playerHint = '';
+    currentSentenceIndex = 0;
     _notify();
-    await continueStory();
+
+    // 第一轮必须直接进入 Writer，绝不经过 continueStory() 的旧 choices 门禁。
+    await _triggerAi('');
+
+    // 无论首轮最终成功、被恢复还是显示错误，Opening 都已经消费完成。
+    // 真正落库后的重启会再由 history.currentTurn 决定 story 状态。
+    if (!_disposed && _launchPhase == NovelLaunchPhase.startingNarrative) {
+      _setLaunchPhase(NovelLaunchPhase.story);
+    }
   }
 
   void acceptFateRevert() {
@@ -3494,12 +4044,43 @@ class NovelGameController extends ChangeNotifier {
         choices = <NovelChoice>[];
         showEnding = true;
         break;
-      case 'background_generating':
-        isBackgroundGenerating = true;
+      case 'storyboard_generating':
+        _mergeStoryboardPayload(
+          <String, dynamic>{
+            ...data,
+            'generating': true,
+            'ready': false,
+          },
+          notify: false,
+        );
         break;
-      case 'background_update':
-        isBackgroundGenerating = false;
-        world = world.copyWith(backgroundUrl: stringValue(data['image_url'], world.backgroundUrl));
+      case 'storyboard_sheet_update':
+        _mergeStoryboardPayload(
+          <String, dynamic>{
+            ...data,
+            'generating': true,
+          },
+          notify: false,
+        );
+        break;
+      case 'storyboard_turn_ready':
+        _mergeStoryboardPayload(
+          <String, dynamic>{
+            ...data,
+            'generating': false,
+            'ready': true,
+          },
+          notify: false,
+        );
+        break;
+      case 'storyboard_sheet_failed':
+        _mergeStoryboardPayload(
+          <String, dynamic>{
+            ...data,
+            'failed': true,
+          },
+          notify: false,
+        );
         break;
       case 'character_portrait_generating':
         final genId = stringValue(data['character_id']);
@@ -3514,6 +4095,20 @@ class NovelGameController extends ChangeNotifier {
             ? raw.map(NovelChoice.fromDynamic).where((choice) => choice.text.isNotEmpty).toList()
             : <NovelChoice>[];
         playerHint = stringValue(data['player_hint']);
+        break;
+      case 'background_update':
+        // Scene-only storyboard fallback is delivered through background_update.
+        // Older clients ignored this event, so a turn with no character-safe CG could
+        // leave the visual stage with no image at all until the next history sync.
+        final backgroundUrl = stringValue(
+          data['image_url'] ?? data['background_url'] ?? data['url'],
+        ).trim();
+        if (backgroundUrl.isNotEmpty) {
+          world = world.copyWith(
+            backgroundUrl: backgroundUrl,
+            location: stringValue(data['location'], world.location),
+          );
+        }
         break;
       case 'world_state_update':
         final previousLocation = world.location;

@@ -69,6 +69,32 @@ class _NovelInputBarState extends State<NovelInputBar> {
   final GlobalKey _layoutMeasureKey = GlobalKey();
   double _lastReportedLayoutHeight = -1;
 
+  // Flutter 会在 TextField.enabled 变为 false 时主动把它移出可聚焦树。
+  // 剧情生成/翻页期间 enabled 可能只是短暂关闭；如果用户关闭前正在输入，
+  // 恢复可输入后应把焦点还给同一个输入框，而不是让用户再点一次。
+  bool _restoreFocusWhenEnabled = false;
+
+  void _requestInputFocusAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !widget.enabled ||
+          _isListening ||
+          _micHeld ||
+          _speechStarting ||
+          _speechFinishing) {
+        return;
+      }
+      widget.focusNode.requestFocus();
+    });
+  }
+
+  bool _globalPointInsideInputBar(Offset globalPosition) {
+    final renderObject = _layoutMeasureKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return false;
+    final origin = renderObject.localToGlobal(Offset.zero);
+    return (origin & renderObject.size).contains(globalPosition);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -87,8 +113,12 @@ class _NovelInputBarState extends State<NovelInputBar> {
       _update();
     }
     if (oldWidget.focusNode != widget.focusNode) {
+      final oldHadFocus = oldWidget.focusNode.hasFocus;
       oldWidget.focusNode.removeListener(_updateFocus);
       widget.focusNode.addListener(_updateFocus);
+      if (oldHadFocus && widget.enabled) {
+        _requestInputFocusAfterFrame();
+      }
     }
     if (oldWidget.socketService != widget.socketService) {
       unawaited(_asr.dispose());
@@ -96,7 +126,13 @@ class _NovelInputBarState extends State<NovelInputBar> {
     }
 
     if (oldWidget.enabled && !widget.enabled) {
+      // 先记住用户是否真的在输入。临时 disable 会让 TextField 自己失焦，
+      // 但这不应被解释成用户主动放弃输入。
+      _restoreFocusWhenEnabled = widget.focusNode.hasFocus;
       _closeInventoryPicker();
+    } else if (!oldWidget.enabled && widget.enabled && _restoreFocusWhenEnabled) {
+      _restoreFocusWhenEnabled = false;
+      _requestInputFocusAfterFrame();
     }
 
     if (oldWidget.enabled && !widget.enabled &&
@@ -248,11 +284,14 @@ class _NovelInputBarState extends State<NovelInputBar> {
     _inventoryOverlay?.markNeedsBuild();
   }
 
-  void _closeInventoryPicker() {
+  void _closeInventoryPicker({bool focusInput = false}) {
     final entry = _inventoryOverlay;
     _inventoryOverlay = null;
     if (entry != null && entry.mounted) entry.remove();
     if (entry != null && mounted) setState(() {});
+    if (entry != null && focusInput) {
+      _requestInputFocusAfterFrame();
+    }
   }
 
   Future<void> _refreshInventoryPicker() async {
@@ -293,7 +332,14 @@ class _NovelInputBarState extends State<NovelInputBar> {
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
-                onTap: _closeInventoryPicker,
+                onTapDown: (details) {
+                  // Overlay 位于 TextField 上方。以前用户点输入框时，第一下只会
+                  // 被这层 barrier 吃掉并关闭面板，看起来像“输入框无法聚焦”。
+                  // 如果这次点击本来就落在输入栏区域，关闭面板后立刻把焦点还回去。
+                  final focusInput =
+                      _globalPointInsideInputBar(details.globalPosition);
+                  _closeInventoryPicker(focusInput: focusInput);
+                },
               ),
             ),
             CompositedTransformFollower(
@@ -459,12 +505,15 @@ class _NovelInputBarState extends State<NovelInputBar> {
             ? visibleText
             : '$visibleText $references';
 
+    // 发送通常会让父层短暂进入 generating，从而把 widget.enabled 关掉。
+    // 记住“发送前正在输入”的意图，等可输入状态恢复后再安全回焦。
+    _restoreFocusWhenEnabled = widget.focusNode.hasFocus;
     widget.onSend(sendText);
     widget.controller.clear();
     if (_referencedItemNames.isNotEmpty) {
       setState(_referencedItemNames.clear);
     }
-    widget.focusNode.requestFocus();
+    _requestInputFocusAfterFrame();
   }
 
   void _insertNewline() {

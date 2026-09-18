@@ -402,6 +402,8 @@ class NovelSentence {
     this.nextCharacterId = '',
     this.nextPortraitUrl = '',
     this.nextAvatarUrl = '',
+    this.storySourceStartSegment = -1,
+    this.storySourceEndSegment = -1,
     this.speakerInfo = const <String, dynamic>{},
   });
 
@@ -421,6 +423,11 @@ class NovelSentence {
   final String nextCharacterId;
   final String nextPortraitUrl;
   final String nextAvatarUrl;
+  /// Raw Writer display-segment range consumed by this reader sentence.
+  /// Storyboard Director uses the exact same segmentation, so this is a stable
+  /// chronology clock rather than a guessed percentage through the turn.
+  final int storySourceStartSegment;
+  final int storySourceEndSegment;
   final JsonMap speakerInfo;
 
   bool get isNarration {
@@ -471,6 +478,14 @@ class NovelSentence {
       nextCharacterId: stringValue(json['nextCharacterId'] ?? json['next_character_id']),
       nextPortraitUrl: stringValue(json['nextPortraitUrl'] ?? json['next_portrait_url']),
       nextAvatarUrl: stringValue(json['nextAvatarUrl'] ?? json['next_avatar_url']),
+      storySourceStartSegment: intValue(
+        json['storySourceStartSegment'] ?? json['story_source_start_segment'],
+        -1,
+      ),
+      storySourceEndSegment: intValue(
+        json['storySourceEndSegment'] ?? json['story_source_end_segment'],
+        -1,
+      ),
       speakerInfo: asJsonMap(json['speakerInfo'] ?? json['speaker_info']),
     );
   }
@@ -491,6 +506,8 @@ class NovelSentence {
     String? nextCharacterId,
     String? nextPortraitUrl,
     String? nextAvatarUrl,
+    int? storySourceStartSegment,
+    int? storySourceEndSegment,
     JsonMap? speakerInfo,
   }) {
     return NovelSentence(
@@ -509,6 +526,10 @@ class NovelSentence {
       nextCharacterId: nextCharacterId ?? this.nextCharacterId,
       nextPortraitUrl: nextPortraitUrl ?? this.nextPortraitUrl,
       nextAvatarUrl: nextAvatarUrl ?? this.nextAvatarUrl,
+      storySourceStartSegment:
+          storySourceStartSegment ?? this.storySourceStartSegment,
+      storySourceEndSegment:
+          storySourceEndSegment ?? this.storySourceEndSegment,
       speakerInfo: speakerInfo ?? this.speakerInfo,
     );
   }

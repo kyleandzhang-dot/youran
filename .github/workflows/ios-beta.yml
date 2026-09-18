@@ -35,6 +35,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.4'
           channel: 'stable'
 
       - name: Cache Flutter pub dependencies

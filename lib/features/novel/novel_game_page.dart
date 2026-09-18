@@ -692,16 +692,32 @@ class _NovelGamePageState extends State<NovelGamePage>
     }
   }
 
+  void _requestStoryInputFocusAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _primaryTab != _NovelPrimaryTab.story ||
+          !controller.storyStarted ||
+          controller.isCinematic ||
+          _battleOpen ||
+          _endingOpen) {
+        return;
+      }
+      _inputFocusNode.requestFocus();
+    });
+  }
+
   void _handleSceneBarkTap(NovelSceneBark bark) {
     if (!bark.clickable || bark.actor.cleanName.isEmpty) return;
     setState(() => _targetSceneActor = _resolveSceneActorVisuals(bark.actor));
-    _inputFocusNode.requestFocus();
+    // setState 会让输入栏先重建目标角色上下文；下一帧再 requestFocus，
+    // 避免同一帧 TextField 重建与焦点申请互相竞争。
+    _requestStoryInputFocusAfterFrame();
   }
 
   void _handleTalkTargetTap(NovelSceneBarkActor actor) {
     if (actor.cleanName.isEmpty) return;
     setState(() => _targetSceneActor = _resolveSceneActorVisuals(actor));
-    _inputFocusNode.requestFocus();
+    _requestStoryInputFocusAfterFrame();
   }
 
   void _clearTargetSceneActor() {
@@ -727,6 +743,10 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   Future<void> _processOverlayRequests() async {
+    // 初始化完成前，launchPhase 还不是权威状态。initialize() 开头会 notify，
+    // 如果此时处理覆盖层，会在 /chat/history 返回前把角色创建弹窗提前 push 出来。
+    if (!controller.isInitialized || controller.isInitializing) return;
+
     // 角色确认弹窗尚未完全退出时，禁止再 push 开场/其他覆盖层。
     // submitCharacterSetup() 成功后会 notify，并把 showOpening 设为 true；
     // 如果这里不拦截，就会出现两个 Dialog 同时操作 Navigator 的 assertion。
@@ -755,15 +775,15 @@ class _NovelGamePageState extends State<NovelGamePage>
     }
     if (controller.showOpening && !_openingOpen) {
       _openingOpen = true;
-      final openMenuRequested =
-          await showNovelOpeningDialog(context, controller);
+      final result = await showNovelOpeningDialog(context, controller);
       _openingOpen = false;
       if (!mounted) return;
 
-      if (openMenuRequested) {
-        // 与首次“确认角色”返回保持同一行为：不留在空剧情页，
-        // 直接回到世界 Shell 并自动展开左侧菜单。
+      if (result == NovelOpeningResult.worldMenu) {
         await _returnToWorldMenuAfterCharacterSetupDismissed();
+      } else {
+        // Dialog 只负责阅读体验；真正的状态迁移和首轮 Writer 启动统一由 Controller 管。
+        await controller.startNarrative();
       }
       return;
     }
@@ -1115,11 +1135,7 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   Future<void> _previewOpening() async {
     if (!mounted) return;
-    await showNovelOpeningDialog(
-      context,
-      controller,
-      previewOnly: true,
-    );
+    await showNovelOpeningDialog(context, controller);
   }
 
   Future<void> _previewSceneArrival() async {
@@ -2243,16 +2259,6 @@ class _NovelGamePageState extends State<NovelGamePage>
             novelDisplayMode,
           ]),
           builder: (context, _) {
-            final rawBackground = _backgroundPreviewOverride ?? controller.world.backgroundUrl.trim();
-            final normalizedBackground = rawBackground.replaceAll('\\', '/').toLowerCase();
-            final isHomeBackground =
-                normalizedBackground.endsWith('/home_background.jpg') ||
-                normalizedBackground.endsWith('home_background.jpg') ||
-                normalizedBackground.endsWith('/background_home.png') ||
-                normalizedBackground.endsWith('background_home.png');
-            final background = isHomeBackground ? '' : rawBackground;
-            final activeWeather = _activeWeatherEffect;
-            final activeTime = _activeTimePeriod;
             final loadFailed = !controller.isInitializing &&
                 !controller.isInitialized &&
                 controller.lastError.isNotEmpty;
@@ -2327,29 +2333,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                 fit: StackFit.expand,
                 children: <Widget>[
                   RepaintBoundary(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 360),
-                      switchInCurve: Curves.easeOutCubic,
-                      switchOutCurve: Curves.easeInCubic,
-                      child: NovelWorldBackground(
-                        url: _backgroundPreviewBytes == null ? background : '',
-                        memoryBytes: _backgroundPreviewBytes,
-                        memoryCacheKey: _backgroundPreviewBytes == null
-                            ? ''
-                            : 'developer-background|$_backgroundPreviewVersion|${_backgroundPreviewFileName ?? ''}|${_backgroundPreviewBytes!.lengthInBytes}',
-                        parallaxStrength: _backgroundParallaxStrength,
-                        fallbackAsset: 'assets/images/background_home.png',
-                        characterPresent: controller.storyStarted &&
-                            controller.currentSpeakerName.isNotEmpty &&
-                            !controller.isCinematic,
-                        isGenerating: controller.isGenerating,
-                        weatherEffect: _weatherPreviewOverride != null
-                            ? activeWeather
-                            : (controller.settings.weatherEffectsEnabled
-                                ? activeWeather
-                                : NovelWeatherEffect.none),
-                        timePeriod: activeTime,
-                      ),
+                    child: _NovelStoryboardStage(
+                      controller: controller,
+                      fallbackAsset: widget.fallbackBackgroundAsset.trim().isNotEmpty
+                          ? widget.fallbackBackgroundAsset.trim()
+                          : 'assets/images/background_home.png',
                     ),
                   ),
                   SafeArea(
@@ -2841,10 +2829,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                     ),
 
                   if (_primaryTab == _NovelPrimaryTab.story &&
-                      controller.storyStarted &&
-                      controller.isGenerating &&
-                      (controller.currentSentence?.readerText.trim().isEmpty ?? true) &&
-                      !controller.showDice)
+                      controller.showStoryBrewing)
                     const NovelBrewingOverlay(),
 
                   if (_primaryTab == _NovelPrimaryTab.story &&
@@ -3198,6 +3183,435 @@ class _NovelPreviewButton extends StatelessWidget {
   }
 }
 
+/// Novel main visual stage.
+/// Current backend contract: each storyboard sheet is one complete cinematic image.
+/// There is no panel splitting/cropping on the client.
+class _NovelStoryboardStage extends StatefulWidget {
+  const _NovelStoryboardStage({
+    required this.controller,
+    required this.fallbackAsset,
+  });
 
+  final NovelGameController controller;
+  final String fallbackAsset;
 
+  @override
+  State<_NovelStoryboardStage> createState() => _NovelStoryboardStageState();
+}
+
+class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
+  final Set<String> _preloadedUrls = <String>{};
+
+  // These fields are nullable on purpose. During Flutter Web hot reload an already
+  // mounted State object can survive a class shape change, so newly-added fields may
+  // temporarily read as JS `undefined`. All access goes through lazy safe getters so
+  // a development hot reload cannot crash on .trim() / .isNotEmpty.
+  Set<String>? _preloadingUrlsStore;
+  static Map<String, String>? _stickyStoryboardBySessionStore;
+  String? _displayedStoryboardUrlStore;
+  String? _lastLocationKeyStore;
+  String? _lastWorldBackgroundUrlStore;
+  bool? _awaitingSceneBackgroundStore;
+  int? _promoteTokenStore;
+  String? _promotingUrlStore;
+  Map<String, int>? _promoteFailureCountsStore;
+
+  Map<String, int> get _promoteFailureCounts =>
+      _promoteFailureCountsStore ??= <String, int>{};
+
+  Set<String> get _preloadingUrls =>
+      _preloadingUrlsStore ??= <String>{};
+  static Map<String, String> get _stickyStoryboardBySession =>
+      _stickyStoryboardBySessionStore ??= <String, String>{};
+
+  String get _displayedStoryboardUrl =>
+      _displayedStoryboardUrlStore?.trim() ?? '';
+  set _displayedStoryboardUrl(String value) =>
+      _displayedStoryboardUrlStore = value;
+
+  String get _lastLocationKey => _lastLocationKeyStore?.trim() ?? '';
+  set _lastLocationKey(String value) => _lastLocationKeyStore = value;
+
+  String get _lastWorldBackgroundUrl =>
+      _lastWorldBackgroundUrlStore?.trim() ?? '';
+  set _lastWorldBackgroundUrl(String value) =>
+      _lastWorldBackgroundUrlStore = value;
+
+  bool get _awaitingSceneBackground => _awaitingSceneBackgroundStore ?? false;
+  set _awaitingSceneBackground(bool value) =>
+      _awaitingSceneBackgroundStore = value;
+
+  int get _promoteToken => _promoteTokenStore ?? 0;
+  set _promoteToken(int value) => _promoteTokenStore = value;
+
+  String get _promotingUrl => _promotingUrlStore?.trim() ?? '';
+  set _promotingUrl(String value) => _promotingUrlStore = value;
+
+  String get _sessionKey => widget.controller.sessionId.trim();
+
+  String _stickyStoryboardForSession(String sessionKey) {
+    final value = _stickyStoryboardBySession[sessionKey];
+    return value?.trim() ?? '';
+  }
+
+  String _locationKey() => <String>[
+        widget.controller.locationTitle.trim(),
+        widget.controller.locationSubtitle.trim(),
+      ].join('\u0001');
+
+  @override
+  void initState() {
+    super.initState();
+    _lastLocationKey = _locationKey();
+    _lastWorldBackgroundUrl = widget.controller.world.backgroundUrl.trim();
+    final sticky = _stickyStoryboardForSession(_sessionKey);
+    if (sticky.isNotEmpty) _displayedStoryboardUrl = sticky;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _scheduleVisualSync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _NovelStoryboardStage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldSession = oldWidget.controller.sessionId.trim();
+    if (oldSession != _sessionKey) {
+      _promoteToken += 1;
+      _displayedStoryboardUrl = _stickyStoryboardForSession(_sessionKey);
+      _lastLocationKey = _locationKey();
+      _lastWorldBackgroundUrl = widget.controller.world.backgroundUrl.trim();
+      _awaitingSceneBackground = false;
+    }
+    _scheduleVisualSync();
+  }
+
+  ImageProvider _providerFor(String source) {
+    final value = source.trim();
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+      return NetworkImage(value);
+    }
+    return AssetImage(value);
+  }
+
+  void _scheduleVisualSync() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncVisualState();
+    });
+  }
+
+  void _syncVisualState() {
+    final controller = widget.controller;
+    final nextLocation = _locationKey();
+    final nextWorldBackground = controller.world.backgroundUrl.trim();
+    final locationChanged = _lastLocationKey.isNotEmpty &&
+        nextLocation.isNotEmpty &&
+        nextLocation != _lastLocationKey;
+    if (locationChanged) {
+      _awaitingSceneBackground = true;
+    }
+    _lastLocationKey = nextLocation;
+
+    if (_awaitingSceneBackground &&
+        nextWorldBackground.isNotEmpty &&
+        nextWorldBackground != _lastWorldBackgroundUrl) {
+      // A location update can arrive before background_update. Wait for an actually
+      // new scene image URL instead of clearing the old CG onto the previous scene's
+      // background. Once the new scene image is decodable, reveal the base layer.
+      _lastWorldBackgroundUrl = nextWorldBackground;
+      _awaitingSceneBackground = false;
+      if (_displayedStoryboardUrl.isNotEmpty) {
+        _releaseStoryboardAfterSceneBackground(nextWorldBackground, nextLocation);
+        return;
+      }
+    }
+
+    if (!_awaitingSceneBackground && nextWorldBackground.isNotEmpty) {
+      _lastWorldBackgroundUrl = nextWorldBackground;
+    }
+
+    final currentCandidate = controller.currentStoryboardDisplayCandidateUrl.trim();
+    final currentReadyImage = controller.currentStoryboardReadyImageUrl.trim();
+    final hasTimeline = controller.currentStoryboardShots.isNotEmpty;
+    final currentSheetUrls = controller.currentStoryboardSheetUrls;
+    final singleReadyCurrentTurn =
+        currentSheetUrls.length == 1 && currentReadyImage.isNotEmpty;
+
+    // Never let an optional reader-clock callback permanently hide a successfully
+    // generated current-turn image. New single-image storyboards depict the first safe
+    // source segment, and the Controller already promotes those immediately. This extra
+    // last-sentence fallback protects legacy/live race cases where the final sub-page
+    // position callback was dropped during a rebuild or swipe.
+    final preferredCandidate = currentCandidate.isNotEmpty
+        ? currentCandidate
+        : ((!hasTimeline || (!controller.hasNext && singleReadyCurrentTurn))
+            ? currentReadyImage
+            : '');
+    if (preferredCandidate.isNotEmpty &&
+        preferredCandidate != _displayedStoryboardUrl) {
+      unawaited(_promoteStoryboard(preferredCandidate));
+      return;
+    }
+
+    // On first mount / route restoration there may be no current-turn image yet.
+    // Recover the most recent persisted storyboard instead of flashing the fallback.
+    if (_displayedStoryboardUrl.isEmpty) {
+      final recovered = controller.latestAvailableStoryboardImageUrl.trim();
+      if (recovered.isNotEmpty) {
+        unawaited(_promoteStoryboard(recovered));
+      }
+    }
+
+    _schedulePreload();
+  }
+
+  Future<void> _releaseStoryboardAfterSceneBackground(
+    String backgroundUrl,
+    String expectedLocation,
+  ) async {
+    final token = ++_promoteToken;
+    try {
+      await precacheImage(_providerFor(backgroundUrl), context);
+    } catch (_) {
+      // NovelWorldBackground may still recover through its resize/original fallback.
+      // Never clear the current CG just because this eager preload failed.
+      return;
+    }
+    if (!mounted || token != _promoteToken || _locationKey() != expectedLocation) {
+      return;
+    }
+    setState(() {
+      _displayedStoryboardUrl = '';
+    });
+    // The current turn's storyboard may already have become ready while we were
+    // awaiting the new scene background. Re-evaluate immediately; otherwise no new
+    // controller notification may arrive and the latest CG can remain hidden.
+    _scheduleVisualSync();
+  }
+
+  Future<void> _promoteStoryboard(String url) async {
+    final clean = url.trim();
+    if (clean.isEmpty ||
+        clean == _displayedStoryboardUrl ||
+        clean == _promotingUrl) {
+      return;
+    }
+
+    _promotingUrl = clean;
+    final token = ++_promoteToken;
+    try {
+      await precacheImage(NetworkImage(clean), context);
+    } catch (error) {
+      if (_promotingUrl == clean) _promotingUrl = '';
+      // The defining rule of the stage: a failed next image can never erase the last
+      // successfully rendered world frame. Retry a couple of times because R2/CDN
+      // propagation can lag behind the backend's successful task completion event.
+      final attempt = (_promoteFailureCounts[clean] ?? 0) + 1;
+      _promoteFailureCounts[clean] = attempt;
+      debugPrint(
+        '[StoryboardStage] preload failed; keep previous. next=$clean attempt=$attempt error=$error',
+      );
+      if (attempt <= 2) {
+        Future<void>.delayed(const Duration(milliseconds: 900), () {
+          if (!mounted || _displayedStoryboardUrl == clean) return;
+          final current = widget.controller.currentStoryboardDisplayCandidateUrl.trim();
+          final ready = widget.controller.currentStoryboardReadyImageUrl.trim();
+          if (current == clean || ready == clean) _scheduleVisualSync();
+        });
+      }
+      return;
+    }
+    if (!mounted || token != _promoteToken) {
+      if (_promotingUrl == clean) _promotingUrl = '';
+      return;
+    }
+
+    if (_promotingUrl == clean) _promotingUrl = '';
+    _promoteFailureCounts.remove(clean);
+    _preloadedUrls.add(clean);
+    _preloadingUrls.remove(clean);
+    if (_sessionKey.isNotEmpty) {
+      _stickyStoryboardBySession[_sessionKey] = clean;
+      while (_stickyStoryboardBySession.length > 8) {
+        _stickyStoryboardBySession.remove(_stickyStoryboardBySession.keys.first);
+      }
+    }
+    setState(() {
+      _displayedStoryboardUrl = clean;
+    });
+  }
+
+  void _schedulePreload() {
+    final urls = <String>{
+      ...widget.controller.currentStoryboardSheetUrls,
+      widget.controller.currentStoryboardDisplayCandidateUrl,
+      widget.controller.latestAvailableStoryboardImageUrl,
+    }..removeWhere((url) => url.trim().isEmpty);
+    if (urls.isEmpty) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final rawUrl in urls) {
+        final url = rawUrl.trim();
+        if (url.isEmpty ||
+            _preloadedUrls.contains(url) ||
+            !_preloadingUrls.add(url)) {
+          continue;
+        }
+        precacheImage(NetworkImage(url), context).then((_) {
+          _preloadingUrls.remove(url);
+          _preloadedUrls.add(url);
+        }).catchError((_) {
+          // Failed preloads are deliberately not marked successful so a later rebuild
+          // can retry after a transient CDN/network failure.
+          _preloadingUrls.remove(url);
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+
+    // Always keep a living scene background underneath the storyboard. This covers
+    // first-load, scene-only turns, missing portrait-reference turns, failed CGs, and
+    // any brief current-turn window where no storyboard URL exists yet.
+    final worldBackgroundUrl = controller.world.backgroundUrl.trim();
+    final Widget baseWorld = worldBackgroundUrl.isEmpty
+        ? _NovelStoryboardPlaceholder(fallbackAsset: widget.fallbackAsset)
+        : NovelWorldBackground(
+            url: worldBackgroundUrl,
+            fallbackAsset: widget.fallbackAsset,
+            storyboardMode: false,
+            characterPresent: false,
+            isGenerating: controller.isGenerating,
+            weatherEffect: novelWeatherEffectFromKey(controller.world.weather),
+            timePeriod: novelTimePeriodFromKey(
+              controller.effectiveWorldTimePeriodKey,
+            ),
+          );
+
+    final displayedUrl = _displayedStoryboardUrl;
+    final Widget storyboardVisual = displayedUrl.isEmpty
+        ? const SizedBox.expand(
+            key: ValueKey<String>('storyboard-none'),
+          )
+        : _NovelStoryboardImage(
+            key: ValueKey<String>('storyboard-display|$displayedUrl'),
+            imageUrl: displayedUrl,
+          );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        baseWorld,
+        AnimatedSwitcher(
+          duration: MediaQuery.of(context).disableAnimations
+              ? Duration.zero
+              : const Duration(milliseconds: 420),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.linear,
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              ...previousChildren,
+              if (currentChild != null) currentChild,
+            ],
+          ),
+          transitionBuilder: (child, animation) {
+            final incomingKey = ValueKey<String>(
+              displayedUrl.isEmpty
+                  ? 'storyboard-none'
+                  : 'storyboard-display|$displayedUrl',
+            );
+            if (child.key == incomingKey && displayedUrl.isNotEmpty) {
+              return FadeTransition(opacity: animation, child: child);
+            }
+            // Outgoing successful image stays fully visible until the incoming image
+            // covers it. No fade-to-black gap between story pages/turns.
+            return child;
+          },
+          child: storyboardVisual,
+        ),
+        // Keep HUD/dialogue readable without repainting weather/time over a composed CG.
+        IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[
+                  Colors.black.withOpacity(.10),
+                  Colors.transparent,
+                  Colors.black.withOpacity(.10),
+                ],
+                stops: const <double>[0, .56, 1],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NovelStoryboardImage extends StatelessWidget {
+  const _NovelStoryboardImage({
+    super.key,
+    required this.imageUrl,
+  });
+
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.network(
+      imageUrl,
+      width: double.infinity,
+      height: double.infinity,
+      // Storyboard is a world layer, not a gallery image. Always fill the viewport;
+      // crop a small amount at the edges instead of exposing black letterbox bars.
+      fit: BoxFit.cover,
+      alignment: Alignment.center,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.high,
+      // This image was precached before promotion. If the provider still fails later,
+      // reveal the stable world background underneath instead of painting black.
+      errorBuilder: (_, __, ___) => const SizedBox.expand(),
+    );
+  }
+}
+
+class _NovelStoryboardPlaceholder extends StatelessWidget {
+  const _NovelStoryboardPlaceholder({
+    super.key,
+    required this.fallbackAsset,
+  });
+
+  final String fallbackAsset;
+
+  @override
+  Widget build(BuildContext context) {
+    final asset = fallbackAsset.trim();
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        const ColoredBox(color: Color(0xFF090A0C)),
+        if (asset.isNotEmpty)
+          Opacity(
+            opacity: .16,
+            child: Image.asset(
+              asset,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ),
+          ),
+      ],
+    );
+  }
+}
 

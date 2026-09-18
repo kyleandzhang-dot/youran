@@ -760,6 +760,7 @@ class NovelWorldBackground extends StatefulWidget {
     this.memoryCacheKey = '',
     this.parallaxStrength = 1.5,
     this.fallbackAsset = '',
+    this.storyboardMode = false,
     this.characterPresent = false,
     this.isGenerating = false,
     this.weatherEffect = NovelWeatherEffect.none,
@@ -779,6 +780,11 @@ class NovelWorldBackground extends StatefulWidget {
   final double parallaxStrength;
 
   final String fallbackAsset;
+
+  /// Storyboard CG already contains its own cinematic staging and featured characters.
+  /// Keep it as a flat image instead of running Depth Anything / 2.5D parallax.
+  /// Historical stitched sheets are also handled by the aspect-ratio fallback below.
+  final bool storyboardMode;
   final bool characterPresent;
   final bool isGenerating;
   final NovelWeatherEffect weatherEffect;
@@ -802,6 +808,15 @@ class _ResolvedNovelBackgroundImage {
 
 class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     with SingleTickerProviderStateMixin {
+  // Cross-mount latch for the last successfully rendered remote story image.
+  // GameShell / route restoration can rebuild this widget with a temporarily empty URL;
+  // keeping this outside the State instance prevents a one-frame storyboard from vanishing
+  // into the fallback when the whole State is recreated.
+  static String _stickySuccessfulRemoteUrl = '';
+  static bool _stickySuccessfulUseOriginalNetworkUrl = false;
+  static DateTime? _stickySuccessfulAt;
+  static const Duration _stickySuccessfulTtl = Duration(minutes: 30);
+
   late final AnimationController _motionController;
   bool _lowPowerEffects = false;
   bool _animationsDisabled = false;
@@ -810,6 +825,9 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   // 对正式剧情它就是 URL / asset；对开发者本地图则是 memory:<cacheKey>。
   late String _displayedUrl;
   Uint8List? _displayedMemoryBytes;
+  // CDN resize 变体偶发失败时，当前成功画面可锁定为原始 URL。
+  // 只有下一张图片确认解码成功后才会更新这组 displayed 状态。
+  bool _displayedUseOriginalNetworkUrl = false;
   int _loadToken = 0;
 
   // 2.5D 资源。人物立绘不进入这条链路，只有世界背景参与 Depth + Shader。
@@ -855,6 +873,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
           defaultTargetPlatform == TargetPlatform.android);
 
   bool get _parallaxReady =>
+      !widget.storyboardMode &&
       _depthParallaxSupported &&
       _depthSourceKey == _displayedUrl.trim() &&
       _parallaxShader != null &&
@@ -876,6 +895,38 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     return value.url.trim();
   }
 
+  bool _isRemoteSource(String value) =>
+      value.startsWith('http://') || value.startsWith('https://');
+
+  bool get _hasFreshStickyRemote {
+    final url = _stickySuccessfulRemoteUrl.trim();
+    final at = _stickySuccessfulAt;
+    if (url.isEmpty || at == null) return false;
+    return DateTime.now().difference(at) <= _stickySuccessfulTtl;
+  }
+
+  void _rememberSuccessfulRemote(
+    String value, {
+    required bool useOriginalNetworkUrl,
+  }) {
+    final clean = value.trim();
+    if (!_isRemoteSource(clean)) return;
+    _stickySuccessfulRemoteUrl = clean;
+    _stickySuccessfulUseOriginalNetworkUrl = useOriginalNetworkUrl;
+    _stickySuccessfulAt = DateTime.now();
+  }
+
+  void _restoreStickyRemoteIfNeeded(String requested) {
+    if (requested.trim().isNotEmpty || !_hasFreshStickyRemote) return;
+    _displayedUrl = _stickySuccessfulRemoteUrl;
+    _displayedMemoryBytes = null;
+    _displayedUseOriginalNetworkUrl =
+        _stickySuccessfulUseOriginalNetworkUrl;
+    debugPrint(
+      '[NovelBG] restored sticky storyboard after remount: $_displayedUrl',
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -883,8 +934,10 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       vsync: this,
       duration: const Duration(seconds: 22),
     );
-    _displayedUrl = _sourceKeyForWidget(widget);
+    final requestedSource = _sourceKeyForWidget(widget);
+    _displayedUrl = requestedSource;
     _displayedMemoryBytes = widget.memoryBytes;
+    _restoreStickyRemoteIfNeeded(requestedSource);
 
     if (_depthParallaxSupported) {
       WidgetsBinding.instance.pointerRouter.addGlobalRoute(
@@ -935,6 +988,21 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     final previous = _sourceKeyForWidget(oldWidget);
     if (next != previous) {
       unawaited(_preloadThenSwap(next, widget.memoryBytes));
+    }
+
+    if (oldWidget.storyboardMode != widget.storyboardMode) {
+      // Switching between world background and storyboard CG must also switch the
+      // rendering pipeline even when the URL itself happens to stay unchanged.
+      _depthToken += 1;
+      _clearParallaxImages();
+      _depthGenerating = false;
+      _depthError = '';
+      _syncLegacyBackgroundMotion();
+      if (!widget.storyboardMode) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_prepareDepthForDisplayedImage());
+        });
+      }
     }
   }
 
@@ -1183,6 +1251,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   ImageProvider? _providerFor(
     String value, {
     Uint8List? memoryBytes,
+    bool useOriginalNetworkUrl = false,
   }) {
     if (value.isEmpty) return null;
     if (value.startsWith('memory:')) {
@@ -1198,58 +1267,90 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       }
     }
     if (value.startsWith('http://') || value.startsWith('https://')) {
-      return NetworkImage(CdnUtil.resize(value, width: 1080)); // 压缩全屏背景
+      final networkUrl = useOriginalNetworkUrl
+          ? value
+          : CdnUtil.resize(value, width: 1080);
+      return NetworkImage(networkUrl);
     }
     return AssetImage(value);
   }
 
-  /// 新图先在后台完整解码，解码成功（或明确失败）之后再 setState 触发
-  /// AnimatedSwitcher 的切换动画。这样动画开始时新图必然已经能立刻画出来，
-  /// 老图会一直原地不动，杜绝“动画时间到了但图还没到”的黑屏窗口。
+  /// 新图必须先完整解码成功，才有资格替换当前画面。
+  ///
+  /// 这里把当前成功背景当成“锁存帧”：
+  /// - 上游短暂给空 URL：忽略，绝不清屏；
+  /// - resize/CDN 变体失败：自动重试原始 URL；
+  /// - 两个 URL 都失败：继续显示上一张成功图；
+  /// - 只有新图确认可解码后才更新 _displayedUrl。
+  ///
+  /// 这样历史翻页 / storyboard 状态异步更新时，即使中间出现空值、迟到值或
+  /// CDN resize 抖动，也不会出现“正确画面闪一下随后变黑”的窗口。
   Future<void> _preloadThenSwap(
     String value,
     Uint8List? memoryBytes,
   ) async {
     final token = ++_loadToken;
+    final nextValue = value.trim();
 
-    if (value.isEmpty) {
-      if (mounted && token == _loadToken) {
-        setState(() {
-          _displayedUrl = value;
-          _displayedMemoryBytes = null;
-        });
-        _clearParallaxImages();
-        _syncLegacyBackgroundMotion();
-      }
+    if (nextValue.isEmpty) {
+      debugPrint(
+        '[NovelBG] ignore empty background update; keep=${_displayedUrl.trim()}',
+      );
       return;
     }
 
-    final provider = _providerFor(value, memoryBytes: memoryBytes);
+    var useOriginalNetworkUrl = false;
+    var provider = _providerFor(
+      nextValue,
+      memoryBytes: memoryBytes,
+    );
     if (provider == null) {
-      // 无法识别的 URL（比如 data: 解析失败），直接切换让 errorBuilder 兜底。
-      if (mounted && token == _loadToken) {
-        setState(() {
-          _displayedUrl = value;
-          _displayedMemoryBytes = memoryBytes;
-        });
-        _clearParallaxImages();
-        _syncLegacyBackgroundMotion();
-      }
+      debugPrint(
+        '[NovelBG] ignore invalid background source; keep=${_displayedUrl.trim()} next=$nextValue',
+      );
       return;
     }
 
     try {
       await precacheImage(provider, context);
-    } catch (_) {
-      // 加载失败也要切换过去：交给 _image() 里的 errorBuilder 兜底。
+    } catch (error) {
+      final isNetwork = nextValue.startsWith('http://') ||
+          nextValue.startsWith('https://');
+      if (!isNetwork) {
+        debugPrint(
+          '[NovelBG] preload failed; keep previous background. next=$nextValue error=$error',
+        );
+        return;
+      }
+
+      // 某些 CDN resize 变体可能短暂 404/超时，但 R2/CDN 原始地址本身是好的。
+      // 这种情况下直接用原图，不允许 errorBuilder 把已经正常的旧画面替换成黑底。
+      final originalProvider = NetworkImage(nextValue);
+      try {
+        await precacheImage(originalProvider, context);
+        provider = originalProvider;
+        useOriginalNetworkUrl = true;
+        debugPrint('[NovelBG] resized image failed; using original URL: $nextValue');
+      } catch (originalError) {
+        debugPrint(
+          '[NovelBG] both resized/original preload failed; keep previous background. next=$nextValue error=$originalError',
+        );
+        return;
+      }
     }
 
-    // token 不一致说明这期间 URL 又变了，只认最新的那次。
+    // token 不一致说明等待图片期间上游又切到了更新的一张，只认最新请求。
     if (!mounted || token != _loadToken) return;
+
     setState(() {
-      _displayedUrl = value;
+      _displayedUrl = nextValue;
       _displayedMemoryBytes = memoryBytes;
+      _displayedUseOriginalNetworkUrl = useOriginalNetworkUrl;
     });
+    _rememberSuccessfulRemote(
+      nextValue,
+      useOriginalNetworkUrl: useOriginalNetworkUrl,
+    );
     _syncLegacyBackgroundMotion();
     unawaited(_prepareDepthForDisplayedImage());
   }
@@ -1330,10 +1431,30 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   Future<void> _prepareDepthForDisplayedImage() async {
     if (!_depthParallaxSupported || !mounted) return;
 
+    if (widget.storyboardMode) {
+      // A storyboard is already a composed cinematic frame. Depth-based motion can
+      // tear silhouettes, hands and hair away from their intended contact points.
+      // Keep it flat and let the existing fade/scale transition provide motion.
+      if (_parallaxSourceImage != null ||
+          _parallaxDepthImage != null ||
+          _depthGenerating ||
+          _depthSourceKey.isNotEmpty) {
+        setState(() {
+          _depthToken += 1;
+          _clearParallaxImages();
+          _depthGenerating = false;
+          _depthError = '';
+        });
+        _syncLegacyBackgroundMotion();
+      }
+      return;
+    }
+
     final sourceKey = _displayedUrl.trim();
     final provider = _providerFor(
       sourceKey,
       memoryBytes: _displayedMemoryBytes,
+      useOriginalNetworkUrl: _displayedUseOriginalNetworkUrl,
     );
     if (provider == null || sourceKey.isEmpty) {
       if (mounted) {
@@ -1369,6 +1490,30 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       resolved = await _imageFrameFromProvider(provider);
       if (resolved == null || resolved.bytes.isEmpty) {
         throw StateError('无法取得背景图片像素');
+      }
+
+      // Backward compatibility: historical storyboard sheets were vertically stitched
+      // two-panel canvases. Portrait/square images remain flat even if the caller does
+      // not yet pass storyboardMode. Landscape world backgrounds may still use 2.5D.
+      if (resolved.image.height >= resolved.image.width) {
+        final width = resolved.image.width;
+        final height = resolved.image.height;
+        resolved.dispose();
+        resolved = null;
+        if (!mounted || token != _depthToken ||
+            sourceKey != _displayedUrl.trim()) {
+          return;
+        }
+        setState(() {
+          _clearParallaxImages();
+          _depthGenerating = false;
+          _depthError = '';
+        });
+        debugPrint(
+          '[NovelBG] keep flat image for portrait/square storyboard-like source: ${width}x$height',
+        );
+        _syncLegacyBackgroundMotion();
+        return;
       }
 
       // 全局 DepthService 缓存以 URL/asset key 去重：同一张背景只跑一次 ONNX。
@@ -1494,22 +1639,31 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     );
   }
 
+  Widget _darkFallbackGradient() {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            Color(0xFF25282B),
+            Color(0xFF121416),
+            Color(0xFF08090A),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _fallback() {
     final asset = widget.fallbackAsset.trim();
-    if (asset.isEmpty) {
-      return const DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: <Color>[
-              Color(0xFF25282B),
-              Color(0xFF121416),
-              Color(0xFF08090A),
-            ],
-          ),
-        ),
-      );
+    if (asset.isEmpty) return _darkFallbackGradient();
+
+    // This asset is missing from the current web bundle (404 at
+    // assets/assets/images/home_background.jpg). Do not keep issuing a failing
+    // request every time the story background temporarily has no source.
+    if (kIsWeb && asset.endsWith('home_background.jpg')) {
+      return _darkFallbackGradient();
     }
 
     return Transform.scale(
@@ -1519,20 +1673,27 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         fit: BoxFit.cover,
         filterQuality: FilterQuality.medium,
         gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: <Color>[
-                Color(0xFF25282B),
-                Color(0xFF121416),
-                Color(0xFF08090A),
-              ],
-            ),
-          ),
-        ),
+        errorBuilder: (_, __, ___) => _darkFallbackGradient(),
       ),
+    );
+  }
+
+  Widget _stickyRemoteImageOrFallback({String exclude = ''}) {
+    final sticky = _stickySuccessfulRemoteUrl.trim();
+    if (!_hasFreshStickyRemote || sticky.isEmpty || sticky == exclude.trim()) {
+      return _fallback();
+    }
+    final provider = _providerFor(
+      sticky,
+      useOriginalNetworkUrl: _stickySuccessfulUseOriginalNetworkUrl,
+    );
+    if (provider == null) return _fallback();
+    return Image(
+      image: provider,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (_, __, ___) => _fallback(),
     );
   }
 
@@ -1542,14 +1703,29 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     final provider = _providerFor(
       value,
       memoryBytes: _displayedMemoryBytes,
+      useOriginalNetworkUrl: _displayedUseOriginalNetworkUrl,
     );
-    if (provider == null) return _fallback();
+    if (provider == null) return _stickyRemoteImageOrFallback(exclude: value);
     return Image(
       image: provider,
       fit: BoxFit.cover,
       gaplessPlayback: true,
       filterQuality: FilterQuality.medium,
-      errorBuilder: (_, __, ___) => _fallback(),
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (frame != null && _isRemoteSource(value)) {
+          _rememberSuccessfulRemote(
+            value,
+            useOriginalNetworkUrl: _displayedUseOriginalNetworkUrl,
+          );
+        }
+        return child;
+      },
+      errorBuilder: (_, error, __) {
+        debugPrint(
+          '[NovelBG] displayed image failed; trying sticky. current=$value error=$error',
+        );
+        return _stickyRemoteImageOrFallback(exclude: value);
+      },
     );
   }
 

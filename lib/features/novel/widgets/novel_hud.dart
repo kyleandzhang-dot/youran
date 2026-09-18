@@ -101,6 +101,8 @@ class NovelTopHud extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             _ConditionAvatar(
+                              avatarUrl: controller.protagonist?.avatarUrl ?? '',
+                              portraitUrl: controller.protagonist?.portraitUrl ?? '',
                               gender: controller.protagonist?.gender ?? '',
                               size: avatarSize,
                             ),
@@ -799,20 +801,25 @@ class _TopIconButton extends StatelessWidget {
 
 class _ConditionAvatar extends StatelessWidget {
   const _ConditionAvatar({
+    required this.avatarUrl,
+    required this.portraitUrl,
     required this.gender,
     this.size = 38,
   });
 
+  final String avatarUrl;
+  final String portraitUrl;
   final String gender;
   final double size;
 
   bool get _isFemale {
     final value = gender.trim().toLowerCase();
     return value == 'female' ||
-        value == '女' ||
-        value == '女性' ||
+        value == 'female_user' ||
         value == 'woman' ||
-        value == 'girl';
+        value == 'girl' ||
+        value == '\u5973' ||
+        value == '\u5973\u6027';
   }
 
   @override
@@ -821,19 +828,52 @@ class _ConditionAvatar extends StatelessWidget {
         ? 'assets/images/female.webp'
         : 'assets/images/male.webp';
 
-    // 左上角固定使用项目内置头像，不读取用户或主角上传的头像地址。
+    final avatar = avatarUrl.trim();
+    final portrait = portraitUrl.trim();
+
+    // Image generation can intentionally reuse portraitUrl as avatarUrl when
+    // no separately cropped avatar exists. Treat an identical URL as portrait
+    // content instead of pretending it is a face avatar.
+    final hasIndependentAvatar =
+        avatar.isNotEmpty && (portrait.isEmpty || avatar != portrait);
+    final showingPortrait = !hasIndependentAvatar && portrait.isNotEmpty;
+    final artworkUrl = hasIndependentAvatar
+        ? avatar
+        : (portrait.isNotEmpty ? portrait : avatar);
+
+    Widget artwork = NovelArtwork(
+      url: artworkUrl,
+      assetCandidates: <String>[fallbackAsset],
+      fit: BoxFit.cover,
+      // Portrait fallback is anchored to the very top. The extra zoom below
+      // intentionally prioritizes the face and upper torso inside the tiny HUD slot.
+      alignment: showingPortrait ? Alignment.topCenter : Alignment.center,
+      fallbackText: '',
+      filterQuality: showingPortrait ? FilterQuality.high : FilterQuality.medium,
+    );
+
+    if (showingPortrait) {
+      artwork = Transform.scale(
+        scale: 2.5,
+        alignment: Alignment.topCenter,
+        child: artwork,
+      );
+    }
+
     return SizedBox(
       width: size,
       height: size,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(9),
-        child: NovelArtwork(
-          url: '',
-          assetCandidates: <String>[fallbackAsset],
-          fit: BoxFit.cover,
-          alignment: Alignment.center,
-          fallbackText: '',
-          filterQuality: FilterQuality.medium,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withOpacity(.16),
+            width: .7,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(.7),
+          child: ClipOval(child: artwork),
         ),
       ),
     );
