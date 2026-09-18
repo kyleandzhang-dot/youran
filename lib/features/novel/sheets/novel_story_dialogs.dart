@@ -394,12 +394,16 @@ class _IdentityTag extends StatelessWidget {
   }
 }
 
-Future<bool> showNovelOpeningDialog(
+enum NovelOpeningResult {
+  completed,
+  worldMenu,
+}
+
+Future<NovelOpeningResult> showNovelOpeningDialog(
   BuildContext context,
-  NovelGameController controller, {
-  bool previewOnly = false,
-}) async {
-  final openMenuRequested = await showGeneralDialog<bool>(
+  NovelGameController controller,
+) async {
+  final result = await showGeneralDialog<NovelOpeningResult>(
     context: context,
     barrierDismissible: false,
     barrierLabel: '故事开场',
@@ -407,8 +411,9 @@ Future<bool> showNovelOpeningDialog(
     transitionDuration: const Duration(milliseconds: 1200),
     pageBuilder: (context, animation, secondaryAnimation) {
       return _NovelOpeningExperience(
-        controller: controller,
-        previewOnly: previewOnly,
+        openingText: controller.openingText,
+        backgroundUrl: controller.world.backgroundUrl,
+        fontFamily: controller.settings.fontFamily,
       );
     },
     transitionBuilder: (context, animation, secondaryAnimation, child) {
@@ -418,16 +423,18 @@ Future<bool> showNovelOpeningDialog(
       );
     },
   );
-  return openMenuRequested ?? false;
+  return result ?? NovelOpeningResult.worldMenu;
 }
 
 class _NovelOpeningExperience extends StatefulWidget {
   const _NovelOpeningExperience({
-    required this.controller,
-    required this.previewOnly,
+    required this.openingText,
+    required this.backgroundUrl,
+    required this.fontFamily,
   });
-  final NovelGameController controller;
-  final bool previewOnly;
+  final String openingText;
+  final String backgroundUrl;
+  final String? fontFamily;
 
   @override
   State<_NovelOpeningExperience> createState() => _NovelOpeningExperienceState();
@@ -445,9 +452,9 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
   @override
   void initState() {
     super.initState();
-    final source = widget.controller.openingText.trim().isEmpty
+    final source = widget.openingText.trim().isEmpty
         ? '故事即将开始。'
-        : widget.controller.openingText.trim();
+        : widget.openingText.trim();
     final cleanedSource = novelTextWithoutSymbolOnlyLines(source);
     _paragraphs = (cleanedSource.isEmpty ? '故事即将开始。' : cleanedSource)
         .split('\n')
@@ -495,21 +502,23 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
   void _requestWorldMenu() {
     if (_closing) return;
     _closing = true;
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop(NovelOpeningResult.worldMenu);
+  }
+
+  void _completeOpening() {
+    if (_closing) return;
+    _closing = true;
+    Navigator.of(context).pop(NovelOpeningResult.completed);
   }
 
   void _advance() {
     if (_closing) return;
-    if (!_finished) {
-      setState(() => _visibleCount += 1);
-      _scrollToLatestParagraph();
+    if (_finished) {
+      _completeOpening();
       return;
     }
-    _closing = true;
-    Navigator.of(context).pop(false);
-    if (!widget.previewOnly) {
-      unawaited(widget.controller.startNarrative());
-    }
+    setState(() => _visibleCount += 1);
+    _scrollToLatestParagraph();
   }
 
   Widget _buildParagraphList({
@@ -556,7 +565,7 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
                     textAlign: TextAlign.justify,
                     style: TextStyle(
                       color: Colors.white,
-                      fontFamily: widget.controller.settings.fontFamily,
+                      fontFamily: widget.fontFamily,
                       fontSize: fontSize,
                       height: lineHeight,
                       letterSpacing: .7,
@@ -584,13 +593,38 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
 
   Widget _buildContinueHint({required bool compact}) {
     if (_visibleCount <= 0) return const SizedBox.shrink();
+
+    if (_finished) {
+      return TextButton.icon(
+        onPressed: _completeOpening,
+        style: TextButton.styleFrom(
+          foregroundColor: Colors.white.withOpacity(.78),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 10 : 14,
+            vertical: compact ? 6 : 8,
+          ),
+        ),
+        icon: Icon(
+          Icons.chevron_right_rounded,
+          size: compact ? 15 : 17,
+        ),
+        label: Text(
+          '进入故事',
+          style: TextStyle(
+            fontSize: compact ? 10 : 11,
+            letterSpacing: compact ? 1.2 : 1.6,
+          ),
+        ),
+      );
+    }
+
     return FadeTransition(
       opacity: _breathe,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text(
-            _finished ? '轻触进入故事' : '轻触继续',
+            '轻触继续',
             style: TextStyle(
               color: Colors.white.withOpacity(.58),
               fontSize: compact ? 9.5 : 10.5,
@@ -750,7 +784,7 @@ class _NovelOpeningExperienceState extends State<_NovelOpeningExperience>
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final background = widget.controller.world.backgroundUrl;
+    final background = widget.backgroundUrl;
     final landscape = size.width > size.height;
 
     return PopScope(
