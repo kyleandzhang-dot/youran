@@ -709,15 +709,11 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _handleSceneBarkTap(NovelSceneBark bark) {
     if (!bark.clickable || bark.actor.cleanName.isEmpty) return;
     setState(() => _targetSceneActor = _resolveSceneActorVisuals(bark.actor));
-    // setState 会让输入栏先重建目标角色上下文；下一帧再 requestFocus，
-    // 避免同一帧 TextField 重建与焦点申请互相竞争。
-    _requestStoryInputFocusAfterFrame();
   }
 
   void _handleTalkTargetTap(NovelSceneBarkActor actor) {
     if (actor.cleanName.isEmpty) return;
     setState(() => _targetSceneActor = _resolveSceneActorVisuals(actor));
-    _requestStoryInputFocusAfterFrame();
   }
 
   void _clearTargetSceneActor() {

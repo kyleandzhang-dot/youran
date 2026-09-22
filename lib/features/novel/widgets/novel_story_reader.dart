@@ -2466,61 +2466,59 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
               
               const SizedBox(height: 6),
 
+              // ✨ 3. 透明白+强毛玻璃的独立对话面板
               GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onTap: onTap,
-                child: ValueListenableBuilder<String>(
-                  valueListenable: displayTextListenable,
-                  builder: (context, value, _) {
-                    final display = value.isEmpty && !(sentence?.readerText.isNotEmpty == true) ? emptyTextFallback : value;
-                    // ✨ 1. 修改：不管横屏还是主角，这里强制要求长文本完全左对齐
-                    const alignment = TextAlign.left;
-                        
-                    return TweenAnimationBuilder<double>(
-                      tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
-                      duration: const Duration(milliseconds: 600),
-                      curve: Curves.easeOutCubic,
-                      builder: (context, glow, child) {
-                        final style = TextStyle(
-                          color: const Color(0xFFF4F1EA),
-                          fontFamily: fontFamily,
-                          fontSize: fontSize + (shortWide ? -.2 : (compact ? 0 : .4)),
-                          height: shortWide ? 1.55 : 1.72,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: .35,
-                          shadows: <Shadow>[
-                            Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
-                            Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
-                          ],
-                        );
-                        
-                        return Container(
-                          // ✨ 2. 修改：为透明玻璃面板增加 16.0 的底部边距（Margin），留出呼吸感
-                          margin: const EdgeInsets.only(bottom: 16.0),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(panelRadius),
-                            boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 16, offset: Offset(0, 6))],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(panelRadius),
-                            child: _AdaptiveBackdropBlur(
-                              sigma: 16,
-                              child: Container(
-                                padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 20, vertical: compact ? 14 : 16),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.12),
-                                  borderRadius: BorderRadius.circular(panelRadius),
-                                  border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.0),
-                                ),
-                                child: Text.rich(
+                child: TweenAnimationBuilder<double>( // ✨ 外层控制透明度和阴影的入场动画
+                  tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
+                  duration: const Duration(milliseconds: 600),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, glow, child) {
+                    final style = TextStyle(
+                      color: const Color(0xFFF4F1EA),
+                      fontFamily: fontFamily,
+                      fontSize: fontSize + (shortWide ? -.2 : (compact ? 0 : .4)),
+                      height: shortWide ? 1.55 : 1.72,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: .35,
+                      shadows: <Shadow>[
+                        Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
+                        Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
+                      ],
+                    );
+                    
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16.0),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(panelRadius),
+                        boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 16, offset: Offset(0, 6))],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(panelRadius),
+                        child: _AdaptiveBackdropBlur( // ✨ 性能修复：昂贵的毛玻璃放到最外层，只渲染一次
+                          sigma: 16,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 20, vertical: compact ? 14 : 16),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(panelRadius),
+                              border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.0),
+                            ),
+                            child: ValueListenableBuilder<String>( // ✨ 性能修复：让逐字刷新的监听器跑到最内层，只重绘文本！
+                              valueListenable: displayTextListenable,
+                              builder: (context, value, _) {
+                                final display = value.isEmpty && !(sentence?.readerText.isNotEmpty == true) ? emptyTextFallback : value;
+                                const alignment = TextAlign.left;
+                                return Text.rich(
                                   TextSpan(children: _buildNovelDialogueDisplaySpans(display, style)),
                                   textAlign: alignment,
-                                ),
-                              ),
+                                );
+                              },
                             ),
                           ),
-                        );
-                      },
+                        ),
+                      ),
                     );
                   },
                 ),
