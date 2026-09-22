@@ -2092,7 +2092,7 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     setState(() {
       _backgroundPreviewBytes = null;
-      _backgroundPreviewFileName = null;
+      _backgroundPreviewFileName = '背景过渡测试';
       _backgroundPreviewOverride = testUrl;
     });
   }
@@ -2323,7 +2323,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                 !_endingOpen &&
                 !_battleOpen &&
                 _primaryTab != _NovelPrimaryTab.surroundings &&
-                (controller.hasNext || controller.isGenerating) &&
                 !keyboardActive;
 
             final gameScaffold = Scaffold(
@@ -2338,6 +2337,16 @@ class _NovelGamePageState extends State<NovelGamePage>
                       fallbackAsset: widget.fallbackBackgroundAsset.trim().isNotEmpty
                           ? widget.fallbackBackgroundAsset.trim()
                           : 'assets/images/background_home.png',
+                      weatherEffect: (_weatherPreviewOverride != null ||
+                              controller.settings.weatherEffectsEnabled)
+                          ? _activeWeatherEffect
+                          : NovelWeatherEffect.none,
+                      timePeriod: _activeTimePeriod,
+                      parallaxStrength: _backgroundParallaxStrength,
+                      backgroundPreviewBytes: _backgroundPreviewBytes,
+                      backgroundPreviewUrl: _backgroundPreviewOverride ?? '',
+                      backgroundPreviewCacheKey:
+                          'developer-background-$_backgroundPreviewVersion',
                     ),
                   ),
                   SafeArea(
@@ -2387,6 +2396,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                             !keyboardActive &&
                             !controller.hasNext &&
                             !controller.isGenerating &&
+                            !controller.forcedBattlePending &&
                             !_sceneArrivalActive &&
                             !_battleOpen &&
                             !_endingOpen;
@@ -2431,6 +2441,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                             !keyboardActive &&
                             !controller.hasNext &&
                             !controller.isGenerating &&
+                            !controller.forcedBattlePending &&
                             !_sceneArrivalActive &&
                             !_battleOpen &&
                             !_endingOpen &&
@@ -2636,15 +2647,16 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 controller.storyStarted &&
                                 !controller.isCinematic &&
                                 !keyboardActive &&
-                                !showBottomNav &&
                                 !controller.hasNext &&
                                 !controller.isGenerating &&
+                                !controller.forcedBattlePending &&
                                 !_sceneArrivalActive &&
                                 !_battleOpen &&
                                 !_endingOpen &&
                                 _talkTargets.isNotEmpty)
                               Positioned(
-                                right: compact ? 6 : 14,
+                                // 👈 为横屏(shortWide)单独设置 64.0 的右边距，避让右侧导航按钮
+                                right: shortWide ? 64.0 : (compact ? 6.0 : 14.0), 
                                 // 时间牌改为上下两层后高度更高；人物/探索从它下方留出呼吸感。
                                 top: shortWide ? 106 : 136,
                                 bottom: shortWide ? 84 : 212,
@@ -3190,10 +3202,22 @@ class _NovelStoryboardStage extends StatefulWidget {
   const _NovelStoryboardStage({
     required this.controller,
     required this.fallbackAsset,
+    required this.weatherEffect,
+    required this.timePeriod,
+    required this.parallaxStrength,
+    this.backgroundPreviewBytes,
+    this.backgroundPreviewUrl = '',
+    this.backgroundPreviewCacheKey = '',
   });
 
   final NovelGameController controller;
   final String fallbackAsset;
+  final NovelWeatherEffect weatherEffect;
+  final NovelTimePeriod timePeriod;
+  final double parallaxStrength;
+  final Uint8List? backgroundPreviewBytes;
+  final String backgroundPreviewUrl;
+  final String backgroundPreviewCacheKey;
 
   @override
   State<_NovelStoryboardStage> createState() => _NovelStoryboardStageState();
@@ -3476,68 +3500,45 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
-
-    // Always keep a living scene background underneath the storyboard. This covers
-    // first-load, scene-only turns, missing portrait-reference turns, failed CGs, and
-    // any brief current-turn window where no storyboard URL exists yet.
+    final previewBytes = widget.backgroundPreviewBytes;
+    final hasMemoryPreview = previewBytes != null && previewBytes.isNotEmpty;
+    final previewUrl = widget.backgroundPreviewUrl.trim();
+    final displayedStoryboardUrl = _displayedStoryboardUrl;
     final worldBackgroundUrl = controller.world.backgroundUrl.trim();
-    final Widget baseWorld = worldBackgroundUrl.isEmpty
-        ? _NovelStoryboardPlaceholder(fallbackAsset: widget.fallbackAsset)
-        : NovelWorldBackground(
-            url: worldBackgroundUrl,
+
+    // Exactly one NovelWorldBackground owns the visible image pipeline. This keeps
+    // Depth, time tint and weather on the same pixels instead of rendering them under
+    // an opaque storyboard image. It also avoids running two sensor/depth pipelines.
+    final selectedUrl = previewUrl.isNotEmpty
+        ? previewUrl
+        : displayedStoryboardUrl.isNotEmpty
+            ? displayedStoryboardUrl
+            : worldBackgroundUrl;
+
+    final Widget visual = hasMemoryPreview || selectedUrl.isNotEmpty
+        ? NovelWorldBackground(
+            url: hasMemoryPreview ? '' : selectedUrl,
+            memoryBytes: hasMemoryPreview ? previewBytes : null,
+            memoryCacheKey:
+                hasMemoryPreview ? widget.backgroundPreviewCacheKey : '',
+            parallaxStrength: widget.parallaxStrength,
             fallbackAsset: widget.fallbackAsset,
+            // Storyboard CGs are now processed by the same Depth + Shader pipeline as
+            // scene backgrounds. Historical extreme-tall stitched sheets are filtered
+            // inside NovelWorldBackground by aspect ratio.
             storyboardMode: false,
             characterPresent: false,
             isGenerating: controller.isGenerating,
-            weatherEffect: novelWeatherEffectFromKey(controller.world.weather),
-            timePeriod: novelTimePeriodFromKey(
-              controller.effectiveWorldTimePeriodKey,
-            ),
-          );
-
-    final displayedUrl = _displayedStoryboardUrl;
-    final Widget storyboardVisual = displayedUrl.isEmpty
-        ? const SizedBox.expand(
-            key: ValueKey<String>('storyboard-none'),
+            weatherEffect: widget.weatherEffect,
+            timePeriod: widget.timePeriod,
           )
-        : _NovelStoryboardImage(
-            key: ValueKey<String>('storyboard-display|$displayedUrl'),
-            imageUrl: displayedUrl,
-          );
+        : _NovelStoryboardPlaceholder(fallbackAsset: widget.fallbackAsset);
 
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        baseWorld,
-        AnimatedSwitcher(
-          duration: MediaQuery.of(context).disableAnimations
-              ? Duration.zero
-              : const Duration(milliseconds: 420),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.linear,
-          layoutBuilder: (currentChild, previousChildren) => Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              ...previousChildren,
-              if (currentChild != null) currentChild,
-            ],
-          ),
-          transitionBuilder: (child, animation) {
-            final incomingKey = ValueKey<String>(
-              displayedUrl.isEmpty
-                  ? 'storyboard-none'
-                  : 'storyboard-display|$displayedUrl',
-            );
-            if (child.key == incomingKey && displayedUrl.isNotEmpty) {
-              return FadeTransition(opacity: animation, child: child);
-            }
-            // Outgoing successful image stays fully visible until the incoming image
-            // covers it. No fade-to-black gap between story pages/turns.
-            return child;
-          },
-          child: storyboardVisual,
-        ),
-        // Keep HUD/dialogue readable without repainting weather/time over a composed CG.
+        visual,
+        // HUD/dialogue readability veil stays above the environment effects.
         IgnorePointer(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -3555,33 +3556,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _NovelStoryboardImage extends StatelessWidget {
-  const _NovelStoryboardImage({
-    super.key,
-    required this.imageUrl,
-  });
-
-  final String imageUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.network(
-      imageUrl,
-      width: double.infinity,
-      height: double.infinity,
-      // Storyboard is a world layer, not a gallery image. Always fill the viewport;
-      // crop a small amount at the edges instead of exposing black letterbox bars.
-      fit: BoxFit.cover,
-      alignment: Alignment.center,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.high,
-      // This image was precached before promotion. If the provider still fails later,
-      // reveal the stable world background underneath instead of painting black.
-      errorBuilder: (_, __, ___) => const SizedBox.expand(),
     );
   }
 }

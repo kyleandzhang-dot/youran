@@ -54,6 +54,7 @@ class NovelEndpointConfig {
     this.imageTaskResult = '/image/task/{taskId}/result',
     this.r2Signature = '/r2/get-signature',
     this.inventory = '/novel/inventory/{sessionId}',
+    this.battleAutoStart = '/novel/battle/auto-start',
     this.battleItemSettlement = '/novel/battle/items/settle',
     this.battleRetry = '/novel/battle/retry',
     this.equipItem = '/novel/inventory/{scenarioInstanceId}/equip',
@@ -65,7 +66,9 @@ class NovelEndpointConfig {
     this.revertTurn = '/novel/revert',
     this.developerContent = '/novel/developer/content',
     this.developerBattleOpponents = '/novel/developer/battle-opponents',
-    this.sceneLayoutPreview = '/novel/scene-layout/preview',
+    this.sceneAssetsGenerate = '/novel/scene-assets/generate',
+    this.sceneAssetTaskResult = '/novel/scene-assets/task/{taskId}/result',
+    this.sceneAssetTaskCancel = '/novel/scene-assets/task/{taskId}/cancel',
     this.webSocket = '/ws/private',
   });
 
@@ -100,6 +103,7 @@ class NovelEndpointConfig {
   final String imageTaskResult;
   final String r2Signature;
   final String inventory;
+  final String battleAutoStart;
   final String battleItemSettlement;
   final String battleRetry;
   final String equipItem;
@@ -111,7 +115,9 @@ class NovelEndpointConfig {
   final String revertTurn;
   final String developerContent;
   final String developerBattleOpponents;
-  final String sceneLayoutPreview;
+  final String sceneAssetsGenerate;
+  final String sceneAssetTaskResult;
+  final String sceneAssetTaskCancel;
   final String webSocket;
 
   String resolve(
@@ -435,6 +441,29 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
       'POST',
       path,
       body: <String, dynamic>{'node_id': nodeId.trim()},
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> startAutoBattle({
+    required String sessionId,
+    required int sourceMessageId,
+  }) async {
+    final numericSessionId = int.tryParse(sessionId.trim());
+    if (numericSessionId == null || numericSessionId <= 0) {
+      throw const NovelBackendException('当前会话ID无效，无法进入战斗');
+    }
+    if (sourceMessageId <= 0) {
+      throw const NovelBackendException('自动战斗来源消息无效');
+    }
+    final response = await _send(
+      'POST',
+      endpoints.battleAutoStart,
+      body: <String, dynamic>{
+        'session_id': numericSessionId,
+        'source_message_id': sourceMessageId,
+      },
     );
     return asJsonMap(_dataOf(response));
   }
@@ -1321,10 +1350,11 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
   }
 
   @override
-  Future<JsonMap> previewSceneLayout({
+  Future<JsonMap> createSceneAssetTask({
     required String name,
     String? sessionId,
     String description = '',
+    String styleHint = '',
   }) async {
     final cleanName = name.trim();
     if (cleanName.isEmpty) {
@@ -1335,23 +1365,47 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
     final cleanSessionId = sessionId?.trim() ?? '';
     if (cleanSessionId.isNotEmpty) {
       numericSessionId = int.tryParse(cleanSessionId);
-      if (numericSessionId == null) {
-        throw const NovelBackendException('当前会话ID无效，无法生成场景布局预览');
+      if (numericSessionId == null || numericSessionId <= 0) {
+        throw const NovelBackendException('当前会话ID无效，无法生成自由探索场景');
       }
     }
 
-    final payload = <String, dynamic>{
-      'name': cleanName,
-      if (numericSessionId != null) 'session_id': numericSessionId,
-      if (description.trim().isNotEmpty) 'description': description.trim(),
-    };
-
     final response = await _send(
       'POST',
-      endpoints.sceneLayoutPreview,
-      body: payload,
+      endpoints.sceneAssetsGenerate,
+      body: <String, dynamic>{
+        'name': cleanName,
+        if (numericSessionId != null) 'session_id': numericSessionId,
+        if (description.trim().isNotEmpty) 'description': description.trim(),
+        if (styleHint.trim().isNotEmpty) 'style_hint': styleHint.trim(),
+      },
     );
     return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> fetchSceneAssetTaskResult(String taskId) async {
+    final cleanTaskId = taskId.trim();
+    if (cleanTaskId.isEmpty) {
+      throw const NovelBackendException('场景资产 task_id 为空');
+    }
+    final path = endpoints.resolve(
+      endpoints.sceneAssetTaskResult,
+      taskId: cleanTaskId,
+    );
+    final response = await _get(path);
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<void> cancelSceneAssetTask(String taskId) async {
+    final cleanTaskId = taskId.trim();
+    if (cleanTaskId.isEmpty) return;
+    final path = endpoints.resolve(
+      endpoints.sceneAssetTaskCancel,
+      taskId: cleanTaskId,
+    );
+    await _send('DELETE', path);
   }
 
   @override

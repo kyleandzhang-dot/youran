@@ -10,13 +10,25 @@ abstract class NovelBackend {
 
   Stream<NovelStreamEvent> sendMessageStream(NovelSendRequest request);
 
-  /// 按场景名称生成新版自由二维 ScenePlan。
-  /// 返回只负责空间布局与实体语义，不写旧 surroundings 探索状态。
-  Future<JsonMap> previewSceneLayout({
+  /// 创建自由探索场景资产任务。后端返回 task_id，并同时返回当前主角已有立绘元数据。
+  Future<JsonMap> createSceneAssetTask({
     required String name,
     String? sessionId,
     String description = '',
-  });
+    String styleHint = '',
+  }) {
+    throw const NovelBackendException('当前后端不支持自由探索场景资产生成');
+  }
+
+  /// 轮询自由探索场景资产任务；completed 时包含 asset_package。
+  Future<JsonMap> fetchSceneAssetTaskResult(String taskId) {
+    throw const NovelBackendException('当前后端不支持自由探索场景资产生成');
+  }
+
+  /// 主动取消仍在生成中的自由探索场景资产任务。
+  Future<void> cancelSceneAssetTask(String taskId) async {
+    throw const NovelBackendException('当前后端不支持取消自由探索场景资产生成');
+  }
 
   /// 获取当前位置与一跳相邻节点。后端不会返回完整世界地图或隐藏节点。
   Future<JsonMap> fetchSceneMap(String sessionId);
@@ -48,6 +60,15 @@ abstract class NovelBackend {
     String sessionId,
     String nodeId,
   );
+
+  /// 剧情已经被后端确认进入 engaged 后，由“最后一页继续”触发。
+  /// 这不是玩家选择开战；只是把已经成立的强制战斗切入 Battle UI。
+  Future<JsonMap> startAutoBattle({
+    required String sessionId,
+    required int sourceMessageId,
+  }) {
+    throw const NovelBackendException('当前后端不支持自动敌对战斗');
+  }
 
   /// 点击调查中的敌人节点后，创建并冻结一场后端权威战斗。
   Future<JsonMap> startSurroundEncounter(

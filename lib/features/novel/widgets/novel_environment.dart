@@ -1492,10 +1492,12 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         throw StateError('无法取得背景图片像素');
       }
 
-      // Backward compatibility: historical storyboard sheets were vertically stitched
-      // two-panel canvases. Portrait/square images remain flat even if the caller does
-      // not yet pass storyboardMode. Landscape world backgrounds may still use 2.5D.
-      if (resolved.image.height >= resolved.image.width) {
+      // Backward compatibility: only historical extreme-tall stitched storyboard
+      // sheets stay flat. Normal portrait/square CGs are valid Depth inputs and should
+      // receive the same 2.5D treatment as landscape scene backgrounds.
+      final sourceAspectHeightOverWidth =
+          resolved.image.height / resolved.image.width;
+      if (sourceAspectHeightOverWidth >= 2.35) {
         final width = resolved.image.width;
         final height = resolved.image.height;
         resolved.dispose();
@@ -1510,7 +1512,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
           _depthError = '';
         });
         debugPrint(
-          '[NovelBG] keep flat image for portrait/square storyboard-like source: ${width}x$height',
+          '[NovelBG] keep flat image for extreme-tall stitched source: ${width}x$height',
         );
         _syncLegacyBackgroundMotion();
         return;

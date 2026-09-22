@@ -69,6 +69,22 @@ class _NovelInputBarState extends State<NovelInputBar> {
   final GlobalKey _layoutMeasureKey = GlobalKey();
   double _lastReportedLayoutHeight = -1;
 
+  bool get _interactionEnabled =>
+      widget.enabled && !(widget.gameController?.forcedBattlePending ?? false);
+
+  void _onGameControllerChanged() {
+    if (!mounted) return;
+    if (widget.gameController?.forcedBattlePending == true) {
+      _closeInventoryPicker();
+      widget.focusNode.unfocus();
+      if (_isListening || _micHeld || _speechStarting || _asr.isSessionOpen) {
+        _micHeld = false;
+        unawaited(_finishHoldListening(commit: false));
+      }
+    }
+    setState(() {});
+  }
+
   // Flutter 会在 TextField.enabled 变为 false 时主动把它移出可聚焦树。
   // 剧情生成/翻页期间 enabled 可能只是短暂关闭；如果用户关闭前正在输入，
   // 恢复可输入后应把焦点还给同一个输入框，而不是让用户再点一次。
@@ -77,7 +93,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
   void _requestInputFocusAfterFrame() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
-          !widget.enabled ||
+          !_interactionEnabled ||
           _isListening ||
           _micHeld ||
           _speechStarting ||
@@ -101,6 +117,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
     _asr = NovelAsrStreamService(socketService: widget.socketService);
     widget.controller.addListener(_update);
     widget.focusNode.addListener(_updateFocus);
+    widget.gameController?.addListener(_onGameControllerChanged);
     _update();
   }
 
@@ -123,6 +140,10 @@ class _NovelInputBarState extends State<NovelInputBar> {
     if (oldWidget.socketService != widget.socketService) {
       unawaited(_asr.dispose());
       _asr = NovelAsrStreamService(socketService: widget.socketService);
+    }
+    if (oldWidget.gameController != widget.gameController) {
+      oldWidget.gameController?.removeListener(_onGameControllerChanged);
+      widget.gameController?.addListener(_onGameControllerChanged);
     }
 
     if (oldWidget.enabled && !widget.enabled) {
@@ -487,7 +508,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
     _closeInventoryPicker();
     final visibleText = widget.controller.text.trim();
     final referencedItems = _activeReferencedItems();
-    if (!widget.enabled ||
+    if (!_interactionEnabled ||
         _isListening ||
         _micHeld ||
         _speechStarting ||
@@ -517,7 +538,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
   }
 
   void _insertNewline() {
-    if (!widget.enabled || _isListening || _micHeld || _speechStarting || _speechFinishing) return;
+    if (!_interactionEnabled || _isListening || _micHeld || _speechStarting || _speechFinishing) return;
 
     final value = widget.controller.value;
     final selection = value.selection;
@@ -534,7 +555,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
 
   KeyEventResult _handleInputKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent ||
-        !widget.enabled ||
+        !_interactionEnabled ||
         _isListening ||
         _micHeld ||
         _speechStarting ||
@@ -589,7 +610,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
   }
 
   Future<void> _beginHoldListening() async {
-    if (!widget.enabled || _speechFinishing || _speechStarting || _micHeld) return;
+    if (!_interactionEnabled || _speechFinishing || _speechStarting || _micHeld) return;
 
     // 新一轮语音开始时立即清掉上一条轻提示，用户无需等 SnackBar 动画结束。
     ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar(
@@ -835,6 +856,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
     _speechHoldWatch = null;
     widget.controller.removeListener(_update);
     widget.focusNode.removeListener(_updateFocus);
+    widget.gameController?.removeListener(_onGameControllerChanged);
     unawaited(_asr.dispose());
     super.dispose();
   }
@@ -858,22 +880,21 @@ class _NovelInputBarState extends State<NovelInputBar> {
     Future<void>.delayed(const Duration(milliseconds: 180), measure);
   }
 
-  @override
+ @override
   Widget build(BuildContext context) {
+    final interactionEnabled = _interactionEnabled;
+    final forcedBattlePending = widget.gameController?.forcedBattlePending ?? false;
     final speaking = _micHeld || _isListening || _speechStarting;
     final speechBusy = speaking || _speechFinishing;
     final referencedItems = _activeReferencedItems();
-    final canSend = widget.enabled &&
+    final canSend = interactionEnabled &&
         (_hasText || referencedItems.isNotEmpty) &&
         !speaking &&
         !_speechFinishing;
-    final focused = widget.enabled && widget.focusNode.hasFocus;
-    // 只要输入框已有文字（键盘输入或语音转写），即使失焦也保持深色玻璃，
-    // 避免场景背景直接穿透导致已输入内容看不清。
+    final focused = interactionEnabled && widget.focusNode.hasFocus;
     final glassActive = focused || _hasText;
     final lowPowerEffects = _useLowPowerNovelEffects(context);
-    // 正在连接时也必须继续接收 pointerUp，否则用户松手会丢失结束事件。
-    final micEnabled = widget.enabled && !_speechFinishing;
+    final micEnabled = interactionEnabled && !_speechFinishing;
     final inventoryPickerOpen = _inventoryOverlay != null;
     final viewport = NovelViewportMetrics.of(
       context,
@@ -895,70 +916,100 @@ class _NovelInputBarState extends State<NovelInputBar> {
     ];
     _reportLayoutHeight();
 
+    final isCapsule = !focused && !_hasText && !speechBusy;
+    final capsuleRadius = isCapsule ? 26.0 : 10.0;
+
     return AnimatedOpacity(
         key: _layoutMeasureKey,
-        opacity: widget.enabled ? 1 : .50,
+        opacity: interactionEnabled ? 1 : .50,
         duration: const Duration(milliseconds: 160),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: <Widget>[
             if (widget.luckyCardCount > 0) ...<Widget>[
-              ClipRRect(
-                  borderRadius: BorderRadius.zero,
-                  child: _AdaptiveBackdropBlur(
-                    sigma: 14,
-                    child: Material(
-                      color: widget.luckyCardActive
-                          ? NovelPalette.accent.withOpacity(.12)
-                          : Colors.white.withOpacity(.045),
-                      child: InkWell(
-                        onTap: widget.enabled ? widget.onToggleLuckyCard : null,
-                        child: Container(
-                          width: shortViewport ? 40 : 44,
-                          height: shortViewport ? 44 : 50,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.zero,
-                            border: Border.all(
+              // ✨ 修复：不再使用外层 ClipOval 切割，改用 Stack 允许角标溢出
+              SizedBox(
+                width: shortViewport ? 44 : 48,
+                height: shortViewport ? 44 : 48,
+                child: Stack(
+                  clipBehavior: Clip.none, // ✨ 允许角标超出边界
+                  children: <Widget>[
+                    // 背景毛玻璃层
+                    Positioned.fill(
+                      child: ClipOval(
+                        child: _AdaptiveBackdropBlur(
+                          sigma: 14,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 240),
+                            curve: Curves.easeOutCubic,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
                               color: widget.luckyCardActive
-                                  ? NovelPalette.accent.withOpacity(.40)
-                                  : Colors.white.withOpacity(.12),
-                              width: .65,
+                                  ? Colors.white.withOpacity(.18)
+                                  : Colors.white.withOpacity(.045),
+                              border: Border.all(
+                                color: widget.luckyCardActive
+                                    ? Colors.white.withOpacity(.90)
+                                    : Colors.white.withOpacity(.12),
+                                width: widget.luckyCardActive ? 1.2 : .65,
+                              ),
                             ),
                           ),
-                          child: Stack(fit: StackFit.expand, children: <Widget>[
-                            const Padding(
-                                padding: EdgeInsets.all(11),
-                                child: NovelArtwork(
-                                  assetCandidates: <String>['assets/images/lucky_card.webp'],
-                                  fit: BoxFit.contain,
-                                  fallbackIcon: Icons.auto_awesome_outlined,
-                                )),
-                            Positioned(
-                                top: 3,
-                                right: 3,
-                                child: Container(
-                                  constraints: const BoxConstraints(minWidth: 15),
-                                  height: 15,
-                                  padding: const EdgeInsets.symmetric(horizontal: 3),
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(color: NovelPalette.text, borderRadius: BorderRadius.circular(5)),
-                                  child: Text('${widget.luckyCardCount}', style: const TextStyle(color: Color(0xFF111512), fontSize: 8.5, fontWeight: FontWeight.w900)),
-                                )),
-                          ]),
                         ),
                       ),
                     ),
-                  )),
-              const SizedBox(width: 4),
+                    // 点击水波纹与图标层
+                    Positioned.fill(
+                      child: Material(
+                        color: Colors.transparent,
+                        shape: const CircleBorder(),
+                        clipBehavior: Clip.hardEdge,
+                        child: InkWell(
+                          onTap: interactionEnabled ? widget.onToggleLuckyCard : null,
+                          child: const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: NovelArtwork(
+                              assetCandidates: <String>['assets/images/lucky_card.webp'],
+                              fit: BoxFit.contain,
+                              fallbackIcon: Icons.auto_awesome_outlined,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // ✨ 数字角标，独立定位在右上角
+                    Positioned(
+                      top: -2,
+                      right: -2,
+                      child: Container(
+                        constraints: const BoxConstraints(minWidth: 15),
+                        height: 15,
+                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: NovelPalette.text,
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          '${widget.luckyCardCount}',
+                          style: const TextStyle(
+                            color: Color(0xFF111512),
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 5),
             ],
             Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  // 上下文行出现 / 消失时让输入区自身平滑改变高度。
-                  // 正常流式布局下，宿主会自然把剧情正文和选项区往上推；
-                  // 若宿主使用 Stack/Positioned，则配合 onLayoutHeightChanged 同步 bottom inset。
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 160),
                     curve: Curves.easeOutCubic,
@@ -978,219 +1029,182 @@ class _NovelInputBarState extends State<NovelInputBar> {
                             ),
                           ),
                   ),
-                  ClipRRect(
-                    borderRadius: BorderRadius.zero,
-                    child: _AdaptiveBackdropBlur(
-                      sigma: glassActive ? 3 : 0,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 170),
-                        constraints: BoxConstraints(
-                          minHeight: shortViewport ? 44 : 50,
-                          maxHeight: shortViewport ? 118 : 158,
-                        ),
-                        padding: EdgeInsets.fromLTRB(
-                          shortViewport ? 8 : 10,
-                          shortViewport ? 4 : 6,
-                          5,
-                          shortViewport ? 4 : 6,
-                        ),
-                        decoration: BoxDecoration(
-                          // 自由输入是整套界面里唯一保留明确“操作框”的区域。
-                          // 平时只留一层很淡的黑玻璃与白色描边；聚焦时描边才抬亮，
-                          // 和上方无框剧情选项形成清楚的交互层级。
-                          color: Colors.black.withOpacity(
-                            speechBusy
-                                ? .10
-                                : (focused
-                                    ? (lowPowerEffects ? .13 : .12)
-                                    : (glassActive ? .09 : .045)),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 240),
+                    curve: Curves.easeOutCubic,
+                    margin: EdgeInsets.symmetric(
+                      horizontal: isCapsule ? (shortViewport ? 24.0 : 16.0) : 0.0,
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(capsuleRadius),
+                      child: _AdaptiveBackdropBlur(
+                        sigma: glassActive ? 6 : 12,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 240),
+                          curve: Curves.easeOutCubic,
+                          constraints: BoxConstraints(
+                            minHeight: shortViewport ? 44 : 50,
+                            maxHeight: shortViewport ? 118 : 158,
                           ),
-                          borderRadius: BorderRadius.zero,
-                          border: Border.all(
-                            color: speechBusy
-                                ? NovelPalette.accent.withOpacity(.68)
-                                : Colors.white.withOpacity(
-                                    focused
-                                        ? .30
-                                        : (glassActive ? .19 : .115),
-                                  ),
-                            width: speechBusy ? .95 : .85,
+                          padding: EdgeInsets.fromLTRB(
+                            isCapsule ? 16 : (shortViewport ? 8 : 10),
+                            shortViewport ? 4 : 6,
+                            5,
+                            shortViewport ? 4 : 6,
                           ),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: <Widget>[
-                            if (widget.gameController != null) ...<Widget>[
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 1),
-                                child: CompositedTransformTarget(
-                                  link: _inventoryLink,
-                                  child: Tooltip(
-                                    message: '引用物品',
-                                    child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 140),
-                                      width: shortViewport ? 29 : 32,
-                                      height: shortViewport ? 30 : 34,
-                                      alignment: Alignment.center,
-                                      // “+” 不再拥有自己的小方框；它只是统一输入栏里的一个动作。
-                                      child: Material(
-                                        color: Colors.transparent,
-                                        child: InkWell(
-                                          onTap: widget.enabled && !speechBusy
-                                              ? _toggleInventoryPicker
-                                              : null,
-                                          borderRadius: BorderRadius.zero,
-                                          splashColor: Colors.white.withOpacity(.055),
-                                          highlightColor: Colors.white.withOpacity(.035),
-                                          hoverColor: Colors.white.withOpacity(.025),
-                                          child: Center(
-                                            child: AnimatedDefaultTextStyle(
-                                              duration: const Duration(milliseconds: 140),
-                                              style: TextStyle(
-                                                color: inventoryPickerOpen
-                                                    ? Colors.white.withOpacity(.96)
-                                                    : Colors.white.withOpacity(
-                                                        widget.enabled && !speechBusy ? .58 : .24,
-                                                      ),
-                                                fontSize: shortViewport ? 18 : 20,
-                                                height: 1,
-                                                fontWeight: FontWeight.w300,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(
+                              speechBusy
+                                  ? .10
+                                  : (focused
+                                      ? (lowPowerEffects ? .13 : .12)
+                                      : (isCapsule ? .28 : .15)),
+                            ),
+                            borderRadius: BorderRadius.circular(capsuleRadius),
+                            border: Border.all(
+                              color: speechBusy
+                                  ? NovelPalette.accent.withOpacity(.68)
+                                  : Colors.white.withOpacity(
+                                      focused ? .30 : (isCapsule ? .25 : .12),
+                                    ),
+                              width: speechBusy ? .95 : .85,
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: <Widget>[
+                              if (widget.gameController != null) ...<Widget>[
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 1),
+                                  child: CompositedTransformTarget(
+                                    link: _inventoryLink,
+                                    child: Tooltip(
+                                      message: '引用物品',
+                                      child: AnimatedContainer(
+                                        duration: const Duration(milliseconds: 140),
+                                        width: shortViewport ? 29 : 32,
+                                        height: shortViewport ? 30 : 34,
+                                        alignment: Alignment.center,
+                                        child: Material(
+                                          color: Colors.transparent,
+                                          child: InkWell(
+                                            onTap: interactionEnabled && !speechBusy
+                                                ? _toggleInventoryPicker
+                                                : null,
+                                            borderRadius: BorderRadius.circular(isCapsule ? 16 : 0),
+                                            splashColor: Colors.white.withOpacity(.055),
+                                            highlightColor: Colors.white.withOpacity(.035),
+                                            hoverColor: Colors.white.withOpacity(.025),
+                                            child: Center(
+                                              child: AnimatedDefaultTextStyle(
+                                                duration: const Duration(milliseconds: 140),
+                                                style: TextStyle(
+                                                  color: inventoryPickerOpen
+                                                      ? Colors.white.withOpacity(.96)
+                                                      : Colors.white.withOpacity(
+                                                          interactionEnabled && !speechBusy ? .58 : .24,
+                                                        ),
+                                                  fontSize: shortViewport ? 18 : 20,
+                                                  height: 1,
+                                                  fontWeight: FontWeight.w300,
+                                                ),
+                                                child: const Text('+'),
                                               ),
-                                              child: const Text('+'),
                                             ),
                                           ),
                                         ),
                                       ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
+                              Expanded(
+                                child: Focus(
+                                  onKeyEvent: _handleInputKey,
+                                  child: TextField(
+                                    controller: widget.controller,
+                                    focusNode: widget.focusNode,
+                                    enabled: interactionEnabled && !speaking && !_speechFinishing,
+                                    minLines: 1,
+                                    maxLines: 5,
+                                    keyboardType: TextInputType.multiline,
+                                    textInputAction: TextInputAction.send,
+                                    onSubmitted: (_) => _submit(),
+                                    cursorColor: targetActorActive
+                                        ? Colors.white.withOpacity(.92)
+                                        : NovelPalette.accent,
+                                    style: TextStyle(
+                                      color: const Color(0xFFF4F3EE),
+                                      fontSize: shortViewport ? 13.4 : 14,
+                                      height: shortViewport ? 1.28 : 1.35,
+                                      fontWeight: FontWeight.w400,
+                                    ),
+                                    decoration: InputDecoration(
+                                      hintText: forcedBattlePending
+                                          ? '当前袭击已经发生，请继续阅读…'
+                                          : _speechFinishing
+                                              ? '正在转文字…'
+                                              : speaking
+                                                  ? '正在听… 松开后转成文字'
+                                                  : targetActorActive
+                                                      ? '输入要说的话…'
+                                                      : (widget.luckyCardActive
+                                                          ? '运气已加持，描述你的行动…'
+                                                          : '描述你想做的事…'),
+                                      hintStyle: TextStyle(
+                                        color: speechBusy
+                                            ? Colors.white.withOpacity(.58)
+                                            : Colors.white.withOpacity(
+                                                targetActorActive
+                                                    ? (focused ? .42 : .30)
+                                                    : (focused ? .48 : .32),
+                                              ),
+                                        fontSize: shortViewport ? 12.5 : 13.2,
+                                        fontWeight: FontWeight.w400,
+                                      ),
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.only(
+                                        top: shortViewport ? 6 : 8,
+                                        bottom: shortViewport ? 9 : 12,
+                                      ),
+                                      border: InputBorder.none,
+                                      enabledBorder: InputBorder.none,
+                                      focusedBorder: InputBorder.none,
+                                      disabledBorder: InputBorder.none,
                                     ),
                                   ),
                                 ),
                               ),
                               const SizedBox(width: 4),
-                            ],
-                            Expanded(
-                              child: Focus(
-                                onKeyEvent: _handleInputKey,
-                                child: TextField(
-                                  controller: widget.controller,
-                                  focusNode: widget.focusNode,
-                                  enabled: widget.enabled && !speaking && !_speechFinishing,
-                                  minLines: 1,
-                                  maxLines: 5,
-                                  keyboardType: TextInputType.multiline,
-                                  textInputAction: TextInputAction.send,
-                                  onSubmitted: (_) => _submit(),
-                                  cursorColor: targetActorActive
-                                      ? Colors.white.withOpacity(.92)
-                                      : NovelPalette.accent,
-                                  style: TextStyle(
-                                    color: const Color(0xFFF4F3EE),
-                                    fontSize: shortViewport ? 13.4 : 14,
-                                    height: shortViewport ? 1.28 : 1.35,
-                                    fontWeight: FontWeight.w400,
-                                  ),
-                                  decoration: InputDecoration(
-                                    hintText: _speechFinishing
-                                        ? '正在转文字…'
-                                        : speaking
-                                            ? '正在听… 松开后转成文字'
-                                            : targetActorActive
-                                                ? '输入要说的话…'
-                                                : (widget.luckyCardActive
-                                                    ? '运气已加持，描述你的行动…'
-                                                    : '描述你想做的事…'),
-                                    hintStyle: TextStyle(
-                                      color: speechBusy
-                                          ? Colors.white.withOpacity(.58)
-                                          : Colors.white.withOpacity(
-                                              targetActorActive
-                                                  ? (focused ? .42 : .30)
-                                                  : (focused ? .48 : .32),
-                                            ),
-                                      fontSize: shortViewport ? 12.5 : 13.2,
-                                      fontWeight: FontWeight.w400,
-                                    ),
-                                    isDense: true,
-                                    contentPadding: EdgeInsets.only(
-                                      top: shortViewport ? 6 : 8,
-                                      bottom: shortViewport ? 9 : 12,
-                                    ),
-                                    border: InputBorder.none,
-                                    enabledBorder: InputBorder.none,
-                                    focusedBorder: InputBorder.none,
-                                    disabledBorder: InputBorder.none,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            // 手机端把语音放在输入框右侧内部：它始终是“继续输入”的次级动作。
-                            // 有可发送内容时，发送箭头再出现在它右边作为主动作；录音中发送键自动隐藏。
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 1),
-                              child: Listener(
-                                behavior: HitTestBehavior.opaque,
-                                onPointerDown: micEnabled
-                                    ? (_) => unawaited(_beginHoldListening())
-                                    : null,
-                                onPointerUp: micEnabled
-                                    ? (_) => unawaited(_finishHoldListening())
-                                    : null,
-                                onPointerCancel: micEnabled
-                                    ? (_) => unawaited(_finishHoldListening(commit: false))
-                                    : null,
-                                child: AnimatedOpacity(
-                                  duration: const Duration(milliseconds: 120),
-                                  opacity: !micEnabled
-                                      ? .30
-                                      : (speaking ? 1.0 : (canSend ? .58 : .88)),
-                                  child: AnimatedScale(
-                                    scale: speaking ? 1.08 : 1,
-                                    duration: const Duration(milliseconds: 120),
-                                    curve: Curves.easeOutCubic,
-                                    child: SizedBox(
-                                      width: shortViewport ? 30 : 33,
-                                      height: shortViewport ? 30 : 33,
-                                      child: CustomPaint(
-                                        painter: _CutoutVoiceWavePainter(
-                                          speaking: speaking,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            if (canSend && !speechBusy) ...<Widget>[
-                              const SizedBox(width: 2),
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 1),
-                                child: AnimatedScale(
-                                  duration: const Duration(milliseconds: 150),
-                                  curve: Curves.easeOutCubic,
-                                  scale: canSend ? 1.0 : .96,
-                                  child: SizedBox(
-                                    width: shortViewport ? 31 : 34,
-                                    height: shortViewport ? 31 : 34,
-                                    child: Material(
-                                      color: Colors.transparent,
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.zero,
-                                        onTap: _submit,
-                                        splashColor: Colors.white.withOpacity(.06),
-                                        highlightColor: Colors.white.withOpacity(.035),
-                                        hoverColor: Colors.white.withOpacity(.025),
-                                        child: Center(
-                                          child: Icon(
-                                            Icons.arrow_upward_rounded,
-                                            size: shortViewport ? 17 : 18,
-                                            color: Colors.white.withOpacity(.96),
-                                            shadows: const <Shadow>[
-                                              Shadow(
-                                                color: Color(0x66000000),
-                                                blurRadius: 4,
-                                                offset: Offset(0, 1),
-                                              ),
-                                            ],
+                                child: Listener(
+                                  behavior: HitTestBehavior.opaque,
+                                  onPointerDown: micEnabled
+                                      ? (_) => unawaited(_beginHoldListening())
+                                      : null,
+                                  onPointerUp: micEnabled
+                                      ? (_) => unawaited(_finishHoldListening())
+                                      : null,
+                                  onPointerCancel: micEnabled
+                                      ? (_) => unawaited(_finishHoldListening(commit: false))
+                                      : null,
+                                  child: AnimatedOpacity(
+                                    duration: const Duration(milliseconds: 120),
+                                    opacity: !micEnabled
+                                        ? .30
+                                        : (speaking ? 1.0 : (canSend ? .58 : .88)),
+                                    child: AnimatedScale(
+                                      scale: speaking ? 1.08 : 1,
+                                      duration: const Duration(milliseconds: 120),
+                                      curve: Curves.easeOutCubic,
+                                      child: SizedBox(
+                                        width: shortViewport ? 30 : 33,
+                                        height: shortViewport ? 30 : 33,
+                                        child: CustomPaint(
+                                          painter: _CutoutVoiceWavePainter(
+                                            speaking: speaking,
                                           ),
                                         ),
                                       ),
@@ -1198,8 +1212,47 @@ class _NovelInputBarState extends State<NovelInputBar> {
                                   ),
                                 ),
                               ),
+                              if (canSend && !speechBusy) ...<Widget>[
+                                const SizedBox(width: 2),
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 1),
+                                  child: AnimatedScale(
+                                    duration: const Duration(milliseconds: 150),
+                                    curve: Curves.easeOutCubic,
+                                    scale: canSend ? 1.0 : .96,
+                                    child: SizedBox(
+                                      width: shortViewport ? 31 : 34,
+                                      height: shortViewport ? 31 : 34,
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(isCapsule ? 16 : 0),
+                                          onTap: _submit,
+                                          splashColor: Colors.white.withOpacity(.06),
+                                          highlightColor: Colors.white.withOpacity(.035),
+                                          hoverColor: Colors.white.withOpacity(.025),
+                                          child: Center(
+                                            child: Icon(
+                                              Icons.arrow_upward_rounded,
+                                              size: shortViewport ? 17 : 18,
+                                              color: Colors.white.withOpacity(.96),
+                                              shadows: const <Shadow>[
+                                                Shadow(
+                                                  color: Color(0x66000000),
+                                                  blurRadius: 4,
+                                                  offset: Offset(0, 1),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
-                          ],
+                          ),
                         ),
                       ),
                     ),

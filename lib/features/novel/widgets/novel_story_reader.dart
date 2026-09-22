@@ -521,6 +521,22 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     }
     _syncReveal();
 
+    // 右侧角色头像会把输入框切到“对某人说”模式，并通常把焦点交给输入框。
+    // 如果用户随后关闭目标角色，旧焦点可能继续残留；而横滑逻辑原本只看
+    // focusNode.hasFocus，于是会把这个“幽灵焦点”误判为仍在输入，导致最后一页
+    // 无法右滑回看。目标角色从有到无时主动释放焦点，并清掉可能残留的拖拽状态。
+    final targetActorClosed = oldWidget.targetActorName.trim().isNotEmpty &&
+        widget.targetActorName.trim().isEmpty;
+    if (targetActorClosed) {
+      _swipeController.stop(canceled: false);
+      _horizontalDragDistance = 0;
+      _swipeVisualOffset = 0;
+      _swipeTransitioning = false;
+      if (widget.focusNode.hasFocus) {
+        widget.focusNode.unfocus();
+      }
+    }
+
     if (oldWidget.active != widget.active) {
       if (widget.active) {
         _resumeRevealIfNeeded();
@@ -1103,6 +1119,28 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     }
   }
 
+  void _handleStageTap() {
+    if (!widget.active || _swipeTransitioning) return;
+
+    // 正在对右侧角色输入时，舞台空白点击不推进剧情，避免用户想收起输入态
+    // 却误翻页。目标角色关闭后 didUpdateWidget 会释放残留焦点。
+    if (widget.targetActorName.trim().isNotEmpty) return;
+
+    // 手机键盘真实弹出时，第一次点空白只收键盘；键盘收起后再次点空白
+    // 才按照正常阅读逻辑补全文 / 进入下一阅读页。
+    if (widget.focusNode.hasFocus &&
+        MediaQuery.viewInsetsOf(context).bottom > 0) {
+      widget.focusNode.unfocus();
+      return;
+    }
+
+    // 桌面端或已经没有键盘时，不让一个残留 focus 永久封死舞台点击。
+    if (widget.focusNode.hasFocus) {
+      widget.focusNode.unfocus();
+    }
+    _handleStoryTap();
+  }
+
   void _handleStoryTap() {
     // 第一次点击只负责补全“当前阅读页”，不会把混合句剩余正文/对白一起灌进来。
     if (_revealing) {
@@ -1311,8 +1349,16 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     }
   }
 
+  bool get _inputBlocksReaderGesture {
+    // FocusNode 可能在目标角色关闭后短暂/异常残留焦点。只有“目标输入态仍存在”
+    // 或手机键盘确实还在屏幕上时才阻止剧情横滑，避免幽灵焦点永久锁死回看。
+    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+    return widget.targetActorName.trim().isNotEmpty ||
+        (widget.focusNode.hasFocus && keyboardVisible);
+  }
+
   void _handleHorizontalDragStart(DragStartDetails details) {
-    if (widget.focusNode.hasFocus ||
+    if (_inputBlocksReaderGesture ||
         _swipeTransitioning) {
       return;
     }
@@ -1321,7 +1367,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   }
 
   void _handleHorizontalDragUpdate(DragUpdateDetails details) {
-    if (widget.focusNode.hasFocus ||
+    if (_inputBlocksReaderGesture ||
         _swipeTransitioning) {
       return;
     }
@@ -1343,7 +1389,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   }
 
   void _handleHorizontalDragEnd(DragEndDetails details) {
-    if (widget.focusNode.hasFocus ||
+    if (_inputBlocksReaderGesture ||
         _swipeTransitioning) {
       _horizontalDragDistance = 0;
       if (_swipeVisualOffset != 0) {
@@ -1461,6 +1507,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         mixedPages.isNotEmpty && mixedPageIndex < mixedPages.length - 1;
     final hasPreviousMixedReaderPage =
         mixedPages.isNotEmpty && mixedPageIndex > 0;
+    final targetActorActive = widget.targetActorName.trim().isNotEmpty;
+    final forcedBattlePending = controller.forcedBattlePending;
     final narrationPages = _narrationPagesForCurrentSentence();
     final narrationPageIndex = _safeNarrationPageIndex(narrationPages);
     final narrationPagingActive =
@@ -1469,9 +1517,13 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         narrationPageIndex < narrationPages.length - 1;
     final hasPreviousNarrationReaderPage =
         narrationPagingActive && narrationPageIndex > 0;
+    // 强制战斗流程后端完全跳过 Suggestion/下一轮剧情生成，controller.hasNext
+    // 永远不会翻转成 false；继续沿用它会让“继续”按钮被本地翻页之外的
+    // 外部信号卡死，要么一直不出现，要么提前露出。这里只在强制战斗时改用
+    // 纯本地的分页状态判断“这条消息是否读完”，不再看 controller.hasNext。
     final readerHasNext = hasNextMixedReaderPage ||
         hasNextNarrationReaderPage ||
-        controller.hasNext;
+        (forcedBattlePending ? false : controller.hasNext);
     final readerHasPrevious = hasPreviousMixedReaderPage ||
         hasPreviousNarrationReaderPage ||
         controller.hasPrevious;
@@ -1481,11 +1533,11 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         ? controller.affectionPulseFor(character, speaker)
         : null;
 
-    final targetActorActive = widget.targetActorName.trim().isNotEmpty;
     // 选中角色进入“对某人说”模式时，剧情仍作为上下文存在，但退到第二层。
     // 真正的交互焦点交给目标角色与自由输入，不把屏幕突然清空成聊天 App。
     final storyContextOpacity = targetActorActive ? .50 : 1.0;
     final canShowChoices = !targetActorActive &&
+        !forcedBattlePending &&
         controller.choices.isNotEmpty &&
         !readerHasNext &&
         !controller.isGenerating &&
@@ -1522,20 +1574,24 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
         const narrationRightSafeWidth = 0.0;
         
         // 2. 角色对话框右侧避让逻辑重构：
-        // 手机端保持原样（动态避让）；
-        // 电脑端直接锁死 0.0！我们完全依靠上一步加大的 outerHorizontal 来留白，
-        // 这样可以彻底避免“剧情说完一瞬间，对话框突然往右跳一下”的视觉 Bug。
+        // 横屏模式（shortWide）始终保留右边距以避让右侧按钮；
+        // 竖屏动态避让；电脑端锁死 0.0。
         final dialogueRightSafeWidth = wideDialogueLayout
             ? 0.0 
-            : ((controller.hasNext || controller.isGenerating)
-                ? (shortWide ? 52.0 : (compact ? 58.0 : 70.0))
-                : 0.0);
+            : (shortWide 
+                ? 52.0 
+                : ((controller.hasNext || controller.isGenerating)
+                    ? (compact ? 58.0 : 70.0)
+                    : 0.0));
         final browsingStory = readerHasNext;
 
         // 一级导航已移回右侧 HUD，不再占据底部。
         // 回看历史 / 逐字显示 / 生成中只影响输入区；底部只保留系统安全区。
         final composerVisible =
-            !browsingStory && !controller.isGenerating && !_revealing;
+            !browsingStory &&
+            !controller.isGenerating &&
+            !_revealing &&
+            !forcedBattlePending;
         final surroundingsAction = NovelChoiceDockActionScope.maybeOf(context);
         final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
         final keyboardActive = compact && keyboardInset > 0;
@@ -1654,9 +1710,34 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
           );
         });
 
+        // HUD（顶部头像 / 商城 / 设置、左右侧功能栏）通常是 NovelDialogPanel
+        // 的父级 Stack 兄弟节点。这里绝不能让 Reader 自己在整屏范围都命中，
+        // 否则即使背景翻页层放在 Reader 内部“最底层”，父 Stack 仍会先命中
+        // Reader 这个整屏子节点，下面的 HUD 根本拿不到 Pointer。
+        //
+        // 处理方式：
+        // 1. Reader 根手势改成 deferToChild —— 没有 Reader 子控件命中的区域直接穿透；
+        // 2. 空白翻页只提供一个“阅读安全区”命中面；
+        // 3. 顶部 HUD、左右功能栏、底部输入/导航区域全部不属于这个命中面。
+        final readerTapTop = (MediaQuery.paddingOf(context).top +
+                viewport.topContentReserve +
+                (shortWide ? 2.0 : 4.0))
+            .clamp(0.0, availableHeight)
+            .toDouble();
+        final readerTapSideInset =
+            shortWide ? 72.0 : (compact ? 68.0 : 88.0);
+        final requestedReaderTapBottom = canShowChoices
+            ? choiceContentBottom
+            : math.max(panelBottom, footerBottom + footerHeight + 10.0);
+        final readerTapBottom = requestedReaderTapBottom
+            .clamp(0.0, math.max(0.0, availableHeight - readerTapTop - 48.0))
+            .toDouble();
+
         return GestureDetector(
-          // 整个对话舞台都能接收横滑，而不是只有命中内部文字/按钮时才生效。
-          behavior: HitTestBehavior.translucent,
+          // 关键：不能 translucent/opaque。只有 Reader 自己真正命中的子区域
+          // 才让横滑识别器加入竞技场；HUD 区域没有 Reader child hit 时会继续
+          // 向父 Stack 下层命中商城、头像、人物、背包等控件。
+          behavior: HitTestBehavior.deferToChild,
           onHorizontalDragStart: _handleHorizontalDragStart,
           onHorizontalDragUpdate: _handleHorizontalDragUpdate,
           onHorizontalDragEnd: _handleHorizontalDragEnd,
@@ -1667,6 +1748,24 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
             child: Stack(
             clipBehavior: Clip.none,
             children: <Widget>[
+              // “点空白推进”只存在于阅读安全区，而不是 Positioned.fill。
+              // 这样 HUD 所在的顶部 / 两侧 / 底部根本没有 Reader 的透明命中层，
+              // 点击会穿透到父 Stack 里的真实 HUD。
+              //
+              // 后绘制的正文、头像切换、选项、自由探索、输入框等 Reader 内控件
+              // 仍然优先于这一层，因此这些控件也不会被自动下一页抢走点击。
+              Positioned(
+                left: readerTapSideInset,
+                right: readerTapSideInset,
+                top: readerTapTop,
+                bottom: readerTapBottom,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _handleStageTap,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+
               // Character dialogue uses the authoritative portrait resolved by
               // NovelGameController.currentPortraitUrl. No dynamic field guessing here.
               if (stageActors.isNotEmpty)
@@ -1678,23 +1777,6 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     wideDialogueLayout: wideDialogueLayout,
                     shortWide: shortWide,
                     compact: compact,
-                  ),
-                ),
-
-              // “探索周围”属于场景操作，而不是正文内容。
-              // 固定在屏幕左侧安全区，不再随着旁白/对白的高度、分页或对齐一起移动。
-              if (surroundingsActionVisible)
-                Positioned(
-                  left: compact ? 8.0 : 14.0,
-                  top: math.max(
-                    MediaQuery.paddingOf(context).top +
-                        viewport.topContentReserve +
-                        (shortWide ? 8.0 : 14.0),
-                    availableHeight * (shortWide ? .30 : .38),
-                  ),
-                  child: _NovelFloatingSurroundingsAction(
-                    scope: surroundingsAction!,
-                    compact: compact || shortWide,
                   ),
                 ),
 
@@ -1965,6 +2047,23 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     screen.width,
                   ),
                 ),
+              // “自由探索 / 探索周围”必须放在正文、对白和选择层之后。
+              // Stack 会优先命中后绘制的子节点；旧顺序把按钮放在正文层下面，
+              // 透明的正文手势层会先拿到点击，于是按钮看得见却点不到。
+              if (surroundingsActionVisible)
+                Positioned(
+                  left: compact ? 8.0 : 14.0,
+                  top: math.max(
+                    MediaQuery.paddingOf(context).top +
+                        viewport.topContentReserve +
+                        (shortWide ? 8.0 : 14.0),
+                    availableHeight * (shortWide ? .30 : .38),
+                  ),
+                  child: _NovelFloatingSurroundingsAction(
+                    scope: surroundingsAction!,
+                    compact: compact || shortWide,
+                  ),
+                ),
               Positioned(
                 left: 0,
                 right: 0,
@@ -1981,6 +2080,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   onOpenCharacters: widget.onOpenCharacters,
                   onOpenJourney: widget.onOpenJourney,
                   onContinue: widget.onContinue,
+                  // 战斗继续沿用阅读器的真实最后页条件：
+                  // 没有混合子页、没有旁白分页、没有下一段剧情时才显示。
+                  showBattleContinue: forcedBattlePending && !readerHasNext,
+                  onForceContinue: widget.onForceContinue,
                   targetActorName: widget.targetActorName,
                   targetActorAvatarUrl: widget.targetActorAvatarUrl,
                   targetActorPlaceholder: widget.targetActorPlaceholder,
@@ -2063,10 +2166,7 @@ class _NovelNarrationSurface extends StatelessWidget {
     final compact = viewport.compactContent;
     final shortWide = viewport.shortWide;
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: onTap,
-      child: SingleChildScrollView(
+    return SingleChildScrollView(
         physics: const BouncingScrollPhysics(),
         clipBehavior: Clip.none,
         child: Column(
@@ -2084,7 +2184,10 @@ class _NovelNarrationSurface extends StatelessWidget {
               ),
               SizedBox(height: shortWide ? 3 : (compact ? 5 : 7)),
             ],
-            ValueListenableBuilder<String>(
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: onTap,
+              child: ValueListenableBuilder<String>(
               valueListenable: displayTextListenable,
               builder: (context, value, _) => TweenAnimationBuilder<double>(
                 tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
@@ -2126,6 +2229,7 @@ class _NovelNarrationSurface extends StatelessWidget {
                   );
                 },
               ),
+              ),
             ),
             if (!hasNext &&
                 !isGenerating &&
@@ -2136,8 +2240,7 @@ class _NovelNarrationSurface extends StatelessWidget {
             ],
           ],
         ),
-      ),
-    );
+      );
   }
 }
 
@@ -2164,10 +2267,7 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
     final shortWide = viewport.shortWide;
     final compact = viewport.compactContent;
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: onTap,
-      child: SingleChildScrollView(
+    return SingleChildScrollView(
         physics: const BouncingScrollPhysics(),
         clipBehavior: Clip.none,
         child: Column(
@@ -2181,7 +2281,10 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
               ),
               SizedBox(height: shortWide ? 3 : (compact ? 5 : 7)),
             ],
-            ValueListenableBuilder<String>(
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: onTap,
+              child: ValueListenableBuilder<String>(
           valueListenable: displayTextListenable,
           builder: (context, value, _) {
             final visibleNarration = _novelVisibleNarrationText(value).trim();
@@ -2235,11 +2338,11 @@ class _NovelMixedNarrationSurface extends StatelessWidget {
               },
             );
           },
+              ),
             ),
           ],
         ),
-      ),
-    );
+      );
   }
 }
 
@@ -2311,11 +2414,6 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
     final shortWide = viewport.shortWide;
     final wideDialogueLayout = viewport.useDesktopDialogue;
 
-    // 手机仍保持 NPC 左 / 主角右。
-    // PC 镜头固定：角色永远在左，整个对白阅读区稳定放在右侧，
-    // 避免主角/NPC 一开口界面就左右跳，画面会更像真正的视觉小说舞台。
-    // PC 对白仍然比手机长，但不再无限铺满：
-    // 左侧大半身人物约占 46%，右侧文字约占一半，二者共同构成画面。
     final dialogueWidth = shortWide
         ? (screen.width * .44).clamp(280.0, 420.0).toDouble()
         : compact
@@ -2324,202 +2422,112 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                 ? (screen.width * .52).clamp(500.0, 960.0).toDouble()
                 : (screen.width * .50).clamp(360.0, 680.0).toDouble();
 
-    final outerHorizontal = shortWide
-        ? 26.0
-        : (compact ? 9.0 : (wideDialogueLayout ? 120.0 : 20.0));
-
-    // 这里按真实屏幕方向判断横屏，不再依赖 useDesktopDialogue。
-    // 当前横屏普通剧情分支仍然是 NPC 对白靠右、主角对白靠左；
-    // 因此只把 NPC 的右侧对白往左收，主角原本的左侧构图保持不动。
-    // 真正 PC 的 wideDialogueLayout 仍沿用既有镜头，避免对白侵入左侧大立绘。
+    final outerHorizontal = shortWide ? 26.0 : (compact ? 9.0 : (wideDialogueLayout ? 120.0 : 20.0));
     final isLandscape = screen.width > screen.height;
     final landscapeNpcLeftShift = isLandscape && !wideDialogueLayout && !isHost
         ? (screen.width * .08).clamp(72.0, 156.0).toDouble()
         : 0.0;
+    final portraitFacingGap = shortWide ? 10.0 : (compact ? 7.0 : (wideDialogueLayout ? 16.0 : 12.0));
 
-    final portraitFacingGap = shortWide
-        ? 10.0
-        : (compact ? 7.0 : (wideDialogueLayout ? 16.0 : 12.0));
-
-    // 角色名直接嵌在线条中间：不再使用中央星星，也不再把名字放在线条下方。
-    final shortNameLine = shortWide
-        ? 26.0
-        : (compact ? 28.0 : (wideDialogueLayout ? 46.0 : 38.0));
-    final longNameLine = shortWide
-        ? 42.0
-        : (compact ? 48.0 : (wideDialogueLayout ? 86.0 : 70.0));
-    final leftNameLine = isHost ? longNameLine : shortNameLine;
-    final rightNameLine = isHost ? shortNameLine : longNameLine;
-
-    final speakerHeaderWidth = shortWide
-        ? 220.0
-        : (compact ? 188.0 : (wideDialogueLayout ? 320.0 : 244.0));
+    const panelRadius = 18.0;
 
     final dialogueContent = SizedBox(
       width: dialogueWidth,
       child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: maxPanelHeight.clamp(0.0, 520.0).toDouble(),
-        ),
+        constraints: BoxConstraints(maxHeight: maxPanelHeight.clamp(0.0, 520.0).toDouble()),
         child: SingleChildScrollView(
           physics: const BouncingScrollPhysics(),
           clipBehavior: Clip.none,
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            crossAxisAlignment: wideDialogueLayout
+                ? CrossAxisAlignment.start
+                : (isHost ? CrossAxisAlignment.end : CrossAxisAlignment.start),
             children: <Widget>[
-              Stack(
-                children: <Widget>[
-                  // 名字不再居中整个对话区。
-                  // NPC 立绘在左 -> 名字贴在右侧对白区的左端；
-                  // 主角立绘在右 -> 名字贴在左侧对白区的右端。
-                  Align(
-                    alignment: wideDialogueLayout
-                        ? Alignment.centerLeft
-                        : (isHost ? Alignment.centerRight : Alignment.centerLeft),
-                    child: SizedBox(
-                      width: speakerHeaderWidth,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: wideDialogueLayout
-                            ? CrossAxisAlignment.start
-                            : (isHost
-                                ? CrossAxisAlignment.end
-                                : CrossAxisAlignment.start),
-                        children: <Widget>[
-                          SizedBox(
-                            height: shortWide ? 23 : (compact ? 26 : 29),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: <Widget>[
-                                SizedBox(
-                                  width: leftNameLine,
-                                  child: Container(
-                                    height: 1.05,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.centerLeft,
-                                        end: Alignment.centerRight,
-                                        colors: <Color>[
-                                          Colors.transparent,
-                                          Colors.white.withOpacity(.28),
-                                          Colors.white.withOpacity(.64),
-                                        ],
-                                        stops: const <double>[0, .40, 1],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: compact ? 8 : 10),
-                                Flexible(
-                                  child: _SpeakerIdentity(
-                                    name: speakerName,
-                                    affection: affection,
-                                    isHost: isHost,
-                                    affectionPulse: affectionPulse,
-                                    onAffectionPulseConsumed:
-                                        onAffectionPulseConsumed,
-                                  ),
-                                ),
-                                SizedBox(width: compact ? 8 : 10),
-                                SizedBox(
-                                  width: rightNameLine,
-                                  child: Container(
-                                    height: 1.05,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.centerLeft,
-                                        end: Alignment.centerRight,
-                                        colors: <Color>[
-                                          Colors.white.withOpacity(.64),
-                                          Colors.white.withOpacity(.28),
-                                          Colors.transparent,
-                                        ],
-                                        stops: const <double>[0, .60, 1],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isHost && onOpenPortrait != null) _PortraitSwitchButton(onTap: onOpenPortrait!),
+                  if (isHost && onOpenPortrait != null) const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: _SpeakerIdentity(
+                      name: speakerName,
+                      affection: affection,
+                      isHost: isHost,
+                      affectionPulse: affectionPulse,
+                      onAffectionPulseConsumed: onAffectionPulseConsumed,
                     ),
                   ),
-                  if (onOpenPortrait != null)
-                    Align(
-                      alignment: wideDialogueLayout
-                          ? Alignment.centerRight
-                          : (isHost
-                              ? Alignment.centerLeft
-                              : Alignment.centerRight),
-                      child: _PortraitSwitchButton(onTap: onOpenPortrait!),
-                    ),
+                  if (!isHost && onOpenPortrait != null) const SizedBox(width: 8),
+                  if (!isHost && onOpenPortrait != null) _PortraitSwitchButton(onTap: onOpenPortrait!),
                 ],
               ),
-              SizedBox(height: shortWide ? 5 : (compact ? 7 : 10)),
+              
+              const SizedBox(height: 6),
 
-              ValueListenableBuilder<String>(
-                valueListenable: displayTextListenable,
-                builder: (context, value, _) {
-                  final hasStoryText = sentence?.readerText.isNotEmpty == true;
-                  final display = value.isEmpty && !hasStoryText
-                      ? emptyTextFallback
-                      : value;
-                  // _displayTextNotifier 现在永远只承载“当前阅读页”的文字。
-                  // 普通对白页和混合对白子页都可直接渲染，不再按 rune 长度反推阶段。
-                  final dialogueText = display;
-                  final alignment = shortWide
-                      ? TextAlign.center
-                      : (wideDialogueLayout
-                          ? TextAlign.left
-                          : (isHost ? TextAlign.right : TextAlign.left));
-                      
-                  return TweenAnimationBuilder<double>(
-                    tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
-                    duration: const Duration(milliseconds: 600),
-                    curve: Curves.easeOutCubic,
-                    builder: (context, glow, child) {
-                      final style = TextStyle(
-                        color: const Color(0xFFF4F1EA),
-                        fontFamily: fontFamily,
-                        fontSize: fontSize + (shortWide ? -.2 : (compact ? 0 : .4)),
-                        height: shortWide ? 1.55 : 1.82,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: .15,
-                        shadows: <Shadow>[
-                          Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
-                          Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
-                        ],
-                      );
-                      
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: <Widget>[
-                          if (dialogueText.isNotEmpty)
-                            Text.rich(
-                              TextSpan(
-                                children: _buildNovelDialogueDisplaySpans(
-                                  dialogueText,
-                                  style,
+              GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: onTap,
+                child: ValueListenableBuilder<String>(
+                  valueListenable: displayTextListenable,
+                  builder: (context, value, _) {
+                    final display = value.isEmpty && !(sentence?.readerText.isNotEmpty == true) ? emptyTextFallback : value;
+                    // ✨ 1. 修改：不管横屏还是主角，这里强制要求长文本完全左对齐
+                    const alignment = TextAlign.left;
+                        
+                    return TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0, end: isRevealing ? 1.0 : 0.0),
+                      duration: const Duration(milliseconds: 600),
+                      curve: Curves.easeOutCubic,
+                      builder: (context, glow, child) {
+                        final style = TextStyle(
+                          color: const Color(0xFFF4F1EA),
+                          fontFamily: fontFamily,
+                          fontSize: fontSize + (shortWide ? -.2 : (compact ? 0 : .4)),
+                          height: shortWide ? 1.55 : 1.72,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: .35,
+                          shadows: <Shadow>[
+                            Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
+                            Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
+                          ],
+                        );
+                        
+                        return Container(
+                          // ✨ 2. 修改：为透明玻璃面板增加 16.0 的底部边距（Margin），留出呼吸感
+                          margin: const EdgeInsets.only(bottom: 16.0),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(panelRadius),
+                            boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 16, offset: Offset(0, 6))],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(panelRadius),
+                            child: _AdaptiveBackdropBlur(
+                              sigma: 16,
+                              child: Container(
+                                padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 20, vertical: compact ? 14 : 16),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(panelRadius),
+                                  border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.0),
+                                ),
+                                child: Text.rich(
+                                  TextSpan(children: _buildNovelDialogueDisplaySpans(display, style)),
+                                  textAlign: alignment,
                                 ),
                               ),
-                              // NPC 在左：对白区在右，文字左对齐；
-                              // 主角在右：对白区在左，文字右对齐。
-                              textAlign: alignment,
                             ),
-                        ],
-                      );
-                    },
-                  );
-                },
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
               if (showPlayerHint && playerHint.trim().isNotEmpty) ...<Widget>[
-                const SizedBox(height: 12),
+                // 因为上面板子自己加了 bottom margin，这里只要极少的间距即可
+                const SizedBox(height: 2),
                 _NarratorHint(text: playerHint),
               ],
             ],
@@ -2528,29 +2536,13 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
       ),
     );
 
-    // 角色对白不再铺任何深色背景 / 渐变卡片。
-    // 只依靠正文自身的文字阴影保证复杂场景中的可读性。
-    final readingZone = Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 2 : 5,
-        vertical: shortWide ? 1 : (compact ? 2 : 4),
-      ),
-      child: dialogueContent,
-    );
-
     final sceneHudLeftInset = compactChrome ? 6.0 : 14.0;
     final horizontalReadingAlignment = wideDialogueLayout
         ? Alignment.centerRight
         : (isHost ? Alignment.centerLeft : Alignment.centerRight);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: onTap,
-      child: Align(
-        // 探索入口和对白合成一个垂直块：入口永远在文字上方，
-        // 横向独立贴左侧安全边距，不再与右侧附近角色区域争空间。
-        alignment:
-            choices.isNotEmpty ? Alignment.bottomCenter : Alignment.center,
+    return Align(
+        alignment: choices.isNotEmpty ? Alignment.bottomCenter : const Alignment(0, -0.15),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2558,10 +2550,7 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
             if (storyAction != null) ...<Widget>[
               Padding(
                 padding: EdgeInsets.only(left: sceneHudLeftInset),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: storyAction!,
-                ),
+                child: Align(alignment: Alignment.centerLeft, child: storyAction!),
               ),
               SizedBox(height: shortWide ? 3 : (compact ? 5 : 7)),
             ],
@@ -2574,21 +2563,16 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                 alignment: horizontalReadingAlignment,
                 child: Padding(
                   padding: EdgeInsets.only(
-                    right: wideDialogueLayout
-                        ? 0
-                        : (isHost ? portraitFacingGap : 0),
-                    left: wideDialogueLayout
-                        ? portraitFacingGap
-                        : (isHost ? 0 : portraitFacingGap),
+                    right: wideDialogueLayout ? 0 : (isHost ? portraitFacingGap : 0),
+                    left: wideDialogueLayout ? portraitFacingGap : (isHost ? 0 : portraitFacingGap),
                   ),
-                  child: readingZone,
+                  child: dialogueContent, 
                 ),
               ),
             ),
           ],
         ),
-      ),
-    );
+      );
   }
 }
 

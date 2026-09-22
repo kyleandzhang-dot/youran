@@ -763,8 +763,10 @@ class _NovelSurroundingsPageState extends State<_NovelSurroundingsPage> {
     _syncFromController(notify: false);
     widget.controller.addListener(_handleControllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || widget.controller.surroundingsData.isNotEmpty) return;
-      unawaited(widget.controller.loadSurroundings());
+      if (!mounted) return;
+      // This page is bound to the current scene, not merely to whether some cached payload exists.
+      // Refresh once on entry so data from an earlier scene cannot suppress the current payload.
+      unawaited(widget.controller.loadSurroundings(force: true));
     });
   }
 
@@ -2199,6 +2201,13 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   bool _developerBattleOpening = false;
   String _remoteSceneKey = '';
 
+  // 探索背景与剧情 Storyboard 完全分槽。只缓存 /surroundings 返回的
+  // scene_image_url（后端 SceneAnchor），绝不回退到 world.backgroundUrl。
+  String _remoteSceneImageUrl = '';
+  String _remoteSceneImageStatus = '';
+  Timer? _sceneImageRefreshTimer;
+  int _sceneImageRefreshAttempts = 0;
+
   // 走路探索：后台仍使用 6×6 数据坐标，前台完全隐藏网格并以黑暗场景自由移动。
   late final AnimationController _walkTicker;
   Duration _walkLastElapsed = Duration.zero;
@@ -2254,8 +2263,11 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
       widget.controller.addListener(_handleRemoteChanged);
       _syncRemote();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || widget.controller.surroundingsData.isNotEmpty) return;
-        unawaited(widget.controller.loadSurroundings());
+        if (!mounted) return;
+        // Exploration is a scene-bound surface. Always refresh once on entry so stale
+        // surroundingsData from a previous scene/app version cannot suppress the current
+        // SceneAnchor payload. Controller-side force still deduplicates/serializes requests.
+        unawaited(widget.controller.loadSurroundings(force: true));
       });
     } else {
       _startNewRun();
@@ -2290,6 +2302,8 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
   void dispose() {
     _rewardToastEntry?.remove();
     _rewardToastEntry = null;
+    _sceneImageRefreshTimer?.cancel();
+    _sceneImageRefreshTimer = null;
     _walkTicker
       ..removeListener(_tickWalk)
       ..dispose();
@@ -2302,18 +2316,86 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     setState(_syncRemote);
   }
 
+  void _syncSceneImageRefresh() {
+    _sceneImageRefreshTimer?.cancel();
+    _sceneImageRefreshTimer = null;
+
+    if (!_remote) return;
+
+    final waitingForAnchor = _remoteSceneImageStatus == 'generating' ||
+        _remoteSceneImageStatus == 'missing';
+    if (!waitingForAnchor) {
+      if (_remoteSceneImageStatus == 'ready') {
+        _sceneImageRefreshAttempts = 0;
+      }
+      return;
+    }
+    if (_sceneImageRefreshAttempts >= 10) return;
+
+    // SceneAnchor runs independently from Storyboard. Poll only while the pure scene asset is
+    // pending. On same-scene regeneration we may keep the previous pure scene image until the
+    // replacement is ready, but we never substitute a storyboard frame.
+    _sceneImageRefreshTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (!mounted) return;
+      _sceneImageRefreshAttempts += 1;
+      unawaited(widget.controller.loadSurroundings(force: true));
+    });
+  }
+
   void _syncRemote() {
     final payload = widget.controller.surroundingsData;
+    final availability = widget.controller.surroundingsAvailability;
+    final availabilitySceneKey = stringValue(availability['scene_key']).trim();
+    final payloadSceneKey = stringValue(payload['scene_key']).trim();
+    final payloadMatchesAvailability = availabilitySceneKey.isEmpty ||
+        payloadSceneKey.isEmpty ||
+        availabilitySceneKey == payloadSceneKey;
+
+    // Availability is only a lightweight bootstrap. Once the full payload for the SAME
+    // scene arrives, it is newer and must win. The scene-key guard above already prevents a
+    // stale previous-scene payload from leaking into the new scene.
+    final visualPayload = <String, dynamic>{
+      ...availability,
+      if (payloadMatchesAvailability) ...payload,
+    };
+
+    final nextSceneKey = stringValue(visualPayload['scene_key']).trim();
+    final sceneChanged = nextSceneKey.isNotEmpty && nextSceneKey != _remoteSceneKey;
+    if (sceneChanged) {
+      _remoteSceneImageUrl = '';
+      _remoteSceneImageStatus = '';
+      _sceneImageRefreshAttempts = 0;
+      _sceneImageRefreshTimer?.cancel();
+      _sceneImageRefreshTimer = null;
+    }
+    if (nextSceneKey.isNotEmpty) {
+      _remoteSceneKey = nextSceneKey;
+    }
+
+    final hasSceneImageField = visualPayload.containsKey('scene_image_url');
+    final incomingSceneImageUrl =
+        stringValue(visualPayload['scene_image_url']).trim();
+    final incomingSceneImageStatus =
+        stringValue(visualPayload['scene_image_status']).trim().toLowerCase();
+    if (incomingSceneImageUrl.isNotEmpty) {
+      _remoteSceneImageUrl = incomingSceneImageUrl;
+    } else if (hasSceneImageField && sceneChanged) {
+      // A real scene switch must never leak the previous location into exploration.
+      _remoteSceneImageUrl = '';
+    }
+    if (incomingSceneImageStatus.isNotEmpty) {
+      _remoteSceneImageStatus = incomingSceneImageStatus;
+    }
+    _syncSceneImageRefresh();
+
     if (payload.isEmpty) {
       _message = widget.controller.isSurroundingsLoading
           ? '正在生成当前场景的探索内容…'
           : '当前探索内容尚未载入。';
       return;
     }
-    final nextSceneKey = stringValue(payload['scene_key']).trim();
-    final sceneChanged = nextSceneKey != _remoteSceneKey;
+
     final incomingSeed = intValue(payload['scene_seed']);
-    _remoteSceneKey = nextSceneKey;
 
     // 同一个场景内保持走路地图的 seed 稳定。
     // 部分状态刷新可能暂时缺少 scene_seed，或返回不同 seed；如果每次都覆盖，
@@ -3930,8 +4012,9 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     final start = _walkObjectPointerStart;
     if (start == null) return;
 
-    // 允许正常的手指抖动；只有明显拖动才取消本次拾取。
-    if ((event.position - start).distanceSquared > 26 * 26) {
+    // 物品点击优先：手机上手指按下/抬起会有自然位移，适当放宽容差。
+    // 只有明显拖动才取消本次拾取，避免用户明明点中物品却被当成摇杆手势。
+    if ((event.position - start).distanceSquared > 34 * 34) {
       _walkObjectPointerMoved = true;
     }
   }
@@ -4206,6 +4289,18 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
     return '互动';
   }
 
+  bool _walkDirectPickup(_FogTileDef tile) {
+    // 所有真正的物品都直接点击物品本体拾取/收集，不再要求命中额外操作按钮。
+    // 搜刮点、敌人、场景机关仍保留动作提示，避免把不同交互都伪装成拾取。
+    if (_isRemoteRecipeInput(tile.nodeId)) return true;
+    return tile.kind == _FogTileKind.genericItem ||
+        tile.kind == _FogTileKind.branch ||
+        tile.kind == _FogTileKind.stone ||
+        tile.kind == _FogTileKind.vine ||
+        tile.kind == _FogTileKind.bottle ||
+        tile.collectible;
+  }
+
   Widget _buildWalkObject(int index, double cameraX, double cameraY) {
     final tile = _tileAt(index);
     if (tile.kind == _FogTileKind.empty ||
@@ -4225,13 +4320,65 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
 
     final point = _walkTilePoint(index, _walkWorldWidth, _walkWorldHeight);
     final near = distanceSquared <= _walkInteractRadius * _walkInteractRadius;
-    final width = (_walkViewportWidth * .24).clamp(72.0, 112.0).toDouble();
-    final height = (_walkViewportHeight * .115).clamp(58.0, 86.0).toDouble();
+    final directPickup = _walkDirectPickup(tile);
+
+    // 可拾取物品给更大的透明命中区；物品图标本身始终钉在世界坐标中心。
+    // 这样不会再因为“拾取/收集”提示出现，把图标从真实物品位置挤开。
+    final width = (_walkViewportWidth * (directPickup ? .27 : .24))
+        .clamp(directPickup ? 88.0 : 78.0, directPickup ? 124.0 : 116.0)
+        .toDouble();
+    final height = directPickup
+        ? (_walkViewportHeight * .14).clamp(84.0, 98.0).toDouble()
+        : (_walkViewportHeight * .17).clamp(106.0, 124.0).toDouble();
     final opacity = near ? 1.0 : .52;
     final enemy = tile.kind == _FogTileKind.normalEnemy ||
         tile.kind == _FogTileKind.eliteEnemy;
     final iconSize = near ? (enemy ? 40.0 : 36.0) : (enemy ? 34.0 : 30.0);
     final rewardAsset = enemy ? '' : _walkTileRewardAsset(tile);
+    final labelTop = height / 2 + iconSize / 2 + 4;
+    final showActionHint = near && !directPickup;
+
+    final icon = AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      width: iconSize,
+      height: iconSize,
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(enemy ? .76 : .62),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white.withOpacity(
+            near ? (enemy ? .95 : .84) : (enemy ? .58 : .34),
+          ),
+          width: near ? (enemy ? 1.5 : 1.1) : .8,
+        ),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withOpacity(.52),
+            blurRadius: 6,
+            spreadRadius: 0,
+          ),
+        ],
+      ),
+      child: rewardAsset.isNotEmpty
+          ? Padding(
+              padding: EdgeInsets.all(near ? 4.5 : 4),
+              child: Image.asset(
+                rewardAsset,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (_, __, ___) => Icon(
+                  _walkTileIcon(tile.kind),
+                  size: near ? 20 : 17,
+                  color: _walkTileColor(tile),
+                ),
+              ),
+            )
+          : Icon(
+              _walkTileIcon(tile.kind),
+              size: near ? 20 : 17,
+              color: _walkTileColor(tile),
+            ),
+    );
 
     return Positioned(
       left: point.dx - cameraX - width / 2,
@@ -4243,97 +4390,102 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 180),
           opacity: opacity,
-          child: Listener(
-            behavior: HitTestBehavior.opaque,
-            onPointerDown: (event) => _beginWalkObjectPointer(index, event),
-            onPointerMove: _updateWalkObjectPointer,
-            onPointerUp: (event) => _finishWalkObjectPointer(index, event),
-            onPointerCancel: _cancelWalkObjectPointer,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  width: iconSize,
-                  height: iconSize,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(enemy ? .76 : .62),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withOpacity(
-                        near ? (enemy ? .95 : .84) : (enemy ? .58 : .34),
-                      ),
-                      width: near ? (enemy ? 1.5 : 1.1) : .8,
-                    ),
-                    boxShadow: <BoxShadow>[
-                      BoxShadow(
-                        color: Colors.black.withOpacity(.52),
-                        blurRadius: 6,
-                        spreadRadius: 0,
-                      ),
-                    ],
+          child: Semantics(
+            button: true,
+            label: tile.label,
+            hint: directPickup
+                ? '点击物品直接拾取'
+                : '点击${_walkActionLabel(tile)}',
+            child: Listener(
+              // 整个透明区域都属于这个物品；不需要精确点中图标或提示文字。
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (event) => _beginWalkObjectPointer(index, event),
+              onPointerMove: _updateWalkObjectPointer,
+              onPointerUp: (event) => _finishWalkObjectPointer(index, event),
+              onPointerCancel: _cancelWalkObjectPointer,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  Positioned(
+                    left: (width - iconSize) / 2,
+                    top: (height - iconSize) / 2,
+                    child: icon,
                   ),
-                  child: rewardAsset.isNotEmpty
-                      ? Padding(
-                          padding: EdgeInsets.all(near ? 4.5 : 4),
-                          child: Image.asset(
-                            rewardAsset,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.medium,
-                            errorBuilder: (_, __, ___) => Icon(
-                              _walkTileIcon(tile.kind),
-                              size: near ? 20 : 17,
-                              color: _walkTileColor(tile),
+                  Positioned(
+                    left: 4,
+                    right: 4,
+                    top: labelTop,
+                    child: IgnorePointer(
+                      child: Text(
+                        tile.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(near ? .92 : .66),
+                          fontSize: near ? 9.2 : 8.3,
+                          fontWeight: FontWeight.w700,
+                          shadows: const <Shadow>[
+                            Shadow(color: Colors.black, blurRadius: 6),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (showActionHint)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: labelTop + 16,
+                      child: IgnorePointer(
+                        // 这里只是动作提示，不再承担点击入口；真正命中由整个对象区域处理。
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 9,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(.72),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(.28),
+                                width: .7,
+                              ),
+                            ),
+                            child: Text(
+                              _walkActionLabel(tile),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9.2,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
-                        )
-                      : Icon(
-                          _walkTileIcon(tile.kind),
-                          size: near ? 20 : 17,
-                          color: _walkTileColor(tile),
                         ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  tile.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(near ? .92 : .66),
-                    fontSize: near ? 9.2 : 8.3,
-                    fontWeight: FontWeight.w700,
-                    shadows: const <Shadow>[
-                      Shadow(color: Colors.black, blurRadius: 6),
-                    ],
-                  ),
-                ),
-                if (near) ...<Widget>[
-                  const SizedBox(height: 3),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(.72),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(.28),
-                        width: .7,
                       ),
                     ),
-                    child: Text(
-                      _walkActionLabel(tile),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9.2,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
                 ],
-              ],
+              ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _walkSceneImagePlaceholder() {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            Color(0xFF20252A),
+            Color(0xFF111519),
+            Color(0xFF080A0D),
+          ],
         ),
       ),
     );
@@ -4531,6 +4683,18 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
           playerWorldY - cameraY - _walkPlayerBaseHeight(viewportHeight) * .30,
         );
 
+        // 命中优先级：普通交互先画，可拾取物品最后画；同类里离玩家更近的最后画。
+        // Stack 的后绘制元素优先命中，因此物品与其他 UI/对象重叠时，点击优先落到物品。
+        final walkObjectIndices = _tiles.keys.toList(growable: true)
+          ..sort((a, b) {
+            final aPickup = _walkDirectPickup(_tileAt(a));
+            final bPickup = _walkDirectPickup(_tileAt(b));
+            if (aPickup != bPickup) return aPickup ? 1 : -1;
+            final aDistance = _walkDistanceSquaredToIndex(a);
+            final bDistance = _walkDistanceSquaredToIndex(b);
+            return bDistance.compareTo(aDistance);
+          });
+
         return ClipRect(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -4556,15 +4720,15 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                             alignment: Alignment.center,
                             filterQuality: FilterQuality.medium,
                           )
-                        : widget.controller.world.backgroundUrl.trim().isNotEmpty
+                        : _remoteSceneImageUrl.trim().isNotEmpty
                             ? _walkImageSource(
-                                widget.controller.world.backgroundUrl.trim(),
+                                _remoteSceneImageUrl.trim(),
                                 fit: BoxFit.cover,
                                 alignment: Alignment.center,
                                 filterQuality: FilterQuality.medium,
-                                fallback: const SizedBox.expand(),
+                                fallback: _walkSceneImagePlaceholder(),
                               )
-                            : const SizedBox.expand(),
+                            : _walkSceneImagePlaceholder(),
                   ),
                 ),
                 // 全屏 BackdropFilter 在 Web/Chrome 上代价很高，且镜头移动时会持续重算。
@@ -4624,7 +4788,7 @@ class _SurroundFogPrototypeState extends State<_SurroundFogPrototype>
                     ),
                   ),
                 ),
-                ..._tiles.keys.map(
+                ...walkObjectIndices.map(
                   (index) => _buildWalkObject(index, cameraX, cameraY),
                 ),
                 _buildWalkPlayer(cameraX, cameraY),

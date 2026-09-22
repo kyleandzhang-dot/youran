@@ -3,6 +3,8 @@ part of '../novel_sheets.dart';
 // ============================================================================
 
 const Color _characterHighStar = Color(0xFFE75B62);
+const int _characterRecruitFragmentsRequired = 15;
+const int _characterUpgradeFragmentsRequired = 10;
 // 深色队伍 / 结缘 / 图鉴 / 伙伴养成页
 // 页面入口 / 对外入口：
 //   - NovelTeamTab
@@ -534,6 +536,28 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
     });
   }
 
+  Future<void> _syncCharacterRosterAfterDraw() async {
+    if (!mounted) return;
+    try {
+      // 合成/自动获得由后端决定。抽取完成后只重新读取权威 roster/status，
+      // 不在 Flutter 端用碎片数量自行推断 owned，避免前后端阈值漂移。
+      await widget.controller.refreshNovelCharacterRoster(notify: false);
+      await widget.controller.refreshCharacterStatus(notify: false);
+    } catch (error) {
+      if (mounted) {
+        _message(
+          error is NovelBackendException
+              ? error.message
+              : '角色状态同步失败：$error',
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() {});
+    unawaited(_precacheOwnedHeroPortraits());
+  }
+
   Future<void> _draw(List<NovelCharacter> characters, int count) async {
     final flowers = widget.controller.novelCharacterFlowers;
     if (flowers < count) {
@@ -566,6 +590,8 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
 
     if (results != null && results.isNotEmpty && mounted) {
       setState(() => lastDrawResults = results);
+      await _syncCharacterRosterAfterDraw();
+      if (!mounted) return;
       for (final result in results.where((item) => item.newlyOwned)) {
         final characterId = result.character.id.trim();
         if (characterId.isEmpty) continue;
@@ -584,7 +610,6 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
           }
         }
       }
-      if (mounted) unawaited(_precacheOwnedHeroPortraits());
     }
   }
 
@@ -776,6 +801,8 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
                                     landscapeMode: landscape,
                                     characters: allCharacters,
                                     loading: false,
+                                    isOwned: _isOwned,
+                                    fragmentsOf: _fragmentsOf,
                                     starOf: _starOf,
                                   ),
               ),
@@ -1105,6 +1132,8 @@ class _CharacterGridPage extends StatelessWidget {
   const _CharacterGridPage({
     required this.characters,
     required this.loading,
+    required this.isOwned,
+    required this.fragmentsOf,
     required this.starOf,
     required this.desktopMode,
     this.landscapeMode = false,
@@ -1112,6 +1141,8 @@ class _CharacterGridPage extends StatelessWidget {
 
   final List<NovelCharacter> characters;
   final bool loading;
+  final bool Function(NovelCharacter) isOwned;
+  final int Function(NovelCharacter) fragmentsOf;
   final int Function(NovelCharacter) starOf;
   final bool desktopMode;
   final bool landscapeMode;
@@ -1167,6 +1198,8 @@ class _CharacterGridPage extends StatelessWidget {
             final character = characters[index];
             return _CharacterGameCard(
               character: character,
+              owned: isOwned(character),
+              fragments: fragmentsOf(character),
               star: starOf(character),
             );
           },
@@ -1176,13 +1209,52 @@ class _CharacterGridPage extends StatelessWidget {
   }
 }
 
+class _CharacterArchiveStars extends StatelessWidget {
+  const _CharacterArchiveStars({
+    required this.star,
+    this.compact = false,
+  });
+
+  final int star;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeStar = star.clamp(0, 10).toInt();
+    final secondStage = safeStar > 5;
+    final visibleStars = secondStage ? safeStar - 5 : safeStar;
+    final activeColor = secondStage ? _characterHighStar : _characterGold;
+    final inactiveColor = secondStage
+        ? _characterHighStar.withOpacity(.18)
+        : _characterGoldSoft.withOpacity(.25);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List<Widget>.generate(5, (index) {
+        return Padding(
+          padding: EdgeInsets.only(right: compact ? 1 : 3),
+          child: Icon(
+            Icons.star_rounded,
+            size: compact ? 10 : 13,
+            color: index < visibleStars ? activeColor : inactiveColor,
+          ),
+        );
+      }),
+    );
+  }
+}
+
 class _CharacterGameCard extends StatelessWidget {
   const _CharacterGameCard({
     required this.character,
+    required this.owned,
+    required this.fragments,
     required this.star,
   });
 
   final NovelCharacter character;
+  final bool owned;
+  final int fragments;
   final int star;
 
   @override
@@ -1250,12 +1322,15 @@ class _CharacterGameCard extends StatelessWidget {
                 left: 8,
                 top: 8,
                 child: Text(
-                  '已拥有',
-                  style: const TextStyle(
-                    color: _characterGold,
+                  owned
+                      ? '已拥有'
+                      : '碎片 $fragments/$_characterRecruitFragmentsRequired',
+                  style: TextStyle(
+                    color: owned ? _characterGold : _characterTextSoft,
                     fontSize: 7.5,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: .8,
+                    letterSpacing: owned ? .8 : .45,
+                    shadows: _characterTextOutlineShadows,
                   ),
                 ),
               ),
@@ -1278,21 +1353,22 @@ class _CharacterGameCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      star == 0
-                          ? '0 星'
-                          : List<String>.filled(
-                              star > 5 ? star - 5 : star,
-                              '✦',
-                            ).join(' '),
-                      style: TextStyle(
-                        color: star > 5
-                            ? _characterHighStar
-                            : _characterGold,
-                        fontSize: 9,
-                        letterSpacing: .8,
+                    if (owned)
+                      _CharacterArchiveStars(star: star, compact: true)
+                    else
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(99),
+                        child: LinearProgressIndicator(
+                          value: (fragments / _characterRecruitFragmentsRequired)
+                              .clamp(0.0, 1.0)
+                              .toDouble(),
+                          minHeight: 2.5,
+                          backgroundColor: Colors.white.withOpacity(.10),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            _characterBlueBright.withOpacity(.82),
+                          ),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -1356,13 +1432,36 @@ class _CharacterSummonView extends StatelessWidget {
         opacity: opacity,
         child: SizedBox(
           width: width,
-          child: NovelArtwork(
-            url: CdnUtil.resize(imageUrl, width: width.toInt() * 2),
-            assetCandidates: <String>[fallbackAsset, 'assets/images/portrait_female.webp', 'assets/images/portrait_male.png'],
-            fit: BoxFit.contain,
-            alignment: Alignment.bottomCenter,
-            fallbackText: '',
-            fallbackIcon: Icons.person_outline_rounded,
+          height: double.infinity,
+          // 直接让 PNG 立绘自身的 alpha 在底部淡出，而不是再叠一层有色遮罩。
+          // 这样透明区域不会把页面背景染蓝，也不会出现矩形渐变边界。
+          child: ShaderMask(
+            blendMode: BlendMode.dstIn,
+            shaderCallback: (Rect bounds) {
+              return const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[
+                  Colors.white,
+                  Colors.white,
+                  Color(0xD9FFFFFF),
+                  Colors.transparent,
+                ],
+                stops: <double>[0, .68, .86, 1],
+              ).createShader(bounds);
+            },
+            child: NovelArtwork(
+              url: CdnUtil.resize(imageUrl, width: width.toInt() * 2),
+              assetCandidates: <String>[
+                fallbackAsset,
+                'assets/images/portrait_female.webp',
+                'assets/images/portrait_male.png',
+              ],
+              fit: BoxFit.contain,
+              alignment: Alignment.bottomCenter,
+              fallbackText: '',
+              fallbackIcon: Icons.person_outline_rounded,
+            ),
           ),
         ),
       ),
@@ -1426,10 +1525,6 @@ class _CharacterSummonView extends StatelessWidget {
                 if (topCharacters.length >= 2) _buildBannerPortrait(topCharacters[1], sidePortraitWidth, desktopMode ? .52 : .38, const Alignment(-0.9, 1.0)),
                 if (topCharacters.length >= 3) _buildBannerPortrait(topCharacters[2], sidePortraitWidth, desktopMode ? .52 : .38, const Alignment(0.9, 1.0)),
                 _buildBannerPortrait(topCharacters[0], heroPortraitWidth, 1.0, const Alignment(0.0, 1.0)),
-                Positioned(
-                  left: 0, right: 0, bottom: 0, height: desktopMode ? 180 : 120,
-                  child: DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.transparent, _characterInkSoft.withOpacity(0.8), _characterInkSoft]))),
-                ),
               ],
             ),
           ),
@@ -1449,10 +1544,18 @@ class _CharacterSummonView extends StatelessWidget {
                 ),
               ),
               SizedBox(height: desktopMode ? 14 : (landscapeMode ? 4 : 9)),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                decoration: BoxDecoration(color: Colors.black.withOpacity(0.4), borderRadius: BorderRadius.circular(99), border: Border.all(color: Colors.white.withOpacity(0.05))),
-                child: const Text('消耗鲜花寻访，获取完整角色或角色碎片', style: TextStyle(color: _characterTextSoft, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 1.0)),
+              const Text(
+                '消耗鲜花寻访，获取完整角色或角色碎片',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _characterTextSoft,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1.0,
+                  shadows: <Shadow>[
+                    Shadow(color: Colors.black87, blurRadius: 8),
+                  ],
+                ),
               ),
               SizedBox(height: desktopMode ? 32 : (landscapeMode ? 8 : 20)),
               Wrap(
@@ -1883,322 +1986,8 @@ class _CharacterPortraitRail extends StatelessWidget {
 }
 
 // ============================================================================
-// 更换立绘小窗口 (替换全屏立绘页)
+// 角色主舞台
 // ============================================================================
-
-Future<void> showNovelPortraitModal(
-  BuildContext context,
-  NovelGameController controller,
-  NovelCharacter character,
-) async {
-  await showGeneralDialog(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: '更换立绘',
-    barrierColor: const Color(0xCC070B15), // 沉浸式深色遮罩
-    transitionDuration: const Duration(milliseconds: 260),
-    pageBuilder: (context, _, __) {
-      return Center(
-        child: Material(
-          color: Colors.transparent,
-          child: _CharacterPortraitModalContent(
-            controller: controller,
-            character: character,
-          ),
-        ),
-      );
-    },
-  );
-}
-
-class _CharacterPortraitModalContent extends StatefulWidget {
-  const _CharacterPortraitModalContent({
-    required this.controller,
-    required this.character,
-  });
-
-  final NovelGameController controller;
-  final NovelCharacter character;
-
-  @override
-  State<_CharacterPortraitModalContent> createState() =>
-      _CharacterPortraitModalContentState();
-}
-
-class _CharacterPortraitModalContentState
-    extends State<_CharacterPortraitModalContent> {
-  late final TextEditingController _promptController;
-  bool _generating = false;
-  bool _uploading = false;
-  String _errorText = '';
-  late String _currentPortraitUrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _promptController = TextEditingController();
-    _currentPortraitUrl = widget.character.portraitUrl.isNotEmpty
-        ? widget.character.portraitUrl
-        : widget.character.avatarUrl;
-  }
-
-  @override
-  void dispose() {
-    _promptController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _generatePortrait() async {
-    if (_generating || _uploading) return;
-
-    setState(() {
-      _generating = true;
-      _errorText = '';
-    });
-
-    try {
-      final prompt = _promptController.text.trim();
-      final result = await widget.controller.generatePortrait(
-        character: widget.character,
-        prompt: prompt,
-        style: 'anime', 
-      );
-
-      await widget.controller.updateCharacterVisuals(
-        character: widget.character,
-        portraitUrl: result.portraitUrl,
-        avatarUrl: result.avatarUrl,
-      );
-      widget.controller.clearMessages();
-      await widget.controller.refreshCharacterStatus();
-
-      if (mounted) {
-        setState(() {
-          _currentPortraitUrl = result.portraitUrl;
-          _promptController.clear();
-        });
-        _showCharacterFloatingNotice(context, '立绘已更新');
-      }
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _errorText = error is NovelBackendException
-              ? error.message
-              : '生成失败：$error';
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _generating = false);
-    }
-  }
-
-  Future<void> _pickAndApplyLocalPortrait() async {
-    if (_generating || _uploading) return;
-
-    final picked = await FilePicker.pickFiles(
-      type: FileType.image,
-      allowMultiple: false,
-      withData: true,
-    );
-    final file = picked?.files.single;
-    if (file == null || file.bytes == null) return;
-
-    if (file.size > 12 * 1024 * 1024) {
-      setState(() => _errorText = '图片请控制在 12MB 以内');
-      return;
-    }
-
-    setState(() {
-      _uploading = true;
-      _errorText = '';
-    });
-
-    try {
-      final portraitUrl = await widget.controller.uploadCharacterImage(
-        bytes: file.bytes!,
-        filename: file.name.isEmpty ? 'portrait.jpg' : file.name,
-        contentType: _imageContentType(file.name), 
-      );
-
-      final avatarUrl = widget.character.avatarUrl.trim().isEmpty
-          ? portraitUrl
-          : widget.character.avatarUrl;
-
-      await widget.controller.updateCharacterVisuals(
-        character: widget.character,
-        portraitUrl: portraitUrl,
-        avatarUrl: avatarUrl,
-      );
-      widget.controller.clearMessages();
-      await widget.controller.refreshCharacterStatus();
-
-      if (mounted) {
-        setState(() => _currentPortraitUrl = portraitUrl);
-        _showCharacterFloatingNotice(context, '立绘已更新');
-      }
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _errorText = error is NovelBackendException
-              ? error.message
-              : '上传失败：$error';
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _uploading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final fallbackAsset = widget.character.gender.trim() == '女'
-        ? 'assets/images/portrait_female.webp'
-        : 'assets/images/portrait_male.png';
-
-    final media = MediaQuery.sizeOf(context);
-    final landscape = media.width > media.height;
-    final modalWidth = landscape
-        ? math.min(520.0, media.width * .72)
-        : math.min(320.0, media.width - 28);
-    final modalHeight = landscape
-        ? math.min(media.height * .90, 390.0)
-        : math.min(560.0, media.height * .90);
-
-    return Container(
-      width: modalWidth,
-      height: modalHeight,
-      decoration: BoxDecoration(
-        color: _characterInk,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.4),
-            blurRadius: 30,
-            offset: const Offset(0, 15),
-          ),
-        ],
-      ),
-      child: Column(
-        children: <Widget>[
-          Expanded(
-            child: ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  NovelArtwork(
-                    key: ValueKey(_currentPortraitUrl), 
-                    url: CdnUtil.resize(_currentPortraitUrl, width: 600),
-                    assetCandidates: <String>[
-                      fallbackAsset,
-                      'assets/images/portrait_female.webp',
-                      'assets/images/portrait_male.png',
-                    ],
-                    fit: BoxFit.cover,
-                    alignment: Alignment.topCenter,
-                    fallbackText: '',
-                    fallbackIcon: Icons.person_outline_rounded,
-                  ),
-                  if (_generating || _uploading)
-                    ColoredBox(
-                      color: Colors.black.withOpacity(0.5),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const CircularProgressIndicator(
-                              color: _characterGold,
-                              strokeWidth: 2,
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              _generating ? 'AI 绘制中...' : '图片上传中...',
-                              style: const TextStyle(
-                                color: _characterGold,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          
-          Container(
-            padding: const EdgeInsets.all(14),
-            color: _characterInkSoft,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Container(
-                  decoration: BoxDecoration(
-                    color: _characterInk,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white.withOpacity(0.06)),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: TextField(
-                    controller: _promptController,
-                    enabled: !_generating && !_uploading,
-                    maxLines: 2,
-                    style: const TextStyle(color: _characterText, fontSize: 11.5),
-                    cursorColor: _characterGold,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
-                      border: InputBorder.none,
-                      hintText: '输入额外形象要求 (留空按原设定生成)\n如：白发、赛博朋克风格、手持长剑...',
-                      hintStyle: TextStyle(color: _characterTextMuted, fontSize: 10.5),
-                    ),
-                  ),
-                ),
-                
-                if (_errorText.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _errorText,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: _characterHighStar, fontSize: 10),
-                  ),
-                ],
-                
-                const SizedBox(height: 12),
-                
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: _CharacterDetailButton(
-                        label: 'AI 生成',
-                        primary: true,
-                        enabled: !_generating && !_uploading,
-                        onTap: _generatePortrait,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _CharacterDetailButton(
-                        label: '本地上传',
-                        enabled: !_generating && !_uploading,
-                        onTap: _pickAndApplyLocalPortrait,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _CharacterHeroStage extends StatefulWidget {
   const _CharacterHeroStage({
@@ -2224,8 +2013,6 @@ class _CharacterHeroStage extends StatefulWidget {
 class _CharacterHeroStageState extends State<_CharacterHeroStage> {
   late int _localStar;
   bool _upgrading = false;
-  bool _showUpgradeFlash = false;
-  int? _upgradeFromStar;
   bool _companionBusy = false;
 
   @override
@@ -2259,112 +2046,16 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
       spacing: 1,
       runSpacing: 2,
       children: List<Widget>.generate(5, (index) {
-        return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 800), 
-          switchInCurve: Curves.elasticOut, 
-          transitionBuilder: (child, animation) {
-            return ScaleTransition(
-              scale: Tween<double>(begin: 0.2, end: 1.0).animate(animation),
-              child: RotationTransition(
-                turns: Tween<double>(begin: -0.25, end: 0).animate(
-                  CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
-                ),
-                child: child,
-              ),
-            );
-          },
-          child: Icon(
-            Icons.star_rounded,
-            key: ValueKey<String>('${_localStar}_$index'),
-            size: 10.5,
-            color: index < visibleStars
-                ? (secondStage ? _characterHighStar : _characterGold)
-                : (secondStage
-                    ? _characterHighStar.withOpacity(.18)
-                    : _characterGoldSoft.withOpacity(.25)),
-          ),
+        return Icon(
+          Icons.star_rounded,
+          size: 10.5,
+          color: index < visibleStars
+              ? (secondStage ? _characterHighStar : _characterGold)
+              : (secondStage
+                  ? _characterHighStar.withOpacity(.18)
+                  : _characterGoldSoft.withOpacity(.25)),
         );
       }),
-    );
-  }
-
-  Widget _buildAnimatedInfoPanel(Widget panel) {
-    return TweenAnimationBuilder<double>(
-      key: ValueKey<int>(_localStar),
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 2200),
-      curve: Curves.easeOutCubic,
-      builder: (context, value, child) {
-        final flash = 1.0 - value; 
-        final textOpacity = flash > 0.3 ? 1.0 : (flash / 0.3);
-        
-        return Stack(
-          clipBehavior: Clip.none,
-          children: [
-            child!,
-            if (flash > 0 && _showUpgradeFlash)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          Colors.transparent,
-                          _characterGold.withOpacity(0.22 * flash), 
-                          Colors.transparent,
-                        ],
-                        stops: [
-                          math.max(0.0, value - 0.2),
-                          value,
-                          math.min(1.0, value + 0.2),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            if (flash > 0 && _showUpgradeFlash)
-              Positioned(
-                right: 0,
-                top: -10 - (60 * Curves.easeOutQuint.transform(value)),
-                child: Opacity(
-                  opacity: textOpacity,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.arrow_upward_rounded, 
-                        color: _characterGold, 
-                        size: 14 
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _upgradeFromStar == null
-                            ? '升星成功 · 援战技能数值效果 ${100 + _localStar.clamp(0, 10) * 3}%'
-                            : '升星成功 · 援战技能 ${100 + _upgradeFromStar!.clamp(0, 10) * 3}% → ${100 + _localStar.clamp(0, 10) * 3}%',
-                        style: TextStyle(
-                          color: _characterGold,
-                          fontSize: 12.5, 
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 1.2,
-                          shadows: [
-                            Shadow(
-                              color: _characterGold.withOpacity(0.8),
-                              blurRadius: 10,
-                            )
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
-      child: panel,
     );
   }
 
@@ -2631,22 +2322,23 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
     }
   }
 
-  Future<void> _upgradeStar() async {
+  Future<void> _upgradeCharacter() async {
     if (_upgrading) return;
     if (_localStar >= 10) {
-      _showCompanionMessage('该角色已达到满星');
+      _showCompanionMessage('该角色已达到最高等级');
       return;
     }
-    if (widget.fragments < 20) {
-      _showCompanionMessage('升星材料不足 · 角色碎片 ${widget.fragments}/20');
+    if (widget.fragments < _characterUpgradeFragmentsRequired) {
+      _showCompanionMessage(
+        '升级需要 $_characterUpgradeFragmentsRequired 个角色碎片 · 当前 ${widget.fragments}/$_characterUpgradeFragmentsRequired',
+      );
       return;
     }
     final id = widget.character.id.trim();
     if (id.isEmpty) {
-      _showCompanionMessage('角色数据异常，暂时无法升星');
+      _showCompanionMessage('角色数据异常，暂时无法升级');
       return;
     }
-    final previousStar = _localStar;
     setState(() => _upgrading = true);
     try {
       final payload = await widget.controller.upgradeNovelCharacter(id);
@@ -2655,19 +2347,13 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
         payload['star'],
         _localStar + 1,
       ).clamp(0, 10).toInt();
-      setState(() {
-        _upgradeFromStar = previousStar;
-        _localStar = nextStar;
-        _showUpgradeFlash = true;
-      });
-      Future<void>.delayed(const Duration(milliseconds: 2250), () {
-        if (mounted) setState(() => _showUpgradeFlash = false);
-      });
+      setState(() => _localStar = nextStar);
+      _showCompanionMessage('升级成功 · 援战技能效果 +3%');
     } catch (error) {
       if (!mounted) return;
       final message = error is NovelBackendException
           ? error.message
-          : '升星失败：$error';
+          : '升级失败：$error';
       _showCharacterFloatingNotice(context, message);
     } finally {
       if (mounted) setState(() => _upgrading = false);
@@ -2700,9 +2386,6 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
     final cooperating = !widget.character.isMain &&
         widget.controller.isNovelCompanionDeployed(widget.character.id);
 
-    void openPortraitEditor() {
-      showNovelPortraitModal(context, widget.controller, widget.character);
-    }
 
     Widget infoPanel({required bool compact}) {
       final panel = compact
@@ -2712,10 +2395,10 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
               appearance: appearance,
               stars: _stars(),
               stats: stats,
-              onChangePortrait: openPortraitEditor,
               star: _localStar,
               fragments: widget.fragments,
-              onUpgrade: _upgradeStar,
+              onUpgrade: _upgradeCharacter,
+              upgrading: _upgrading,
               companionSkills: companionSkills,
               cooperating: cooperating,
               companionBusy: _companionBusy,
@@ -2730,10 +2413,10 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
               appearance: appearance,
               stars: _stars(),
               stats: stats,
-              onChangePortrait: openPortraitEditor,
               star: _localStar,
               fragments: widget.fragments,
-              onUpgrade: _upgradeStar,
+              onUpgrade: _upgradeCharacter,
+              upgrading: _upgrading,
               companionSkills: companionSkills,
               cooperating: cooperating,
               companionBusy: _companionBusy,
@@ -2742,7 +2425,7 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
               onLearn: widget.character.isMain ? null : _learnCompanionSkill,
               onRename: _openCompanionSkill,
             );
-      return _buildAnimatedInfoPanel(panel);
+      return panel;
     }
 
     Widget artwork(Alignment alignment) {
@@ -2961,164 +2644,91 @@ class _CharacterHeroStageState extends State<_CharacterHeroStage> {
   }
 }
 
-class _CharacterPortraitEditButton extends StatelessWidget {
-  const _CharacterPortraitEditButton({
-    required this.onTap,
-    this.compact = false,
-  });
-
-  final VoidCallback onTap;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(5),
-        child: Container(
-          height: compact ? 25 : 28,
-          padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 9),
-          decoration: BoxDecoration(
-            color: _characterInkSoft.withOpacity(.46),
-            borderRadius: BorderRadius.circular(5),
-            border: Border.all(color: Colors.white.withOpacity(.11)),
-          ),
-          child: Center(
-            child: Text(
-              '更换立绘',
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              style: TextStyle(
-                color: _characterTextSoft,
-                fontSize: compact ? 7.8 : 9.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CharacterProfileActions extends StatelessWidget {
-  const _CharacterProfileActions({
+class _CharacterStarUpgradeAction extends StatelessWidget {
+  const _CharacterStarUpgradeAction({
     required this.star,
     required this.fragments,
-    required this.onChangePortrait,
-    required this.onUpgrade,
+    required this.onTap,
     this.compact = false,
+    this.busy = false,
   });
 
   final int star;
   final int fragments;
-  final VoidCallback onChangePortrait;
-  final VoidCallback onUpgrade;
+  final VoidCallback onTap;
   final bool compact;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     final fullStar = star >= 10;
-    final canUpgrade = !fullStar && fragments >= 20;
-    final currentSkillEffect = 100 + star.clamp(0, 10) * 3;
-    final nextSkillEffect = 100 + (star + 1).clamp(0, 10) * 3;
-    return Container(
-      padding: EdgeInsets.only(top: compact ? 7 : 11),
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(color: Colors.white.withOpacity(.09)),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Icon(
-                Icons.auto_awesome_rounded,
-                size: compact ? 8.5 : 10.5,
-                color: _characterGold.withOpacity(.92),
-              ),
-              SizedBox(width: compact ? 3 : 4),
-              Expanded(
-                child: Text(
-                  fullStar
-                      ? '援战技能数值效果 $currentSkillEffect% · 已达上限'
-                      : '援战技能数值效果 $currentSkillEffect%  →  $nextSkillEffect%',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: _characterGoldSoft.withOpacity(.94),
-                    fontSize: compact ? 7.2 : 8.8,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: compact ? .15 : .3,
-                  ),
-                ),
-              ),
-              if (!fullStar)
-                Text(
-                  '每星 +3%',
-                  style: TextStyle(
-                    color: _characterTextMuted.withOpacity(.82),
-                    fontSize: compact ? 6.8 : 8.2,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-            ],
-          ),
-          SizedBox(height: compact ? 5 : 7),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _CharacterPortraitEditButton(
-                  compact: compact,
-                  onTap: onChangePortrait,
-                ),
-              ),
-              SizedBox(width: compact ? 5 : 8),
-              Expanded(
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    // 碎片不足时仍允许点击，由 _upgradeStar() 本地提示；
-                    // 只有材料充足才会真正向后端发送升星请求。
-                    onTap: fullStar ? null : onUpgrade,
-                    borderRadius: BorderRadius.circular(5),
-                    child: Container(
-                      height: compact ? 25 : 28,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: Colors.white),
-                      ),
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          compact
-                              ? (fullStar ? '满星' : '升星 $fragments/20')
-                              : (fullStar
-                                  ? '已满星 · 技能效果 130%'
-                                  : '升星  $fragments/20  ·  +3%'),
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: canUpgrade
-                                ? const Color(0xFF161A18)
-                                : const Color(0xFF8B908D),
-                            fontSize: compact ? 7.8 : 9.1,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
+    final canUpgrade = !fullStar && fragments >= _characterUpgradeFragmentsRequired;
+    const accent = _characterGold;
+    final radius = BorderRadius.circular(99);
+
+    final foreground = fullStar
+        ? accent.withOpacity(.92)
+        : canUpgrade
+            ? accent
+            : _characterTextMuted.withOpacity(.92);
+    final background = fullStar
+        ? accent.withOpacity(.08)
+        : canUpgrade
+            ? accent.withOpacity(.14)
+            : _characterInkSoft.withOpacity(.34);
+    final borderColor = fullStar
+        ? accent.withOpacity(.24)
+        : canUpgrade
+            ? accent.withOpacity(.55)
+            : Colors.white.withOpacity(.10);
+
+    return Semantics(
+      button: !fullStar,
+      label: fullStar ? '已达到最高等级' : '升级，角色碎片 $fragments/$_characterUpgradeFragmentsRequired',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          // 材料不足时仍允许点击，由升级逻辑给出明确的碎片提示。
+          onTap: fullStar || busy ? null : onTap,
+          borderRadius: radius,
+          child: Container(
+            height: compact ? 22 : 26,
+            padding: EdgeInsets.symmetric(horizontal: compact ? 7 : 9),
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: radius,
+              border: Border.all(color: borderColor),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (busy) ...<Widget>[
+                  SizedBox(
+                    width: compact ? 9 : 10,
+                    height: compact ? 9 : 10,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.4,
+                      color: foreground,
                     ),
                   ),
+                  SizedBox(width: compact ? 3 : 4),
+                ],
+                Text(
+                  fullStar
+                      ? '满级'
+                      : '升级 $fragments/$_characterUpgradeFragmentsRequired · +3%',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: compact ? 7.3 : 8.7,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: compact ? .1 : .2,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -6282,10 +5892,10 @@ class _CharacterCompactMeta extends StatelessWidget {
     required this.appearance,
     required this.stars,
     required this.stats,
-    required this.onChangePortrait,
     required this.star,
     required this.fragments,
     required this.onUpgrade,
+    required this.upgrading,
     required this.companionSkills,
     required this.cooperating,
     required this.companionBusy,
@@ -6299,10 +5909,10 @@ class _CharacterCompactMeta extends StatelessWidget {
   final String appearance;
   final Widget stars;
   final List<MapEntry<String, String>> stats;
-  final VoidCallback onChangePortrait;
   final int star;
   final int fragments;
   final VoidCallback onUpgrade;
+  final bool upgrading;
   final List<JsonMap> companionSkills;
   final bool cooperating;
   final bool companionBusy;
@@ -6347,7 +5957,25 @@ class _CharacterCompactMeta extends StatelessWidget {
                 ),
               ),
             const SizedBox(height: 6),
-            stars,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: <Widget>[
+                Flexible(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: stars,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _CharacterStarUpgradeAction(
+                  compact: true,
+                  star: star,
+                  fragments: fragments,
+                  busy: upgrading,
+                  onTap: onUpgrade,
+                ),
+              ],
+            ),
             if (onToggleCooperation != null && onLearn != null) ...<Widget>[
               const SizedBox(height: 9),
               _CharacterCompanionSkillsPanel(
@@ -6374,14 +6002,6 @@ class _CharacterCompactMeta extends StatelessWidget {
                 ),
               ),
             ],
-            const SizedBox(height: 8),
-            _CharacterProfileActions(
-              compact: true,
-              star: star,
-              fragments: fragments,
-              onChangePortrait: onChangePortrait,
-              onUpgrade: onUpgrade,
-            ),
           ],
         ),
       ),
@@ -6396,10 +6016,10 @@ class _CharacterStageInfo extends StatelessWidget {
     required this.appearance,
     required this.stars,
     required this.stats,
-    required this.onChangePortrait,
     required this.star,
     required this.fragments,
     required this.onUpgrade,
+    required this.upgrading,
     required this.companionSkills,
     required this.cooperating,
     required this.companionBusy,
@@ -6413,10 +6033,10 @@ class _CharacterStageInfo extends StatelessWidget {
   final String appearance;
   final Widget stars;
   final List<MapEntry<String, String>> stats;
-  final VoidCallback onChangePortrait;
   final int star;
   final int fragments;
   final VoidCallback onUpgrade;
+  final bool upgrading;
   final List<JsonMap> companionSkills;
   final bool cooperating;
   final bool companionBusy;
@@ -6461,20 +6081,20 @@ class _CharacterStageInfo extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: 8),
-              stars,
-              Container(
-                height: 1,
-                margin: const EdgeInsets.symmetric(vertical: 13),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: <Color>[
-                      _characterGold,
-                      Color(0x00C9B778),
-                    ],
+              Row(
+                children: <Widget>[
+                  Flexible(child: stars),
+                  const SizedBox(width: 9),
+                  _CharacterStarUpgradeAction(
+                    star: star,
+                    fragments: fragments,
+                    busy: upgrading,
+                    onTap: onUpgrade,
                   ),
-                ),
+                ],
               ),
-              if (onToggleCooperation != null && onLearn != null)
+              if (onToggleCooperation != null && onLearn != null) ...<Widget>[
+                const SizedBox(height: 8),
                 _CharacterCompanionSkillsPanel(
                   skills: companionSkills,
                   cooperating: cooperating,
@@ -6483,6 +6103,7 @@ class _CharacterStageInfo extends StatelessWidget {
                   onLearn: onLearn!,
                   onRename: onRename,
                 ),
+              ],
               if (appearance.isNotEmpty) ...<Widget>[
                 const SizedBox(height: 15),
                 const Text(
@@ -6506,13 +6127,6 @@ class _CharacterStageInfo extends StatelessWidget {
                   ),
                 ),
               ],
-              const SizedBox(height: 12),
-              _CharacterProfileActions(
-                star: star,
-                fragments: fragments,
-                onChangePortrait: onChangePortrait,
-                onUpgrade: onUpgrade,
-              ),
             ],
           ),
         ),
@@ -7253,33 +6867,10 @@ class _CharacterGameDetail extends StatelessWidget {
                   ],
                   const SizedBox(height: 10),
                   if (owned)
-                    star == 0
-                        ? const Text(
-                            '0 星',
-                            style: TextStyle(
-                              color: _characterGold,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          )
-                        : Row(
-                            children: List<Widget>.generate(
-                              star > 5 ? star - 5 : star,
-                              (index) => Padding(
-                                padding: const EdgeInsets.only(right: 3),
-                                child: Icon(
-                                  Icons.star_rounded,
-                                  size: 13,
-                                  color: star > 5
-                                      ? _characterHighStar
-                                      : _characterGold,
-                                ),
-                              ),
-                            ),
-                          )
+                    _CharacterArchiveStars(star: star)
                   else
                     Text(
-                      '碎片  $fragments / 25',
+                      '碎片  $fragments / $_characterRecruitFragmentsRequired',
                       style: const TextStyle(
                         color: _characterTextSoft,
                         fontSize: 10,
@@ -7364,7 +6955,7 @@ class _CharacterGameDetail extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(99),
                       child: LinearProgressIndicator(
-                        value: fragments / 25,
+                        value: fragments / _characterRecruitFragmentsRequired,
                         minHeight: 3,
                         backgroundColor: Colors.white.withOpacity(.08),
                         valueColor: const AlwaysStoppedAnimation<Color>(

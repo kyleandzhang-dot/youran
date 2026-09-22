@@ -399,6 +399,27 @@ class NovelGameController extends ChangeNotifier {
   NovelPendingBattleStart? _pendingBattleStart;
   JsonMap? _pendingBattle;
   String _activeBattleOptionId = '';
+
+  // 后端已经确认“攻击已经发动”的强制战斗。它与 Battle route 分离：
+  // 玩家仍可把本轮正文读完，但不能再用自由输入/快捷选项开启新的剧情回合。
+  JsonMap _forcedBattleTrigger = <String, dynamic>{};
+
+  bool get forcedBattlePending =>
+      boolValue(_forcedBattleTrigger['required']) &&
+      intValue(_forcedBattleTrigger['source_message_id']) > 0;
+
+  bool get forcedBattleReady =>
+      forcedBattlePending &&
+      !isGenerating &&
+      !hasNext &&
+      !isReaderRevealing &&
+      !isStartingBattle;
+
+  String get forcedBattleTargetName {
+    final target = asJsonMap(_forcedBattleTrigger['target']);
+    final name = stringValue(target['name']).trim();
+    return name.isEmpty ? '当前敌人' : name;
+  }
   final Map<String, String> characterExpressions = <String, String>{};
   int novelCharacterFlowers = 0;
   Map<String, JsonMap> novelCharacterRoster = <String, JsonMap>{};
@@ -556,6 +577,203 @@ class NovelGameController extends ChangeNotifier {
       if (messages[i].role == NovelMessageRole.assistant) return messages[i];
     }
     return null;
+  }
+
+  void _registerForcedBattleTrigger(dynamic raw, {bool notify = true}) {
+    final data = asJsonMap(raw);
+    if (data.isEmpty) return;
+
+    final sourceMessageId = intValue(data['source_message_id']);
+    final required = data.containsKey('required')
+        ? boolValue(data['required'])
+        : true; // battle_auto_required WS 本身就代表 required=true。
+    if (!required || sourceMessageId <= 0) return;
+
+    final target = asJsonMap(data['target']);
+    _forcedBattleTrigger = <String, dynamic>{
+      'required': true,
+      'state': stringValue(data['state'], 'pending').trim().toLowerCase(),
+      'source_message_id': sourceMessageId,
+      'battle_mode': stringValue(data['battle_mode'], 'defend').trim().isEmpty
+          ? 'defend'
+          : stringValue(data['battle_mode'], 'defend').trim().toLowerCase(),
+      'hostility': intValue(data['hostility']),
+      'reason': stringValue(data['reason']),
+      'target': <String, dynamic>{...target},
+      if (stringValue(data['battle_id']).trim().isNotEmpty)
+        'battle_id': stringValue(data['battle_id']).trim(),
+      if (asJsonMap(data['battle_snapshot']).isNotEmpty)
+        'battle_snapshot': <String, dynamic>{...asJsonMap(data['battle_snapshot'])},
+    };
+
+    // 已经 engaged 后，剧情层不存在下一步自由选择。无论旧 suggestions 是刚收到、
+    // 历史恢复带回，还是与 WS 发生竞态，都立即清掉，防止用户继续推进 Writer。
+    choices = <NovelChoice>[];
+    choicesVisible = false;
+    playerHint = '';
+    luckyCardActive = false;
+    if (notify && !_disposed) _notify();
+  }
+
+  void _clearForcedBattleTrigger({bool notify = false}) {
+    if (_forcedBattleTrigger.isEmpty) return;
+    _forcedBattleTrigger = <String, dynamic>{};
+    if (notify && !_disposed) _notify();
+  }
+
+  void _restoreForcedBattleFromMessage(NovelMessage? message) {
+    if (message == null) {
+      _clearForcedBattleTrigger();
+      return;
+    }
+
+    final raw = asJsonMap(message.customAttributes['forced_battle']);
+    final state = stringValue(raw['state']).trim().toLowerCase();
+    final sourceMessageId = intValue(
+      raw['source_message_id'] ?? message.id,
+    );
+
+    if (raw.isEmpty || state.isEmpty || state == 'resolved') {
+      _clearForcedBattleTrigger();
+      return;
+    }
+
+    if (state == 'pending') {
+      _registerForcedBattleTrigger(<String, dynamic>{
+        ...raw,
+        'required': true,
+        'source_message_id': sourceMessageId,
+      }, notify: false);
+      return;
+    }
+
+    if (state != 'active' || sourceMessageId <= 0) {
+      _clearForcedBattleTrigger();
+      return;
+    }
+
+    // active means the server has already created/frozen this battle. Restore that exact
+    // payload directly from history, so reopening an active fight needs no extra recovery route.
+    final snapshot = asJsonMap(raw['battle_snapshot']);
+    final battleId = stringValue(
+      raw['battle_id'] ?? snapshot['battle_id'],
+    ).trim();
+    final opponent = asJsonMap(snapshot['battle_opponent']);
+
+    // Defensive fallback for old/incomplete rows: keep the world locked as pending and let
+    // the normal Continue path call /battle/auto-start, which is idempotent and returns the
+    // cached active battle if it already exists.
+    if (battleId.isEmpty || snapshot.isEmpty || opponent.isEmpty) {
+      _registerForcedBattleTrigger(<String, dynamic>{
+        ...raw,
+        'state': 'pending',
+        'required': true,
+        'source_message_id': sourceMessageId,
+      }, notify: false);
+      return;
+    }
+
+    _registerForcedBattleTrigger(<String, dynamic>{
+      ...raw,
+      'state': 'active',
+      'required': true,
+      'source_message_id': sourceMessageId,
+    }, notify: false);
+
+    final target = asJsonMap(raw['target'] ?? snapshot['target']);
+    final targetName = stringValue(target['name']).trim().isEmpty
+        ? '当前敌人'
+        : stringValue(target['name']).trim();
+    final battleMode = stringValue(
+      raw['battle_mode'] ?? asJsonMap(snapshot['battle_opponent'])['battle_mode'],
+      'defend',
+    ).trim().toLowerCase();
+    final optionId = stringValue(
+      snapshot['option_id'],
+      'auto:$sourceMessageId',
+    ).trim();
+
+    // Do not enqueue the same restored route twice if history is refreshed while Battle UI
+    // is already opening/open.
+    if ((_pendingBattleStart?.optionId ?? '') == optionId ||
+        _activeBattleOptionId == optionId) {
+      return;
+    }
+
+    _pendingBattleStart = NovelPendingBattleStart(
+      optionId: optionId,
+      targetName: targetName,
+      battleMode: battleMode.isEmpty ? 'defend' : battleMode,
+      fromSurroundings: false,
+      loadPayload: () async {
+        return await _attachNovelCompanionStarsToBattle(
+          <String, dynamic>{...snapshot},
+        );
+      },
+    );
+    isStartingBattle = true;
+    choices = <NovelChoice>[];
+    choicesVisible = false;
+    playerHint = '';
+    luckyCardActive = false;
+  }
+
+  Future<void> _queueForcedBattleStart() async {
+    if (!forcedBattleReady) return;
+
+    final sourceMessageId = intValue(_forcedBattleTrigger['source_message_id']);
+    if (sourceMessageId <= 0) {
+      lastError = '自动战斗来源已经失效，请同步剧情后重试。';
+      _notify();
+      return;
+    }
+
+    final targetName = forcedBattleTargetName;
+    final battleMode = stringValue(
+      _forcedBattleTrigger['battle_mode'],
+      'defend',
+    ).trim().toLowerCase();
+    final restoredSnapshot = asJsonMap(_forcedBattleTrigger['battle_snapshot']);
+    final restoredBattleId = stringValue(
+      _forcedBattleTrigger['battle_id'] ?? restoredSnapshot['battle_id'],
+    ).trim();
+    final hasStoredActiveSnapshot =
+        stringValue(_forcedBattleTrigger['state']).trim().toLowerCase() == 'active' &&
+        restoredBattleId.isNotEmpty &&
+        asJsonMap(restoredSnapshot['battle_opponent']).isNotEmpty;
+    final optionId = stringValue(
+      restoredSnapshot['option_id'],
+      'auto:$sourceMessageId',
+    ).trim();
+
+    _pendingBattleStart = NovelPendingBattleStart(
+      optionId: optionId,
+      targetName: targetName,
+      battleMode: battleMode.isEmpty ? 'defend' : battleMode,
+      fromSurroundings: false,
+      loadPayload: () async {
+        if (hasStoredActiveSnapshot) {
+          return await _attachNovelCompanionStarsToBattle(
+            <String, dynamic>{...restoredSnapshot},
+          );
+        }
+        final payload = await backend.startAutoBattle(
+          sessionId: sessionId,
+          sourceMessageId: sourceMessageId,
+        );
+        final battleId = stringValue(payload['battle_id']).trim();
+        if (battleId.isEmpty || asJsonMap(payload['battle_opponent']).isEmpty) {
+          throw const NovelBackendException('后端没有返回完整的自动战斗快照');
+        }
+        return await _attachNovelCompanionStarsToBattle(payload);
+      },
+    );
+    isStartingBattle = true;
+    choices = <NovelChoice>[];
+    choicesVisible = false;
+    playerHint = '';
+    lastError = '';
+    _notify();
   }
 
   /// 页面消费后即清空，不进入 lastError，也不会触发任何历史/场景刷新。
@@ -1089,6 +1307,7 @@ class NovelGameController extends ChangeNotifier {
     return storyStarted &&
         !isCinematic &&
         !isGenerating &&
+        !forcedBattlePending &&
         !hasNext &&
         !isReaderRevealing &&
         !pendingFateRevert &&
@@ -1125,6 +1344,7 @@ class NovelGameController extends ChangeNotifier {
     return storyStarted &&
         !hasNext &&
         !isGenerating &&
+        !forcedBattlePending &&
         !isReaderRevealing &&
         !isCinematic &&
         !pendingFateRevert &&
@@ -1137,6 +1357,7 @@ class NovelGameController extends ChangeNotifier {
     if (!storyStarted) return '剧情尚未开始';
     if (hasNext) return '请先返回最新剧情，再进行场景移动';
     if (isGenerating) return '剧情正在生成，请稍候';
+    if (forcedBattlePending) return '当前袭击已经发生，请先处理战斗';
     if (isReaderRevealing) return '请先读完当前这段剧情';
     if (isCinematic) return '当前处于剧情演出，暂时无法移动';
     if (pendingFateRevert) return '请先处理当前命运回溯';
@@ -1454,6 +1675,11 @@ class NovelGameController extends ChangeNotifier {
 
   void _syncUiFromLastMessage(NovelMessage? message) {
     final attributes = message?.customAttributes ?? const <String, dynamic>{};
+
+    // /chat/history already returns custom_attributes. Restore forced combat directly from
+    // the triggering assistant Message; WebSocket is only the live fast-path.
+    _restoreForcedBattleFromMessage(message);
+
     final storedStoryboard = asJsonMap(attributes['storyboard']);
     if (storedStoryboard.isNotEmpty && message != null) {
       _mergeStoryboardPayload(
@@ -1466,12 +1692,17 @@ class NovelGameController extends ChangeNotifier {
       );
     }
     final rawChoices = attributes['suggested_replies'] ?? attributes['suggestions'];
-    if (rawChoices is List) {
+    if (forcedBattlePending) {
+      choices = <NovelChoice>[];
+      choicesVisible = false;
+      playerHint = '';
+    } else if (rawChoices is List) {
       choices = rawChoices.map(NovelChoice.fromDynamic).where((item) => item.text.isNotEmpty).toList();
+      playerHint = stringValue(attributes['player_hint'], playerHint);
     } else {
       choices = <NovelChoice>[];
+      playerHint = stringValue(attributes['player_hint'], playerHint);
     }
-    playerHint = stringValue(attributes['player_hint'], playerHint);
     final task = asJsonMap(attributes['current_task']);
     if (task.isNotEmpty) currentTask = NovelTask.fromJson(task);
 
@@ -1934,7 +2165,7 @@ class NovelGameController extends ChangeNotifier {
 
   Future<void> sendPlayerMessage(String value) async {
     final text = value.trim();
-    if (text.isEmpty || isGenerating) return;
+    if (text.isEmpty || isGenerating || forcedBattlePending) return;
     messages.add(NovelMessage(
       id: 'temp-user-${DateTime.now().microsecondsSinceEpoch}',
       role: NovelMessageRole.user,
@@ -2162,7 +2393,7 @@ class NovelGameController extends ChangeNotifier {
     required String targetName,
   }) async {
     final cleanNodeId = nodeId.trim();
-    if (cleanNodeId.isEmpty || isStartingBattle) return;
+    if (cleanNodeId.isEmpty || isStartingBattle || forcedBattlePending) return;
     final cleanTarget = targetName.trim().isEmpty ? '未知敌人' : targetName.trim();
     final sceneKey = stringValue(surroundingsData['scene_key']).trim();
     final optionId = 'surround:$sceneKey:$cleanNodeId';
@@ -2229,6 +2460,10 @@ class NovelGameController extends ChangeNotifier {
       }
       sceneMap = NovelSceneMapData.fromDynamic(payload);
       sceneMapPayload = Map<String, dynamic>.of(payload);
+      final autoBattle = asJsonMap(payload['auto_battle']);
+      if (boolValue(autoBattle['required'])) {
+        _registerForcedBattleTrigger(autoBattle, notify: false);
+      }
       _applyStoryClock(payload['story_clock']);
       sceneMapRevision += 1;
       _lastSceneMapRefreshAt = DateTime.now();
@@ -2328,6 +2563,11 @@ class NovelGameController extends ChangeNotifier {
 
   Future<void> continueStory() async {
     if (isGenerating) return;
+    if (forcedBattlePending) {
+      // “继续”只是从已发生的袭击切入 Battle UI，不再生成任何新剧情。
+      await _queueForcedBattleStart();
+      return;
+    }
     if (choices.isNotEmpty && !hasNext) {
       choicesVisible = true;
       _notify();
@@ -2338,12 +2578,19 @@ class NovelGameController extends ChangeNotifier {
 
   Future<void> forceContinue() async {
     if (isGenerating) return;
+    if (forcedBattlePending) {
+      await _queueForcedBattleStart();
+      return;
+    }
     const prompt = '（玩家选择了静静等待或没有做出明确动作。请顺着当前的氛围继续向下描写，可以是 NPC 主动的动作与对话、周遭环境的细节变化，或是时间的自然流逝，让故事自然而然地发展。）';
     await _triggerAi(prompt, isCommand: true, allowLuckyCard: false);
   }
 
   Future<void> selectChoice(NovelChoice choice) async {
-    if (choice.text.trim().isEmpty || isGenerating || isStartingBattle) return;
+    if (choice.text.trim().isEmpty ||
+        isGenerating ||
+        isStartingBattle ||
+        forcedBattlePending) return;
     if (choice.isBattle) {
       await _startBattleChoice(choice);
       return;
@@ -2470,6 +2717,7 @@ class NovelGameController extends ChangeNotifier {
     required String battleMode,
     required String outcome,
   }) async {
+    _clearForcedBattleTrigger();
     final resultLabel = switch (outcome.trim().toLowerCase()) {
       'victory' => '玩家获胜',
       'defeat' => '玩家落败',
@@ -4089,7 +4337,20 @@ class NovelGameController extends ChangeNotifier {
       case 'character_portrait_update':
         _applyCharacterPortraitUpdate(data);
         break;
+      case 'battle_auto_required':
+        _registerForcedBattleTrigger(<String, dynamic>{
+          ...data,
+          'required': true,
+        }, notify: false);
+        break;
       case 'suggestions':
+        if (forcedBattlePending) {
+          // engaged 与 Suggestions 可能来自不同异步通道；强制战斗永远优先。
+          choices = <NovelChoice>[];
+          choicesVisible = false;
+          playerHint = '';
+          break;
+        }
         final raw = data['suggestions'];
         choices = raw is List
             ? raw.map(NovelChoice.fromDynamic).where((choice) => choice.text.isNotEmpty).toList()

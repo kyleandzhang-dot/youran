@@ -234,31 +234,30 @@ class _NovelFloatingSurroundingsActionState
                             height: coreSize,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              // 填充进一步变浅：中心只有一层柔和暖光，向边缘逐渐透明。
-                              // 保留任务星标同款金色，但不再像实心黄色按钮。
+                              // 换成纯净的白色光晕渐变
                               gradient: RadialGradient(
                                 center: const Alignment(-.18, -.22),
                                 radius: .92,
                                 colors: <Color>[
-                                  const Color(0xFFFFE7A1).withOpacity(
-                                    scope.attention ? .13 : .10,
+                                  Colors.white.withOpacity(
+                                    scope.attention ? .18 : .12,
                                   ),
-                                  _exploreGold.withOpacity(
-                                    scope.attention ? .075 : .055,
+                                  Colors.white.withOpacity(
+                                    scope.attention ? .08 : .05,
                                   ),
-                                  _exploreGold.withOpacity(.012),
+                                  Colors.white.withOpacity(.01),
                                 ],
                                 stops: const <double>[0, .58, 1],
                               ),
                               border: Border.all(
-                                color: _exploreGold.withOpacity(
-                                  scope.attention ? .23 : .15,
+                                color: Colors.white.withOpacity(
+                                  scope.attention ? .35 : .20,
                                 ),
                                 width: .65,
                               ),
-                              boxShadow: const <BoxShadow>[
+                              boxShadow: <BoxShadow>[
                                 BoxShadow(
-                                  color: Color(0x18F1C36A),
+                                  color: Colors.white.withOpacity(.12),
                                   blurRadius: 12,
                                   spreadRadius: .2,
                                 ),
@@ -268,22 +267,22 @@ class _NovelFloatingSurroundingsActionState
                             child: scope.loading
                                 ? SizedBox.square(
                                     dimension: compact ? 11.0 : 12.0,
-                                    child: CircularProgressIndicator(
+                                    child: const CircularProgressIndicator(
                                       strokeWidth: 1.15,
-                                      color: _exploreGold,
+                                      color: Colors.white,
                                     ),
                                   )
                                 : Icon(
                                     Icons.explore_outlined,
                                     size: compact ? 16.0 : 18.0,
-                                    color: _exploreGold,
+                                    color: Colors.white, // 图标改为纯白
                                     shadows: const <Shadow>[
                                       Shadow(
-                                        color: Color(0x99F1C36A),
+                                        color: Color(0x99FFFFFF), // 白色发光层
                                         blurRadius: 7,
                                       ),
                                       Shadow(
-                                        color: Color(0x66000000),
+                                        color: Color(0x66000000), // 黑色底阴影，保证在白底上也能看清
                                         blurRadius: 3,
                                         offset: Offset(0, 1),
                                       ),
@@ -700,6 +699,8 @@ class _NovelDialogFooter extends StatelessWidget {
     required this.onOpenCharacters,
     required this.onOpenJourney,
     required this.onContinue,
+    this.showBattleContinue = false,
+    this.onForceContinue,
     this.targetActorName = '',
     this.targetActorAvatarUrl = '',
     this.targetActorPlaceholder = '',
@@ -718,6 +719,8 @@ class _NovelDialogFooter extends StatelessWidget {
   final VoidCallback onOpenCharacters;
   final VoidCallback onOpenJourney;
   final VoidCallback onContinue;
+  final bool showBattleContinue;
+  final VoidCallback? onForceContinue;
   final String targetActorName;
   final String targetActorAvatarUrl;
   final String targetActorPlaceholder;
@@ -744,10 +747,16 @@ class _NovelDialogFooter extends StatelessWidget {
 
     // 最终句 UI 必须等“实际最后一句”才切换，不能再单独依赖 hasNext。
     // 否则 hasNext 在句子边界提前翻 false 时，会出现倒数第二句就收起右栏的问题。
-    final actualLastSentence = novelIsActualLastSentence(controller);
+    // “继续”进战斗和“继续剧情”是两件完全不同的事：后者才需要判断
+    // 是否读到了下一轮AI回复的最后一句（novelIsActualLastSentence）。
+    // 进战斗的继续按钮点下去不会再有下一句剧情——它就是终点，只需要
+    // 确认“当前这条遭遇消息本身有没有显示完”，不该借用那套语义。
+    final showBattleContinueButton = showBattleContinue &&
+        !controller.isGenerating &&
+        novelIsActualLastSentence(controller);
     final showBottomNav = controller.storyStarted &&
         !controller.isCinematic &&
-        (!actualLastSentence || controller.isGenerating) &&
+        !showBattleContinueButton &&
         !keyboardVisible;
     
     // 计算右侧需要避让的宽度（导航图标宽度 + 间距）
@@ -777,7 +786,9 @@ class _NovelDialogFooter extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              if (showComposer) ...<Widget>[
+              if (showBattleContinueButton)
+                _BattleContinueButton(onTap: onForceContinue)
+              else if (showComposer) ...<Widget>[
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
@@ -803,6 +814,41 @@ class _NovelDialogFooter extends StatelessWidget {
             ),
               ],
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 强制战斗待处理时的唯一底部操作。
+/// 输入区会完全移除，避免玩家误以为还能自由输入；点击后由宿主进入战斗。
+class _BattleContinueButton extends StatelessWidget {
+  const _BattleContinueButton({required this.onTap});
+
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        height: 44,
+        width: double.infinity,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Text(
+          '进行战斗',
+          style: TextStyle(
+            color: Color(0xFF111111),
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.8,
           ),
         ),
       ),
