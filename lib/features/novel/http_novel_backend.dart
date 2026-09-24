@@ -1352,6 +1352,7 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
   @override
   Future<JsonMap> createSceneAssetTask({
     required String name,
+    String sceneId = '',
     String? sessionId,
     String description = '',
     String styleHint = '',
@@ -1359,6 +1360,10 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
     final cleanName = name.trim();
     if (cleanName.isEmpty) {
       throw const NovelBackendException('场景名称不能为空');
+    }
+    final cleanSceneId = sceneId.trim();
+    if (cleanSceneId.isEmpty) {
+      throw const NovelBackendException('场景节点ID不能为空');
     }
 
     int? numericSessionId;
@@ -1375,6 +1380,7 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
       endpoints.sceneAssetsGenerate,
       body: <String, dynamic>{
         'name': cleanName,
+        'scene_id': cleanSceneId,
         if (numericSessionId != null) 'session_id': numericSessionId,
         if (description.trim().isNotEmpty) 'description': description.trim(),
         if (styleHint.trim().isNotEmpty) 'style_hint': styleHint.trim(),

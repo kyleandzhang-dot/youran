@@ -39,7 +39,6 @@ class NovelGamePage extends StatefulWidget {
   final NovelGameController controller;
   final String fallbackBackgroundAsset;
   final VoidCallback? onBack;
-  /// 旧版本自定义结局构建器，仅保留接口兼容；当前结局统一使用 NovelEndingPage。
   @Deprecated('结局页面已统一为 NovelEndingPage，此参数不再生效。')
   final NovelEndingBuilder? endingBuilder;
   final bool disposeController;
@@ -55,7 +54,6 @@ enum _NovelPrimaryTab {
   inventory,
   journey,
   world,
-  surroundings,
 }
 
 class _NovelGamePageState extends State<NovelGamePage>
@@ -69,7 +67,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   ];
   static const String _displayModePreferenceKey =
       'novel_display_mode_preference';
-  // 世界地图已有右侧独立入口，主页左上角旧地图 / 地点面板先隐藏。
   static const bool _showLegacyLocationHud = true;
 
   final TextEditingController _inputController = TextEditingController();
@@ -82,11 +79,14 @@ class _NovelGamePageState extends State<NovelGamePage>
   String _characterFocusKey = '';
   int _characterFocusRequestId = 0;
 
-  // 只有从剧情中的人物头像 / 当前说话人头像进入人物页时为 true。
-  // 右侧一级导航进入人物页时必须为 false，这样人物页不显示左上角返回。
   bool _characterOpenedFromAvatar = false;
-
   bool _characterSetupOpen = false;
+  
+  // 🌟 摇杆信号与探索状态控制
+  final ValueNotifier<Offset> _joystickIntent = ValueNotifier(Offset.zero);
+  final ValueNotifier<bool> _joystickActive = ValueNotifier(false);
+  bool _joystickTouched = false;
+
   bool _openingOpen = false;
   bool _fateOpen = false;
   bool _endingOpen = false;
@@ -109,8 +109,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   String _lastWeatherSyncToken = '';
   Timer? _sceneArrivalTimer;
   String _lastSceneArrivalToken = '';
-  // 首次从历史记录恢复时，当前地点只是已有状态，不是一次新的抵达。
-  // 先用历史中的当前位置给 arrival token 做基线，避免每次刷新都误播“新地点”。
   bool _sceneArrivalHydrated = false;
   bool _sceneArrivalActive = false;
   String? _sceneArrivalPreviewTitle;
@@ -126,7 +124,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   NovelGameController get controller => widget.controller;
 
-  // 角色输入/创建阶段进入沉浸输入模式，减少同时显示的信息。
   bool get _immersiveInputMode => _characterSetupOpen;
 
   bool get _isNativeMobilePlatform =>
@@ -148,7 +145,6 @@ class _NovelGamePageState extends State<NovelGamePage>
               ],
       );
     } catch (_) {
-      // 某些平台会忽略方向锁定；布局模式本身仍继续生效。
     }
   }
 
@@ -168,7 +164,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     if (!mounted) return;
 
-    // 没有本地记录时沿用当前全局默认；有记录时以玩家上一次手动选择为准。
     final targetDesktop = savedDesktop ?? controller.desktopMode;
     if (controller.desktopMode != targetDesktop) {
       controller.setDisplayMode(
@@ -186,7 +181,6 @@ class _NovelGamePageState extends State<NovelGamePage>
         desktopMode ? 'desktop' : 'mobile',
       );
     } catch (error) {
-      // 本地偏好写入失败不应该阻断当前模式切换。
       debugPrint('保存小说显示模式失败：$error');
     }
   }
@@ -197,12 +191,20 @@ class _NovelGamePageState extends State<NovelGamePage>
     WidgetsBinding.instance.addObserver(this);
     controller.addListener(_onControllerChanged);
 
-    // 先恢复玩家上一次手动选择的显示模式，再让原生手机方向跟随。
-    // 没有保存记录时才沿用当前全局默认；切换剧本也会读取同一份偏好。
-    unawaited(_restoreDisplayModePreference());
+    // 🌟 监听输入框，聚焦或有文字时自动退出探索模式
+    _inputFocusNode.addListener(_onExplorationExitCheck);
+    _inputController.addListener(_onExplorationExitCheck);
 
+    unawaited(_restoreDisplayModePreference());
     unawaited(_loadAdminStatus());
     unawaited(_initializeGame());
+  }
+
+  void _onExplorationExitCheck() {
+    if (!mounted || !_joystickTouched) return;
+    if (_inputFocusNode.hasFocus || _inputController.text.isNotEmpty) {
+      setState(() => _joystickTouched = false);
+    }
   }
 
   Future<void> _loadAdminStatus() async {
@@ -211,7 +213,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       if (!mounted) return;
       setState(() => _isAdmin = profile.isAdmin);
     } catch (_) {
-      // 权限状态无法确认时按普通用户处理，绝不默认开放开发者入口。
       if (!mounted) return;
       setState(() => _isAdmin = false);
     }
@@ -224,13 +225,10 @@ class _NovelGamePageState extends State<NovelGamePage>
     _syncSceneArrival();
     _syncSceneRecovery();
 
-    // 初始化失败时由页面自动打开菜单，不再继续预加载剧情音频。
     if (!controller.isInitialized) return;
 
     _scheduleSceneBarkRefresh(force: true);
 
-    // 进入剧情后先生成并预热内存打字音，避免第一段流式文字到来时
-    // Android / iOS 才初始化播放器池而丢失前几个 tick。
     await controller.bgm.preloadTypingSfx();
     if (!mounted) return;
 
@@ -247,25 +245,18 @@ class _NovelGamePageState extends State<NovelGamePage>
       return;
     }
     if (state == AppLifecycleState.resumed && controller.isInitialized) {
-      // 原生方向切换也可能产生 inactive -> resumed。pushReplacement 期间旧页面
-      // 尚未 dispose，但已经不是当前路由；它绝不能再次重连旧世界的私有 WS。
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !controller.isInitialized) return;
         final route = ModalRoute.of(context);
         if (route == null || !route.isCurrent) return;
 
-        // 恢复前台时不能只重连 WebSocket；后台期间可能错过任意推送。
-        // 如果运行中已经进入自动恢复流程，就把待执行的退避重试提前到现在，
-        // 避免与 recoverAfterResume() 再并发发起一套重复恢复请求。
         if (_sceneRecoveryInFlight) {
-          // 当前恢复请求已经在跑，等待它自行收敛。
         } else if (_sceneRecoveryOriginalError.isNotEmpty ||
             controller.lastError.trim().isNotEmpty) {
           _sceneRecoveryTimer?.cancel();
           _sceneRecoveryTimer = null;
           _syncSceneRecovery(immediate: true);
         } else {
-          // 没有已知错误时仍执行原有的前台权威状态刷新。
           unawaited(controller.recoverAfterResume());
         }
         unawaited(controller.bgm.init(
@@ -280,8 +271,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _onControllerChanged() {
     if (!mounted) return;
 
-    // 生成拒绝是“非剧情事件”。在任何 scene recovery / bark refresh / overlay
-    // 同步之前先消费，确保这一帧只负责恢复本地快照并给玩家提示。
     final generationNotice = controller.takeGenerationNotice();
     if (generationNotice != null) {
       _lastGeneratingForBarks = controller.isGenerating;
@@ -307,8 +296,6 @@ class _NovelGamePageState extends State<NovelGamePage>
     final message = stringValue(notice['message']).trim();
     if (message.isEmpty) return;
 
-    // MODEL_REFUSAL / MODEL_CONTENT_BLOCKED 是非破坏性生成失败：
-    // 只弹一次轻提示，不刷新页面、不 reload history、不触发场景恢复。
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
     messenger
@@ -373,8 +360,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     final error = controller.lastError.trim();
 
-    // 初始化阶段的失败继续交给 _handleLoadFailure()；这里只接管已经成功
-    // 进入世界之后发生的瞬时网络/场景同步错误。
     if (!controller.isInitialized || controller.isInitializing) {
       if (!_sceneRecoveryInFlight) {
         _clearSceneRecoveryState();
@@ -384,7 +369,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     if (_sceneRecoveryInFlight) return;
 
-    // 错误已经被其他成功请求清掉，说明无需继续等待下一次退避重试。
     if (error.isEmpty) {
       if (_sceneRecoveryActive) {
         _clearSceneRecoveryState();
@@ -438,8 +422,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       _sceneRecoveryAttempt++;
     });
 
-    // lastError 是上一次失败留下的旧状态。先清掉它，之后即可用
-    // recoverAfterResume() 是否重新写入 lastError 来判断本轮恢复是否成功。
     controller.clearMessages();
 
     Object? thrownError;
@@ -455,7 +437,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     _sceneRecoveryInFlight = false;
 
-    // 用户可能在请求期间主动关闭了错误提示，此时不再继续自动重试。
     if (!_sceneRecoveryActive) {
       setState(() {});
       return;
@@ -497,9 +478,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     final token = '$title\u0000$subtitle';
 
-    // 初始化完成后的第一次同步只是“恢复当前世界”。
-    // 如果已经存在历史 AI 消息，就把当前位置登记成基线，不播放抵达动画。
-    // 真正的新开局此时 storyStarted=false，之后第一次实际进入/移动仍会正常触发。
     if (!_sceneArrivalHydrated) {
       _sceneArrivalHydrated = true;
       if (controller.storyStarted && controller.lastAssistantMessage != null) {
@@ -508,7 +486,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       }
     }
 
-    // 回看旧页时不播放；只有停在最新剧情并且地点真的变化才触发。
     if (!controller.storyStarted || controller.hasNext) return;
     if (token == _lastSceneArrivalToken) return;
     _lastSceneArrivalToken = token;
@@ -600,9 +577,6 @@ class _NovelGamePageState extends State<NovelGamePage>
     final character = _characterForSceneActor(actor);
     if (character == null) return actor;
 
-    // 场景接口经常只返回 conversation target 的 id/name，真正的游戏头像和
-    // 人物页顶部立绘保存在 scenario.characters。这里把两份数据合并：
-    // 游戏头像优先；没有头像时保留 portraitUrl 给右上角头像组件做二级回退。
     final gameAvatar = character.avatarUrl.trim();
     final gamePortrait = character.portraitUrl.trim();
     final resolvedAvatar =
@@ -641,9 +615,6 @@ class _NovelGamePageState extends State<NovelGamePage>
     final actor = _resolvedTargetSceneActor;
     if (actor == null) return '';
 
-    // 继续复用 NovelDialogPanel 已有的 targetActorAvatarUrl 通道，避免为了
-    // 头像/立绘回退新增跨层参数。Unit Separator 不会出现在正常 URL 中，
-    // NovelInputBar 会在最末端解出 avatar + portrait 两个独立来源。
     final avatar = actor.avatarUrl.trim();
     final portrait = actor.portraitUrl.trim();
     if (avatar.isEmpty && portrait.isEmpty) return '';
@@ -687,7 +658,6 @@ class _NovelGamePageState extends State<NovelGamePage>
         }
       });
     } catch (error) {
-      // 场景气泡只是氛围层，拉取失败不应该打断剧情阅读。
       debugPrint('刷新场景气泡失败：$error');
     }
   }
@@ -739,13 +709,8 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   Future<void> _processOverlayRequests() async {
-    // 初始化完成前，launchPhase 还不是权威状态。initialize() 开头会 notify，
-    // 如果此时处理覆盖层，会在 /chat/history 返回前把角色创建弹窗提前 push 出来。
     if (!controller.isInitialized || controller.isInitializing) return;
 
-    // 角色确认弹窗尚未完全退出时，禁止再 push 开场/其他覆盖层。
-    // submitCharacterSetup() 成功后会 notify，并把 showOpening 设为 true；
-    // 如果这里不拦截，就会出现两个 Dialog 同时操作 Navigator 的 assertion。
     if (_characterSetupOpen) return;
 
     if (controller.showCharacterSetup) {
@@ -755,16 +720,11 @@ class _NovelGamePageState extends State<NovelGamePage>
       if (!mounted) return;
 
       if (started) {
-        // 等角色弹窗的 reverse transition 完成，再打开开场。
         await Future<void>.delayed(const Duration(milliseconds: 90));
         if (mounted) {
           await _processOverlayRequests();
         }
       } else {
-        // 首次角色尚未确认时，当前游戏页本身没有可继续展示的剧情。
-        // 关闭确认框就等于放弃本次进入：回到空 Shell，并自动展开世界列表。
-        // 这样不会留下白屏；玩家再次点击同一世界时也会重新走 setActiveScenario，
-        // 从而重新获得 session 并再次出现角色确认框。
         await _returnToWorldMenuAfterCharacterSetupDismissed();
       }
       return;
@@ -778,7 +738,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       if (result == NovelOpeningResult.worldMenu) {
         await _returnToWorldMenuAfterCharacterSetupDismissed();
       } else {
-        // Dialog 只负责阅读体验；真正的状态迁移和首轮 Writer 启动统一由 Controller 管。
         await controller.startNarrative();
       }
       return;
@@ -792,7 +751,6 @@ class _NovelGamePageState extends State<NovelGamePage>
         return;
       }
 
-      // 旧流程兼容：如果某处已经直接塞入完整 battle payload，仍照常进入。
       final battlePayload = controller.consumePendingBattle();
       if (battlePayload != null) {
         _battleOpen = true;
@@ -813,8 +771,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       _endingOpen = true;
       controller.showEnding = false;
       controller.clearMessages();
-      // 正式剧情结局统一进入独立的 NovelEndingPage。
-      // endingBuilder 仅保留为旧调用兼容，不再参与实际结局 UI 选择。
       await showNovelEndingPage(context, controller);
       _endingOpen = false;
       return;
@@ -918,8 +874,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   Future<void> _returnToWorldMenuAfterCharacterSetupDismissed() async {
-    // showGeneralDialog 返回时反向动画可能还在收尾，稍等一帧再替换根路由，
-    // 避免 Dialog 与页面路由同时操作 Navigator。
     await Future<void>.delayed(const Duration(milliseconds: 100));
     if (!mounted) return;
 
@@ -932,16 +886,20 @@ class _NovelGamePageState extends State<NovelGamePage>
 
   @override
   void dispose() {
-    // 不要在 dispose() 里改屏幕方向。切换世界时旧 NovelGamePage 的 dispose
-    // 可能晚于新页面 initState 执行，若这里强制 portraitUp，会把新页面已经
-    // 恢复好的横屏模式再次覆盖。真正离开小说模块时，应由外层导航页决定方向。
     WidgetsBinding.instance.removeObserver(this);
     controller.removeListener(_onControllerChanged);
     _sceneArrivalTimer?.cancel();
     _sceneBarkRefreshTimer?.cancel();
     _sceneRecoveryTimer?.cancel();
+    _inputFocusNode.removeListener(_onExplorationExitCheck);
+    _inputController.removeListener(_onExplorationExitCheck);
     _inputController.dispose();
     _inputFocusNode.dispose();
+    
+    // 🌟 销毁摇杆控制器
+    _joystickIntent.dispose();
+    _joystickActive.dispose();
+    
     if (widget.disposeController) controller.dispose();
     super.dispose();
   }
@@ -1012,7 +970,6 @@ class _NovelGamePageState extends State<NovelGamePage>
     };
     if (mounted) setState(() => _timePreviewOverride = next);
   }
-
 
   NovelDeveloperPreviewActions get _developerPreviewActions =>
       NovelDeveloperPreviewActions(
@@ -1087,7 +1044,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       _backgroundPreviewBytes = bytes;
       _backgroundPreviewFileName =
           fileName.trim().isEmpty ? '本地背景' : fileName.trim();
-      // 本地预览优先；同时清掉“背景过渡”测试 URL，避免恢复时跳回随机图。
       _backgroundPreviewOverride = null;
     });
   }
@@ -1107,8 +1063,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     if (controller.desktopMode == immersiveMode) return;
 
-    // 阅读模式只改变剧情布局语义：标准=竖屏，沉浸=横屏。
-    // 底层继续复用既有 mobile / desktop 布局状态，避免牵动整套响应式实现。
     controller.setDisplayMode(
       immersiveMode ? NovelDisplayMode.desktop : NovelDisplayMode.mobile,
     );
@@ -1291,9 +1245,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       ),
     ];
 
-    // 开发者预览直接复用剧情页真正的选择组件。
-    // 不再经过 showNovelChoicesSheet / _ActionTile 那套独立 Sheet UI，
-    // 因此真实选择框今后的边框、磨砂、字号、间距等改动会自动同步到这里。
     await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -1327,7 +1278,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                 bottom: bottom,
                 child: NovelChoiceDock(
                   choices: previewChoices,
-                  // 预览只展示真实组件与按压反馈，不触发任何剧情。
                   onSelected: (_) {},
                 ),
               ),
@@ -1367,6 +1317,7 @@ class _NovelGamePageState extends State<NovelGamePage>
       MaterialPageRoute<void>(
         builder: (_) => NovelExplorationPage(
           backend: controller.backend,
+          controller: controller,
           sessionId: controller.sessionId,
           initialSceneName: initialSceneName,
         ),
@@ -1406,8 +1357,6 @@ class _NovelGamePageState extends State<NovelGamePage>
           raw['image_url'],
     ).trim();
 
-    // 战斗右侧“角色援助”统一使用立绘作为头像源。
-    // 真正的头像 Widget 会用 cover 裁切；这里确保它拿到的不是旧 avatar 图。
     if (portrait.isNotEmpty) {
       normalized['avatar_url'] = portrait;
       normalized['avatarUrl'] = portrait;
@@ -1436,7 +1385,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       }).toList(growable: false);
     }
 
-    // 兼容当前/旧版后端可能使用的几种援助角色字段名。
     for (final key in <String>[
       'companions',
       'battle_companions',
@@ -1554,7 +1502,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       5 => 2.00,
       _ => 3.00,
     };
-    // 与后端探索规则一致：70%来自品质基准，30%参考玩家当前装备。
     final playerScaledAttack =
         ratio * attackMultiplier / math.max(.5, incomingMultiplier);
     final attackRatio = ratio * .70 + playerScaledAttack * .30;
@@ -1562,8 +1509,6 @@ class _NovelGamePageState extends State<NovelGamePage>
         .round()
         .clamp(12, 1000)
         .toInt();
-    // 百分比威力制：开发者探索预览与正式后端保持同一基准。
-    // 普通敌人以 65% 为基础威力，再由探索品质/装备评估得到 attackRatio。
     final basicAttackPowerPercent =
         (65 * attackRatio).round().clamp(35, 220).toInt();
     final difficulty = switch (normalizedQuality) {
@@ -1591,7 +1536,6 @@ class _NovelGamePageState extends State<NovelGamePage>
           .clamp(2, 10)
           .toInt(),
       allowInstantDefeat: normalizedQuality >= 6,
-      // 开发者探索只测试品质数值，不为 NPC 请求或生成专属技能。
       skills: const <YoranBattleSkill>[],
     );
   }
@@ -1630,7 +1574,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       sceneSubtitle:
           '${elite ? '高级敌人' : '普通敌人'} · 品质 ${quality.clamp(1, 6)}',
       socketService: controller.socket,
-      // 开发者探索不传结算回调：不扣真实道具，也不写入正式战斗状态。
     );
     return outcome?.name;
   }
@@ -1692,7 +1635,6 @@ class _NovelGamePageState extends State<NovelGamePage>
     try {
       await controller.refreshNovelCharacterRoster(notify: false);
     } catch (_) {
-      // 测试入口允许使用当前缓存；接口响应仍是队伍数据的第一优先级。
     }
     if (!mounted) return;
 
@@ -1820,13 +1762,11 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     if (!mounted) return;
     if (outcome == null) {
-      // 用户在生成失败/加载阶段主动返回，不消费原战斗选项。
       controller.abandonBattleStart(request.optionId);
       return;
     }
 
     if (request.fromSurroundings) {
-      // 探索遭遇只刷新背包与调查图，不让剧情 LLM 再复述/重判同一场战斗。
       await controller.finishSurroundingsBattle();
       return;
     }
@@ -1955,16 +1895,12 @@ class _NovelGamePageState extends State<NovelGamePage>
     if (!mounted) return;
     FocusManager.instance.primaryFocus?.unfocus();
 
-    // 开战前主动刷新一次角色权威状态，避免刚通过开发者工具加入的技能
-    // 仍停留在旧的本地快照中。
     try {
       await Future.wait<void>(<Future<void>>[
         controller.refreshCharacterStatus(notify: false),
-        // 角色列表刷新会同时读取协同出战状态、NPC 技能和背包。
         controller.refreshNovelCharacterRoster(notify: false),
       ]);
     } catch (_) {
-      // 预览入口允许在离线状态继续打开，下面会使用当前已有快照。
     }
     if (!mounted) return;
 
@@ -1975,8 +1911,6 @@ class _NovelGamePageState extends State<NovelGamePage>
 
     await showYoranBattlePage(
       context,
-
-      // 主角名称、头像、立绘和技能均读取当前角色状态。
       playerName: protagonist?.name.trim().isNotEmpty == true
           ? protagonist!.name.trim()
           : controller.protagonistName,
@@ -1986,12 +1920,8 @@ class _NovelGamePageState extends State<NovelGamePage>
       companions: battleCompanions,
       items: battleInventory,
       equipment: battleInventory,
-
-      // 敌人立绘
       enemyName: '赛诺',
       enemyPortrait: 'assets/images/red_wolf.png',
-
-      // 自动使用当前剧情背景，不要改
       sceneBackground: controller.world.backgroundUrl.trim(),
       sceneTitle: controller.locationTitle,
       sceneSubtitle: controller.locationSubtitle,
@@ -2071,8 +2001,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       romance: 72,
     );
 
-    // 开发者预览与正式剧情共用同一个 NovelEndingPage，
-    // 仅替换为本地测试结局数据，不触发真实剧情副作用。
     await showNovelEndingPage(
       context,
       controller,
@@ -2105,10 +2033,8 @@ class _NovelGamePageState extends State<NovelGamePage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
 
-      // 1. 清空控制器的原本报错信息
       controller.clearMessages();
 
-      // 2. 屏幕下方弹出一个干净友好的提示
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('场景载入异常，已自动为您返回首页'),
@@ -2117,12 +2043,11 @@ class _NovelGamePageState extends State<NovelGamePage>
         ),
       );
 
-      // 3. 自动返回首页
       final callback = widget.onBack;
       if (callback != null) {
         callback();
       } else {
-        openDrawer(); // 展开菜单/返回
+        openDrawer(); 
       }
     });
   }
@@ -2137,9 +2062,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   }
 
   void _selectPrimaryTab(_NovelPrimaryTab tab) {
-    // 这个方法代表“一级导航 / 页面内导航”的普通切页，不是头像快捷入口。
-    // 即使当前已经在人物页，再点右侧人物入口也要清掉头像入口标记，
-    // 让左上角返回立即消失。
     if (_primaryTab == tab) {
       if (_characterOpenedFromAvatar) {
         setState(() => _characterOpenedFromAvatar = false);
@@ -2148,18 +2070,10 @@ class _NovelGamePageState extends State<NovelGamePage>
     }
     FocusManager.instance.primaryFocus?.unfocus();
 
-    // 切离剧情页时先立即掐掉连续打字声；NovelDialogPanel.active 随后会
-    // 在同一帧停止逐字 Timer，避免面板盖上后还有一个尾音/下一字符重新续命。
     if (tab != _NovelPrimaryTab.story) {
       unawaited(controller.bgm.stopTypingSound());
     }
-    if (tab == _NovelPrimaryTab.surroundings) {
-      // 真正点开时才生成；场景到达与入口发光只读取轻量可用性。
-      unawaited(controller.loadSurroundings());
-    }
-
     setState(() {
-      // 普通导航切页时一律结束“头像快捷进入”上下文。
       _characterOpenedFromAvatar = false;
       _primaryTab = tab;
       _mountedPrimaryTabs.add(tab);
@@ -2179,8 +2093,6 @@ class _NovelGamePageState extends State<NovelGamePage>
     unawaited(controller.bgm.stopTypingSound());
 
     setState(() {
-      // 主角 / NPC 统一进入“人物”主页面，只改变当前聚焦角色。
-      // focusRequestId 保证即使已经停留在人物页，再点一次头像也会重新聚焦。
       _characterFocusKey = key;
       _characterFocusRequestId++;
       _characterOpenedFromAvatar = true;
@@ -2192,7 +2104,6 @@ class _NovelGamePageState extends State<NovelGamePage>
   void _openHostCharacterArchive() {
     final host = controller.protagonist;
     if (host == null) {
-      // 仍然是从左上角人物头像触发，只是暂时没有可聚焦的主角数据。
       FocusManager.instance.primaryFocus?.unfocus();
       unawaited(controller.bgm.stopTypingSound());
       setState(() {
@@ -2219,7 +2130,6 @@ class _NovelGamePageState extends State<NovelGamePage>
           controller: controller,
           focusCharacterKey: _characterFocusKey,
           focusRequestId: _characterFocusRequestId,
-          // 只有头像快捷进入才显示 <；点击走真正的页面状态回剧情。
           onBackToStory: _characterOpenedFromAvatar
               ? () => _selectPrimaryTab(_NovelPrimaryTab.story)
               : null,
@@ -2230,12 +2140,10 @@ class _NovelGamePageState extends State<NovelGamePage>
         NovelInventoryTab(controller: controller),
       _NovelPrimaryTab.journey =>
         NovelJourneyTab(controller: controller),
-      _NovelPrimaryTab.world =>                           // 新增这一段
-        NovelWorldMapTab(controller: controller),         // 新增这一段
-      _NovelPrimaryTab.surroundings =>
-        NovelSurroundingsTab(
+      _NovelPrimaryTab.world =>                           
+        NovelWorldMapTab(
           controller: controller,
-          onClose: () => _selectPrimaryTab(_NovelPrimaryTab.story),
+          onMoveStarted: () => _selectPrimaryTab(_NovelPrimaryTab.story),
         ),
       _NovelPrimaryTab.story => const SizedBox.shrink(),
     };
@@ -2255,6 +2163,22 @@ class _NovelGamePageState extends State<NovelGamePage>
             novelDisplayMode,
           ]),
           builder: (context, _) {
+            
+            // ✅ 将代码粘贴到这里：现在它们处于 AnimatedBuilder 内部
+            // 这样每次文字打完、状态改变时，这里都会重新计算并实时显示摇杆
+            final canExitStory = !controller.isGenerating &&
+                                 !controller.isReaderRevealing &&
+                                 !controller.hasNext;
+
+            final isExploring = canExitStory && _joystickTouched;
+
+            if (!canExitStory && _joystickTouched) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted && _joystickTouched) {
+                  setState(() => _joystickTouched = false);
+                }
+              });
+            }
             final loadFailed = !controller.isInitializing &&
                 !controller.isInitialized &&
                 controller.lastError.isNotEmpty;
@@ -2268,16 +2192,12 @@ class _NovelGamePageState extends State<NovelGamePage>
             }
 
             final rootMedia = MediaQuery.of(context);
-            // 第一次进入时根据平台 / 窗口给默认值；之后完全以玩家手动选择为准。
             novelDisplayMode.ensureInitialized(
               viewportWidth: rootMedia.size.width,
               nativeMobile: _isNativeMobilePlatform,
             );
             final desktopMode = controller.desktopMode;
 
-            // PC/Web 的“手机模式”不再只把宽度硬压到 430，而是按现代 iPhone
-            // 的长屏比例模拟完整画布，并补上接近真机的顶部/底部安全区。
-            // 这样在电脑上调出的手机版，与真机的纵向空间分配会非常接近。
             final previewingPhoneOnDesktop = !desktopMode &&
                 !_isNativeMobilePlatform &&
                 rootMedia.size.width > 600;
@@ -2318,7 +2238,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                 !controller.isCinematic &&
                 !_endingOpen &&
                 !_battleOpen &&
-                _primaryTab != _NovelPrimaryTab.surroundings &&
                 !keyboardActive;
 
             final gameScaffold = Scaffold(
@@ -2327,24 +2246,60 @@ class _NovelGamePageState extends State<NovelGamePage>
               body: Stack(
                 fit: StackFit.expand,
                 children: <Widget>[
-                  RepaintBoundary(
-                    child: _NovelStoryboardStage(
-                      controller: controller,
-                      fallbackAsset: widget.fallbackBackgroundAsset.trim().isNotEmpty
-                          ? widget.fallbackBackgroundAsset.trim()
-                          : 'assets/images/background_home.png',
-                      weatherEffect: (_weatherPreviewOverride != null ||
-                              controller.settings.weatherEffectsEnabled)
-                          ? _activeWeatherEffect
-                          : NovelWeatherEffect.none,
-                      timePeriod: _activeTimePeriod,
-                      parallaxStrength: _backgroundParallaxStrength,
-                      backgroundPreviewBytes: _backgroundPreviewBytes,
-                      backgroundPreviewUrl: _backgroundPreviewOverride ?? '',
-                      backgroundPreviewCacheKey:
-                          'developer-background-$_backgroundPreviewVersion',
+                  NovelExplorationPage(
+                    backend: controller.backend,
+                    controller: controller,
+                    sessionId: controller.sessionId,
+                    initialSceneName: controller.locationTitle.isNotEmpty 
+                        ? controller.locationTitle 
+                        : '斗破苍穹 乌坦城萧家坊市',
+                    asLayer: true, 
+                    canExitStory: canExitStory,
+                    joystickIntent: _joystickIntent, 
+                    joystickActive: _joystickActive, 
+                    onExitStoryTriggered: () {
+                      FocusManager.instance.primaryFocus?.unfocus();
+                      if (!_joystickTouched) {
+                        setState(() => _joystickTouched = true);
+                      }
+                    },
+                  ),
+                  
+                  IgnorePointer(
+                    ignoring: isExploring,
+                    child: AnimatedOpacity(
+                      opacity: isExploring ? 0.0 : 1.0,
+                      duration: const Duration(milliseconds: 400),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                        child: Container(color: Colors.black.withOpacity(0.55)),
+                      ),
                     ),
                   ),
+
+                  RepaintBoundary(
+                    child: AnimatedOpacity(
+                      opacity: isExploring ? 0.0 : 1.0,
+                      duration: const Duration(milliseconds: 300),
+                      child: _NovelStoryboardStage(
+                        controller: controller,
+                        fallbackAsset: widget.fallbackBackgroundAsset.trim().isNotEmpty
+                            ? widget.fallbackBackgroundAsset.trim()
+                            : 'assets/images/background_home.png',
+                        weatherEffect: (_weatherPreviewOverride != null ||
+                                controller.settings.weatherEffectsEnabled)
+                            ? _activeWeatherEffect
+                            : NovelWeatherEffect.none,
+                        timePeriod: _activeTimePeriod,
+                        parallaxStrength: _backgroundParallaxStrength,
+                        backgroundPreviewBytes: _backgroundPreviewBytes,
+                        backgroundPreviewUrl: _backgroundPreviewOverride ?? '',
+                        backgroundPreviewCacheKey:
+                            'developer-background-$_backgroundPreviewVersion',
+                      ),
+                    ),
+                  ),
+
                   SafeArea(
                     minimum: const EdgeInsets.fromLTRB(14, 10, 14, 0),
                     child: LayoutBuilder(
@@ -2355,11 +2310,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                         );
                         final compact = viewport.compactChrome;
                         final shortWide = viewport.shortWide;
-                        // 当前 Stack 位于 SafeArea(minimum: 左右14) 内。
-                        // 底部探索需要视觉上横向铺满整个屏幕，所以单独向两侧越过这层 inset。
-                        final screenPadding = MediaQuery.paddingOf(context);
-                        final inlineEdgeLeft = math.max(14.0, screenPadding.left);
-                        final inlineEdgeRight = math.max(14.0, screenPadding.right);
                         final sceneArrivalTitle =
                             _sceneArrivalPreviewTitle ?? controller.locationTitle;
                         final sceneArrivalSubtitle =
@@ -2381,35 +2331,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                             ? const Duration(milliseconds: 180)
                             : const Duration(milliseconds: 620);
 
-                        // 底部整块探索舞台先隐藏，但保留实现，后续需要时可直接重新开启。
-                        // 当前只恢复输入框上方的轻量“探索周围”入口，避免场景底部被大块 UI 占满。
-                        const showInlineSurroundingsDock = false;
-                        final inlineSurroundingsVisible =
-                            showInlineSurroundingsDock &&
-                            _primaryTab == _NovelPrimaryTab.story &&
-                            controller.storyStarted &&
-                            !controller.isCinematic &&
-                            !keyboardActive &&
-                            !controller.hasNext &&
-                            !controller.isGenerating &&
-                            !controller.forcedBattlePending &&
-                            !_sceneArrivalActive &&
-                            !_battleOpen &&
-                            !_endingOpen;
-                        final inlineFullWidth = constraints.maxWidth +
-                            inlineEdgeLeft +
-                            inlineEdgeRight;
-                        final inlineSurroundingsHeight = inlineSurroundingsVisible
-                            ? (inlineFullWidth / (compact ? 1.82 : 2.05))
-                                .clamp(
-                                  compact ? 172.0 : 188.0,
-                                  compact ? 222.0 : 250.0,
-                                )
-                                .toDouble()
-                            : 0.0;
-                        final inlineSurroundingsEnabled =
-                            inlineSurroundingsVisible &&
-                            !controller.isSurroundingsLoading;
                         final storyClock = controller.storyClock;
                         final storyDayLabel = storyClock.enabled
                             ? (storyClock.dayLabel.trim().isNotEmpty
@@ -2429,25 +2350,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                     _ => '',
                                   })
                             : '';
-                        final rightSceneExploreVisible =
-                            !showInlineSurroundingsDock &&
-                            _primaryTab == _NovelPrimaryTab.story &&
-                            controller.storyStarted &&
-                            !controller.isCinematic &&
-                            !keyboardActive &&
-                            !controller.hasNext &&
-                            !controller.isGenerating &&
-                            !controller.forcedBattlePending &&
-                            !_sceneArrivalActive &&
-                            !_battleOpen &&
-                            !_endingOpen &&
-                            controller.surroundingsActionLabel
-                                .trim()
-                                .isNotEmpty;
-
                         return Stack(
-                          // 允许底部探索区单独越过 SafeArea 的左右 14px，
-                          // 做成真正贴屏的连续横版场景。
                           clipBehavior: Clip.none,
                           children: <Widget>[
                             if (controller.storyStarted && controller.isCinematic)
@@ -2489,9 +2392,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                               ),
                             ),
 
-                            // 标准/竖屏模式沿用旧版右侧故事时间戳。
-                            // 沉浸/横屏模式的时间改由 NovelTopHud 放在积分左侧，
-                            // 不再悬浮在画面中央，避免打断场景沉浸感。
                             if (!_immersiveInputMode &&
                                 !desktopMode &&
                                 controller.storyStarted &&
@@ -2511,11 +2411,10 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 ),
                               ),
 
-                            // 完美左对齐 + 高度紧凑优化：把位置和目标包在一个 Column 里
                             if (!_immersiveInputMode && controller.storyStarted && !keyboardActive)
                               Positioned(
                                 left: 0,
-                                top: shortWide ? 48 : 56, // 横屏矮屏进一步压缩顶部占用
+                                top: shortWide ? 48 : 56, 
                                 child: AnimatedSlide(
                                   duration: sceneHudTransitionDuration,
                                   curve: Curves.easeOutCubic,
@@ -2538,7 +2437,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                             onTap: null,
                                           ),
                                         if (_showLegacyLocationHud)
-                                          const SizedBox(height: 6), // 舒适又紧凑的间距
+                                          const SizedBox(height: 6),
                                         NovelGoalHud(
                                           text: controller.currentGoal,
                                           feedbackEvent: controller.hudEvent,
@@ -2576,64 +2475,54 @@ class _NovelGamePageState extends State<NovelGamePage>
                               ),
                             if (controller.storyStarted && !controller.isCinematic)
                               Align(
-                                // Stack 前后会动态插入/移除地点标题、右侧人物和气泡层。
-                                // 顶层稳定 Key 保证这些兄弟节点变化时 Reader State 不会被卸载重建，
-                                // 否则 NovelDialogPanel.initState() 会再次启动逐字动画。
                                 key: const ValueKey<String>('novel-story-reader-stage'),
                                 alignment: Alignment.bottomCenter,
                                 child: Padding(
-                                  // 剧情区域始终保持左右对称，不为右侧悬浮按钮预留宽度。
                                   padding: EdgeInsets.zero,
-                                  // 手机仍保持原来的 720px 阅读舞台；电脑模式则把
-                                  // 整个角色/对白舞台真正放开到当前窗口宽度。否则 reader
-                                  // 里的 left: 0 只会贴到“居中的 720px 小舞台”左边。
                                   child: SizedBox(
                                     width: desktopMode
                                         ? constraints.maxWidth
                                         : math.min(720.0, constraints.maxWidth),
                                     child: NovelChoiceDockActionScope(
-                                      // 探索入口属于剧情阅读舞台，不再塞进附近角色列表。
-                                      // 只在最后一页由 Reader 放到正文左侧。
-                                      visible: rightSceneExploreVisible,
-                                      label: controller.surroundingsActionLabel,
-                                      attention: controller.surroundingsNeedsAttention,
-                                      loading: controller.isSurroundingsLoading,
-                                      onTap: () => _selectPrimaryTab(
-                                        _NovelPrimaryTab.surroundings,
-                                      ),
+                                      visible: false,
+                                      label: '',
+                                      attention: false,
+                                      loading: false,
+                                      onTap: () {},
                                       child: NovelDialogPanel(
-                                      controller: controller,
-                                      bottomReservedHeight: inlineSurroundingsHeight,
-                                      active: _primaryTab == _NovelPrimaryTab.story,
-                                      textController: _inputController,
-                                      focusNode: _inputFocusNode,
-                                      onSend: _sendStoryInput,
-                                      onContinue: controller.continueStory,
-                                      onForceContinue: controller.forceContinue,
-                                      onOpenChoices: () =>
-                                          showNovelChoicesSheet(context, controller),
-                                      onOpenInventory: () => _selectPrimaryTab(
-                                        _NovelPrimaryTab.inventory,
-                                      ),
-                                      onOpenCharacters: () => _selectPrimaryTab(
-                                        _NovelPrimaryTab.characters,
-                                      ),
-                                      onOpenJourney: () => _selectPrimaryTab(
-                                        _NovelPrimaryTab.journey,
-                                      ),
-                                      onRevert: () =>
-                                          showNovelRevertDialog(context, controller),
-                                      onOpenPortrait:
-                                          controller.currentSpeakerCharacter == null
-                                              ? null
-                                              : _openCurrentSpeakerProfile,
-                                      targetActorName:
-                                          _targetSceneActor?.cleanName ?? '',
-                                      targetActorAvatarUrl:
-                                          _resolvedTargetSceneActorImageSource,
-                                      targetActorPlaceholder:
-                                          _targetSceneActor?.inputPlaceholder ?? '',
-                                      onClearTargetActor: _clearTargetSceneActor,
+                                        controller: controller,
+                                        isExploring: isExploring, 
+                                        bottomReservedHeight: 0,
+                                        active: _primaryTab == _NovelPrimaryTab.story,
+                                        textController: _inputController,
+                                        focusNode: _inputFocusNode,
+                                        onSend: _sendStoryInput,
+                                        onContinue: controller.continueStory,
+                                        onForceContinue: controller.forceContinue,
+                                        onOpenChoices: () =>
+                                            showNovelChoicesSheet(context, controller),
+                                        onOpenInventory: () => _selectPrimaryTab(
+                                          _NovelPrimaryTab.inventory,
+                                        ),
+                                        onOpenCharacters: () => _selectPrimaryTab(
+                                          _NovelPrimaryTab.characters,
+                                        ),
+                                        onOpenJourney: () => _selectPrimaryTab(
+                                          _NovelPrimaryTab.journey,
+                                        ),
+                                        onRevert: () =>
+                                            showNovelRevertDialog(context, controller),
+                                        onOpenPortrait:
+                                            controller.currentSpeakerCharacter == null
+                                                ? null
+                                                : _openCurrentSpeakerProfile,
+                                        targetActorName:
+                                            _targetSceneActor?.cleanName ?? '',
+                                        targetActorAvatarUrl:
+                                            _resolvedTargetSceneActorImageSource,
+                                        targetActorPlaceholder:
+                                            _targetSceneActor?.inputPlaceholder ?? '',
+                                        onClearTargetActor: _clearTargetSceneActor,
                                       ),
                                     ),
                                   ),
@@ -2651,16 +2540,11 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 !_endingOpen &&
                                 _talkTargets.isNotEmpty)
                               Positioned(
-                                // 👈 为横屏(shortWide)单独设置 64.0 的右边距，避让右侧导航按钮
-                                right: shortWide ? 64.0 : (compact ? 6.0 : 14.0), 
-                                // 时间牌改为上下两层后高度更高；人物/探索从它下方留出呼吸感。
+                                // 【修改这里】：加大右边距，把附近角色头像往左推，避开右侧垂直按钮
+                                right: shortWide ? 84.0 : (compact ? 56.0 : 64.0), // 原来是 (compact ? 6.0 : 14.0)
                                 top: shortWide ? 106 : 136,
                                 bottom: shortWide ? 84 : 212,
-                                // 附近角色在手机上原本偏小；整体轻量放大头像、姓名和点击区。
-                                // 以右上角为缩放锚点，右侧基线保持不变，不会再往 HUD 外侧挤。
                                 child: Transform.scale(
-                                  // 右侧“附近角色”整体再放大一档，让头像和姓名更清楚。
-                                  // 以右上角为锚点，避免放大后继续向屏幕外偏移。
                                   scale: shortWide
                                       ? 1.30
                                       : (compact ? 1.26 : 1.10),
@@ -2671,16 +2555,13 @@ class _NovelGamePageState extends State<NovelGamePage>
                                         _resolvedTargetSceneActor?.id ?? '',
                                     onSelected: _handleTalkTargetTap,
                                     onClear: _clearTargetSceneActor,
-                                    // 探索入口已经移入剧情正文舞台；右侧 Dock 只负责附近角色。
                                     exploreVisible: false,
                                     exploreLabel: '',
                                     exploreAttention:
-                                        controller.surroundingsNeedsAttention,
+                                        false,
                                     exploreLoading:
-                                        controller.isSurroundingsLoading,
-                                    onExplore: () => _selectPrimaryTab(
-                                      _NovelPrimaryTab.surroundings,
-                                    ),
+                                        false,
+                                    onExplore: () {},
                                   ),
                                 ),
                               ),
@@ -2696,28 +2577,9 @@ class _NovelGamePageState extends State<NovelGamePage>
                               Positioned.fill(
                                 child: NovelSceneBarkLayer(
                                   barks: _sceneBarks,
-                                  // 群众/摊贩气泡是场景常驻氛围层；选中对话对象后也不隐藏。
                                   enabled: true,
-                                  bottomReserve: inlineSurroundingsHeight,
+                                  bottomReserve: 0,
                                   onBarkTap: _handleSceneBarkTap,
-                                ),
-                              ),
-                            if (inlineSurroundingsVisible)
-                              Positioned(
-                                // 只让探索区越过 SafeArea 的左右安全边距，
-                                // 正文、HUD 仍保持原来的 14px 阅读安全区。
-                                left: -inlineEdgeLeft,
-                                right: -inlineEdgeRight,
-                                bottom: 0,
-                                height: inlineSurroundingsHeight,
-                                child: RepaintBoundary(
-                                  child: NovelSurroundingsInlineDock(
-                                    key: ValueKey<String>(
-                                      'inline-surroundings|${controller.locationTitle}|${controller.locationSubtitle}',
-                                    ),
-                                    controller: controller,
-                                    enabled: inlineSurroundingsEnabled,
-                                  ),
                                 ),
                               ),
                           ],
@@ -2744,7 +2606,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                       _NovelPrimaryTab.inventory,
                       _NovelPrimaryTab.journey,
                       _NovelPrimaryTab.world,
-                      _NovelPrimaryTab.surroundings,
                     ])
                       if (_mountedPrimaryTabs.contains(tab))
                         Positioned.fill(
@@ -2758,8 +2619,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                           ),
                         ),
 
-                  // 右侧一级导航使用中等强度的窄暗带。
-                  // 保持遮罩范围收敛，但提高核心暗度，让图标和文字在亮背景上仍然清楚。
                   if (showBottomNav)
                     Positioned(
                       right: 0,
@@ -2801,7 +2660,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                       ),
                     ),
 
-                  // 底部导航栏（实际为右下竖向六按钮）
                   if (showBottomNav)
                     Positioned(
                       left: 0,
@@ -2811,7 +2669,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                         top: false,
                         child: NovelBottomArchiveBar(
                           desktopMode: desktopMode,
-                          // 因为加入了 surroundings，索引不再是一一对应，需要精准映射
                           selectedIndex: switch (_primaryTab) {
                             _NovelPrimaryTab.characters => 1,
                             _NovelPrimaryTab.team => 2,
@@ -2820,7 +2677,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                             _NovelPrimaryTab.world => 5,
                             _ => 0, 
                           },
-                          // 注意：删掉了 onWorld 属性
                           onSelected: (index) {
                             final tab = switch(index) {
                               1 => _NovelPrimaryTab.characters,
@@ -2831,6 +2687,35 @@ class _NovelGamePageState extends State<NovelGamePage>
                               _ => _NovelPrimaryTab.story,
                             };
                             _selectPrimaryTab(tab);
+                          },
+                        ),
+                      ),
+                    ),
+
+                  // 最顶层的公共摇杆，与剧情和输入框完全共存
+                  if (canExitStory)
+                    AnimatedPositioned(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOutCubic,
+                      left: 24,
+                      bottom: MediaQuery.sizeOf(context).height * 0.32,
+                      child: AnimatedOpacity(
+                        opacity: 1.0,
+                        duration: const Duration(milliseconds: 250),
+                        child: NovelExplorationJoystick(
+                          onChanged: (val) {
+                            _joystickIntent.value = val;
+                            if (val != Offset.zero && !_joystickTouched) {
+                              setState(() => _joystickTouched = true);
+                              FocusManager.instance.primaryFocus?.unfocus();
+                            }
+                          },
+                          onActiveChanged: (val) {
+                            _joystickActive.value = val;
+                            if (val && !_joystickTouched) {
+                              setState(() => _joystickTouched = true);
+                              FocusManager.instance.primaryFocus?.unfocus();
+                            }
                           },
                         ),
                       ),
@@ -2919,7 +2804,6 @@ class _NovelGamePageState extends State<NovelGamePage>
               child: gameScaffold,
             );
 
-            // PC/Web 手机预览保持真实长屏比例；桌面模式继续使用完整窗口。
             if (previewingPhoneOnDesktop) {
               return ColoredBox(
                 color: controller.settings.backgroundColor,
@@ -2959,8 +2843,6 @@ class _NovelSceneTimeStamp extends StatelessWidget {
     final period = periodLabel.trim();
     if (day.isEmpty) return const SizedBox.shrink();
 
-    // 时间只做“场景字幕”，不再使用卡片、遮罩或边框。
-    // 两行排版保留主次层级：天数是主信息，时段是轻量副信息。
     return IgnorePointer(
       child: Semantics(
         label: period.isEmpty ? '故事时间 $day' : '故事时间 $day $period',
@@ -3191,9 +3073,6 @@ class _NovelPreviewButton extends StatelessWidget {
   }
 }
 
-/// Novel main visual stage.
-/// Current backend contract: each storyboard sheet is one complete cinematic image.
-/// There is no panel splitting/cropping on the client.
 class _NovelStoryboardStage extends StatefulWidget {
   const _NovelStoryboardStage({
     required this.controller,
@@ -3222,13 +3101,9 @@ class _NovelStoryboardStage extends StatefulWidget {
 class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
   final Set<String> _preloadedUrls = <String>{};
 
-  // These fields are nullable on purpose. During Flutter Web hot reload an already
-  // mounted State object can survive a class shape change, so newly-added fields may
-  // temporarily read as JS `undefined`. All access goes through lazy safe getters so
-  // a development hot reload cannot crash on .trim() / .isNotEmpty.
   Set<String>? _preloadingUrlsStore;
-  static Map<String, String>? _stickyStoryboardBySessionStore;
   String? _displayedStoryboardUrlStore;
+  String? _displayedStoryboardTurnIdStore;
   String? _lastLocationKeyStore;
   String? _lastWorldBackgroundUrlStore;
   bool? _awaitingSceneBackgroundStore;
@@ -3241,13 +3116,16 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
 
   Set<String> get _preloadingUrls =>
       _preloadingUrlsStore ??= <String>{};
-  static Map<String, String> get _stickyStoryboardBySession =>
-      _stickyStoryboardBySessionStore ??= <String, String>{};
 
   String get _displayedStoryboardUrl =>
       _displayedStoryboardUrlStore?.trim() ?? '';
   set _displayedStoryboardUrl(String value) =>
       _displayedStoryboardUrlStore = value;
+
+  String get _displayedStoryboardTurnId =>
+      _displayedStoryboardTurnIdStore?.trim() ?? '';
+  set _displayedStoryboardTurnId(String value) =>
+      _displayedStoryboardTurnIdStore = value;
 
   String get _lastLocationKey => _lastLocationKeyStore?.trim() ?? '';
   set _lastLocationKey(String value) => _lastLocationKeyStore = value;
@@ -3269,9 +3147,11 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
 
   String get _sessionKey => widget.controller.sessionId.trim();
 
-  String _stickyStoryboardForSession(String sessionKey) {
-    final value = _stickyStoryboardBySession[sessionKey];
-    return value?.trim() ?? '';
+  String _permanentSceneBackgroundUrl() {
+    final sceneUrl = widget.controller.currentSceneBackdropUrl.trim();
+    return sceneUrl.isNotEmpty
+        ? sceneUrl
+        : widget.controller.world.backgroundUrl.trim();
   }
 
   String _locationKey() => <String>[
@@ -3283,9 +3163,8 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
   void initState() {
     super.initState();
     _lastLocationKey = _locationKey();
-    _lastWorldBackgroundUrl = widget.controller.world.backgroundUrl.trim();
-    final sticky = _stickyStoryboardForSession(_sessionKey);
-    if (sticky.isNotEmpty) _displayedStoryboardUrl = sticky;
+    _lastWorldBackgroundUrl = _permanentSceneBackgroundUrl();
+    _displayedStoryboardTurnId = widget.controller.currentStoryboardTurnId;
   }
 
   @override
@@ -3300,9 +3179,10 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     final oldSession = oldWidget.controller.sessionId.trim();
     if (oldSession != _sessionKey) {
       _promoteToken += 1;
-      _displayedStoryboardUrl = _stickyStoryboardForSession(_sessionKey);
+      _displayedStoryboardUrl = '';
+      _displayedStoryboardTurnId = widget.controller.currentStoryboardTurnId;
       _lastLocationKey = _locationKey();
-      _lastWorldBackgroundUrl = widget.controller.world.backgroundUrl.trim();
+      _lastWorldBackgroundUrl = _permanentSceneBackgroundUrl();
       _awaitingSceneBackground = false;
     }
     _scheduleVisualSync();
@@ -3325,8 +3205,27 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
 
   void _syncVisualState() {
     final controller = widget.controller;
+    if (controller.isGenerating) {
+      if (_displayedStoryboardUrl.isNotEmpty || _promotingUrl.isNotEmpty) {
+        _promoteToken += 1;
+        _promotingUrl = '';
+      }
+      if (_displayedStoryboardUrl.isNotEmpty) {
+        setState(() => _displayedStoryboardUrl = '');
+      }
+      return;
+    }
+    final currentTurnId = controller.currentStoryboardTurnId.trim();
+    if (_displayedStoryboardTurnId != currentTurnId) {
+      _promoteToken += 1;
+      _promotingUrl = '';
+      _displayedStoryboardTurnId = currentTurnId;
+      if (_displayedStoryboardUrl.isNotEmpty) {
+        setState(() => _displayedStoryboardUrl = '');
+      }
+    }
     final nextLocation = _locationKey();
-    final nextWorldBackground = controller.world.backgroundUrl.trim();
+    final nextWorldBackground = _permanentSceneBackgroundUrl();
     final locationChanged = _lastLocationKey.isNotEmpty &&
         nextLocation.isNotEmpty &&
         nextLocation != _lastLocationKey;
@@ -3338,9 +3237,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     if (_awaitingSceneBackground &&
         nextWorldBackground.isNotEmpty &&
         nextWorldBackground != _lastWorldBackgroundUrl) {
-      // A location update can arrive before background_update. Wait for an actually
-      // new scene image URL instead of clearing the old CG onto the previous scene's
-      // background. Once the new scene image is decodable, reveal the base layer.
       _lastWorldBackgroundUrl = nextWorldBackground;
       _awaitingSceneBackground = false;
       if (_displayedStoryboardUrl.isNotEmpty) {
@@ -3360,11 +3256,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     final singleReadyCurrentTurn =
         currentSheetUrls.length == 1 && currentReadyImage.isNotEmpty;
 
-    // Never let an optional reader-clock callback permanently hide a successfully
-    // generated current-turn image. New single-image storyboards depict the first safe
-    // source segment, and the Controller already promotes those immediately. This extra
-    // last-sentence fallback protects legacy/live race cases where the final sub-page
-    // position callback was dropped during a rebuild or swipe.
     final preferredCandidate = currentCandidate.isNotEmpty
         ? currentCandidate
         : ((!hasTimeline || (!controller.hasNext && singleReadyCurrentTurn))
@@ -3374,15 +3265,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
         preferredCandidate != _displayedStoryboardUrl) {
       unawaited(_promoteStoryboard(preferredCandidate));
       return;
-    }
-
-    // On first mount / route restoration there may be no current-turn image yet.
-    // Recover the most recent persisted storyboard instead of flashing the fallback.
-    if (_displayedStoryboardUrl.isEmpty) {
-      final recovered = controller.latestAvailableStoryboardImageUrl.trim();
-      if (recovered.isNotEmpty) {
-        unawaited(_promoteStoryboard(recovered));
-      }
     }
 
     _schedulePreload();
@@ -3396,8 +3278,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     try {
       await precacheImage(_providerFor(backgroundUrl), context);
     } catch (_) {
-      // NovelWorldBackground may still recover through its resize/original fallback.
-      // Never clear the current CG just because this eager preload failed.
       return;
     }
     if (!mounted || token != _promoteToken || _locationKey() != expectedLocation) {
@@ -3406,9 +3286,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     setState(() {
       _displayedStoryboardUrl = '';
     });
-    // The current turn's storyboard may already have become ready while we were
-    // awaiting the new scene background. Re-evaluate immediately; otherwise no new
-    // controller notification may arrive and the latest CG can remain hidden.
     _scheduleVisualSync();
   }
 
@@ -3426,9 +3303,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
       await precacheImage(NetworkImage(clean), context);
     } catch (error) {
       if (_promotingUrl == clean) _promotingUrl = '';
-      // The defining rule of the stage: a failed next image can never erase the last
-      // successfully rendered world frame. Retry a couple of times because R2/CDN
-      // propagation can lag behind the backend's successful task completion event.
       final attempt = (_promoteFailureCounts[clean] ?? 0) + 1;
       _promoteFailureCounts[clean] = attempt;
       debugPrint(
@@ -3453,14 +3327,9 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     _promoteFailureCounts.remove(clean);
     _preloadedUrls.add(clean);
     _preloadingUrls.remove(clean);
-    if (_sessionKey.isNotEmpty) {
-      _stickyStoryboardBySession[_sessionKey] = clean;
-      while (_stickyStoryboardBySession.length > 8) {
-        _stickyStoryboardBySession.remove(_stickyStoryboardBySession.keys.first);
-      }
-    }
     setState(() {
       _displayedStoryboardUrl = clean;
+      _displayedStoryboardTurnId = widget.controller.currentStoryboardTurnId.trim();
     });
   }
 
@@ -3468,7 +3337,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     final urls = <String>{
       ...widget.controller.currentStoryboardSheetUrls,
       widget.controller.currentStoryboardDisplayCandidateUrl,
-      widget.controller.latestAvailableStoryboardImageUrl,
     }..removeWhere((url) => url.trim().isEmpty);
     if (urls.isEmpty) return;
 
@@ -3485,8 +3353,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
           _preloadingUrls.remove(url);
           _preloadedUrls.add(url);
         }).catchError((_) {
-          // Failed preloads are deliberately not marked successful so a later rebuild
-          // can retry after a transient CDN/network failure.
           _preloadingUrls.remove(url);
         });
       }
@@ -3500,11 +3366,8 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     final hasMemoryPreview = previewBytes != null && previewBytes.isNotEmpty;
     final previewUrl = widget.backgroundPreviewUrl.trim();
     final displayedStoryboardUrl = _displayedStoryboardUrl;
-    final worldBackgroundUrl = controller.world.backgroundUrl.trim();
+    final worldBackgroundUrl = _permanentSceneBackgroundUrl();
 
-    // Exactly one NovelWorldBackground owns the visible image pipeline. This keeps
-    // Depth, time tint and weather on the same pixels instead of rendering them under
-    // an opaque storyboard image. It also avoids running two sensor/depth pipelines.
     final selectedUrl = previewUrl.isNotEmpty
         ? previewUrl
         : displayedStoryboardUrl.isNotEmpty
@@ -3519,9 +3382,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
                 hasMemoryPreview ? widget.backgroundPreviewCacheKey : '',
             parallaxStrength: widget.parallaxStrength,
             fallbackAsset: widget.fallbackAsset,
-            // Storyboard CGs are now processed by the same Depth + Shader pipeline as
-            // scene backgrounds. Historical extreme-tall stitched sheets are filtered
-            // inside NovelWorldBackground by aspect ratio.
             storyboardMode: false,
             characterPresent: false,
             isGenerating: controller.isGenerating,
@@ -3534,7 +3394,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
       fit: StackFit.expand,
       children: <Widget>[
         visual,
-        // HUD/dialogue readability veil stays above the environment effects.
         IgnorePointer(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -3584,4 +3443,3 @@ class _NovelStoryboardPlaceholder extends StatelessWidget {
     );
   }
 }
-

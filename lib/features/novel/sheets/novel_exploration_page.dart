@@ -1,25 +1,51 @@
 part of '../novel_sheets.dart';
 
+class _SceneGroundLoot {
+  const _SceneGroundLoot({required this.node, required this.position});
+
+  final JsonMap node;
+  final Offset position;
+}
+
+class _ScenePickupNotice {
+  const _ScenePickupNotice(this.id, this.items);
+
+  final int id;
+  final List<MapEntry<String, int>> items;
+}
+
 /// 正式自由探索页：
-/// - 输入场景名称后创建 scene-assets 后台任务；
+/// - 直接读取 Controller 中由后端生成并登记到 scene-map 的当前场景；
 /// - 使用后端生成的 1 张 1536x864 完整横版场景图；
 /// - Flutter 以放大的跟随相机显示舞台，不会一次把整张地图缩到屏幕里；
-/// - 主角左右/上下移动时相机同步平移，向上走才逐步看到场景顶部；
+/// - 主角移动时由死区、速度前瞻与双轴阻尼共同驱动平滑相机；
 /// - 移动端虚拟摇杆 + 桌面 WASD/方向键连续移动，碰撞行为对齐 HTML；
 /// - 主角优先使用当前会话已有 portrait_url，不在本页重复生成角色。
 class NovelExplorationPage extends StatefulWidget {
   const NovelExplorationPage({
     super.key,
     required this.backend,
+    this.controller,
     this.sessionId,
     this.initialSceneName = '斗破苍穹 乌坦城萧家坊市',
     this.onEntityTap,
+    this.asLayer = false, // 👈 优雅的核心：是否作为图层嵌入
+    this.canExitStory = false,
+    this.onExitStoryTriggered,
+    this.joystickIntent,
+    this.joystickActive,
   });
 
   final NovelBackend backend;
+  final NovelGameController? controller;
   final String? sessionId;
   final String initialSceneName;
   final ValueChanged<JsonMap>? onEntityTap;
+  final bool asLayer;
+  final bool canExitStory;
+  final VoidCallback? onExitStoryTriggered;
+  final ValueNotifier<Offset>? joystickIntent;
+  final ValueNotifier<bool>? joystickActive;
 
   @override
   State<NovelExplorationPage> createState() => _NovelExplorationPageState();
@@ -35,19 +61,207 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
   String? _activeTaskId;
   int _generationSerial = 0;
   bool _showFootprints = false;
+  bool _controllerSyncScheduled = false;
+  bool _sceneActionRunning = false;
+  final Map<String, _SceneGroundLoot> _groundLoot = <String, _SceneGroundLoot>{};
+  final Set<String> _locallyPickedIds = <String>{};
+  final List<_ScenePickupNotice> _pickupNotices = <_ScenePickupNotice>[];
+  final List<Timer> _pickupNoticeTimers = <Timer>[];
+  int _pickupNoticeSerial = 0;
+  String _loadedSceneId = '';
+  String _loadedSceneIdentity = '';
+  String _loadingSceneIdentity = '';
+  // 独立跟踪"当前立绘已加载的 URL"：立绘经常比场景资源晚就绪（后端异步生成），
+  // 如果只靠 _loadedSceneIdentity 判断要不要重载，场景一旦加载完成就会永久
+  // 跳过后续的立绘更新，玩家角色就会一直停留在占位符（小人）状态。
+  String _loadedPlayerUrl = '';
+  bool _playerPortraitSyncing = false;
 
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.initialSceneName);
+    widget.controller?.addListener(_handleControllerChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = widget.controller;
+      if (controller == null) return;
+      unawaited(controller.refreshSceneExplorationState(forceMap: true));
+      _syncAuthoritativeScene();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant NovelExplorationPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?.removeListener(_handleControllerChanged);
+      widget.controller?.addListener(_handleControllerChanged);
+      _loadedSceneId = '';
+      _loadedSceneIdentity = '';
+      _groundLoot.clear();
+      _locallyPickedIds.clear();
+      _pickupNotices.clear();
+      _handleControllerChanged();
+    }
   }
 
   @override
   void dispose() {
     _generationSerial++;
+    for (final timer in _pickupNoticeTimers) {
+      timer.cancel();
+    }
+    widget.controller?.removeListener(_handleControllerChanged);
     _nameController.dispose();
     _images?.dispose();
     super.dispose();
+  }
+
+  void _handleControllerChanged() {
+    if (_controllerSyncScheduled || !mounted) return;
+    _controllerSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _controllerSyncScheduled = false;
+      if (mounted) _syncAuthoritativeScene();
+    });
+  }
+
+  JsonMap _currentPlayerAsset() {
+    final protagonist = widget.controller?.protagonist;
+    if (protagonist == null) return <String, dynamic>{};
+    return <String, dynamic>{
+      'portrait_url': protagonist.portraitUrl,
+      'avatar_url': protagonist.avatarUrl,
+    };
+  }
+
+  Future<void> _syncAuthoritativeScene() async {
+    final controller = widget.controller;
+    if (controller == null) return;
+    final node = controller.sceneMap.currentScene;
+    final asset = node.sceneAsset;
+    final package = _sceneMap(asset['asset_package']);
+    final status = _sceneString(asset['status']).toLowerCase();
+    final sceneIdentity = _sceneString(
+      package['scene_id'],
+      node.sceneId.isNotEmpty ? node.sceneId : controller.sceneMap.currentSceneId,
+    );
+
+    if (sceneIdentity.isNotEmpty &&
+        _loadedSceneId.isNotEmpty &&
+        sceneIdentity != _loadedSceneId &&
+        mounted) {
+      final previous = _images;
+      setState(() {
+        _assetPackage = null;
+        _images = null;
+        _error = null;
+        _groundLoot.clear();
+        _locallyPickedIds.clear();
+        _pickupNotices.clear();
+      });
+      previous?.dispose();
+      _loadedSceneId = '';
+      _loadedSceneIdentity = '';
+    }
+
+    if (package.isEmpty || (status.isNotEmpty && status != 'ready' && status != 'completed')) {
+      if (!mounted) return;
+      final waiting = controller.isBackgroundGenerating ||
+          const <String>{'queued', 'pending', 'processing', 'generating'}.contains(status);
+      final failed = status == 'failed';
+      setState(() {
+        _loading = !failed;
+        _statusText = waiting ? '后端正在准备当前场景…' : '等待后端场景资源';
+        _error = failed
+            ? _sceneString(asset['error'], '当前场景资源生成失败')
+            : null;
+      });
+      return;
+    }
+
+    final revision = _sceneString(
+      asset['revision_id'],
+      _sceneString(asset['task_id']),
+    );
+    final loadIdentity = '$sceneIdentity|$revision|${_sceneString(_sceneMap(package['floor'])['url'])}';
+    if (loadIdentity == _loadedSceneIdentity ||
+        loadIdentity == _loadingSceneIdentity) {
+      // 场景本身没变，但立绘 URL 可能是刚刚才就绪的（后端异步生成），
+      // 单独同步一下，不必把整张场景图重新走一遍。
+      unawaited(_syncPlayerPortrait());
+      return;
+    }
+
+    final serial = ++_generationSerial;
+    _loadingSceneIdentity = loadIdentity;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _statusText = '正在载入当前场景…';
+    });
+    try {
+      final loaded = await _loadSceneImages(package, _currentPlayerAsset());
+      if (!mounted || serial != _generationSerial) {
+        loaded.dispose();
+        return;
+      }
+      final previous = _images;
+      setState(() {
+        _assetPackage = package;
+        _images = loaded;
+        _loadedSceneId = sceneIdentity;
+        _loadedSceneIdentity = loadIdentity;
+        _loadedPlayerUrl = _sceneString(
+          _currentPlayerAsset()['portrait_url'],
+          _sceneString(_currentPlayerAsset()['avatar_url']),
+        );
+        _loading = false;
+        _statusText = '当前场景已载入';
+      });
+      _loadingSceneIdentity = '';
+      previous?.dispose();
+    } catch (error) {
+      if (!mounted || serial != _generationSerial) return;
+      _loadingSceneIdentity = '';
+      setState(() {
+        _loading = false;
+        _error = error is NovelBackendException ? error.message : '$error';
+      });
+    }
+  }
+
+  /// 单独把角色立绘补上，不影响场景其余资源（地板/建筑/精灵图）。
+  /// 场景经常先于立绘就绪（立绘是后端异步任务），这里在每次 controller
+  /// 变化时都会被轻量地检查一次，一旦发现新的 portrait_url 就热替换。
+  Future<void> _syncPlayerPortrait() async {
+    final images = _images;
+    if (images == null || _playerPortraitSyncing) return;
+    final playerUrl = _sceneString(
+      _currentPlayerAsset()['portrait_url'],
+      _sceneString(_currentPlayerAsset()['avatar_url']),
+    );
+    if (playerUrl.isEmpty || playerUrl == _loadedPlayerUrl) return;
+
+    _playerPortraitSyncing = true;
+    try {
+      final image = await _loadUiImage(playerUrl);
+      if (!mounted || _images != images) {
+        _disposeUiImage(image);
+        return;
+      }
+      final previousPlayer = images.player;
+      images.player = image;
+      _loadedPlayerUrl = playerUrl;
+      setState(() {});
+      _disposeUiImage(previousPlayer);
+    } catch (_) {
+      // 静默失败即可：保留当前立绘（或占位符），不打断场景其它部分；
+      // 下一次 controller 变化时会自动重试。
+    } finally {
+      _playerPortraitSyncing = false;
+    }
   }
 
   Future<void> _generate() async {
@@ -63,8 +277,13 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
     });
 
     try {
+      final sceneId = widget.controller?.sceneMap.currentSceneId.trim() ?? '';
+      if (sceneId.isEmpty) {
+        throw const NovelBackendException('当前场景还没有后端 scene_id，不能手动生成');
+      }
       final created = await widget.backend.createSceneAssetTask(
         name: name,
+        sceneId: sceneId,
         sessionId: widget.sessionId,
       );
       if (!mounted || serial != _generationSerial) return;
@@ -118,6 +337,10 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
             _error = null;
           });
           previous?.dispose();
+          final controller = widget.controller;
+          if (controller != null) {
+            unawaited(controller.refreshSceneExplorationState(forceMap: true));
+          }
           return;
         }
 
@@ -211,11 +434,12 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
         spriteImages.addAll(values.sublist(1, 1 + objectCount));
         playerImage = values.last;
 
-        final spriteRects = <Rect>[];
-        for (final image in spriteImages) {
-          final rects = await _extractOpaqueSpriteRects(image, 1, 1);
-          spriteRects.add(rects.first);
-        }
+        final spriteRectLists = await Future.wait(
+          spriteImages.map((image) => _extractOpaqueSpriteRects(image, 1, 1)),
+        );
+        final spriteRects = [
+          for (final rects in spriteRectLists) rects.first,
+        ];
         return _LoadedSceneImages(
           floor: floorImage,
           atlas: null,
@@ -1285,51 +1509,416 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
     );
   }
 
+  static const JsonMap _emptyAssetPackage = <String, dynamic>{
+    'objects': <dynamic>[],
+  };
+
+  Widget _defaultSceneBackground() {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            Color(0xFF20252A),
+            Color(0xFF111519),
+            Color(0xFF080A0D),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<JsonMap> _visibleSceneInteractions() {
+    final payload = widget.controller?.surroundingsData ?? const <String, dynamic>{};
+    final visible = _sceneList(payload['visible'])
+        .map(_sceneString)
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    final consumed = <String>{
+      ..._sceneList(payload['consumed']).map(_sceneString),
+      ..._sceneList(payload['claimed']).map(_sceneString),
+    };
+    return _sceneList(payload['grid_nodes'])
+        .map(_sceneMap)
+        .where((node) {
+          final id = _sceneString(node['id']);
+          return id.isNotEmpty && visible.contains(id) &&
+              !consumed.contains(id) && !_locallyPickedIds.contains(id);
+        })
+        .toList(growable: false);
+  }
+
+  Map<String, int> _inventoryAmounts() {
+    final inventory = widget.controller?.inventory;
+    if (inventory == null) return <String, int>{};
+    final amounts = <String, int>{};
+    for (final item in <NovelInventoryItem>[
+      ...inventory.storyItems,
+      ...inventory.consumables,
+    ]) {
+      final name = item.name.trim();
+      if (name.isEmpty) continue;
+      amounts.update(name, (value) => value + item.quantity,
+          ifAbsent: () => item.quantity);
+    }
+    return amounts;
+  }
+
+  void _showPickupNotice(List<MapEntry<String, int>> items) {
+    if (items.isEmpty || !mounted) return;
+    final id = ++_pickupNoticeSerial;
+    setState(() {
+      _pickupNotices.add(_ScenePickupNotice(id, items));
+      if (_pickupNotices.length > 3) _pickupNotices.removeAt(0);
+    });
+    late final Timer timer;
+    timer = Timer(const Duration(seconds: 3), () {
+      _pickupNoticeTimers.remove(timer);
+      if (mounted) {
+        setState(() => _pickupNotices.removeWhere((notice) => notice.id == id));
+      }
+    });
+    _pickupNoticeTimers.add(timer);
+  }
+
+  Offset _nearestLootLanding(Offset point) {
+    final package = _assetPackage;
+    if (package == null) return point;
+    final grid = _sceneMap(package['grid']);
+    final gridWidth = _sceneInt(grid['width'], 32).clamp(1, 200).toInt();
+    final gridHeight = _sceneInt(grid['height'], 32).clamp(1, 200).toInt();
+    final objects = _sceneList(package['objects'])
+        .map(_sceneMap)
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    return _nearestSceneWalkable(
+      point,
+      gridWidth,
+      gridHeight,
+      objects,
+      .28,
+    );
+  }
+
+  Future<void> _revealSceneNode(JsonMap node, Offset groundPosition) async {
+    final id = _sceneString(node['id']);
+    if (id.isEmpty || _sceneActionRunning) return;
+
+    if (boolValue(node['collectible'])) {
+      setState(() {
+        _groundLoot[id] = _SceneGroundLoot(
+          node: node,
+          position: _nearestLootLanding(groundPosition),
+        );
+      });
+      return;
+    }
+
+    // A searched container may keep its ID and only change to collectible.
+    // Track only items that were collectible before the request so that this
+    // state transition is still recognized as newly revealed loot.
+    final beforeCollectibles = _visibleSceneInteractions()
+        .where((entry) => boolValue(entry['collectible']))
+        .map((entry) => _sceneString(entry['id']))
+        .toSet();
+    final investigated = await _interactWithSceneNode(node);
+    if (!investigated || !mounted) return;
+    final revealed = _visibleSceneInteractions()
+        .where((entry) => boolValue(entry['collectible']) &&
+            !beforeCollectibles.contains(_sceneString(entry['id'])))
+        .toList(growable: false);
+
+    if (revealed.isNotEmpty) {
+      setState(() {
+        for (var i = 0; i < revealed.length; i++) {
+          final entry = revealed[i];
+          final newId = _sceneString(entry['id']);
+          if (newId.isEmpty) continue;
+          final angle = _sceneRandom.nextDouble() * math.pi * 2;
+          final radius = .5 + _sceneRandom.nextDouble() * .9;
+          final candidate = groundPosition +
+              Offset(math.cos(angle) * radius, math.sin(angle) * radius);
+          _groundLoot[newId] = _SceneGroundLoot(
+            node: entry,
+            position: _nearestLootLanding(candidate),
+          );
+        }
+      });
+    }
+  }
+
+  Future<void> _pickUpSceneLoot(JsonMap node) async {
+    final controller = widget.controller;
+    final id = _sceneString(node['id']);
+    if (controller == null || id.isEmpty ||
+        !_groundLoot.containsKey(id) || _sceneActionRunning) return;
+    final before = _inventoryAmounts();
+    setState(() {
+      _sceneActionRunning = true;
+      _error = null;
+    });
+    try {
+      await controller.claimSurroundReward(id);
+      if (!mounted) return;
+      final after = _inventoryAmounts();
+      final gained = <MapEntry<String, int>>[];
+      for (final entry in after.entries) {
+        final difference = entry.value - (before[entry.key] ?? 0);
+        if (difference > 0) gained.add(MapEntry(entry.key, difference));
+      }
+      final claimed = _sceneList(controller.surroundingsData['claimed'])
+          .map(_sceneString).contains(id);
+      final consumed = _sceneList(controller.surroundingsData['consumed'])
+          .map(_sceneString).contains(id);
+      if (!claimed && !consumed && gained.isEmpty) {
+        setState(() => _error = controller.surroundingsError.isNotEmpty
+            ? controller.surroundingsError : '拾取尚未确认，请重试');
+        return;
+      }
+      setState(() {
+        _groundLoot.remove(id);
+        _locallyPickedIds.add(id);
+        _statusText = '';
+      });
+      if (gained.isEmpty) {
+        final reward = _sceneMap(node['reward']);
+        gained.add(MapEntry(
+          _sceneString(reward['name'], _sceneString(node['label'], '物品')),
+          math.max(1, _sceneInt(reward['quantity'], _sceneInt(node['quantity'], 1))),
+        ));
+      }
+      _showPickupNotice(gained);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = controller.surroundingsError.isNotEmpty
+          ? controller.surroundingsError : '$error');
+    } finally {
+      if (mounted) setState(() => _sceneActionRunning = false);
+    }
+  }
+
+  Future<void> _moveThroughScene(NovelSceneMapNode target) async {
+    final controller = widget.controller;
+    if (controller == null || _sceneActionRunning) return;
+    setState(() {
+      _sceneActionRunning = true;
+      _error = null;
+      _statusText = '正在确认前往${target.name}的路线…';
+    });
+    try {
+      final accepted = await controller.requestSceneMove(target);
+      if (!mounted) return;
+      setState(() {
+        _statusText = accepted ? '正在前往${target.name}…' : '';
+        _error = accepted ? null : controller.sceneMoveError;
+      });
+    } finally {
+      if (mounted) setState(() => _sceneActionRunning = false);
+    }
+  }
+
+  Future<bool> _interactWithSceneNode(JsonMap node) async {
+    final controller = widget.controller;
+    final nodeId = _sceneString(node['id']);
+    if (controller == null || nodeId.isEmpty || _sceneActionRunning) return false;
+    final label = _sceneString(node['label'], '场景线索');
+    setState(() {
+      _sceneActionRunning = true;
+      _error = null;
+      _statusText = '正在处理：$label';
+    });
+    try {
+      final encounter = _sceneMap(node['encounter']);
+      if (encounter.isNotEmpty) {
+        await controller.startSurroundEncounter(
+          nodeId: nodeId,
+          targetName: _sceneString(encounter['name'], label),
+        );
+      } else {
+        await controller.investigateSurroundNode(nodeId);
+      }
+      if (mounted) setState(() => _statusText = '$label：已处理');
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() {
+        _error = controller.surroundingsError.isNotEmpty
+            ? controller.surroundingsError
+            : '$error';
+      });
+      return false;
+    } finally {
+      if (mounted) setState(() => _sceneActionRunning = false);
+    }
+  }
+
+  bool? _lastLoggedInteractionEnabled;
+  // 不依赖 kDebugMode（那个来自 foundation.dart，这个 part 文件没法自己
+  // import），用一个本地常量开关代替；诊断完把这个改回 false 或直接删掉
+  // 整个方法即可。
+  static const bool _kLogInteractionEnabled = true;
+
+  /// 临时诊断用：问号点了没反应，本质上是 GestureDetector 的 onTap
+  /// 被下面这个条件短路成了 null（见 2965/3100 行附近）。这里只在
+  /// 状态发生变化时打印一次，方便确认到底是
+  /// canInvestigateSurroundings 返回 false，还是 _sceneActionRunning
+  /// 卡在了 true。定位到原因后可以把这个方法和调用点删掉，
+  /// 直接换回内联的布尔表达式。
+  bool _debugInteractionEnabled() {
+    // 强制返回 true（或者只防连续点击），让问号永远可点
+    return !_sceneActionRunning;
+  }
+
   @override
   Widget build(BuildContext context) {
     final package = _assetPackage;
     final images = _images;
     final hasScene = package != null && images != null;
 
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          if (hasScene)
-            _SceneAssetCanvas(
-              assetPackage: package!,
-              floorImage: images!.floor,
-              atlasImage: images.atlas,
-              stripImage: images.strip,
-              spriteImages: images.sprites,
-              playerImage: images.player,
-              spriteRects: images.spriteRects,
+    final weatherKey = widget.controller?.world.weather ?? '';
+    final weatherEffect = novelWeatherEffectFromKey(weatherKey);
+
+    Widget content = Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        if (!hasScene) _defaultSceneBackground(),
+
+        // 🌟 关键：用 IgnorePointer 保证底层画布不会吞掉问号的点击
+        Positioned.fill(
+          child: IgnorePointer(
+            ignoring: false, // 保证底下的移动和画布正常，但允许事件向上冒泡
+            child: _SceneAssetCanvas(
+              assetPackage: hasScene ? package! : _emptyAssetPackage,
+              floorImage: hasScene ? images!.floor : null,
+              atlasImage: hasScene ? images!.atlas : null,
+              stripImage: hasScene ? images!.strip : null,
+              spriteImages: hasScene ? images!.sprites : const <dynamic>[],
+              playerImage: hasScene ? images!.player : null,
+              spriteRects: hasScene ? images!.spriteRects : const <Rect>[],
               showFootprints: _showFootprints,
               onEntityTap: _handleEntityTap,
-            )
-          else
-            ColoredBox(
-              color: const Color(0xFF111315),
-              child: Center(
-                child: _loading
-                    ? const Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          CircularProgressIndicator(),
-                          SizedBox(height: 14),
-                          Text('正在生成场景…'),
-                        ],
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.all(28),
-                        child: Text(
-                          _error ?? '点击右上角设置生成探索场景',
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
+              isStoryActive: !widget.canExitStory,
+              canExitStory: widget.canExitStory,
+              onExitStoryTriggered: widget.onExitStoryTriggered ?? () {},
+              joystickIntent: widget.joystickIntent,
+              joystickActive: widget.joystickActive,
+              navigationTargets:
+                  widget.controller?.currentSceneNavigationTargets ??
+                      const <NovelSceneMapNode>[],
+              interactionNodes: _visibleSceneInteractions(),
+              groundLoot: _groundLoot,
+              navigationEnabled: widget.controller?.canRequestSceneMove == true &&
+                  !_sceneActionRunning,
+              interactionEnabled: _debugInteractionEnabled(),
+              onNavigationTarget: _moveThroughScene,
+              onRevealInteraction: _revealSceneNode,
+              onPickUpLoot: _pickUpSceneLoot,
+            ),
+          ),
+        ),
+
+        // 【新增】：独立的天气特效层
+        // 去掉了不存在的 timePeriod 参数，解决编译报错
+        if (widget.controller != null && weatherEffect != NovelWeatherEffect.none)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: NovelWeatherOverlay(
+                effect: weatherEffect,
               ),
             ),
+          ),
+
+        if (_pickupNotices.isNotEmpty)
+          Positioned(
+            left: 16,
+            top: MediaQuery.paddingOf(context).top + (widget.asLayer ? 92 : 108),
+            child: IgnorePointer(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  for (final notice in _pickupNotices)
+                    TweenAnimationBuilder<double>(
+                      key: ValueKey<int>(notice.id),
+                      tween: Tween<double>(begin: 0, end: 1),
+                      duration: const Duration(milliseconds: 350),
+                      curve: Curves.easeOutBack,
+                      builder: (context, progress, child) => Opacity(
+                        opacity: progress.clamp(0.0, 1.0).toDouble(),
+                        child: Transform.translate(
+                          offset: Offset(-24 * (1 - progress), 0),
+                          child: child,
+                        ),
+                      ),
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xDC121820),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0x99E7C47B)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            for (final item in notice.items)
+                              Text(
+                                '${item.key} × ${item.value}',
+                                style: const TextStyle(
+                                  color: Color(0xFFF8E6B1),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+
+        if (!hasScene && (_loading || _error != null))
+          Positioned(
+            left: 0,
+            right: 0,
+            top: widget.asLayer ? 12 : 64,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(.55),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (_loading) ...<Widget>[
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Flexible(
+                      child: Text(
+                        _loading
+                            ? (_statusText.isNotEmpty ? _statusText : '正在生成场景…')
+                            : (_error ?? ''),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        if (!widget.asLayer)
           SafeArea(
             child: Stack(
               children: <Widget>[
@@ -1354,8 +1943,14 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
               ],
             ),
           ),
-        ],
-      ),
+      ],
+    );
+
+    if (widget.asLayer) return content;
+
+    return Scaffold(
+      resizeToAvoidBottomInset: false,
+      body: content,
     );
   }
 }
@@ -1498,7 +2093,8 @@ class _LoadedSceneImages {
   final dynamic atlas;
   final dynamic strip;
   final List<dynamic> sprites;
-  final dynamic player;
+  // 非 final：允许立绘就绪较晚时原地替换，见 _syncPlayerPortrait。
+  dynamic player;
   final List<Rect> spriteRects;
 
   void dispose() {
@@ -1511,6 +2107,11 @@ class _LoadedSceneImages {
     _disposeUiImage(player);
   }
 }
+
+// 单个共享的 Random 实例：dust 粒子/掉落物散布不需要每次调用都重新播种一个
+// Random（这本身就有开销），尤其是行走时每次踩地都会触发一次，复用同一个
+// 生成器更省、也更符合"一次构造多次使用"的惯例。
+final math.Random _sceneRandom = math.Random();
 
 void _disposeUiImage(dynamic image) {
   if (image == null) return;
@@ -1540,6 +2141,19 @@ class _SceneAssetCanvas extends StatefulWidget {
     required this.spriteRects,
     required this.showFootprints,
     required this.onEntityTap,
+    required this.isStoryActive,
+    required this.canExitStory,
+    required this.onExitStoryTriggered,
+    required this.navigationTargets,
+    required this.interactionNodes,
+    required this.groundLoot,
+    required this.navigationEnabled,
+    required this.interactionEnabled,
+    required this.onNavigationTarget,
+    required this.onRevealInteraction,
+    required this.onPickUpLoot,
+    this.joystickIntent,
+    this.joystickActive,
   });
 
   final JsonMap assetPackage;
@@ -1551,6 +2165,19 @@ class _SceneAssetCanvas extends StatefulWidget {
   final List<Rect> spriteRects;
   final bool showFootprints;
   final ValueChanged<JsonMap> onEntityTap;
+  final bool isStoryActive;
+  final bool canExitStory;
+  final VoidCallback onExitStoryTriggered;
+  final List<NovelSceneMapNode> navigationTargets;
+  final List<JsonMap> interactionNodes;
+  final Map<String, _SceneGroundLoot> groundLoot;
+  final bool navigationEnabled;
+  final bool interactionEnabled;
+  final ValueChanged<NovelSceneMapNode> onNavigationTarget;
+  final Future<void> Function(JsonMap, Offset) onRevealInteraction;
+  final Future<void> Function(JsonMap) onPickUpLoot;
+  final ValueNotifier<Offset>? joystickIntent;
+  final ValueNotifier<bool>? joystickActive;
 
   @override
   State<_SceneAssetCanvas> createState() => _SceneAssetCanvasState();
@@ -1560,22 +2187,61 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   static const double _playerRadius = .28;
   static const double _maxMoveSpeedPx = 180.0;
 
+  // Camera state lives in projected world coordinates. Keeping it independent
+  // from the player lets small movements stay inside the deadzone and lets
+  // larger movements be followed with frame-rate-independent damping.
+  static const double _cameraSpeed = 6.0;
+  static const double _cameraVelocitySmoothing = 8.0;
+  static const double _deadzoneX = 24.0;
+  static const double _deadzoneY = 16.0;
+  static const double _lookaheadSec = .25;
+
   Offset _player = Offset.zero;
   String _facing = 'S';
   String _moveHint = '左下摇杆移动 · WASD / 方向键移动 · 长按物件查看';
   double _walkPhase = 0.0;
+  Offset? _searchEffectPosition;
+  int _searchEffectSerial = 0;
+  final List<_StepDustParticle> _dustParticles = <_StepDustParticle>[];
 
   final Set<LogicalKeyboardKey> _pressedKeys = <LogicalKeyboardKey>{};
   Offset _joystickIntent = Offset.zero;
   bool _joystickActive = false;
   Offset _velocityPx = Offset.zero;
+  Offset? _cameraWorldPos;
+  Offset _smoothedVelocity = Offset.zero;
+  // Timer.periodic(16ms) 驱动移动循环。（曾经试过换成 Ticker 以对齐
+  // vsync，但那需要 SingleTickerProviderStateMixin/Ticker，来自
+  // scheduler.dart —— 这个 part 文件所在的库没有 import 这个包，
+  // 编译会直接报 Type not found。要换回 Ticker 版本的话，去
+  // novel_sheets.dart 顶部加一行 `import 'package:flutter/scheduler.dart';`
+  // 再切回去即可。）
   Timer? _motionTimer;
   DateTime? _lastMotionAt;
+
+  void _stopMotionLoop() {
+    _motionTimer?.cancel();
+    _motionTimer = null;
+  }
 
   @override
   void initState() {
     super.initState();
     _resetPlayer();
+    widget.joystickIntent?.addListener(_onExternalJoystickIntent);
+    widget.joystickActive?.addListener(_onExternalJoystickActive);
+  }
+
+  void _onExternalJoystickIntent() {
+    if (widget.joystickIntent != null) {
+      _setJoystickIntent(widget.joystickIntent!.value);
+    }
+  }
+
+  void _onExternalJoystickActive() {
+    if (widget.joystickActive != null) {
+      _setJoystickActive(widget.joystickActive!.value);
+    }
   }
 
   @override
@@ -1589,25 +2255,50 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
 
   @override
   void dispose() {
-    _motionTimer?.cancel();
+    widget.joystickIntent?.removeListener(_onExternalJoystickIntent);
+    widget.joystickActive?.removeListener(_onExternalJoystickActive);
+    _stopMotionLoop();
     super.dispose();
   }
 
   JsonMap get _grid => _sceneMap(widget.assetPackage['grid']);
 
-  List<JsonMap> get _objects => _sceneList(widget.assetPackage['objects'])
-      .map(_sceneMap)
-      .where((item) => item.isNotEmpty)
-      .toList(growable: false);
+  // _canStand() (collision) runs this list twice per call, and is itself
+  // called dozens of times per motion tick (binary search x steps). Without
+  // caching, every call rebuilt the whole list via map/where/toList, which
+  // showed up as real per-frame cost on scenes with many objects. Cache by
+  // identity of the raw 'objects' payload so it's only rebuilt when the
+  // asset package actually changes.
+  List<JsonMap>? _objectsCache;
+  Object? _objectsCacheKey;
+  // identical(null, null) 在 Dart 里恒为 true，所以只用 identical 判等无法
+  // 区分"从未缓存过"和"缓存的就是 null"这两种情况。加一个独立的 bool 标记
+  // 是否已经真正算过一次，避免 rawObjects 恰好是 null 时缓存分支被跳过、
+  // _objectsCache 永远未赋值，最终 `_objectsCache!` 断言崩溃。
+  bool _hasCachedObjects = false;
+
+  List<JsonMap> get _objects {
+    final rawObjects = widget.assetPackage['objects'];
+    if (!_hasCachedObjects || !identical(rawObjects, _objectsCacheKey)) {
+      _hasCachedObjects = true;
+      _objectsCacheKey = rawObjects;
+      _objectsCache = _sceneList(rawObjects)
+          .map(_sceneMap)
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+    }
+    return _objectsCache!;
+  }
 
   int get _gridWidth => _sceneInt(_grid['width'], 32).clamp(1, 200).toInt();
   int get _gridHeight => _sceneInt(_grid['height'], 32).clamp(1, 200).toInt();
 
   void _resetPlayer() {
-    _motionTimer?.cancel();
-    _motionTimer = null;
+    _stopMotionLoop();
     _lastMotionAt = null;
     _velocityPx = Offset.zero;
+    _cameraWorldPos = null;
+    _smoothedVelocity = Offset.zero;
     _joystickIntent = Offset.zero;
     _joystickActive = false;
     _pressedKeys.clear();
@@ -1617,69 +2308,28 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final y = _sceneNum(spawn['y'], _gridHeight / 2).floor();
     _facing = _normalizeFacing(_sceneString(spawn['facing'], 'S'));
     _player = _nearestWalkable(Offset(x + .5, y + .5));
+    _cameraWorldPos = _sceneMetrics().project(_player.dx, _player.dy);
     _moveHint = '出生点就绪 · 左下摇杆 / WASD / 方向键移动';
     _walkPhase = 0.0;
   }
 
   Offset _nearestWalkable(Offset point) {
-    if (_canStand(point)) return point;
-    for (var radius = 1; radius <= math.max(_gridWidth, _gridHeight); radius++) {
-      for (var dy = -radius; dy <= radius; dy++) {
-        for (var dx = -radius; dx <= radius; dx++) {
-          if (dx.abs() != radius && dy.abs() != radius) continue;
-          final candidate = Offset(
-            (point.dx.floor() + dx + .5),
-            (point.dy.floor() + dy + .5),
-          );
-          if (_canStand(candidate)) return candidate;
-        }
-      }
-    }
-    return Offset(_gridWidth / 2, _gridHeight / 2);
+    return _nearestSceneWalkable(
+      point,
+      _gridWidth,
+      _gridHeight,
+      _objects,
+      _playerRadius,
+    );
   }
 
-  bool _canStand(Offset point) {
-    if (point.dx - _playerRadius < 0 ||
-        point.dy - _playerRadius < 0 ||
-        point.dx + _playerRadius > _gridWidth ||
-        point.dy + _playerRadius > _gridHeight) {
-      return false;
-    }
-
-    // Buildings are interaction zones only in strip mode; they never block movement.
-    // Explicit walkable overlays also do not block the player.
-    for (final object in _objects) {
-      if (_sceneString(object['category']).toLowerCase() == 'building') continue;
-      if (_sceneString(object['movement']).toLowerCase() != 'walkable') continue;
-      final x = _sceneNum(object['x']);
-      final y = _sceneNum(object['y']);
-      final width = math.max(1.0, _sceneNum(object['width'], 1));
-      final height = math.max(1.0, _sceneNum(object['height'], 1));
-      if (point.dx - _playerRadius >= x &&
-          point.dx + _playerRadius <= x + width &&
-          point.dy - _playerRadius >= y &&
-          point.dy + _playerRadius <= y + height) {
-        return true;
-      }
-    }
-
-    for (final object in _objects) {
-      if (_sceneString(object['category']).toLowerCase() == 'building') continue;
-      final movement = _sceneString(object['movement'], 'blocked').toLowerCase();
-      if (movement == 'walkable') continue;
-      if (movement != 'blocked' && movement != 'conditional') continue;
-      final x = _sceneNum(object['x']);
-      final y = _sceneNum(object['y']);
-      final width = math.max(1.0, _sceneNum(object['width'], 1));
-      final height = math.max(1.0, _sceneNum(object['height'], 1));
-      final closestX = point.dx.clamp(x, x + width).toDouble();
-      final closestY = point.dy.clamp(y, y + height).toDouble();
-      final dx = point.dx - closestX;
-      final dy = point.dy - closestY;
-      if (dx * dx + dy * dy < _playerRadius * _playerRadius) return false;
-    }
-    return true;
-  }
+  bool _canStand(Offset point) => _canStandInScene(
+        point,
+        _gridWidth,
+        _gridHeight,
+        _objects,
+        _playerRadius,
+      );
 
   Offset _axisAdvance(Offset start, double targetValue, bool xAxis) {
     final direct = xAxis
@@ -1773,15 +2423,16 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   void _stopMotionImmediately({bool repaint = true}) {
     final needsRepaint = _velocityPx != Offset.zero || _walkPhase != 0;
     _velocityPx = Offset.zero;
-    _motionTimer?.cancel();
-    _motionTimer = null;
-    _lastMotionAt = null;
     if (repaint && needsRepaint && mounted) {
       setState(() {
         _walkPhase = 0;
+        _dustParticles.clear();
         _moveHint = '左下摇杆移动 · WASD / 方向键移动 · 长按物件查看';
       });
     }
+    // Keep ticking briefly so velocity lookahead and camera follow can settle
+    // instead of freezing on the exact frame input is released.
+    _ensureMotionLoop();
   }
 
   void _setJoystickActive(bool active) {
@@ -1824,18 +2475,103 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
         _sceneMap(widget.assetPackage['floor']),
       );
 
-  void _motionTick() {
-    if (!mounted) {
-      _motionTimer?.cancel();
-      _motionTimer = null;
-      return;
+  bool _updateCamera(double dt, _IsoMetrics metrics) {
+    final playerWorld = metrics.project(_player.dx, _player.dy);
+    final current = _cameraWorldPos;
+    if (current == null) {
+      _cameraWorldPos = playerWorld;
+      _smoothedVelocity = Offset.zero;
+      return true;
     }
 
-    // Do not trust a stale joystick vector. Continuous movement is permitted only
-    // while a pointer is actively held on the joystick or a movement key is down.
-    if (_keyboardIntent() == Offset.zero && !_joystickActive) {
-      _joystickIntent = Offset.zero;
-      _stopMotionImmediately();
+    final velocityFactor = 1.0 - math.exp(-_cameraVelocitySmoothing * dt);
+    _smoothedVelocity = Offset(
+      _smoothedVelocity.dx +
+          (_velocityPx.dx - _smoothedVelocity.dx) * velocityFactor,
+      _smoothedVelocity.dy +
+          (_velocityPx.dy - _smoothedVelocity.dy) * velocityFactor,
+    );
+
+    // Only horizontal lookahead is used. Vertical prediction is deliberately
+    // omitted because it makes a 2.5D exploration camera feel much less stable.
+    final focus = Offset(
+      playerWorld.dx + _smoothedVelocity.dx * _lookaheadSec,
+      playerWorld.dy,
+    );
+    final diff = focus - current;
+    var targetX = current.dx;
+    var targetY = current.dy;
+    if (diff.dx.abs() > _deadzoneX) {
+      targetX += diff.dx - diff.dx.sign * _deadzoneX;
+    }
+    if (diff.dy.abs() > _deadzoneY) {
+      targetY += diff.dy - diff.dy.sign * _deadzoneY;
+    }
+
+    final followFactor = 1.0 - math.exp(-_cameraSpeed * dt);
+    final next = Offset(
+      current.dx + (targetX - current.dx) * followFactor,
+      current.dy + (targetY - current.dy) * followFactor,
+    );
+    _cameraWorldPos = next;
+    return (next - current).distanceSquared > .000001;
+  }
+
+  bool _cameraIsSettled(_IsoMetrics metrics) {
+    final camera = _cameraWorldPos;
+    if (camera == null) return true;
+    final playerWorld = metrics.project(_player.dx, _player.dy);
+    final focus = Offset(
+      playerWorld.dx + _smoothedVelocity.dx * _lookaheadSec,
+      playerWorld.dy,
+    );
+    final diff = focus - camera;
+    return _smoothedVelocity.distance < .05 &&
+        diff.dx.abs() <= _deadzoneX + .05 &&
+        diff.dy.abs() <= _deadzoneY + .05;
+  }
+
+  Offset _cameraOffsetFor(
+    Size viewport,
+    _IsoMetrics metrics,
+    double cameraScale,
+  ) {
+    final world = metrics.canvasSize;
+    final camCenter =
+        _cameraWorldPos ?? metrics.project(_player.dx, _player.dy);
+    final scaledWidth = world.width * cameraScale;
+    final scaledHeight = world.height * cameraScale;
+
+    double clampAxis(
+      double desired,
+      double scaledExtent,
+      double viewportExtent,
+    ) {
+      if (scaledExtent <= viewportExtent) {
+        return (viewportExtent - scaledExtent) / 2;
+      }
+      return desired
+          .clamp(viewportExtent - scaledExtent, 0.0)
+          .toDouble();
+    }
+
+    return Offset(
+      clampAxis(
+        viewport.width * .50 - camCenter.dx * cameraScale,
+        scaledWidth,
+        viewport.width,
+      ),
+      clampAxis(
+        viewport.height * .80 - camCenter.dy * cameraScale,
+        scaledHeight,
+        viewport.height,
+      ),
+    );
+  }
+
+  void _motionTick() {
+    if (!mounted) {
+      _stopMotionLoop();
       return;
     }
 
@@ -1843,15 +2579,28 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final last = _lastMotionAt ?? now;
     _lastMotionAt = now;
     final dt = math.min(.035, math.max(.001, now.difference(last).inMicroseconds / 1000000));
+    final metrics = _sceneMetrics();
 
     var intent = _combinedMoveIntent();
     final hasInput = intent.distance > .03;
     intent = _normalized(intent);
 
-    // Hard input movement only: no acceleration, no deceleration and no coasting.
-    // Releasing joystick/keyboard means zero movement immediately.
     if (!hasInput) {
-      _stopMotionImmediately();
+      _joystickIntent = Offset.zero;
+      final wasMoving = _velocityPx != Offset.zero || _walkPhase != 0;
+      _velocityPx = Offset.zero;
+      final cameraChanged = _updateCamera(dt, metrics);
+      _dustParticles.removeWhere((particle) => particle.isExpired(now));
+      if (wasMoving || cameraChanged) {
+        setState(() {
+          _walkPhase = 0;
+          _moveHint = '左下摇杆移动 · WASD / 方向键移动 · 长按物件查看';
+        });
+      }
+      if (_cameraIsSettled(metrics)) {
+        _stopMotionLoop();
+        _lastMotionAt = null;
+      }
       return;
     }
 
@@ -1863,8 +2612,6 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final totalDelta = Offset(vx * dt, vy * dt);
     final steps = math.max(1, (totalDelta.distance / 7).ceil());
     final step = Offset(totalDelta.dx / steps, totalDelta.dy / steps);
-    final metrics = _sceneMetrics();
-
     for (var i = 0; i < steps; i++) {
       final before = metrics.project(nextPlayer.dx, nextPlayer.dy);
       final logicalTarget = metrics.unproject(before + step);
@@ -1873,14 +2620,16 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
       final actual = after - before;
       travelledPx += actual.distance;
 
-      // Same behavior as the HTML: when one component is blocked, damp only that
-      // component and keep the other so the player naturally slides along furniture.
-      if (step.dx.abs() > .2 && actual.dx.abs() < step.dx.abs() * .28) vx *= .35;
-      if (step.dy.abs() > .2 && actual.dy.abs() < step.dy.abs() * .28) vy *= .35;
       nextPlayer = moved;
     }
 
     final movedDistance = (nextPlayer - _player).distance;
+    final projectedDelta = metrics.project(nextPlayer.dx, nextPlayer.dy) -
+        metrics.project(_player.dx, _player.dy);
+    final actualVelocity = Offset(
+      projectedDelta.dx / dt,
+      projectedDelta.dy / dt,
+    );
     var nextFacing = _facing;
     if (hasInput) {
       if (intent.dx.abs() > .08) {
@@ -1890,21 +2639,45 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
       }
     }
 
-    if (movedDistance > .0001 || _velocityPx.dx != vx || _velocityPx.dy != vy) {
+    final velocityChanged = (_velocityPx - actualVelocity).distanceSquared > .01;
+    if (movedDistance > .0001 || velocityChanged) {
       setState(() {
         _player = nextPlayer;
-        _velocityPx = Offset(vx, vy);
+        _velocityPx = actualVelocity;
+        _updateCamera(dt, metrics);
         _facing = nextFacing;
+        
         if (movedDistance > .001 && travelledPx > .05) {
-          // About 1.2-1.4 gentle vertical cycles/sec at normal top speed.
+          final oldPhase = _walkPhase;
           _walkPhase = (_walkPhase + travelledPx * .045) % (math.pi * 2);
+          
+          // 步态越过0点（踩地瞬间）生成粒子
+          if ((math.sin(oldPhase) < 0 && math.sin(_walkPhase) >= 0) ||
+              (math.sin(oldPhase) > 0 && math.sin(_walkPhase) <= 0)) {
+            final footPos = metrics.project(nextPlayer.dx, nextPlayer.dy);
+            for (var i = 0; i < 3; i++) {
+              final angle = _sceneRandom.nextDouble() * math.pi * 2;
+              final speed = 4.0 + _sceneRandom.nextDouble() * 8.0;
+              _dustParticles.add(
+                _StepDustParticle(
+                  position: footPos + Offset((_sceneRandom.nextDouble() - 0.5) * 10, (_sceneRandom.nextDouble() - 0.5) * 4),
+                  radius: 2.2 + _sceneRandom.nextDouble() * 2.0,
+                  maxAge: Duration(milliseconds: 320 + _sceneRandom.nextInt(160)),
+                  createdAt: now,
+                  velocity: Offset(math.cos(angle) * speed, math.sin(angle) * speed * 0.4 - 2.0),
+                ),
+              );
+            }
+          }
         }
+        
+        _dustParticles.removeWhere((p) => p.isExpired(now));
         _moveHint = '摇杆 / WASD 连续移动 · 松开立即停止';
       });
     } else {
-      _velocityPx = Offset(vx, vy);
+      _velocityPx = actualVelocity;
+      if (_updateCamera(dt, metrics)) setState(() {});
     }
-
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
@@ -1945,11 +2718,11 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
           .clamp(.5, 5.0)
           .toDouble();
 
-      final horizontalGap = _player.dx < x
-          ? x - _player.dx
-          : _player.dx > x + width
-              ? _player.dx - (x + width)
-              : 0.0;
+      // Trigger around the building's horizontal CENTER, not its whole
+      // facade width. Otherwise adjacent buildings share no gap and the
+      // hint feels like one continuous strip along the whole row.
+      final centerX = x + width / 2;
+      final horizontalGap = (_player.dx - centerX).abs();
       if (horizontalGap > radius) continue;
 
       final score = _player.dy + horizontalGap * 2.0;
@@ -1959,6 +2732,469 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
       }
     }
     return nearest;
+  }
+
+  String _objectId(JsonMap object) => _sceneString(
+        object['id'] ?? object['scene_object_id'] ?? object['object_id'],
+      );
+
+  double _distanceToObject(JsonMap object) {
+    final left = _sceneNum(object['x']);
+    final top = _sceneNum(object['y']);
+    final right = left + math.max(1.0, _sceneNum(object['width'], 1));
+    final bottom = top + math.max(1.0, _sceneNum(object['height'], 1));
+    final dx = _player.dx < left
+        ? left - _player.dx
+        : (_player.dx > right ? _player.dx - right : 0.0);
+    final dy = _player.dy < top
+        ? top - _player.dy
+        : (_player.dy > bottom ? _player.dy - bottom : 0.0);
+    return math.sqrt(dx * dx + dy * dy);
+  }
+
+  NovelSceneMapNode? _nearbyNavigationTarget() {
+    final targets = widget.navigationTargets
+        .where((target) => target.isUnlocked && target.sceneId.isNotEmpty)
+        .toList(growable: false);
+
+    NovelSceneMapNode? nearest;
+    var bestDistance = double.infinity;
+    for (final target in targets) {
+      final trigger = target.navigationTrigger;
+      if (target.triggerType == 'object') {
+        final object = _objects.where(
+          (item) => _objectId(item) == target.triggerObjectId,
+        ).firstOrNull;
+        if (object == null) continue;
+        final distance = _distanceToObject(object);
+        final radius = _sceneNum(
+          trigger['interaction_radius_tiles'],
+          2.2,
+        ).clamp(.5, 6.0).toDouble();
+        if (distance <= radius && distance < bestDistance) {
+          nearest = target;
+          bestDistance = distance;
+        }
+        continue;
+      }
+      if (target.triggerType == 'zone') {
+        final left = _sceneNum(trigger['x']);
+        final top = _sceneNum(trigger['y']);
+        final zone = Rect.fromLTWH(
+          left,
+          top,
+          math.max(.5, _sceneNum(trigger['width'], 1)),
+          math.max(.5, _sceneNum(trigger['height'], 1)),
+        );
+        if (zone.inflate(.35).contains(_player)) return target;
+      }
+    }
+    if (nearest != null) return nearest;
+
+    for (final side in const <String>['left', 'right', 'top', 'bottom']) {
+      final sideTargets = targets
+          .where((target) => target.triggerType == 'edge' && target.triggerSide == side)
+          .toList(growable: false);
+      if (sideTargets.isEmpty) continue;
+      final edgeDistance = switch (side) {
+        'left' => _player.dx,
+        'right' => _gridWidth - _player.dx,
+        'top' => _player.dy,
+        _ => _gridHeight - _player.dy,
+      };
+      if (edgeDistance > 1.0) continue;
+      final ratio = (side == 'left' || side == 'right')
+          ? (_player.dy / _gridHeight).clamp(0.0, 1.0)
+          : (_player.dx / _gridWidth).clamp(0.0, 1.0);
+      for (var index = 0; index < sideTargets.length; index++) {
+        final target = sideTargets[index];
+        final trigger = target.navigationTrigger;
+        final slot = _sceneInt(trigger['slot'], index)
+            .clamp(0, sideTargets.length - 1)
+            .toInt();
+        final minRatio = trigger.containsKey('min_ratio')
+            ? _sceneNum(trigger['min_ratio']).clamp(0.0, 1.0)
+            : slot / sideTargets.length;
+        final maxRatio = trigger.containsKey('max_ratio')
+            ? _sceneNum(trigger['max_ratio']).clamp(0.0, 1.0)
+            : (slot + 1) / sideTargets.length;
+        if (ratio >= minRatio && ratio <= maxRatio) return target;
+      }
+    }
+    return null;
+  }
+
+  JsonMap? _nearbySceneInteraction() {
+    JsonMap? nearest;
+    var bestDistance = double.infinity;
+    for (final node in widget.interactionNodes) {
+      if (widget.groundLoot.containsKey(_sceneString(node['id']))) continue;
+      final objectId = _sceneString(node['scene_object_id'], _sceneString(node['id']));
+      if (objectId.isEmpty) continue;
+      final object = _objects.where((item) => _objectId(item) == objectId).firstOrNull;
+      if (object == null) continue;
+      final distance = _distanceToObject(object);
+      final radius = _sceneNum(
+        object['interaction_radius_tiles'],
+        1.8,
+      ).clamp(.5, 5.0).toDouble();
+      if (distance <= radius && distance < bestDistance) {
+        nearest = node;
+        bestDistance = distance;
+      }
+    }
+    return nearest;
+  }
+
+  _SceneGroundLoot? _nearbyGroundLoot() {
+    _SceneGroundLoot? nearest;
+    var bestDistance = double.infinity;
+    final visibleIds = widget.interactionNodes
+        .map((node) => _sceneString(node['id'])).toSet();
+    for (final entry in widget.groundLoot.entries) {
+      if (!visibleIds.contains(entry.key)) continue;
+      final distance = (_player - entry.value.position).distance;
+      if (distance <= 1.15 && distance < bestDistance) {
+        nearest = entry.value;
+        bestDistance = distance;
+      }
+    }
+    return nearest;
+  }
+
+  Offset? _interactionAnchor(JsonMap node) {
+    final objectId = _sceneString(node['scene_object_id'], _sceneString(node['id']));
+    final object = _objects.where((item) => _objectId(item) == objectId).firstOrNull;
+    if (object == null) return null;
+    final left = _sceneNum(object['x']);
+    final top = _sceneNum(object['y']);
+    final right = left + math.max(1.0, _sceneNum(object['width'], 1));
+    final bottom = top + math.max(1.0, _sceneNum(object['height'], 1));
+    final center = Offset((left + right) / 2, (top + bottom) / 2);
+    if ((center - _player).distance <= 2.5) return center;
+    // 大物件靠近哪一段，就把问号放在哪一段，避免中心点跑出屏幕。
+    return Offset(
+      _player.dx.clamp(left, right).toDouble(),
+      _player.dy.clamp(top, bottom).toDouble(),
+    );
+  }
+
+  void _showSearchEffect(Offset position) {
+    final serial = ++_searchEffectSerial;
+    setState(() => _searchEffectPosition = position);
+    Future<void>.delayed(const Duration(milliseconds: 850), () {
+      if (mounted && serial == _searchEffectSerial) {
+        setState(() => _searchEffectPosition = null);
+      }
+    });
+  }
+
+  // 1. 匹配本地图片路径 (与 page_3 规则对齐)
+  String _surroundRewardAsset(String itemType) {
+    return switch (itemType.trim().toLowerCase()) {
+      'score' => 'assets/images/xing.webp',
+      'gift' => 'assets/images/gift.webp',
+      'lucky_card' => 'assets/images/lucky_card.webp',
+      'skill_book' => 'assets/images/skill_book.webp',
+      'cat_eye_stone' => 'assets/images/cat_eye_stone.webp',
+      'enhance_stone' => 'assets/images/enhance_stone.webp',
+      'blind_box' => 'assets/images/blind_box.webp',
+      _ => '',
+    };
+  }
+
+  // 2. 匹配回退的 Icon 图标
+  IconData _surroundRewardFallbackIcon(String itemType) {
+    return switch (itemType.trim().toLowerCase()) {
+      'score' => Icons.auto_awesome_rounded,
+      'gift' => Icons.local_florist_rounded,
+      'lucky_card' => Icons.eco_rounded,
+      'skill_book' => Icons.menu_book_rounded,
+      'cat_eye_stone' => Icons.visibility_rounded,
+      'enhance_stone' => Icons.diamond_outlined,
+      'blind_box' => Icons.redeem_rounded,
+      _ => Icons.auto_awesome_rounded,
+    };
+  }
+
+  // 3. 构建掉落物中心的 Widget (带容错)
+  Widget _buildLootIcon(JsonMap node) {
+    final reward = _sceneMap(node['reward']);
+    final rewardType = _sceneString(
+      reward['type'] ?? reward['item_type'] ?? node['type'],
+    ).trim().toLowerCase();
+    
+    final label = _sceneString(node['label'], '');
+    final assetPath = _sceneString(reward['image_asset']).trim();
+
+    Widget fallbackIcon() => Icon(
+          _surroundRewardFallbackIcon(rewardType),
+          color: const Color(0xFFFFE1A2),
+          size: 20,
+        );
+
+    // 优先 1：如果后端直接下发了明确的图片路径
+    if (assetPath.isNotEmpty) {
+      return Image.asset(
+        assetPath, 
+        width: 24, 
+        height: 24, 
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) => fallbackIcon(),
+      );
+    }
+
+    // 优先 2：根据系统道具 type 匹配
+    final mappedAsset = _surroundRewardAsset(rewardType);
+    if (mappedAsset.isNotEmpty) {
+      return Image.asset(
+        mappedAsset, 
+        width: 24, 
+        height: 24, 
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) => fallbackIcon(),
+      );
+    }
+
+    // 优先 3：根据名称关键字兜底（针对特有道具，例如“珍珠”）
+    if (label.contains('珍珠')) {
+      return Image.asset(
+        'assets/images/pearl.webp', // 假设你的珍珠图标存放在这
+        width: 24, 
+        height: 24, 
+        errorBuilder: (_, __, ___) => fallbackIcon(),
+      );
+    }
+
+    // 兜底：彻底回退到 Icon
+    return fallbackIcon();
+  }
+
+  Widget _buildSceneMarkers(_IsoMetrics metrics, JsonMap? nearbyInteraction) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewport = Size(constraints.maxWidth, constraints.maxHeight);
+        final world = metrics.canvasSize;
+        final scale = math.max(viewport.width / world.width,
+                viewport.height / world.height) * 1.34;
+        final camera = _cameraOffsetFor(viewport, metrics, scale);
+        Offset onScreen(Offset position) {
+          final projected = metrics.project(position.dx, position.dy);
+          return Offset(projected.dx * scale + camera.dx,
+              projected.dy * scale + camera.dy);
+        }
+
+        final visibleIds = widget.interactionNodes
+            .map((node) => _sceneString(node['id'])).toSet();
+        final anchor = nearbyInteraction == null
+            ? null : _interactionAnchor(nearbyInteraction);
+        final marker = anchor == null ? null : onScreen(anchor);
+        final searchEffect = _searchEffectPosition == null
+            ? null : onScreen(_searchEffectPosition!);
+
+        return Stack(
+          fit: StackFit.expand, // 👈 核心修复1：强制 Stack 铺满屏幕，防止点击被 0x0 边界拦截丢弃
+          clipBehavior: Clip.none,
+          children: <Widget>[
+            if (searchEffect != null)
+              Positioned(
+                left: searchEffect.dx - 17,
+                top: searchEffect.dy - 27,
+                child: IgnorePointer(
+                  child: TweenAnimationBuilder<double>(
+                    key: ValueKey<int>(_searchEffectSerial),
+                    tween: Tween<double>(begin: 0, end: 1),
+                    duration: const Duration(milliseconds: 750),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, progress, child) => Opacity(
+                      opacity: (1 - progress).clamp(0.0, 1.0).toDouble(),
+                      child: Transform.translate(
+                        offset: Offset(0, -58 * (1 - progress)),
+                        child: child,
+                      ),
+                    ),
+                    child: const Icon(Icons.auto_awesome_rounded,
+                        color: Color(0xFFFFDF99), size: 34),
+                  ),
+                ),
+              ),
+            for (final entry in widget.groundLoot.entries)
+              if (visibleIds.contains(entry.key))
+                Positioned(
+                  left: onScreen(entry.value.position).dx - 55,
+                  top: onScreen(entry.value.position).dy - 32,
+                  child: TweenAnimationBuilder<double>(
+                    key: ValueKey<String>('fall-${entry.key}'),
+                    tween: Tween<double>(begin: 0, end: 1),
+                    duration: const Duration(milliseconds: 650),
+                    curve: Curves.easeOutQuad,
+                    builder: (context, progress, child) {
+                      final bounce = math.sin(progress * math.pi);
+                      final offsetY = bounce * -45.0;
+                      final itemScale = progress < .25 ? progress * 4.0 : 1.0;
+                      final opacity = (progress * 5).clamp(0.0, 1.0);
+                      return Opacity(
+                        opacity: opacity.toDouble(),
+                        child: Transform.translate(
+                          offset: Offset(0, offsetY),
+                          child: Transform.scale(
+                            scale: itemScale,
+                            alignment: Alignment.bottomCenter,
+                            child: child,
+                          ),
+                        ),
+                      );
+                    },
+                    child: Semantics(
+                      button: true,
+                      label:
+                          '拾取 ${_sceneString(entry.value.node['label'], '物品')}',
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: widget.interactionEnabled
+                            ? () => widget.onPickUpLoot(entry.value.node)
+                            : null,
+                        child: SizedBox(
+                          width: 110,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Container(
+                                width: 38,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xD21B2530),
+                                  border: Border.all(
+                                    color: const Color(0xFFFFD78B),
+                                    width: 1.5,
+                                  ),
+                                  boxShadow: const <BoxShadow>[
+                                    BoxShadow(
+                                      color: Color(0xAAE9BD5F),
+                                      blurRadius: 18,
+                                      spreadRadius: 2,
+                                    ),
+                                    BoxShadow(
+                                      color: Color(0x55FFFFFF),
+                                      blurRadius: 4,
+                                      spreadRadius: 1,
+                                    ),
+                                  ],
+                                ),
+                                child: Center(
+                                  child: _buildLootIcon(entry.value.node),
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xBB000000),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: const Color(0x66E9BD5F),
+                                  ),
+                                ),
+                                child: Text(
+                                  _sceneString(
+                                    entry.value.node['label'],
+                                    '物品',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Color(0xFFFFE8B7),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            if (marker != null && nearbyInteraction != null)
+              Positioned(
+                left: marker.dx - 27, // 居中偏移调整（对应 54 宽度的一半）
+                top: marker.dy - 66,  // 稍微再抬高一点点，避开玩家模型
+                child: Semantics(
+                  button: true,
+                  label: '${boolValue(nearbyInteraction['collectible']) ? '发现' : '调查'} ${_sceneString(nearbyInteraction['label'], '附近物件')}',
+                  // 👈 核心修复2：移除不可靠的 Material+InkWell，换成底层极高权重的 GestureDetector
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: widget.interactionEnabled
+                        ? () {
+                            final sourcePosition = anchor ??
+                                _nearestWalkable(
+                                  _player + const Offset(1.0, 0),
+                                );
+                            if (!boolValue(nearbyInteraction['collectible'])) {
+                              _showSearchEffect(sourcePosition);
+                            }
+                            widget.onRevealInteraction(
+                              nearbyInteraction,
+                              sourcePosition,
+                            );
+                          }
+                        : null,
+                    child: Container(
+                      width: 54, // 👈 核心修复3：加一层透明外壳扩大隐藏的点击热区，大幅提升鼠标/手指点击的容错率
+                      height: 54,
+                      alignment: Alignment.center,
+                      // 👈 核心修复4：禁用态（正在追剧情/打字机动画中）给一个明确的
+                      // 视觉反馈——之前启用/禁用长得一模一样，玩家点了没反应会
+                      // 以为按钮坏了；现在禁用时变暗+变灰，一看就知道"现在还不能点"。
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 150),
+                        opacity: widget.interactionEnabled ? 1.0 : 0.35,
+                        child: Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: const Color(0xE6222830),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: widget.interactionEnabled
+                                  ? const Color(0xFFFFE0A2)
+                                  : const Color(0xFF8A8A8A),
+                              width: 1.3,
+                            ),
+                            boxShadow: widget.interactionEnabled
+                                ? const <BoxShadow>[
+                                    BoxShadow(color: Color(0x775C410F), blurRadius: 14),
+                                  ]
+                                : const <BoxShadow>[],
+                          ),
+                          child: Icon(
+                            boolValue(nearbyInteraction['collectible'])
+                                ? Icons.question_mark_rounded
+                                : Icons.search_rounded,
+                            color: widget.interactionEnabled
+                                ? const Color(0xFFFFE3AD)
+                                : const Color(0xFFBFBFBF),
+                            size: 24,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
   }
 
   void _handleLongPress(Offset localPosition, _IsoMetrics metrics) {
@@ -1981,6 +3217,9 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
             nearbyBuilding['display_name'],
             _sceneString(nearbyBuilding['name']),
           );
+    final nearbyTarget = _nearbyNavigationTarget();
+    final nearbyInteraction = _nearbySceneInteraction();
+    final nearbyLoot = _nearbyGroundLoot();
 
     return ColoredBox(
       color: const Color(0xFF111315),
@@ -2001,40 +3240,13 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                   );
                   final world = metrics.canvasSize;
 
-                  // Follow camera: only part of the 1536x864 world is visible.
-                  // Bottom spawn starts with the upper scene hidden; walking upward
-                  // physically moves the camera upward and reveals the scene top.
                   final coverScale = math.max(
                     viewport.width / world.width,
                     viewport.height / world.height,
                   );
                   final cameraScale = coverScale * 1.34;
-
-                  final playerOnWorld = metrics.project(_player.dx, _player.dy);
-                  final scaledWidth = world.width * cameraScale;
-                  final scaledHeight = world.height * cameraScale;
-                  final desiredX = viewport.width * .50 -
-                      playerOnWorld.dx * cameraScale;
-                  final desiredY = viewport.height * .94 -
-                      playerOnWorld.dy * cameraScale;
-
-                  double clampCameraAxis(
-                    double desired,
-                    double scaledExtent,
-                    double viewportExtent,
-                  ) {
-                    if (scaledExtent <= viewportExtent) {
-                      return (viewportExtent - scaledExtent) / 2;
-                    }
-                    return desired
-                        .clamp(viewportExtent - scaledExtent, 0.0)
-                        .toDouble();
-                  }
-
-                  final cameraOffset = Offset(
-                    clampCameraAxis(desiredX, scaledWidth, viewport.width),
-                    clampCameraAxis(desiredY, scaledHeight, viewport.height),
-                  );
+                  final cameraOffset =
+                      _cameraOffsetFor(viewport, metrics, cameraScale);
 
                   return ClipRect(
                     child: Transform.translate(
@@ -2068,6 +3280,8 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                                 metrics: metrics,
                                 showFootprints: widget.showFootprints,
                                 walkPhase: _walkPhase,
+                                dustParticles: _dustParticles,
+                                nearbyBuilding: nearbyBuilding,
                               ),
                             ),
                           ),
@@ -2079,43 +3293,80 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
               ),
             ),
           ),
-          if (nearbyBuildingName.isNotEmpty)
+
+          Positioned.fill(child: _buildSceneMarkers(metrics, nearbyInteraction)),
+
+          if (nearbyTarget != null || nearbyLoot != null)
             Positioned(
-              left: 0,
-              right: 0,
-              bottom: 34 + MediaQuery.paddingOf(context).bottom,
-              child: IgnorePointer(
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: const Color(0xB814171A),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0x55FFFFFF)),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                      child: Text(
-                        nearbyBuildingName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
+              right: 18,
+              bottom: MediaQuery.paddingOf(context).bottom + 82,
+              child: SafeArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (nearbyLoot != null)
+                      OutlinedButton.icon(
+                        onPressed: widget.interactionEnabled
+                            ? () => widget.onPickUpLoot(nearbyLoot.node)
+                            : null,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFFFE7B4),
+                          backgroundColor: const Color(0xD6222830),
+                          side: const BorderSide(color: Color(0xAAE6C781)),
+                          shape: const StadiumBorder(),
+                        ),
+                        icon: const Icon(Icons.pan_tool_alt_outlined, size: 17),
+                        label: Text(
+                          '拾取 ${_sceneString(nearbyLoot.node['label'], '物品')}',
                         ),
                       ),
-                    ),
+                    if (nearbyTarget != null) ...<Widget>[
+                      if (nearbyLoot != null) const SizedBox(height: 8),
+                      FilledButton.tonalIcon(
+                        onPressed: widget.navigationEnabled
+                            ? () => widget.onNavigationTarget(nearbyTarget)
+                            : null,
+                        icon: const Icon(Icons.directions_walk_rounded),
+                        label: Text(
+                          _sceneString(
+                            nearbyTarget.navigationTrigger['prompt'],
+                            '前往${nearbyTarget.name}',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          
+         if (widget.joystickIntent == null)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+              // 【人体工学优化】：向右、向上推移，避开死角，让大拇指自然伸展
+              left: 56,
+              bottom: (widget.isStoryActive && widget.canExitStory)
+                  ? MediaQuery.paddingOf(context).bottom + 112 
+                  : 48 + MediaQuery.paddingOf(context).bottom,
+              child: AnimatedOpacity(
+                opacity: !widget.isStoryActive ? 1.0 : (widget.canExitStory ? 1.0 : 0.0),
+                duration: const Duration(milliseconds: 250),
+                child: IgnorePointer(
+                  ignoring: widget.isStoryActive && !widget.canExitStory,
+                  child: NovelExplorationJoystick(
+                    onChanged: _setJoystickIntent,
+                    onActiveChanged: (active) {
+                      if (active && widget.isStoryActive && widget.canExitStory) {
+                        widget.onExitStoryTriggered();
+                      }
+                      _setJoystickActive(active);
+                    },
                   ),
                 ),
               ),
             ),
-          Positioned(
-            left: 18,
-            bottom: 18 + MediaQuery.paddingOf(context).bottom,
-            child: _ExplorationJoystick(
-              onChanged: _setJoystickIntent,
-              onActiveChanged: _setJoystickActive,
-            ),
-          ),
         ],
       ),
     );
@@ -2123,8 +3374,9 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
 
 }
 
-class _ExplorationJoystick extends StatefulWidget {
-  const _ExplorationJoystick({
+class NovelExplorationJoystick extends StatefulWidget {
+  const NovelExplorationJoystick({
+    super.key,
     required this.onChanged,
     required this.onActiveChanged,
   });
@@ -2133,12 +3385,14 @@ class _ExplorationJoystick extends StatefulWidget {
   final ValueChanged<bool> onActiveChanged;
 
   @override
-  State<_ExplorationJoystick> createState() => _ExplorationJoystickState();
+  State<NovelExplorationJoystick> createState() => _NovelExplorationJoystickState();
 }
 
-class _ExplorationJoystickState extends State<_ExplorationJoystick> {
-  static const double _size = 116;
-  static const double _travelRadius = 38;
+class _NovelExplorationJoystickState extends State<NovelExplorationJoystick> {
+  // 固定的物理尺寸，彻底杜绝 no size 渲染崩溃
+  static const double _size = 124; 
+  // 增加物理行程，走位更细腻
+  static const double _travelRadius = 45; 
   Offset _value = Offset.zero;
   int? _activePointer;
 
@@ -2173,8 +3427,6 @@ class _ExplorationJoystickState extends State<_ExplorationJoystick> {
     } else {
       _value = Offset.zero;
     }
-    // Always send both signals. Never skip a release just because the local knob
-    // already looks centered; the parent may still have a stale non-zero vector.
     widget.onChanged(Offset.zero);
     widget.onActiveChanged(false);
   }
@@ -2192,17 +3444,18 @@ class _ExplorationJoystickState extends State<_ExplorationJoystick> {
         onPanUpdate: (details) => _update(details.localPosition),
         onPanEnd: (_) => _release(),
         onPanCancel: _release,
+        // 明确给出正方形尺寸，这是保证不崩溃的关键
         child: CustomPaint(
           size: const Size.square(_size),
-          painter: _ExplorationJoystickPainter(_value),
+          painter: _NovelExplorationJoystickPainter(_value),
         ),
       ),
     );
   }
 }
 
-class _ExplorationJoystickPainter extends CustomPainter {
-  const _ExplorationJoystickPainter(this.value);
+class _NovelExplorationJoystickPainter extends CustomPainter {
+  const _NovelExplorationJoystickPainter(this.value);
 
   final Offset value;
 
@@ -2210,31 +3463,45 @@ class _ExplorationJoystickPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final baseRadius = size.width * .43;
-    const travel = 38.0;
+    const travel = 45.0; // 与上方的 _travelRadius 保持一致
     final knobCenter = center + Offset(value.dx * travel, value.dy * travel);
 
-    canvas.drawCircle(center, baseRadius, Paint()..color = const Color(0x661A1D20));
+    // 1. 极简透明底座
+    canvas.drawCircle(
+      center,
+      baseRadius,
+      Paint()..color = Colors.white.withOpacity(0.04),
+    );
     canvas.drawCircle(
       center,
       baseRadius,
       Paint()
-        ..color = const Color(0x88FFFFFF)
+        ..color = Colors.white.withOpacity(0.12)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4,
+        ..strokeWidth = 1.0,
     );
-    canvas.drawCircle(knobCenter, 23, Paint()..color = const Color(0xCCF2F2F2));
+
+    final isActive = value != Offset.zero;
+    
+    // 2. 摇杆帽子阴影
     canvas.drawCircle(
       knobCenter,
-      23,
+      22,
       Paint()
-        ..color = const Color(0xAA111315)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
+        ..color = Colors.black.withOpacity(isActive ? 0.20 : 0.08)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+
+    // 3. 摇杆帽子本体
+    canvas.drawCircle(
+      knobCenter,
+      22,
+      Paint()..color = Colors.white.withOpacity(isActive ? 0.95 : 0.75),
     );
   }
 
   @override
-  bool shouldRepaint(covariant _ExplorationJoystickPainter oldDelegate) =>
+  bool shouldRepaint(covariant _NovelExplorationJoystickPainter oldDelegate) =>
       oldDelegate.value != value;
 }
 
@@ -2374,6 +3641,8 @@ class _SceneAssetPainter extends CustomPainter {
     required this.metrics,
     required this.showFootprints,
     required this.walkPhase,
+    required this.dustParticles,
+    this.nearbyBuilding,
   });
 
   final int gridWidth;
@@ -2391,36 +3660,152 @@ class _SceneAssetPainter extends CustomPainter {
   final _IsoMetrics metrics;
   final bool showFootprints;
   final double walkPhase;
+  final List<_StepDustParticle> dustParticles;
+  final JsonMap? nearbyBuilding;
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF111315));
     final floorMode = _sceneString(floorSpec['mode'], 'material_texture').toLowerCase();
+    
     if (floorMode == 'side_scroll_backdrop') {
       _drawSideScrollBackdrop(canvas);
     } else if (floorMode == 'room_surface_atlas') {
       _drawRoomSurfaceAtlas(canvas);
     } else if (floorMode == 'room_shell') {
-      // Legacy compatibility for the first room-shell experiment.
       _drawRoomShell(canvas);
     } else {
-      // Backward compatibility for older asset packages that still contain a
-      // flat top-down material texture.
       _drawGround(canvas);
     }
+    
     if (showFootprints) _drawFootprints(canvas);
+    
     _drawDepthSortedEntities(canvas);
+    _drawDustParticles(canvas); // 绘制步尘
+    
+    final highlighted = nearbyBuilding;
+    if (highlighted != null) _drawBuildingHighlight(canvas, highlighted);
+  }
+
+  /// Soft glowing white outline around the approximate facade box of the
+  /// building the player is currently near. This is a code-drawn overlay on
+  /// top of the baked scene image, NOT a real pixel-accurate silhouette --
+  /// the backdrop is one flat generated PNG with no per-building alpha mask,
+  /// so an exact-contour outline is not available without a separate
+  /// segmentation pass. A rounded rect approximation reads fine at this
+  /// interaction distance.
+  void _drawBuildingHighlight(Canvas canvas, JsonMap object) {
+    final x = _sceneNum(object['x']);
+    final width = math.max(1.0, _sceneNum(object['width'], 1));
+    final stage = _sceneMap(floorSpec['stage']);
+    
+    final buildingBaseline = metrics.canvasSize.height *
+        _sceneNum(stage['building_baseline_ratio'], .665).clamp(.50, .82).toDouble();
+
+    final left = metrics.project(x, 0).dx;
+    final right = metrics.project(x + width, 0).dx;
+    if (right <= left) return;
+
+    final centerX = (left + right) / 2;
+    final name = _sceneString(object['display_name'], _sceneString(object['name'], '未知区域'));
+    if (name.isEmpty) return;
+
+    // ==========================================
+    // 底板变透明后，图文必须换回纯白，并自带微弱阴影防干扰
+    // ==========================================
+    const textColor = Color(0xFFF2F2F2);
+    const textShadows = [
+      Shadow(color: Color(0x99000000), blurRadius: 3, offset: Offset(0, 1)),
+    ];
+
+    final iconPainter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(Icons.search.codePoint),
+        style: const TextStyle(
+          fontFamily: 'MaterialIcons',
+          color: textColor, 
+          fontSize: 16,
+          shadows: textShadows, // 加上轻微阴影
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: name,
+        style: const TextStyle(
+          color: textColor,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          shadows: textShadows, // 加上轻微阴影
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    const gap = 4.0;
+    final contentWidth = iconPainter.width + gap + textPainter.width;
+    final contentHeight = math.max(iconPainter.height, textPainter.height);
+
+    final labelCenter = Offset(centerX, buildingBaseline - 45);
+
+    // ==========================================
+    // 绘制：极透白底 + 胶囊圆角 + 细白边
+    // ==========================================
+    final boxHeight = contentHeight + 14.0;
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: labelCenter,
+        width: contentWidth + 24, 
+        height: boxHeight,
+      ),
+      Radius.circular(boxHeight / 2), // 保持胶囊圆角
+    );
+
+    // 1. 内部高透底色 (15% 不透明度的纯白，也就是 0x26，足够剔透)
+    canvas.drawRRect(
+      rrect,
+      Paint()..color = const Color(0x26FFFFFF), 
+    );
+
+    // 2. 白色描边 (50% 不透明度 0x80，1.0 像素细线，模拟玻璃边缘的高光反光)
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = const Color(0x80FFFFFF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0, 
+    );
+
+    // ==========================================
+    // 居中绘制图文
+    // ==========================================
+    final startX = labelCenter.dx - contentWidth / 2;
+    
+    iconPainter.paint(
+      canvas,
+      Offset(startX, labelCenter.dy - iconPainter.height / 2),
+    );
+
+    textPainter.paint(
+      canvas,
+      Offset(startX + iconPainter.width + gap, labelCenter.dy - textPainter.height / 2),
+    );
   }
 
   Path _groundPath() {
+    final w = gridWidth.toDouble();
+    final h = gridHeight.toDouble();
+    final topLeft = metrics.project(0, 0);
+    final topRight = metrics.project(w, 0);
+    final bottomRight = metrics.project(w, h);
+    final bottomLeft = metrics.project(0, h);
     return Path()
-      ..moveTo(metrics.project(0, 0).dx, metrics.project(0, 0).dy)
-      ..lineTo(metrics.project(gridWidth.toDouble(), 0).dx,
-          metrics.project(gridWidth.toDouble(), 0).dy)
-      ..lineTo(metrics.project(gridWidth.toDouble(), gridHeight.toDouble()).dx,
-          metrics.project(gridWidth.toDouble(), gridHeight.toDouble()).dy)
-      ..lineTo(metrics.project(0, gridHeight.toDouble()).dx,
-          metrics.project(0, gridHeight.toDouble()).dy)
+      ..moveTo(topLeft.dx, topLeft.dy)
+      ..lineTo(topRight.dx, topRight.dy)
+      ..lineTo(bottomRight.dx, bottomRight.dy)
+      ..lineTo(bottomLeft.dx, bottomLeft.dy)
       ..close();
   }
 
@@ -3005,7 +4390,7 @@ class _SceneAssetPainter extends CustomPainter {
       final xEnd = metrics.project(gridWidth.toDouble(), 0);
       final yEnd = metrics.project(0, gridHeight.toDouble());
       final a = (xEnd.dx - top.dx) / sourceWidth;
-      final b = (xEnd.dy - top.dy) / sourceWidth;
+      final b = (xEnd.dy - top.dx) / sourceWidth;
       final c = (yEnd.dx - top.dx) / sourceHeight;
       final d = (yEnd.dy - top.dy) / sourceHeight;
       final matrix = Float64List.fromList(<double>[
@@ -3042,13 +4427,15 @@ class _SceneAssetPainter extends CustomPainter {
       final width = math.max(1.0, _sceneNum(object['width'], 1));
       final height = math.max(1.0, _sceneNum(object['height'], 1));
       final movement = _sceneString(object['movement'], 'blocked');
+      final topLeft = metrics.project(x, y);
+      final topRight = metrics.project(x + width, y);
+      final bottomRight = metrics.project(x + width, y + height);
+      final bottomLeft = metrics.project(x, y + height);
       final path = Path()
-        ..moveTo(metrics.project(x, y).dx, metrics.project(x, y).dy)
-        ..lineTo(metrics.project(x + width, y).dx, metrics.project(x + width, y).dy)
-        ..lineTo(metrics.project(x + width, y + height).dx,
-            metrics.project(x + width, y + height).dy)
-        ..lineTo(metrics.project(x, y + height).dx,
-            metrics.project(x, y + height).dy)
+        ..moveTo(topLeft.dx, topLeft.dy)
+        ..lineTo(topRight.dx, topRight.dy)
+        ..lineTo(bottomRight.dx, bottomRight.dy)
+        ..lineTo(bottomLeft.dx, bottomLeft.dy)
         ..close();
       final color = movement == 'walkable'
           ? const Color(0x4439C779)
@@ -3218,13 +4605,44 @@ class _SceneAssetPainter extends CustomPainter {
     );
   }
 
+  void _drawDustParticles(Canvas canvas) {
+    if (dustParticles.isEmpty) return;
+    final now = DateTime.now();
+
+    for (final dust in dustParticles) {
+      final t = dust.progress(now);
+      if (t >= 1.0) continue;
+
+      final ageSec = now.difference(dust.createdAt).inMicroseconds / 1000000.0;
+      final currentPos = dust.position + dust.velocity * ageSec;
+      
+      final currentRadius = dust.radius * (1.0 + t * 0.7);
+      final alpha = ((1.0 - t) * 0.45).clamp(0.0, 1.0);
+
+      final paint = Paint()
+        ..color = Color.fromRGBO(230, 225, 215, alpha)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6);
+
+      canvas.drawCircle(currentPos, currentRadius, paint);
+    }
+  }
+
   void _drawPlayer(Canvas canvas) {
     final p = metrics.project(player.dx, player.dy, .03);
-    // Smooth one-cycle bob instead of the old frame-by-frame odd/even jitter.
-    final bob = -(1 - math.cos(walkPhase)) * .75;
+    
+    // 仅保留极其克制的垂直节奏，绝不进行旋转或拉伸形变
+    final cycle = math.sin(walkPhase);
+    final isMoving = walkPhase > 0.001;
+    final bob = isMoving ? -cycle.abs() * 2.2 : 0.0;
 
-    final playerShadowWidth = (metrics.tileWidth * .92).clamp(22.0, 46.0).toDouble();
-    final playerShadowHeight = (metrics.tileHeight * .42).clamp(7.0, 16.0).toDouble();
+    // 动态脚底阴影：步伐跃起时阴影轻微收缩淡化，触地时阴影扩散加重
+    final lift = (-bob / 2.2).clamp(0.0, 1.0);
+    final shadowScale = 1.0 - lift * 0.18; 
+    final shadowAlpha = (0.42 - lift * 0.12).clamp(0.1, 0.5); 
+
+    final playerShadowWidth = (metrics.tileWidth * .92 * shadowScale).clamp(24.0, 48.0).toDouble();
+    final playerShadowHeight = (metrics.tileHeight * .42 * shadowScale).clamp(8.0, 16.0).toDouble();
+    
     canvas.drawOval(
       Rect.fromCenter(
         center: Offset(p.dx, p.dy + metrics.tileHeight * .07),
@@ -3232,23 +4650,24 @@ class _SceneAssetPainter extends CustomPainter {
         height: playerShadowHeight,
       ),
       Paint()
-        ..color = const Color(0x52000000)
+        ..color = Color.fromRGBO(0, 0, 0, shadowAlpha)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.2),
     );
 
     if (playerImage != null) {
       final sourceWidth = (playerImage.width as int).toDouble();
       final sourceHeight = (playerImage.height as int).toDouble();
-      // Character portrait is intentionally 20% smaller than the previous build.
       final playerDisplayScale = metrics.sideScroll ? 1.40 : 1.20;
       final drawWidth = (metrics.groundWidth * .052 * playerDisplayScale)
           .clamp(58.0, metrics.sideScroll ? 126.0 : 106.0)
           .toDouble();
       final drawHeight = drawWidth * sourceHeight / sourceWidth;
       final faceSign = facing == 'W' ? -1.0 : 1.0;
+
       canvas.save();
-      canvas.translate(p.dx, p.dy + bob);
-      canvas.scale(faceSign, 1);
+      canvas.translate(p.dx, p.dy + bob); // 带有微弱起伏的平移
+      canvas.scale(faceSign, 1.0);        // 仅左右翻转
+
       canvas.drawImageRect(
         playerImage,
         Rect.fromLTWH(0, 0, sourceWidth, sourceHeight),
@@ -3259,6 +4678,7 @@ class _SceneAssetPainter extends CustomPainter {
       return;
     }
 
+    // 无图占位符也同步微弱起落
     canvas.save();
     canvas.translate(p.dx, p.dy + bob);
     canvas.drawCircle(
@@ -3274,7 +4694,111 @@ class _SceneAssetPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _SceneAssetPainter oldDelegate) => true;
+  bool shouldRepaint(covariant _SceneAssetPainter oldDelegate) {
+    // dustParticles is the same mutable list instance across frames (the
+    // state field is mutated in place, never reassigned), so it can't be
+    // compared by value here. While it's non-empty the particles are still
+    // animating against wall-clock time in _drawDustParticles, so keep
+    // repainting; once it's empty there is nothing left to animate.
+    if (dustParticles.isNotEmpty || oldDelegate.dustParticles.isNotEmpty) {
+      return true;
+    }
+    return oldDelegate.player != player ||
+        oldDelegate.facing != facing ||
+        oldDelegate.walkPhase != walkPhase ||
+        oldDelegate.showFootprints != showFootprints ||
+        oldDelegate.nearbyBuilding != nearbyBuilding ||
+        !identical(oldDelegate.objects, objects) ||
+        !identical(oldDelegate.floorImage, floorImage) ||
+        !identical(oldDelegate.atlasImage, atlasImage) ||
+        !identical(oldDelegate.stripImage, stripImage) ||
+        !identical(oldDelegate.playerImage, playerImage) ||
+        !identical(oldDelegate.spriteImages, spriteImages);
+  }
+}
+
+bool _canStandInScene(
+  Offset point,
+  int gridWidth,
+  int gridHeight,
+  List<JsonMap> objects,
+  double radius,
+) {
+  if (point.dx - radius < 0 ||
+      point.dy - radius < 0 ||
+      point.dx + radius > gridWidth ||
+      point.dy + radius > gridHeight) {
+    return false;
+  }
+
+  // Buildings are interaction zones only in strip mode; they never block
+  // movement. Explicit walkable overlays also do not block the player/loot.
+  for (final object in objects) {
+    if (_sceneString(object['category']).toLowerCase() == 'building') continue;
+    if (_sceneString(object['movement']).toLowerCase() != 'walkable') continue;
+    final x = _sceneNum(object['x']);
+    final y = _sceneNum(object['y']);
+    final width = math.max(1.0, _sceneNum(object['width'], 1));
+    final height = math.max(1.0, _sceneNum(object['height'], 1));
+    if (point.dx - radius >= x &&
+        point.dx + radius <= x + width &&
+        point.dy - radius >= y &&
+        point.dy + radius <= y + height) {
+      return true;
+    }
+  }
+
+  for (final object in objects) {
+    if (_sceneString(object['category']).toLowerCase() == 'building') continue;
+    final movement = _sceneString(object['movement'], 'blocked').toLowerCase();
+    if (movement == 'walkable') continue;
+    if (movement != 'blocked' && movement != 'conditional') continue;
+    final x = _sceneNum(object['x']);
+    final y = _sceneNum(object['y']);
+    final width = math.max(1.0, _sceneNum(object['width'], 1));
+    final height = math.max(1.0, _sceneNum(object['height'], 1));
+    final closestX = point.dx.clamp(x, x + width).toDouble();
+    final closestY = point.dy.clamp(y, y + height).toDouble();
+    final dx = point.dx - closestX;
+    final dy = point.dy - closestY;
+    if (dx * dx + dy * dy < radius * radius) return false;
+  }
+  return true;
+}
+
+Offset _nearestSceneWalkable(
+  Offset point,
+  int gridWidth,
+  int gridHeight,
+  List<JsonMap> objects,
+  double radius,
+) {
+  if (_canStandInScene(point, gridWidth, gridHeight, objects, radius)) {
+    return point;
+  }
+  for (var distance = 1;
+      distance <= math.max(gridWidth, gridHeight);
+      distance++) {
+    for (var dy = -distance; dy <= distance; dy++) {
+      for (var dx = -distance; dx <= distance; dx++) {
+        if (dx.abs() != distance && dy.abs() != distance) continue;
+        final candidate = Offset(
+          point.dx.floor() + dx + .5,
+          point.dy.floor() + dy + .5,
+        );
+        if (_canStandInScene(
+          candidate,
+          gridWidth,
+          gridHeight,
+          objects,
+          radius,
+        )) {
+          return candidate;
+        }
+      }
+    }
+  }
+  return Offset(gridWidth / 2, gridHeight / 2);
 }
 
 JsonMap? _hitSceneObject(List<JsonMap> objects, Offset logical) {
@@ -3336,4 +4860,29 @@ int _sceneInt(dynamic value, [int fallback = 0]) {
 String _sceneString(dynamic value, [String fallback = '']) {
   final text = value?.toString().trim() ?? '';
   return text.isEmpty ? fallback : text;
+}
+
+
+class _StepDustParticle {
+  _StepDustParticle({
+    required this.position,
+    required this.radius,
+    required this.maxAge,
+    required this.createdAt,
+    required this.velocity,
+  });
+
+  final Offset position;
+  final double radius;
+  final Duration maxAge;
+  final DateTime createdAt;
+  final Offset velocity;
+
+  double progress(DateTime now) {
+    final elapsed = now.difference(createdAt).inMicroseconds;
+    final total = maxAge.inMicroseconds;
+    return (elapsed / total).clamp(0.0, 1.0);
+  }
+
+  bool isExpired(DateTime now) => progress(now) >= 1.0;
 }

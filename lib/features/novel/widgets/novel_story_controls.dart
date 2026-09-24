@@ -371,6 +371,11 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
       _commitTimer?.cancel();
       _selectedIndex = null;
       _selectionLocked = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.jumpTo(0);
+        }
+      });
     }
   }
 
@@ -449,11 +454,28 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final choiceWidth = _choiceWidth(
+        final preferredChoiceWidth = _choiceWidth(
           availableWidth: constraints.maxWidth,
           count: choices.length,
           compact: compact,
         );
+        // 三个以内优先排成一组居中；宽度不够时保留横向滑动。
+        final fitChoiceWidth = choices.isEmpty
+            ? 0.0
+            : (constraints.maxWidth - rightPadding * 2 -
+                    math.max(0, choices.length - 1) * gap) /
+                choices.length;
+        final choiceWidth = choices.length <= 3 &&
+                fitChoiceWidth >= (compact ? 88.0 : 132.0)
+            ? math.min(preferredChoiceWidth, fitChoiceWidth)
+            : preferredChoiceWidth;
+        final choiceContentWidth = choices.length * choiceWidth +
+            math.max(0, choices.length - 1) * gap;
+        final overflows = choiceContentWidth + rightPadding * 2 >
+            constraints.maxWidth;
+        final sidePadding = overflows
+            ? math.max(rightPadding, (constraints.maxWidth - choiceWidth) / 2)
+            : rightPadding;
 
         final scrollView = SingleChildScrollView(
           controller: _scrollController,
@@ -462,29 +484,35 @@ class _InlineNovelChoicesState extends State<_InlineNovelChoices> {
               ? const NeverScrollableScrollPhysics()
               : const BouncingScrollPhysics(),
           clipBehavior: Clip.none,
-          // 左侧继续与输入框共用同一条视觉基线。
-          padding: EdgeInsets.only(right: rightPadding),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              for (final entry in choices.asMap().entries) ...<Widget>[
-                if (entry.key > 0) SizedBox(width: gap),
-                SizedBox(
-                  width: choiceWidth,
-                  height: choiceHeight,
-                  child: _ImmersiveNovelChoiceItem(
-                    choice: entry.value,
-                    compact: compact,
-                    shortWide: shortWide,
-                    selected: _selectedIndex == entry.key,
-                    dimmed:
-                        _selectedIndex != null && _selectedIndex != entry.key,
-                    enabled: !_selectionLocked,
-                    onTap: () => _selectChoice(entry.key, entry.value),
+          // 溢出时把首个可选项放在中间，后续选项仍能横向滑动。
+          padding: EdgeInsets.symmetric(horizontal: sidePadding),
+          child: SizedBox(
+            width: math.max(
+              choiceContentWidth,
+              constraints.maxWidth - sidePadding * 2,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                for (final entry in choices.asMap().entries) ...<Widget>[
+                  if (entry.key > 0) SizedBox(width: gap),
+                  SizedBox(
+                    width: choiceWidth,
+                    height: choiceHeight,
+                    child: _ImmersiveNovelChoiceItem(
+                      choice: entry.value,
+                      compact: compact,
+                      shortWide: shortWide,
+                      selected: _selectedIndex == entry.key,
+                      dimmed:
+                          _selectedIndex != null && _selectedIndex != entry.key,
+                      enabled: !_selectionLocked,
+                      onTap: () => _selectChoice(entry.key, entry.value),
+                    ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         );
 
@@ -706,6 +734,7 @@ class _NovelDialogFooter extends StatelessWidget {
     this.targetActorPlaceholder = '',
     this.onClearTargetActor,
     this.onInputLayoutHeightChanged,
+    this.isExploring = false,
   });
 
   final NovelGameController controller;
@@ -726,6 +755,7 @@ class _NovelDialogFooter extends StatelessWidget {
   final String targetActorPlaceholder;
   final VoidCallback? onClearTargetActor;
   final ValueChanged<double>? onInputLayoutHeightChanged;
+  final bool isExploring;
 
   @override
   Widget build(BuildContext context) {
@@ -765,24 +795,36 @@ class _NovelDialogFooter extends StatelessWidget {
         ? (shortViewport ? 52.0 : (compact ? 56.0 : 64.0))
         : 0.0;
 
+    // 之前这里给探索模式单独在右侧留了 45% 空间，理由是"避开右侧摇杆"——
+    // 但摇杆实际定位在 novel_exploration_page.dart 里是 left: 24，根本在左边，
+    // 右侧从来没有需要避让的东西。探索模式和普通模式用同一份留白逻辑即可：
+    // 只避开常驻的右侧导航图标列（navOffsetRight），输入框照常整体居中。
+    // maxWidth 封顶后，居中位置离左下角的摇杆仍有足够间距，不会遮挡。
+    final composerRightReserve = navOffsetRight;
+
+    final composerMaxWidth = wideDialogueLayout
+        ? 920.0
+        : (viewport.shortWide
+            ? math.min(720.0, media.size.width)
+            : media.size.width);
+    final explorationWidth = math.min(
+      wideDialogueLayout ? 280.0 : 224.0,
+      composerMaxWidth,
+    );
+
     return AnimatedPadding(
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
-      // 底部永远贴底，通过 right 让出右侧导航栏的空间
       padding: EdgeInsets.only(
         bottom: safeBottom + (shortViewport ? 4.0 : 8.0),
-        right: navOffsetRight, 
+        right: composerRightReserve,
       ),
       child: Align(
         alignment: Alignment.bottomCenter,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: wideDialogueLayout
-                ? 920.0
-                : (viewport.shortWide
-                    ? math.min(720.0, media.size.width)
-                    : media.size.width),
-          ),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+          width: isExploring ? explorationWidth : composerMaxWidth,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
@@ -796,6 +838,7 @@ class _NovelDialogFooter extends StatelessWidget {
                   child: NovelInputBar(
                     controller: textController,
                     focusNode: focusNode,
+                    isExploring: isExploring,
                     gameController: controller,
                     socketService: controller.socket,
                     enabled: inputEnabled,

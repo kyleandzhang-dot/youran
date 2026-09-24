@@ -13,6 +13,7 @@ abstract class NovelBackend {
   /// 创建自由探索场景资产任务。后端返回 task_id，并同时返回当前主角已有立绘元数据。
   Future<JsonMap> createSceneAssetTask({
     required String name,
+    String sceneId = '',
     String? sessionId,
     String description = '',
     String styleHint = '',

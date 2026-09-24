@@ -132,7 +132,17 @@ bool _sceneBool(dynamic value, {bool fallback = false}) {
   return fallback;
 }
 
-/// 后端只返回当前位置与一跳相邻节点，前端不会拿到完整世界地图。
+String _sceneAssetImageUrl(JsonMap asset) {
+  final package = _sceneJsonMap(asset['asset_package']);
+  final floor = _sceneJsonMap(package['floor']);
+  return _sceneString(
+    asset['backdrop_url'] ??
+        asset['scene_image_url'] ??
+        floor['url'],
+  );
+}
+
+/// 节点既可来自一跳导航目标，也可来自“已发现的大场景”列表；未来节点不会下发。
 class NovelSceneMapNode {
   const NovelSceneMapNode({
     this.sceneId = '',
@@ -149,6 +159,12 @@ class NovelSceneMapNode {
     this.visited = false,
     this.unlocked = false,
     this.presentNpcs = const <String>[],
+    this.sceneScope = 'major',
+    this.parentSceneId = '',
+    this.routeKind = '',
+    this.destinationSpawn = '',
+    this.navigationTrigger = const <String, dynamic>{},
+    this.sceneAsset = const <String, dynamic>{},
   });
 
   final String sceneId;
@@ -166,26 +182,42 @@ class NovelSceneMapNode {
   final bool visited;
   final bool unlocked;
   final List<String> presentNpcs;
+  final String sceneScope;
+  final String parentSceneId;
+  final String routeKind;
+  final String destinationSpawn;
+  final JsonMap navigationTrigger;
+  final JsonMap sceneAsset;
 
   bool get isAvailable => moveState == 'available';
   bool get isRisky => moveState == 'risky';
   bool get isLocked => !isAvailable && !isRisky;
   bool get isUnlocked => unlocked || visited || isAvailable || isRisky;
+  bool get isMajorScene => sceneScope == 'major';
+  String get triggerType => _sceneString(navigationTrigger['type']).toLowerCase();
+  String get triggerSide => _sceneString(navigationTrigger['side']).toLowerCase();
+  String get triggerObjectId => _sceneString(
+        navigationTrigger['scene_object_id'] ?? navigationTrigger['object_id'],
+      );
 
   factory NovelSceneMapNode.fromDynamic(dynamic value) {
     final data = _sceneJsonMap(value);
     final rawNpcs = data['present_npcs'];
+    final sceneAsset = _sceneJsonMap(data['scene_asset']);
+    final directImage = _sceneString(
+      data['map_tile_url'] ??
+          data['world_map_image_url'] ??
+          data['image_url'] ??
+          data['scene_image_url'] ??
+          data['image'],
+    );
     return NovelSceneMapNode(
       sceneId: _sceneString(data['scene_id']),
       name: _sceneString(data['name']),
       regionId: _sceneString(data['region_id']),
-      imageUrl: _sceneString(
-        data['map_tile_url'] ??
-            data['world_map_image_url'] ??
-            data['image_url'] ??
-            data['scene_image_url'] ??
-            data['image'],
-      ),
+      imageUrl: directImage.isNotEmpty
+          ? directImage
+          : _sceneAssetImageUrl(sceneAsset),
       description: _sceneString(data['description']),
       connectionId: _sceneString(data['connection_id']),
       exitName: _sceneString(data['exit_name']),
@@ -207,6 +239,14 @@ class NovelSceneMapNode {
               .where((item) => item.isNotEmpty)
               .toList(growable: false)
           : const <String>[],
+      sceneScope: _sceneString(data['scene_scope']).isEmpty
+          ? 'major'
+          : _sceneString(data['scene_scope']).toLowerCase(),
+      parentSceneId: _sceneString(data['parent_scene_id']),
+      routeKind: _sceneString(data['route_kind']).toLowerCase(),
+      destinationSpawn: _sceneString(data['destination_spawn']),
+      navigationTrigger: _sceneJsonMap(data['navigation_trigger']),
+      sceneAsset: sceneAsset,
     );
   }
 }
@@ -245,6 +285,7 @@ class NovelSceneMapData {
     this.currentScene = const NovelSceneMapNode(),
     this.mobility = const NovelSceneMobility(),
     this.targets = const <NovelSceneMapNode>[],
+    this.majorScenes = const <NovelSceneMapNode>[],
   });
 
   final bool configured;
@@ -252,6 +293,7 @@ class NovelSceneMapData {
   final NovelSceneMapNode currentScene;
   final NovelSceneMobility mobility;
   final List<NovelSceneMapNode> targets;
+  final List<NovelSceneMapNode> majorScenes;
 
   bool get hasCurrentScene =>
       currentSceneId.isNotEmpty || currentScene.name.isNotEmpty;
@@ -259,6 +301,7 @@ class NovelSceneMapData {
   factory NovelSceneMapData.fromDynamic(dynamic value) {
     final data = _sceneJsonMap(value);
     final rawTargets = data['targets'];
+    final rawMajorScenes = data['major_scenes'];
     return NovelSceneMapData(
       configured: _sceneBool(data['configured']),
       currentSceneId: _sceneString(data['current_scene_id']),
@@ -266,6 +309,12 @@ class NovelSceneMapData {
       mobility: NovelSceneMobility.fromDynamic(data['mobility']),
       targets: rawTargets is List
           ? rawTargets
+              .map(NovelSceneMapNode.fromDynamic)
+              .where((item) => item.sceneId.isNotEmpty || item.name.isNotEmpty)
+              .toList(growable: false)
+          : const <NovelSceneMapNode>[],
+      majorScenes: rawMajorScenes is List
+          ? rawMajorScenes
               .map(NovelSceneMapNode.fromDynamic)
               .where((item) => item.sceneId.isNotEmpty || item.name.isNotEmpty)
               .toList(growable: false)
@@ -1013,46 +1062,6 @@ class NovelGameController extends ChangeNotifier {
   String get currentStoryboardReadyImageUrl =>
       _latestStoryboardImageUrlFromPayload(currentStoryboard);
 
-  /// Best already-persisted visual for recovering a remounted stage. The current
-  /// unlocked shot always wins; otherwise walk older ready turns/messages backwards.
-  /// This never unlocks a future current-turn shot merely to avoid a placeholder.
-  String get latestAvailableStoryboardImageUrl {
-    final current = currentStoryboardDisplayCandidateUrl;
-    if (current.isNotEmpty) return current;
-
-    final currentTurnId = currentStoryboardTurnId;
-    // Async image jobs can finish out of order. Map insertion order therefore is NOT
-    // visual chronology: a slow old turn may arrive last and must not become the recovery
-    // image. Sort by authoritative turn_number (then numeric turn id) instead.
-    final cachedEntries = _storyboardTurns.entries.toList(growable: false)
-      ..sort((a, b) {
-        final aTurn = intValue(
-          a.value['turn_number'] ?? a.value['turnNumber'],
-          int.tryParse(a.key) ?? 0,
-        );
-        final bTurn = intValue(
-          b.value['turn_number'] ?? b.value['turnNumber'],
-          int.tryParse(b.key) ?? 0,
-        );
-        return bTurn.compareTo(aTurn);
-      });
-    for (final entry in cachedEntries) {
-      if (entry.key == currentTurnId) continue;
-      final url = _latestStoryboardImageUrlFromPayload(entry.value);
-      if (url.isNotEmpty) return url;
-    }
-
-    for (final message in messages.reversed) {
-      if (message.role != NovelMessageRole.assistant) continue;
-      if (message.id.trim() == currentTurnId) continue;
-      final payload = asJsonMap(message.customAttributes['storyboard']);
-      if (payload.isEmpty) continue;
-      final url = _latestStoryboardImageUrlFromPayload(payload);
-      if (url.isNotEmpty) return url;
-    }
-    return '';
-  }
-
   /// Storyboard playback uses the same deterministic source-segment clock as Speaker.
   /// A shot becomes visible only after its reveal checkpoint has been fully read.
   /// This intentionally prefers a slightly late visual reveal over showing a future
@@ -1302,6 +1311,27 @@ class NovelGameController extends ChangeNotifier {
     if (parts.length <= 1) return '';
     return parts.sublist(0, parts.length - 1).join(' · ');
   }
+
+  /// 探索页只消费后端 scene-map 返回的当前场景资产，不自行创建场景。
+  JsonMap get currentSceneAsset => sceneMap.currentScene.sceneAsset;
+
+  JsonMap get currentSceneAssetPackage =>
+      asJsonMap(currentSceneAsset['asset_package']);
+
+  /// 剧情分镜尚未完成时展示当前场景的永久底图；绝不回退上一回合分镜。
+  String get currentSceneBackdropUrl {
+    final direct = stringValue(
+      currentSceneAsset['scene_image_url'] ??
+          currentSceneAsset['backdrop_url'],
+    ).trim();
+    if (direct.isNotEmpty) return direct;
+    return stringValue(
+      asJsonMap(currentSceneAssetPackage['floor'])['url'],
+    ).trim();
+  }
+
+  List<NovelSceneMapNode> get currentSceneNavigationTargets =>
+      sceneMap.targets;
 
   bool get shouldShowSurroundingsAction {
     return storyStarted &&
@@ -2219,6 +2249,16 @@ class NovelGameController extends ChangeNotifier {
         'status=${stringValue(payload['status'])} '
         'reason=${stringValue(payload['reason'])}',
       );
+      final shouldLoadSceneInteractions =
+          boolValue(payload['available']) &&
+          boolValue(payload['can_investigate']) &&
+          !isSurroundingsLoading &&
+          (surroundingsData.isEmpty ||
+              incomingSceneKey.isEmpty ||
+              incomingSceneKey != loadedSceneKey);
+      if (shouldLoadSceneInteractions) {
+        unawaited(loadSurroundings());
+      }
     } on NoSuchMethodError {
       surroundingsAvailability = <String, dynamic>{};
       surroundingsError = '当前客户端尚未接入调查接口';
@@ -2431,7 +2471,22 @@ class NovelGameController extends ChangeNotifier {
     _notify();
   }
 
-  /// 刷新只包含“当前位置 + 一跳相邻节点”的局部地图。
+  /// 同步探索画面所需的两份后端权威状态：场景资产与场景交互节点。
+  Future<void> refreshSceneExplorationState({bool forceMap = true}) async {
+    await refreshSceneMap(force: forceMap, notify: false);
+    await refreshSurroundingsAvailability(notify: false);
+    if (boolValue(surroundingsAvailability['available']) &&
+        boolValue(surroundingsAvailability['can_investigate'])) {
+      try {
+        await loadSurroundings(force: true);
+      } catch (_) {
+        // 地图与正文仍可使用；探索页会展示 surroundingsError 并允许后续事件重试。
+      }
+    }
+    _notify();
+  }
+
+  /// 刷新包含当前位置、一跳导航目标和已发现的大场景。
   /// `novel_backend.dart` 可直接实现 fetchSceneMap(sessionId)，也可以在
   /// 构造 Controller 时通过 sceneMapLoader 注入，避免页面依赖 HTTP 细节。
   Future<void> refreshSceneMap({
@@ -2460,6 +2515,15 @@ class NovelGameController extends ChangeNotifier {
       }
       sceneMap = NovelSceneMapData.fromDynamic(payload);
       sceneMapPayload = Map<String, dynamic>.of(payload);
+      final assetStatus = stringValue(
+        sceneMap.currentScene.sceneAsset['status'],
+      ).trim().toLowerCase();
+      isBackgroundGenerating = const <String>{
+        'queued',
+        'pending',
+        'processing',
+        'generating',
+      }.contains(assetStatus);
       final autoBattle = asJsonMap(payload['auto_battle']);
       if (boolValue(autoBattle['required'])) {
         _registerForcedBattleTrigger(autoBattle, notify: false);
@@ -4389,13 +4453,21 @@ class NovelGameController extends ChangeNotifier {
           surroundingsData = <String, dynamic>{};
           surroundingsAvailability = <String, dynamic>{};
           surroundingsError = '';
-          unawaited(refreshSurroundingsAvailability());
+          unawaited(refreshSceneExplorationState(forceMap: true));
         }
+        break;
+      case 'scene_asset_task':
+        isBackgroundGenerating = true;
+        unawaited(refreshSceneMap(force: true));
+        break;
+      case 'scene_asset_ready':
+        isBackgroundGenerating = false;
+        unawaited(refreshSceneExplorationState(forceMap: true));
         break;
       case 'surroundings_state_changed':
         // 该事件由 Writer 后台 StateAnalyzer 在权威状态提交后发送；此时再读
         // availability，确保同地点出现的新资源也能立即点亮入口。
-        unawaited(refreshSurroundingsAvailability());
+        unawaited(refreshSceneExplorationState(forceMap: false));
         break;
       case 'relation_update':
         _applyRelationUpdate(data);

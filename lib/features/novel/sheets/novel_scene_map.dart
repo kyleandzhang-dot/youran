@@ -33,9 +33,14 @@ const List<_WorldMapPreviewScene> _developerWorldMapScenes =
 
 // 供主页底部导航栏调用的内嵌 Tab 入口
 class NovelWorldMapTab extends StatelessWidget {
-  const NovelWorldMapTab({super.key, required this.controller});
+  const NovelWorldMapTab({
+    super.key,
+    required this.controller,
+    this.onMoveStarted,
+  });
   
   final NovelGameController controller;
+  final VoidCallback? onMoveStarted;
 
   @override
   Widget build(BuildContext context) {
@@ -46,6 +51,7 @@ class NovelWorldMapTab extends StatelessWidget {
       controller: controller,
       developerPreview: false,
       embedded: true, // 标记为内嵌模式
+      onMoveStarted: onMoveStarted,
     );
   }
 }
@@ -139,7 +145,7 @@ class _WorldMapEntry {
   final bool current;
   final NovelSceneMapNode? node;
 
-  bool get showsImage => unlocked && imageUrl.trim().isNotEmpty;
+  bool get showsImage => imageUrl.trim().isNotEmpty;
 }
 
 class _NovelWorldMapPage extends StatefulWidget {
@@ -147,11 +153,13 @@ class _NovelWorldMapPage extends StatefulWidget {
     required this.controller,
     required this.developerPreview,
     this.embedded = false,
+    this.onMoveStarted,
   });
 
   final NovelGameController controller;
   final bool developerPreview;
   final bool embedded;
+  final VoidCallback? onMoveStarted;
 
   @override
   State<_NovelWorldMapPage> createState() => _NovelWorldMapPageState();
@@ -242,7 +250,16 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
       ];
     }
 
-    final current = map.currentScene;
+    final rawCurrent = map.currentScene;
+    final knownMajorScenes = map.majorScenes.isNotEmpty
+        ? map.majorScenes
+        : map.targets.where((node) => node.isMajorScene).toList(growable: false);
+    final parentMajor = rawCurrent.parentSceneId.isEmpty
+        ? null
+        : knownMajorScenes
+            .where((node) => node.sceneId == rawCurrent.parentSceneId)
+            .firstOrNull;
+    final current = rawCurrent.isMajorScene ? rawCurrent : (parentMajor ?? rawCurrent);
     final currentName = current.name.trim().isNotEmpty
         ? current.name.trim()
         : controller.locationTitle.trim();
@@ -259,12 +276,15 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
         current: true,
         node: current,
       ),
-      for (final node in map.targets)
+      // 世界地图读取所有已发现的大场景；建筑内部与局部子场景只在探索页进入。
+      for (final node in knownMajorScenes.where(
+        (node) => node.sceneId != current.sceneId && node.isMajorScene,
+      ))
         _WorldMapEntry(
           id: node.sceneId,
           name: node.name,
           imageUrl: node.imageUrl,
-          unlocked: node.isUnlocked && node.imageUrl.trim().isNotEmpty,
+          unlocked: !node.isLocked,
           node: node,
         ),
     ];
@@ -284,7 +304,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
   }
 
   Future<void> _onEntryTap(_WorldMapEntry entry) async {
-    if (!entry.showsImage || _moving) return;
+    if (!entry.unlocked || _moving) return;
     if (widget.developerPreview) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -314,6 +334,8 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
     final accepted = await controller.requestSceneMove(entry.node!);
     if (!mounted) return;
     if (accepted) {
+      setState(() => _moving = false);
+      widget.onMoveStarted?.call();
       if (!widget.embedded) {
         Navigator.of(context).pop();
       }
@@ -730,22 +752,25 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
   @override
   Widget build(BuildContext context) {
     final entry = widget.entry;
-    if (!entry.showsImage) return const _LockedWorldSceneTile();
+    final disabled = !entry.unlocked;
 
     return Semantics(
       button: true,
       label: entry.current ? '${entry.name}，当前位置' : entry.name,
       child: MouseRegion(
-        cursor: widget.moving
+        cursor: widget.moving || disabled
             ? SystemMouseCursors.basic
             : SystemMouseCursors.click,
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onTapDown: widget.moving ? null : (_) => setState(() => _isPressed = true),
-          onTapUp: widget.moving ? null : (_) => setState(() => _isPressed = false),
-          onTapCancel: widget.moving ? null : () => setState(() => _isPressed = false),
-          onTap: widget.moving ? null : widget.onTap,
-          child: AnimatedScale(
+          onTapDown: widget.moving || disabled ? null : (_) => setState(() => _isPressed = true),
+          onTapUp: widget.moving || disabled ? null : (_) => setState(() => _isPressed = false),
+          onTapCancel: widget.moving || disabled ? null : () => setState(() => _isPressed = false),
+          onTap: widget.moving || disabled ? null : widget.onTap,
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 220),
+            opacity: disabled ? .46 : 1,
+            child: AnimatedScale(
             duration: Duration(milliseconds: _isPressed ? 150 : 600),
             curve: _isPressed ? Curves.easeOutCubic : Curves.elasticOut,
             scale: _isPressed || widget.moving ? 0.88 : 1.0,
@@ -802,6 +827,19 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                   ),
                 ),
 
+                if (disabled)
+                  const Positioned.fill(
+                    child: IgnorePointer(
+                      child: Center(
+                        child: Icon(
+                          Icons.lock_outline_rounded,
+                          size: 20,
+                          color: Color(0xCCF2F0E8),
+                        ),
+                      ),
+                    ),
+                  ),
+
                 Positioned(
                   left: 12,
                   right: 12,
@@ -856,6 +894,7 @@ class _WorldSceneTileState extends State<_WorldSceneTile>
                 ),
               ],
             ),
+            ),
           ),
         ),
       ),
@@ -880,6 +919,7 @@ class _WorldSceneImage extends StatelessWidget {
         color: Colors.white.withOpacity(.20),
       ),
     );
+    if (clean.isEmpty) return fallback;
     if (clean.startsWith('http://') || clean.startsWith('https://')) {
       return Image.network(
         clean,
