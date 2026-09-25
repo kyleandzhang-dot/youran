@@ -1609,15 +1609,13 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
       setState(() {
         _groundLoot[id] = _SceneGroundLoot(
           node: node,
-          position: _nearestLootLanding(groundPosition),
+          // ⚠️ 第一处修改：去掉 _nearestLootLanding，直接用 groundPosition
+          position: groundPosition, 
         );
       });
       return;
     }
 
-    // A searched container may keep its ID and only change to collectible.
-    // Track only items that were collectible before the request so that this
-    // state transition is still recognized as newly revealed loot.
     final beforeCollectibles = _visibleSceneInteractions()
         .where((entry) => boolValue(entry['collectible']))
         .map((entry) => _sceneString(entry['id']))
@@ -1635,13 +1633,12 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
           final entry = revealed[i];
           final newId = _sceneString(entry['id']);
           if (newId.isEmpty) continue;
-          final angle = _sceneRandom.nextDouble() * math.pi * 2;
-          final radius = .5 + _sceneRandom.nextDouble() * .9;
-          final candidate = groundPosition +
-              Offset(math.cos(angle) * radius, math.sin(angle) * radius);
+          
+          // ⚠️ 第二处修改：把原来计算随机 angle、radius 和 candidate 的那 3 行代码全删掉！
+          // 直接让物品的位置等于 groundPosition 即可。
           _groundLoot[newId] = _SceneGroundLoot(
             node: entry,
-            position: _nearestLootLanding(candidate),
+            position: groundPosition, // 👈 强制原地掉落在刚才那个问号的坐标上
           );
         }
       });
@@ -1829,55 +1826,7 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
             ),
           ),
 
-        if (_pickupNotices.isNotEmpty)
-          Positioned(
-            left: 16,
-            top: MediaQuery.paddingOf(context).top + (widget.asLayer ? 92 : 108),
-            child: IgnorePointer(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  for (final notice in _pickupNotices)
-                    TweenAnimationBuilder<double>(
-                      key: ValueKey<int>(notice.id),
-                      tween: Tween<double>(begin: 0, end: 1),
-                      duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeOutBack,
-                      builder: (context, progress, child) => Opacity(
-                        opacity: progress.clamp(0.0, 1.0).toDouble(),
-                        child: Transform.translate(
-                          offset: Offset(-24 * (1 - progress), 0),
-                          child: child,
-                        ),
-                      ),
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 6),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xDC121820),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0x99E7C47B)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            for (final item in notice.items)
-                              Text(
-                                '${item.key} × ${item.value}',
-                                style: const TextStyle(
-                                  color: Color(0xFFF8E6B1),
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
+        // 👈 注意：这里原本的 if (_pickupNotices.isNotEmpty) 块已经被完全删除。
 
         if (!hasScene && (_loading || _error != null))
           Positioned(
@@ -2768,9 +2717,9 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
         if (object == null) continue;
         final distance = _distanceToObject(object);
         final radius = _sceneNum(
-          trigger['interaction_radius_tiles'],
-          2.2,
-        ).clamp(.5, 6.0).toDouble();
+          object['interaction_radius_tiles'],
+          1.0, // 👈 之前是 1.8，把它改小，比如 1.0 或 0.8
+        ).clamp(.5, 5.0).toDouble();
         if (distance <= radius && distance < bestDistance) {
           nearest = target;
           bestDistance = distance;
@@ -2870,13 +2819,10 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final top = _sceneNum(object['y']);
     final right = left + math.max(1.0, _sceneNum(object['width'], 1));
     final bottom = top + math.max(1.0, _sceneNum(object['height'], 1));
-    final center = Offset((left + right) / 2, (top + bottom) / 2);
-    if ((center - _player).distance <= 2.5) return center;
-    // 大物件靠近哪一段，就把问号放在哪一段，避免中心点跑出屏幕。
-    return Offset(
-      _player.dx.clamp(left, right).toDouble(),
-      _player.dy.clamp(top, bottom).toDouble(),
-    );
+    
+    // ⚠️ 修改：直接计算并返回物体的绝对中心点。去掉了原本的距离判断和 clamp，
+    // 这样交互标记就会死死钉在物体上，再也不会“跟随角色”滑动了。
+    return Offset((left + right) / 2, (top + bottom) / 2); 
   }
 
   void _showSearchEffect(Offset position) {
@@ -2889,87 +2835,29 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     });
   }
 
-  // 1. 匹配本地图片路径 (与 page_3 规则对齐)
-  String _surroundRewardAsset(String itemType) {
+  IconData _surroundRewardIcon(String itemType) {
     return switch (itemType.trim().toLowerCase()) {
-      'score' => 'assets/images/xing.webp',
-      'gift' => 'assets/images/gift.webp',
-      'lucky_card' => 'assets/images/lucky_card.webp',
-      'skill_book' => 'assets/images/skill_book.webp',
-      'cat_eye_stone' => 'assets/images/cat_eye_stone.webp',
-      'enhance_stone' => 'assets/images/enhance_stone.webp',
-      'blind_box' => 'assets/images/blind_box.webp',
-      _ => '',
-    };
-  }
-
-  // 2. 匹配回退的 Icon 图标
-  IconData _surroundRewardFallbackIcon(String itemType) {
-    return switch (itemType.trim().toLowerCase()) {
-      'score' => Icons.auto_awesome_rounded,
-      'gift' => Icons.local_florist_rounded,
-      'lucky_card' => Icons.eco_rounded,
-      'skill_book' => Icons.menu_book_rounded,
-      'cat_eye_stone' => Icons.visibility_rounded,
+      'score' => Icons.star_outline_rounded,
+      'gift' => Icons.card_giftcard_rounded,
+      'lucky_card' => Icons.style_outlined,
+      'skill_book' => Icons.menu_book_outlined,
+      'cat_eye_stone' => Icons.visibility_outlined,
       'enhance_stone' => Icons.diamond_outlined,
-      'blind_box' => Icons.redeem_rounded,
-      _ => Icons.auto_awesome_rounded,
+      'blind_box' => Icons.inventory_2_outlined,
+      _ => Icons.circle_outlined,
     };
   }
 
-  // 3. 构建掉落物中心的 Widget (带容错)
   Widget _buildLootIcon(JsonMap node) {
     final reward = _sceneMap(node['reward']);
     final rewardType = _sceneString(
       reward['type'] ?? reward['item_type'] ?? node['type'],
     ).trim().toLowerCase();
-    
-    final label = _sceneString(node['label'], '');
-    final assetPath = _sceneString(reward['image_asset']).trim();
-
-    Widget fallbackIcon() => Icon(
-          _surroundRewardFallbackIcon(rewardType),
-          color: const Color(0xFFFFE1A2),
-          size: 20,
-        );
-
-    // 优先 1：如果后端直接下发了明确的图片路径
-    if (assetPath.isNotEmpty) {
-      return Image.asset(
-        assetPath, 
-        width: 24, 
-        height: 24, 
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (_, __, ___) => fallbackIcon(),
-      );
-    }
-
-    // 优先 2：根据系统道具 type 匹配
-    final mappedAsset = _surroundRewardAsset(rewardType);
-    if (mappedAsset.isNotEmpty) {
-      return Image.asset(
-        mappedAsset, 
-        width: 24, 
-        height: 24, 
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (_, __, ___) => fallbackIcon(),
-      );
-    }
-
-    // 优先 3：根据名称关键字兜底（针对特有道具，例如“珍珠”）
-    if (label.contains('珍珠')) {
-      return Image.asset(
-        'assets/images/pearl.webp', // 假设你的珍珠图标存放在这
-        width: 24, 
-        height: 24, 
-        errorBuilder: (_, __, ___) => fallbackIcon(),
-      );
-    }
-
-    // 兜底：彻底回退到 Icon
-    return fallbackIcon();
+    return Icon(
+      _surroundRewardIcon(rewardType),
+      color: const Color(0xFFE7E4DD),
+      size: 18,
+    );
   }
 
   Widget _buildSceneMarkers(_IsoMetrics metrics, JsonMap? nearbyInteraction) {
@@ -2995,7 +2883,7 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
             ? null : onScreen(_searchEffectPosition!);
 
         return Stack(
-          fit: StackFit.expand, // 👈 核心修复1：强制 Stack 铺满屏幕，防止点击被 0x0 边界拦截丢弃
+          fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: <Widget>[
             if (searchEffect != null)
@@ -3015,24 +2903,28 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                         child: child,
                       ),
                     ),
-                    child: const Icon(Icons.auto_awesome_rounded,
-                        color: Color(0xFFFFDF99), size: 34),
+                    child: const Icon(
+                      Icons.search_rounded,
+                      color: Color(0xBFFFFFFF),
+                      size: 24,
+                    ),
                   ),
                 ),
               ),
             for (final entry in widget.groundLoot.entries)
               if (visibleIds.contains(entry.key))
                 Positioned(
-                  left: onScreen(entry.value.position).dx - 55,
+                  // ⚠️ 修改：因为加入了文字需要更宽的空间，将 dx/dy 的偏移量稍微调整以保持整体居中
+                  left: onScreen(entry.value.position).dx - 40,
                   top: onScreen(entry.value.position).dy - 32,
                   child: TweenAnimationBuilder<double>(
                     key: ValueKey<String>('fall-${entry.key}'),
                     tween: Tween<double>(begin: 0, end: 1),
-                    duration: const Duration(milliseconds: 650),
-                    curve: Curves.easeOutQuad,
+                    duration: const Duration(milliseconds: 700),
+                    curve: Curves.easeOutBack,
                     builder: (context, progress, child) {
                       final bounce = math.sin(progress * math.pi);
-                      final offsetY = bounce * -45.0;
+                      final offsetY = bounce * -35.0;
                       final itemScale = progress < .25 ? progress * 4.0 : 1.0;
                       final opacity = (progress * 5).clamp(0.0, 1.0);
                       return Opacity(
@@ -3056,65 +2948,55 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                         onTap: widget.interactionEnabled
                             ? () => widget.onPickUpLoot(entry.value.node)
                             : null,
+                        // ⚠️ 修改：使用 SizedBox 限制宽度，并使用 Column 垂直排列图标和文字
                         child: SizedBox(
-                          width: 110,
+                          width: 80,
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
                               Container(
-                                width: 38,
-                                height: 38,
+                                width: 36,
+                                height: 36,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: const Color(0xD21B2530),
+                                  color: const Color(0x401A1D22),
                                   border: Border.all(
-                                    color: const Color(0xFFFFD78B),
-                                    width: 1.5,
+                                    color: const Color(0x4DFFFFFF),
+                                    width: 0.8,
                                   ),
                                   boxShadow: const <BoxShadow>[
                                     BoxShadow(
-                                      color: Color(0xAAE9BD5F),
-                                      blurRadius: 18,
+                                      color: Color(0x4DFFD700),
+                                      blurRadius: 15,
                                       spreadRadius: 2,
-                                    ),
-                                    BoxShadow(
-                                      color: Color(0x55FFFFFF),
-                                      blurRadius: 4,
-                                      spreadRadius: 1,
                                     ),
                                   ],
                                 ),
-                                child: Center(
-                                  child: _buildLootIcon(entry.value.node),
+                                child: const Center(
+                                  // ⚠️ 修改：原为 _buildLootIcon(entry.value.node)，现改为固定的问号图标
+                                  child: Icon(
+                                    Icons.question_mark_rounded,
+                                    color: Color(0xFFE7E4DD),
+                                    size: 20,
+                                  ),
                                 ),
                               ),
-                              const SizedBox(height: 5),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
+                              const SizedBox(height: 4),
+                              // ⚠️ 修改：在下方添加物体的名称
+                              Text(
+                                _sceneString(entry.value.node['label'], '物品'),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  // 加入阴影防止文字在复杂背景下看不清
+                                  shadows: [
+                                    Shadow(color: Colors.black87, blurRadius: 3, offset: Offset(0, 1)),
+                                  ],
                                 ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xBB000000),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(
-                                    color: const Color(0x66E9BD5F),
-                                  ),
-                                ),
-                                child: Text(
-                                  _sceneString(
-                                    entry.value.node['label'],
-                                    '物品',
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Color(0xFFFFE8B7),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
@@ -3125,12 +3007,12 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                 ),
             if (marker != null && nearbyInteraction != null)
               Positioned(
-                left: marker.dx - 27, // 居中偏移调整（对应 54 宽度的一半）
-                top: marker.dy - 66,  // 稍微再抬高一点点，避开玩家模型
+                // 恢复适合单图标的偏移量
+                left: marker.dx - 26,
+                top: marker.dy - 58,
                 child: Semantics(
                   button: true,
                   label: '${boolValue(nearbyInteraction['collectible']) ? '发现' : '调查'} ${_sceneString(nearbyInteraction['label'], '附近物件')}',
-                  // 👈 核心修复2：移除不可靠的 Material+InkWell，换成底层极高权重的 GestureDetector
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: widget.interactionEnabled
@@ -3148,42 +3030,40 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                             );
                           }
                         : null,
+                    // ⚠️ 修改：去掉了 Column 和 Text，只保留和掉落物同款的“圆形问号”
                     child: Container(
-                      width: 54, // 👈 核心修复3：加一层透明外壳扩大隐藏的点击热区，大幅提升鼠标/手指点击的容错率
-                      height: 54,
+                      width: 52,
+                      height: 52,
                       alignment: Alignment.center,
-                      // 👈 核心修复4：禁用态（正在追剧情/打字机动画中）给一个明确的
-                      // 视觉反馈——之前启用/禁用长得一模一样，玩家点了没反应会
-                      // 以为按钮坏了；现在禁用时变暗+变灰，一看就知道"现在还不能点"。
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 150),
-                        opacity: widget.interactionEnabled ? 1.0 : 0.35,
+                        opacity: widget.interactionEnabled ? 1.0 : 0.32,
                         child: Container(
-                          width: 42,
-                          height: 42,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
-                            color: const Color(0xE6222830),
-                            shape: BoxShape.circle,
+                            shape: BoxShape.circle, // 圆形
+                            color: const Color(0xD91A1D22),
                             border: Border.all(
                               color: widget.interactionEnabled
-                                  ? const Color(0xFFFFE0A2)
-                                  : const Color(0xFF8A8A8A),
-                              width: 1.3,
+                                  ? const Color(0x3DFFFFFF)
+                                  : const Color(0x24FFFFFF),
+                              width: .8,
                             ),
-                            boxShadow: widget.interactionEnabled
-                                ? const <BoxShadow>[
-                                    BoxShadow(color: Color(0x775C410F), blurRadius: 14),
-                                  ]
-                                : const <BoxShadow>[],
+                            boxShadow: const <BoxShadow>[
+                              BoxShadow(
+                                color: Color(0x33000000),
+                                blurRadius: 10,
+                                offset: Offset(0, 3),
+                              ),
+                            ],
                           ),
                           child: Icon(
-                            boolValue(nearbyInteraction['collectible'])
-                                ? Icons.question_mark_rounded
-                                : Icons.search_rounded,
+                            Icons.question_mark_rounded, // 变成问号
                             color: widget.interactionEnabled
-                                ? const Color(0xFFFFE3AD)
-                                : const Color(0xFFBFBFBF),
-                            size: 24,
+                                ? const Color(0xFFE7E4DD)
+                                : const Color(0xFF8E9094),
+                            size: 20,
                           ),
                         ),
                       ),
@@ -3311,12 +3191,21 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                             ? () => widget.onPickUpLoot(nearbyLoot.node)
                             : null,
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFFFFE7B4),
-                          backgroundColor: const Color(0xD6222830),
-                          side: const BorderSide(color: Color(0xAAE6C781)),
-                          shape: const StadiumBorder(),
+                          foregroundColor: const Color(0xFFECE9E2),
+                          backgroundColor: const Color(0xE01A1D22),
+                          side: const BorderSide(
+                            color: Color(0x33FFFFFF),
+                            width: .8,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 13,
+                            vertical: 9,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(11),
+                          ),
                         ),
-                        icon: const Icon(Icons.pan_tool_alt_outlined, size: 17),
+                        icon: const Icon(Icons.inventory_2_outlined, size: 16),
                         label: Text(
                           '拾取 ${_sceneString(nearbyLoot.node['label'], '物品')}',
                         ),
@@ -3345,11 +3234,11 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
             AnimatedPositioned(
               duration: const Duration(milliseconds: 250),
               curve: Curves.easeOutCubic,
-              // 【人体工学优化】：向右、向上推移，避开死角，让大拇指自然伸展
-              left: 56,
+              // 【人体工学优化】：参考传统 MOBA，左边距拉大，底边距压低，使拇指自然落在热区
+              left: 84, // 👈 将左边距从 56 调大到 84（如果你的受众手机屏幕普遍偏大，甚至可以给到 96）
               bottom: (widget.isStoryActive && widget.canExitStory)
-                  ? MediaQuery.paddingOf(context).bottom + 112 
-                  : 48 + MediaQuery.paddingOf(context).bottom,
+                  ? MediaQuery.paddingOf(context).bottom + 88 // 👈 剧情模式下也相应调低（原为 112）
+                  : 28 + MediaQuery.paddingOf(context).bottom, // 👈 自由探索时底边距压低到 28（原为 48）
               child: AnimatedOpacity(
                 opacity: !widget.isStoryActive ? 1.0 : (widget.canExitStory ? 1.0 : 0.0),
                 duration: const Duration(milliseconds: 250),

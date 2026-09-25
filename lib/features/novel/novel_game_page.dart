@@ -2277,25 +2277,29 @@ class _NovelGamePageState extends State<NovelGamePage>
                     ),
                   ),
 
-                  RepaintBoundary(
-                    child: AnimatedOpacity(
-                      opacity: isExploring ? 0.0 : 1.0,
-                      duration: const Duration(milliseconds: 300),
-                      child: _NovelStoryboardStage(
-                        controller: controller,
-                        fallbackAsset: widget.fallbackBackgroundAsset.trim().isNotEmpty
-                            ? widget.fallbackBackgroundAsset.trim()
-                            : 'assets/images/background_home.png',
-                        weatherEffect: (_weatherPreviewOverride != null ||
-                                controller.settings.weatherEffectsEnabled)
-                            ? _activeWeatherEffect
-                            : NovelWeatherEffect.none,
-                        timePeriod: _activeTimePeriod,
-                        parallaxStrength: _backgroundParallaxStrength,
-                        backgroundPreviewBytes: _backgroundPreviewBytes,
-                        backgroundPreviewUrl: _backgroundPreviewOverride ?? '',
-                        backgroundPreviewCacheKey:
-                            'developer-background-$_backgroundPreviewVersion',
+                  IgnorePointer(
+                    ignoring: isExploring,
+                    child: RepaintBoundary(
+                      child: AnimatedOpacity(
+                        opacity: isExploring ? 0.0 : 1.0,
+                        duration: const Duration(milliseconds: 300),
+                        child: _NovelStoryboardStage(
+                          controller: controller,
+                          fallbackAsset:
+                              widget.fallbackBackgroundAsset.trim().isNotEmpty
+                                  ? widget.fallbackBackgroundAsset.trim()
+                                  : 'assets/images/background_home.png',
+                          weatherEffect: (_weatherPreviewOverride != null ||
+                                  controller.settings.weatherEffectsEnabled)
+                              ? _activeWeatherEffect
+                              : NovelWeatherEffect.none,
+                          timePeriod: _activeTimePeriod,
+                          parallaxStrength: _backgroundParallaxStrength,
+                          backgroundPreviewBytes: _backgroundPreviewBytes,
+                          backgroundPreviewUrl: _backgroundPreviewOverride ?? '',
+                          backgroundPreviewCacheKey:
+                              'developer-background-$_backgroundPreviewVersion',
+                        ),
                       ),
                     ),
                   ),
@@ -2575,11 +2579,14 @@ class _NovelGamePageState extends State<NovelGamePage>
                                 !_endingOpen &&
                                 _sceneBarks.isNotEmpty)
                               Positioned.fill(
-                                child: NovelSceneBarkLayer(
-                                  barks: _sceneBarks,
-                                  enabled: true,
-                                  bottomReserve: 0,
-                                  onBarkTap: _handleSceneBarkTap,
+                                child: IgnorePointer(
+                                  ignoring: isExploring,
+                                  child: NovelSceneBarkLayer(
+                                    barks: _sceneBarks,
+                                    enabled: true,
+                                    bottomReserve: 0,
+                                    onBarkTap: _handleSceneBarkTap,
+                                  ),
                                 ),
                               ),
                           ],
@@ -2693,12 +2700,13 @@ class _NovelGamePageState extends State<NovelGamePage>
                     ),
 
                   // 最顶层的公共摇杆，与剧情和输入框完全共存
-                  if (canExitStory)
+                  // 最顶层的公共摇杆，与剧情和输入框完全共存
+                  if (canExitStory && _primaryTab == _NovelPrimaryTab.story)
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 250),
                       curve: Curves.easeOutCubic,
-                      left: 24,
-                      bottom: MediaQuery.sizeOf(context).height * 0.32,
+                      left: 84, 
+                      bottom: 48 + MediaQuery.paddingOf(context).bottom,
                       child: AnimatedOpacity(
                         opacity: 1.0,
                         duration: const Duration(milliseconds: 250),

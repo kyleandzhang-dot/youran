@@ -1561,11 +1561,31 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         final skills = _skills(host);
         final backpackItems = items.where((item) => !item.isEquipped).toList();
         final filteredItems = backpackItems.where((item) {
-          if (_filterIndex == 1) return _isWearable(item);
-          if (_filterIndex == 2) return !_isWearable(item);
-          return true;
+          if (_filterIndex == 1) {
+            // 1. 穿戴：装备类物品
+            return _isWearable(item);
+          }
+          
+          if (_filterIndex == 2) {
+            // 2. 道具：非穿戴物品，且必须包含 icon
+            return !_isWearable(item) && _inventoryItemImageSource(item).isNotEmpty;
+          }
+          
+          if (_filterIndex == 0) {
+            // 0. 任务：精准匹配 + 无图标物品兜底
+            // 检查是否来源于后端的剧情道具列表
+            final isStoryItem = data.storyItems.contains(item);
+            // 检查类型
+            final type = item.itemType.trim().toLowerCase();
+            final isQuest = type == 'quest' || type == 'story' || type == 'material';
+            // 兜底：既不是穿戴，也没有图标的物品，强制扔进“任务”里，防止在背包里彻底隐形
+            final noIconFallback = !_isWearable(item) && _inventoryItemImageSource(item).isEmpty;
+            
+            return isStoryItem || isQuest || noIconFallback;
+          }
+          
+          return false;
         }).toList();
-
         Widget desktopLayout() {
           return Column(
             children: <Widget>[
@@ -1758,12 +1778,13 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   );
 
                   switch (mode) {
-                    case _InventoryViewportMode.desktop:
+                   case _InventoryViewportMode.desktop:
                       return Center(
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 1440),
                           child: Padding(
-                            padding: const EdgeInsets.fromLTRB(46, 14, 54, 12),
+                            // 缩小左右边距，移除大边框感
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
                             child: desktopLayout(),
                           ),
                         ),
@@ -1824,7 +1845,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Expanded(child: _buildFilterBtn('全部', 0, quiet: quiet)),
+            Expanded(child: _buildFilterBtn('任务', 0, quiet: quiet)),
             Expanded(child: _buildFilterBtn('穿戴', 1, quiet: quiet)),
             Expanded(child: _buildFilterBtn('道具', 2, quiet: quiet)),
           ],

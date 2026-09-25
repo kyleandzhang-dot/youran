@@ -2273,6 +2273,10 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
 
   bool get isHost => mode == _NovelLineMode.protagonist;
 
+
+  
+  
+  
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
@@ -2299,8 +2303,6 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
         ? (screen.width * .08).clamp(72.0, 156.0).toDouble()
         : 0.0;
     final portraitFacingGap = shortWide ? 10.0 : (compact ? 7.0 : (wideDialogueLayout ? 16.0 : 12.0));
-
-    const panelRadius = 18.0;
 
     final dialogueContent = SizedBox(
       width: dialogueWidth,
@@ -2345,47 +2347,42 @@ class _NovelCharacterDialogueSurface extends StatelessWidget {
                   duration: const Duration(milliseconds: 600),
                   curve: Curves.easeOutCubic,
                   builder: (context, glow, child) {
+                    // 【正宗白底黑字排版】：深灰蓝底色 + 中等偏粗 + 无阴影 + 微调字距
                     final style = TextStyle(
-                      color: const Color(0xFFF4F1EA),
+                      color: const Color(0xFF2C3135), // 避免纯黑，使用深灰蓝，护眼且有高级感
                       fontFamily: fontFamily,
                       fontSize: fontSize + (shortWide ? -.2 : (compact ? 0 : .4)),
                       height: shortWide ? 1.55 : 1.72,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: .35,
-                      shadows: <Shadow>[
-                        Shadow(color: Color.lerp(const Color(0x99000000), const Color(0xD9000000), glow)!, blurRadius: 6 - 2 * glow, offset: const Offset(0, 1)),
-                        Shadow(color: Color.lerp(const Color(0x66000000), const Color(0x80FFFFFF), glow)!, blurRadius: 12),
-                      ],
+                      fontWeight: FontWeight.w600, // 稍微加粗，防止白底吞噬笔画
+                      letterSpacing: 0.35,
+                      shadows: const <Shadow>[], // 绝对不要阴影
                     );
                     
                     return Container(
-                      margin: const EdgeInsets.only(bottom: 16.0),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(panelRadius),
-                        boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 16, offset: Offset(0, 6))],
+                      // 保留之前为了气泡小尾巴留出的边距
+                      margin: EdgeInsets.only(
+                        bottom: 16.0, 
+                        top: 6.0,
+                        right: isHost ? 12.0 : 0.0,
+                        left: !isHost ? 12.0 : 0.0,
                       ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(panelRadius),
-                        child: _AdaptiveBackdropBlur(
-                          sigma: 16,
-                          child: Container(
-                            padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 20, vertical: compact ? 14 : 16),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(panelRadius),
-                              border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.0),
-                            ),
-                            child: ValueListenableBuilder<String>(
-                              valueListenable: displayTextListenable,
-                              builder: (context, value, _) {
-                                final display = value.isEmpty && !(sentence?.readerText.isNotEmpty == true) ? emptyTextFallback : value;
-                                const alignment = TextAlign.left;
-                                return Text.rich(
-                                  TextSpan(children: _buildNovelDialogueDisplaySpans(display, style)),
-                                  textAlign: alignment,
-                                );
-                              },
-                            ),
+                      // 找回你的白色气泡画笔
+                      child: CustomPaint(
+                        painter: _SpeechBubblePainter(isHost: isHost),
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: compact ? 18 : 22, 
+                            vertical: compact ? 14 : 16
+                          ),
+                          child: ValueListenableBuilder<String>(
+                            valueListenable: displayTextListenable,
+                            builder: (context, value, _) {
+                              final display = value.isEmpty && !(sentence?.readerText.isNotEmpty == true) ? emptyTextFallback : value;
+                              return Text.rich(
+                                TextSpan(children: _buildNovelDialogueDisplaySpans(display, style)),
+                                textAlign: TextAlign.left,
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -3033,5 +3030,61 @@ class _NarratorHintState extends State<_NarratorHint> {
         ),
       ),
     );
+  }
+}
+
+class _SpeechBubblePainter extends CustomPainter {
+  _SpeechBubblePainter({
+    required this.isHost,
+    this.bubbleColor = const Color(0xFFF8F9FA),
+    this.tailBaseWidth = 14.0,
+    this.tailLength = 10.0,
+    this.cornerRadius = 18.0,
+  });
+
+  final bool isHost;
+  final Color bubbleColor;
+  final double tailBaseWidth;
+  final double tailLength;
+  final double cornerRadius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = bubbleColor
+      ..style = PaintingStyle.fill;
+
+    final path = Path();
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+
+    // 主体圆角矩形
+    path.addRRect(RRect.fromRectAndRadius(rect, Radius.circular(cornerRadius)));
+
+    // 绘制小尾巴，让它指向侧面的立绘
+    final tailPath = Path();
+    final tailStartY = 24.0; // 尾巴距离气泡顶部的垂直距离
+
+    if (isHost) {
+      // 主角（气泡在左，立绘在右），尾巴在右侧边缘，向右指
+      tailPath.moveTo(size.width, tailStartY);
+      tailPath.lineTo(size.width + tailLength, tailStartY + tailBaseWidth / 2);
+      tailPath.lineTo(size.width, tailStartY + tailBaseWidth);
+    } else {
+      // NPC（气泡在右，立绘在左），尾巴在左侧边缘，向左指
+      tailPath.moveTo(0, tailStartY);
+      tailPath.lineTo(-tailLength, tailStartY + tailBaseWidth / 2);
+      tailPath.lineTo(0, tailStartY + tailBaseWidth);
+    }
+    tailPath.close();
+    path.addPath(tailPath, Offset.zero);
+
+    // 绘制柔和的弥散阴影
+    canvas.drawShadow(path, Colors.black.withOpacity(0.12), 12.0, false);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SpeechBubblePainter oldDelegate) {
+    return oldDelegate.isHost != isHost || oldDelegate.bubbleColor != bubbleColor;
   }
 }

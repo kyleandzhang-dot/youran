@@ -115,12 +115,11 @@ List<InlineSpan> _buildNovelDialogueDisplaySpans(
     return <InlineSpan>[TextSpan(text: value, style: baseStyle)];
   }
 
+  // 【修改点】：传统的白底气泡神态文字，纯净浅灰，彻底去阴影
   final stageStyle = baseStyle.copyWith(
-    color: (baseStyle.color ?? const Color(0xFFF7F7F7)).withOpacity(.58),
-    fontWeight: FontWeight.w400,
-    shadows: const <Shadow>[
-      Shadow(color: Color(0x30000000), blurRadius: 1.5, offset: Offset(0, 1)),
-    ],
+    color: const Color(0xFF8B949B), // 纯净的实色中度灰，护眼且层次分明
+    fontWeight: FontWeight.w400, // 保持比正文细一点
+    shadows: const <Shadow>[], // 【关键】强制清空阴影，解决发糊发脏的问题
   );
 
   final spans = <InlineSpan>[];

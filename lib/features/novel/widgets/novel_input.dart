@@ -1045,8 +1045,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
                               : targetActorActive
                                   ? '输入要说的话…'
                                   : (widget.luckyCardActive
-                                      ? '运气已加持，描述你的行动…'
-                                      : '描述你想做的事…'),
+                                      ? '运气已加持…'
+                                      : '你想要说什么…'),
                   hintStyle: TextStyle(
                     color: speechBusy
                         ? Colors.white.withOpacity(.58)

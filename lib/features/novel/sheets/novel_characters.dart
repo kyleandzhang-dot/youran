@@ -359,7 +359,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
               final landscapeFooter = Align(
                 alignment: Alignment.centerRight,
                 child: Padding(
-                  // 右侧仍给一级悬浮导航留出安全带；筛选和头像整体贴着它左边摆放。
                   padding: EdgeInsets.only(right: rightFloatingRailReserve),
                   child: SizedBox(
                     width: landscapeFooterWidth,
@@ -387,6 +386,20 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                 ),
               );
 
+              // 新增：构建供竖屏和桌面端使用的底部模块（筛选 + 角色列表）
+              final portraitFooter = Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  filterBar(mode),
+                  _CharacterThumbStrip(
+                    characters: filtered,
+                    selectedKey: _characterKey(selected),
+                    onSelected: selectCharacter,
+                  ),
+                ],
+              );
+
               final stage = _CharacterShowcaseStage(
                 controller: widget.controller,
                 character: selected,
@@ -396,38 +409,21 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                 landscapeFooter: mode == _CharacterViewportMode.landscape
                     ? landscapeFooter
                     : null,
+                portraitFooter: mode != _CharacterViewportMode.landscape
+                    ? portraitFooter
+                    : null,
               );
 
-              switch (mode) {
-                case _CharacterViewportMode.landscape:
-                  return shell(
-                    mode,
-                    Column(
-                      children: <Widget>[
-                        header(mode),
-                        Expanded(child: stage),
-                      ],
-                    ),
-                  );
-
-                case _CharacterViewportMode.portrait:
-                case _CharacterViewportMode.desktop:
-                  return shell(
-                    mode,
-                    Column(
-                      children: <Widget>[
-                        header(mode),
-                        Expanded(child: stage),
-                        filterBar(mode),
-                        _CharacterThumbStrip(
-                          characters: filtered,
-                          selectedKey: _characterKey(selected),
-                          onSelected: selectCharacter,
-                        ),
-                      ],
-                    ),
-                  );
-              }
+              // 统一结构：不论横屏还是竖屏/桌面端，都将内容完全交由 stage 排版
+              return shell(
+                mode,
+                Column(
+                  children: <Widget>[
+                    header(mode),
+                    Expanded(child: stage),
+                  ],
+                ),
+              );
             },
           ),
         );
@@ -740,6 +736,7 @@ class _CharacterShowcaseStage extends StatefulWidget {
     required this.summary,
     required this.identity,
     this.landscapeFooter,
+    this.portraitFooter, // <--- 新增
     _CharacterViewportMode? mode,
     bool? compact,
   }) : mode = mode ??
@@ -752,6 +749,7 @@ class _CharacterShowcaseStage extends StatefulWidget {
   final String summary;
   final String identity;
   final Widget? landscapeFooter;
+  final Widget? portraitFooter; // <--- 新增
   final _CharacterViewportMode mode;
 
   @override
@@ -910,6 +908,8 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
           );
         }
 
+        // ... 前面的 landscape 代码保持不变 ...
+
         final portraitWidth = desktop
             ? math.min(constraints.maxWidth * .55, 620.0)
             : landscape
@@ -926,83 +926,113 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
             : landscape
                 ? 2.0
                 : -portraitWidth * .14;
-        final portraitBottom = desktop
-            ? -h * .055
-            : landscape
-                ? -h * .08
-                : -h * .025;
-        final portraitHeight = desktop
-            ? h * 1.02
-            : landscape
-                ? h * 1.10
-                : h * .96;
 
-        return Stack(
-          fit: StackFit.expand,
-          clipBehavior: Clip.none,
+        return Column(
           children: <Widget>[
-            Positioned(
-              left: portraitLeft,
-              bottom: portraitBottom,
-              child: IgnorePointer(
-                child: SizedBox(
-                  width: portraitWidth,
-                  height: portraitHeight,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 260),
-                    switchInCurve: Curves.easeOutCubic,
-                    switchOutCurve: Curves.easeInCubic,
-                    child: NovelArtwork(
-                      key: ValueKey<String>(
-                        'showcase-${_portraitUrl}-${widget.character.name}',
+            Expanded(
+              // 新增：内部 LayoutBuilder，获取扣除底部列表后的真实剩余高度
+              child: LayoutBuilder(
+                builder: (context, innerConstraints) {
+                  final innerH = innerConstraints.maxHeight;
+                  // 根据真实的剩余高度 (innerH) 计算尺寸，彻底解决立绘超出的问题
+                  final portraitHeight = desktop
+                      ? innerH * 1.02
+                      : landscape
+                          ? innerH * 1.10
+                          : innerH * 0.96;
+                  final portraitBottom = desktop
+                      ? -innerH * .055
+                      : landscape
+                          ? -innerH * .08
+                          : -innerH * .025;
+
+                  return Stack(
+                    fit: StackFit.expand,
+                    clipBehavior: Clip.none,
+                    children: <Widget>[
+                      Positioned(
+                        left: portraitLeft,
+                        bottom: portraitBottom,
+                        child: IgnorePointer(
+                          child: SizedBox(
+                            width: portraitWidth,
+                            height: portraitHeight,
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 260),
+                              switchInCurve: Curves.easeOutCubic,
+                              switchOutCurve: Curves.easeInCubic,
+                              child: NovelArtwork(
+                                key: ValueKey<String>(
+                                  'showcase-${_portraitUrl}-${widget.character.name}',
+                                ),
+                                url: CdnUtil.resize(_portraitUrl, width: 800),
+                                assetCandidates: <String>[
+                                  fallbackAsset,
+                                  'assets/images/portrait_female.webp',
+                                  'assets/images/portrait_male.png',
+                                ],
+                                fit: BoxFit.contain,
+                                alignment: Alignment.bottomCenter,
+                                fallbackText: '',
+                                fallbackIcon: Icons.person_outline_rounded,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      url: CdnUtil.resize(_portraitUrl, width: 800),
-                      assetCandidates: <String>[
-                        fallbackAsset,
-                        'assets/images/portrait_female.webp',
-                        'assets/images/portrait_male.png',
-                      ],
-                      fit: BoxFit.contain,
-                      alignment: Alignment.bottomCenter,
-                      fallbackText: '',
-                      fallbackIcon: Icons.person_outline_rounded,
-                    ),
-                  ),
-                ),
+                      Positioned(
+                        right: desktop ? 38 : 7,
+                        top: 0, // 修改点：将距离顶部的多余 30/13 边距设为 0，与左侧标题/立绘顶部平行
+                        bottom: 0,
+                        width: infoWidth,
+                        child: SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          padding: EdgeInsets.only(
+                            bottom: compact ? 8 : 12,
+                          ),
+                          child: _CharacterShowcaseInfo(
+                            character: widget.character,
+                            summary: widget.summary,
+                            identity: widget.identity,
+                            relationLabel: _relationLabel,
+                            compact: compact,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
-            Positioned(
-              right: desktop ? 38 : (landscape ? 6 : 7),
-              top: desktop ? 30 : (landscape ? 3 : 13),
-              bottom: desktop ? 22 : (landscape ? 3 : 8),
-              width: infoWidth,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            // 底部操作区，角色列表靠左，立绘模块固定在右侧
+            Padding(
+              padding: EdgeInsets.only(
+                top: 8,
+                bottom: compact ? 8 : 12,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
                   Expanded(
-                    child: SingleChildScrollView(
-                      physics: const BouncingScrollPhysics(),
-                      padding: EdgeInsets.only(
-                        bottom: landscape ? 4 : (compact ? 8 : 12),
-                      ),
-                      child: _CharacterShowcaseInfo(
+                    child: widget.portraitFooter ?? const SizedBox.shrink(),
+                  ),
+                  SizedBox(width: desktop ? 20 : 10),
+                  Padding(
+                    padding: EdgeInsets.only(
+                      right: desktop ? 38 : 7,
+                    ),
+                    child: SizedBox(
+                      width: infoWidth, 
+                      child: _CharacterQuickPortraitEditor(
+                        controller: widget.controller,
                         character: widget.character,
-                        summary: widget.summary,
-                        identity: widget.identity,
-                        relationLabel: _relationLabel,
                         compact: compact,
+                        onPortraitChanged: (portraitUrl) {
+                          if (!mounted) return;
+                          setState(() => _previewPortraitUrl = portraitUrl);
+                        },
                       ),
                     ),
-                  ),
-                  SizedBox(height: landscape ? 4 : (compact ? 8 : 12)),
-                  _CharacterQuickPortraitEditor(
-                    controller: widget.controller,
-                    character: widget.character,
-                    compact: compact,
-                    onPortraitChanged: (portraitUrl) {
-                      if (!mounted) return;
-                      setState(() => _previewPortraitUrl = portraitUrl);
-                    },
                   ),
                 ],
               ),
@@ -1638,18 +1668,18 @@ class _CharacterQuickPortraitEditorState
 
   @override
   Widget build(BuildContext context) {
-    // 提取输入框组件，方便根据 fillHeight 决定是否使用 Expanded 伸缩
+    // 1. 输入框容器（改为直角、无描边）
     Widget inputFieldContainer = Container(
       decoration: BoxDecoration(
         color: _archiveSurface,
-        borderRadius: BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+        borderRadius: BorderRadius.zero, // 直角
         border: Border.all(
-          color: _archiveLine,
+          color: _archiveLine, // 使用主题的浅色线条颜色作为描边
           width: 1,
         ),
       ),
       constraints: widget.fillHeight
-          ? null // 如果填充高度，则不写死限制
+          ? null 
           : BoxConstraints(
               minHeight: widget.landscapeDense ? 72 : (widget.compact ? 104 : 112),
             ),
@@ -1660,13 +1690,14 @@ class _CharacterQuickPortraitEditorState
         widget.landscapeDense ? 7 : 10,
       ),
       child: TextField(
+      
         controller: _promptController,
         focusNode: _promptFocusNode,
         enabled: !_generating,
         minLines: widget.fillHeight ? null : (widget.landscapeDense ? 2 : 4),
         maxLines: widget.fillHeight ? null : (widget.landscapeDense ? 3 : (widget.compact ? 4 : 5)),
-        expands: widget.fillHeight, // 核心：允许 TextField 向下填满容器
-        textAlignVertical: widget.fillHeight ? TextAlignVertical.top : null, // 文本靠上
+        expands: widget.fillHeight,
+        textAlignVertical: widget.fillHeight ? TextAlignVertical.top : null,
         scrollPadding: EdgeInsets.zero,
         cursorColor: NovelPalette.accent,
         style: TextStyle(
@@ -1696,7 +1727,6 @@ class _CharacterQuickPortraitEditorState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          // 横屏不再额外显示“更换立绘”四字标题，把宝贵高度全部交给描述框。
           if (widget.fillHeight)
             Expanded(child: inputFieldContainer)
           else
@@ -1715,33 +1745,27 @@ class _CharacterQuickPortraitEditorState
             ),
           ],
           SizedBox(height: widget.landscapeDense ? 7 : 10),
+
+          // 2. 生成立绘按钮（改为直角、无描边）
           SizedBox(
             width: double.infinity,
             height: widget.landscapeDense ? 36 : 42,
             child: Material(
               color: Colors.transparent,
-              borderRadius:
-                  BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+              borderRadius: BorderRadius.zero,
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                borderRadius:
-                    BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+                borderRadius: BorderRadius.zero,
                 onTap: (_generating || _uploading) ? null : _generatePortrait,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    borderRadius:
-                        BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+                    borderRadius: BorderRadius.zero, // 直角
                     color: _generating
                         ? _archiveSurfaceSoft
                         : _archiveThemeGreen,
-                    border: Border.all(
-                      color: _generating
-                          ? _archiveLine
-                          : _archiveThemeGreen,
-                      width: .9,
-                    ),
+                    // 移除 border: Border.all(...)
                   ),
                   child: _generating
                       ? const Row(
@@ -1780,17 +1804,18 @@ class _CharacterQuickPortraitEditorState
             ),
           ),
           SizedBox(height: widget.landscapeDense ? 7 : 10),
+
+          // 3. 本地上传按钮（改为直角、无描边）
+          // 3. 本地上传按钮（直角、无描边、浅灰色填充）
           SizedBox(
             width: double.infinity,
             height: widget.landscapeDense ? 36 : 42,
             child: Material(
               color: Colors.transparent,
-              borderRadius:
-                  BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+              borderRadius: BorderRadius.zero,
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                borderRadius:
-                    BorderRadius.circular(widget.landscapeDense ? 9 : 12),
+                borderRadius: BorderRadius.zero,
                 onTap: (_generating || _uploading)
                     ? null
                     : _pickAndApplyLocalPortrait,
@@ -1798,17 +1823,11 @@ class _CharacterQuickPortraitEditorState
                   duration: const Duration(milliseconds: 160),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    borderRadius:
-                        BorderRadius.circular(widget.landscapeDense ? 9 : 12),
-                    color: _uploading
-                        ? _archiveSurfaceSoft
-                        : Colors.transparent,
-                    border: Border.all(
-                      color: _uploading
-                          ? _archiveLine
-                          : _archiveAccent.withOpacity(.55),
-                      width: .9,
-                    ),
+                    borderRadius: BorderRadius.zero, // 直角
+                    // 使用很浅的灰色作为默认填充色
+                    color: _uploading 
+                        ? _archiveSurfaceSoft 
+                        : _archiveSurfaceSoft.withOpacity(0.6), 
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1827,7 +1846,7 @@ class _CharacterQuickPortraitEditorState
                       Text(
                         _uploading ? '上传中…' : '本地上传',
                         style: const TextStyle(
-                          color: _archiveAccent,
+                          color: _archiveAccent, // 保持文字颜色
                           fontSize: 10.4,
                           fontWeight: FontWeight.w700,
                           letterSpacing: .35,
