@@ -136,21 +136,25 @@ class _NovelPresenceStage extends StatelessWidget {
 
     if (singleActor) {
       if (wideDialogueLayout) {
+        // 【电脑端修改】：系数从 .55 降到 .40，最大最小值相应调低
         final widthBased =
-            (stageSize.width * .55).clamp(550.0, 960.0).toDouble();
+            (stageSize.width * .40).clamp(400.0, 720.0).toDouble(); 
+        // 高度系数从 1.05 降到 .85
         final heightBased =
-            (stageSize.height * 1.05).clamp(500.0, 1000.0).toDouble();
+            (stageSize.height * .85).clamp(400.0, 800.0).toDouble(); 
         portraitWidth = math.min(widthBased, heightBased);
         portraitHeightRatio = 1.25;
-        sinkRatio = .45;
+        sinkRatio = .45; // 如果你觉得立绘沉在屏幕下面太多或太少，可以微调这个值
       } else if (shortWide) {
+        // 【横屏修改】：系数从 .55 降到 .40，高度系数从 1.22 降到 .90
         portraitWidth = math
-            .min(stageSize.width * .55, stageSize.height * 1.22)
-            .clamp(330.0, 520.0)
+            .min(stageSize.width * .40, stageSize.height * .90)
+            .clamp(260.0, 420.0) // 上下限从 330-520 降低到 260-420
             .toDouble();
         portraitHeightRatio = 1.25;
         sinkRatio = .45;
       } else {
+      
         const double minStage = 320.0;
         const double maxStage = 600.0;
         final t = ((stageSize.width - minStage) / (maxStage - minStage))

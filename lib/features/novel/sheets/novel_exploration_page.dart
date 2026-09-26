@@ -202,7 +202,8 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
       _statusText = '正在载入当前场景…';
     });
     try {
-      final loaded = await _loadSceneImages(package, _currentPlayerAsset());
+      final gender = widget.controller?.protagonist?.gender ?? '';
+      final loaded = await _loadSceneImages(package, _currentPlayerAsset(), gender);
       if (!mounted || serial != _generationSerial) {
         loaded.dispose();
         return;
@@ -253,14 +254,182 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
       }
       final previousPlayer = images.player;
       images.player = image;
+      images.isFallbackPlayer = false; // ✨ 真实立绘就绪后，取消默认头像状态
       _loadedPlayerUrl = playerUrl;
       setState(() {});
       _disposeUiImage(previousPlayer);
     } catch (_) {
-      // 静默失败即可：保留当前立绘（或占位符），不打断场景其它部分；
-      // 下一次 controller 变化时会自动重试。
     } finally {
       _playerPortraitSyncing = false;
+    }
+  }
+
+  Future<_LoadedSceneImages> _loadSceneImages(
+    JsonMap package,
+    JsonMap playerAsset,
+    String gender, // ✨ 新增参数
+  ) async {
+    final floor = _sceneMap(package['floor']);
+    final sheet = _sceneMap(package['sprite_sheet']);
+    final floorUrl = _sceneString(floor['url']);
+    final atlasUrl = _sceneString(sheet['url']);
+    final sheetMode = _sceneString(sheet['mode']).toLowerCase();
+    final objectCount = _sceneList(package['objects']).length;
+    final spriteEntries = _sceneList(package['sprites'])
+        .map(_sceneMap)
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+
+    if (floorUrl.isEmpty) {
+      throw const NovelBackendException('场景资产缺少 floor.url');
+    }
+
+    final spriteUrls = List<String>.filled(objectCount, '');
+    for (final sprite in spriteEntries) {
+      final index = _sceneInt(sprite['sprite_index'], -1);
+      if (index < 0 || index >= spriteUrls.length) continue;
+      spriteUrls[index] = _sceneString(sprite['url']);
+    }
+    final hasIndividualSprites = objectCount > 0 &&
+        spriteUrls.length == objectCount &&
+        spriteUrls.every((url) => url.isNotEmpty);
+
+    var playerUrl = _sceneString(
+      playerAsset['portrait_url'],
+      _sceneString(playerAsset['avatar_url']),
+    );
+
+    // ✨ 根据性别分配默认头像
+    bool isFallbackPlayer = false;
+    if (playerUrl.isEmpty) {
+      isFallbackPlayer = true;
+      playerUrl = gender.trim() == '女'
+          ? 'assets/images/female.webp'
+          : 'assets/images/male.webp';
+    }
+
+    dynamic floorImage;
+    dynamic atlasImage;
+    dynamic stripImage;
+    dynamic playerImage;
+    final spriteImages = <dynamic>[];
+    try {
+      if (hasIndividualSprites) {
+        final values = await Future.wait<dynamic>(<Future<dynamic>>[
+          _loadUiImage(floorUrl),
+          ...spriteUrls.map(_loadUiImage),
+          if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
+        ]);
+        floorImage = values.first;
+        spriteImages.addAll(values.sublist(1, 1 + objectCount));
+        playerImage = values.last;
+
+        final spriteRectLists = await Future.wait(
+          spriteImages.map((image) => _extractOpaqueSpriteRects(image, 1, 1)),
+        );
+        final spriteRects = [
+          for (final rects in spriteRectLists) rects.first,
+        ];
+        return _LoadedSceneImages(
+          floor: floorImage,
+          atlas: null,
+          strip: null,
+          sprites: spriteImages,
+          player: playerImage,
+          isFallbackPlayer: isFallbackPlayer, // ✨ 传值
+          spriteRects: spriteRects,
+        );
+      }
+
+      final floorRenderMode = _sceneString(floor['render_mode']).toLowerCase();
+      final sourceSheetMode = _sceneString(
+        floor['source_sheet_mode'],
+        _sceneString(_sceneMap(floor['stage'])['source_sheet_mode']),
+      ).toLowerCase();
+      final metadataOnlyHotspots =
+          floorRenderMode == 'full_scene_plate' ||
+          sourceSheetMode == 'full_scene_composite' ||
+          sheetMode == 'disabled' ||
+          (atlasUrl.isEmpty && !hasIndividualSprites);
+
+      if (metadataOnlyHotspots) {
+        final values = await Future.wait<dynamic>(<Future<dynamic>>[
+          _loadUiImage(floorUrl),
+          if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
+        ]);
+        floorImage = values[0];
+        playerImage = values[1];
+
+        return _LoadedSceneImages(
+          floor: floorImage,
+          atlas: null,
+          strip: null,
+          sprites: const <dynamic>[],
+          player: playerImage,
+          isFallbackPlayer: isFallbackPlayer, // ✨ 传值
+          spriteRects: const <Rect>[],
+        );
+      }
+
+      if (sheetMode == 'strip') {
+        final values = await Future.wait<dynamic>(<Future<dynamic>>[
+          _loadUiImage(floorUrl),
+          if (atlasUrl.isNotEmpty)
+            _loadPreparedAtlas(atlasUrl, sheet, 1, 1)
+          else
+            Future<dynamic>.value(null),
+          if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
+        ]);
+        floorImage = values[0];
+        final preparedStrip = values[1] as _PreparedSceneAtlas?;
+        stripImage = preparedStrip?.image;
+        playerImage = values[2];
+
+        return _LoadedSceneImages(
+          floor: floorImage,
+          atlas: null,
+          strip: stripImage,
+          sprites: const <dynamic>[],
+          player: playerImage,
+          isFallbackPlayer: isFallbackPlayer, // ✨ 传值
+          spriteRects: const <Rect>[],
+        );
+      }
+
+      final cols = _sceneInt(sheet['cols'], 3).clamp(1, 12).toInt();
+      final rows = _sceneInt(sheet['rows'], 3).clamp(1, 12).toInt();
+
+      final values = await Future.wait<dynamic>(<Future<dynamic>>[
+        _loadUiImage(floorUrl),
+        if (atlasUrl.isNotEmpty)
+          _loadPreparedAtlas(atlasUrl, sheet, cols, rows)
+        else
+          Future<dynamic>.value(null),
+        if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
+      ]);
+      floorImage = values[0];
+      final preparedAtlas = values[1] as _PreparedSceneAtlas?;
+      atlasImage = preparedAtlas?.image;
+      playerImage = values[2];
+
+      return _LoadedSceneImages(
+        floor: floorImage,
+        atlas: atlasImage,
+        strip: null,
+        sprites: const <dynamic>[],
+        player: playerImage,
+        isFallbackPlayer: isFallbackPlayer, // ✨ 传值
+        spriteRects: preparedAtlas?.spriteRects ?? const <Rect>[],
+      );
+    } catch (_) {
+      _disposeUiImage(floorImage);
+      _disposeUiImage(atlasImage);
+      _disposeUiImage(stripImage);
+      for (final image in spriteImages) {
+        _disposeUiImage(image);
+      }
+      _disposeUiImage(playerImage);
+      rethrow;
     }
   }
 
@@ -322,7 +491,8 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
 
           // Image Service 只有在 Cloudflare Worker 已把 Fal 图片流式落到 R2 后
           // 才会把任务标记 completed；Flutter 这里只消费最终 R2 URL。
-          final loaded = await _loadSceneImages(package, playerAsset);
+          final gender = widget.controller?.protagonist?.gender ?? '';
+          final loaded = await _loadSceneImages(package, playerAsset, gender);
           if (!mounted || serial != _generationSerial) {
             loaded.dispose();
             return;
@@ -378,164 +548,6 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
       await widget.backend.cancelSceneAssetTask(taskId);
     } catch (_) {
       // 页面已经停止消费结果；后端取消失败不覆盖用户当前页面状态。
-    }
-  }
-
-  Future<_LoadedSceneImages> _loadSceneImages(
-    JsonMap package,
-    JsonMap playerAsset,
-  ) async {
-    final floor = _sceneMap(package['floor']);
-    final sheet = _sceneMap(package['sprite_sheet']);
-    final floorUrl = _sceneString(floor['url']);
-    final atlasUrl = _sceneString(sheet['url']);
-    final sheetMode = _sceneString(sheet['mode']).toLowerCase();
-    final objectCount = _sceneList(package['objects']).length;
-    final spriteEntries = _sceneList(package['sprites'])
-        .map(_sceneMap)
-        .where((item) => item.isNotEmpty)
-        .toList(growable: false);
-
-    if (floorUrl.isEmpty) {
-      throw const NovelBackendException('场景资产缺少 floor.url');
-    }
-
-    // Legacy compatibility only. New scene assets may return either a keyed
-    // building strip or a classic sprite sheet.
-    final spriteUrls = List<String>.filled(objectCount, '');
-    for (final sprite in spriteEntries) {
-      final index = _sceneInt(sprite['sprite_index'], -1);
-      if (index < 0 || index >= spriteUrls.length) continue;
-      spriteUrls[index] = _sceneString(sprite['url']);
-    }
-    final hasIndividualSprites = objectCount > 0 &&
-        spriteUrls.length == objectCount &&
-        spriteUrls.every((url) => url.isNotEmpty);
-
-
-    final playerUrl = _sceneString(
-      playerAsset['portrait_url'],
-      _sceneString(playerAsset['avatar_url']),
-    );
-
-    dynamic floorImage;
-    dynamic atlasImage;
-    dynamic stripImage;
-    dynamic playerImage;
-    final spriteImages = <dynamic>[];
-    try {
-      if (hasIndividualSprites) {
-        final values = await Future.wait<dynamic>(<Future<dynamic>>[
-          _loadUiImage(floorUrl),
-          ...spriteUrls.map(_loadUiImage),
-          if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
-        ]);
-        floorImage = values.first;
-        spriteImages.addAll(values.sublist(1, 1 + objectCount));
-        playerImage = values.last;
-
-        final spriteRectLists = await Future.wait(
-          spriteImages.map((image) => _extractOpaqueSpriteRects(image, 1, 1)),
-        );
-        final spriteRects = [
-          for (final rects in spriteRectLists) rects.first,
-        ];
-        return _LoadedSceneImages(
-          floor: floorImage,
-          atlas: null,
-          strip: null,
-          sprites: spriteImages,
-          player: playerImage,
-          spriteRects: spriteRects,
-        );
-      }
-
-      final floorRenderMode = _sceneString(floor['render_mode']).toLowerCase();
-      final sourceSheetMode = _sceneString(
-        floor['source_sheet_mode'],
-        _sceneString(_sceneMap(floor['stage'])['source_sheet_mode']),
-      ).toLowerCase();
-      final metadataOnlyHotspots =
-          floorRenderMode == 'full_scene_plate' ||
-          sourceSheetMode == 'full_scene_composite' ||
-          sheetMode == 'disabled' ||
-          (atlasUrl.isEmpty && !hasIndividualSprites);
-
-      if (metadataOnlyHotspots) {
-        final values = await Future.wait<dynamic>(<Future<dynamic>>[
-          _loadUiImage(floorUrl),
-          if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
-        ]);
-        floorImage = values[0];
-        playerImage = values[1];
-
-        return _LoadedSceneImages(
-          floor: floorImage,
-          atlas: null,
-          strip: null,
-          sprites: const <dynamic>[],
-          player: playerImage,
-          spriteRects: const <Rect>[],
-        );
-      }
-
-      if (sheetMode == 'strip') {
-        final values = await Future.wait<dynamic>(<Future<dynamic>>[
-          _loadUiImage(floorUrl),
-          if (atlasUrl.isNotEmpty)
-            _loadPreparedAtlas(atlasUrl, sheet, 1, 1)
-          else
-            Future<dynamic>.value(null),
-          if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
-        ]);
-        floorImage = values[0];
-        final preparedStrip = values[1] as _PreparedSceneAtlas?;
-        stripImage = preparedStrip?.image;
-        playerImage = values[2];
-
-        return _LoadedSceneImages(
-          floor: floorImage,
-          atlas: null,
-          strip: stripImage,
-          sprites: const <dynamic>[],
-          player: playerImage,
-          spriteRects: const <Rect>[],
-        );
-      }
-
-      final cols = _sceneInt(sheet['cols'], 3).clamp(1, 12).toInt();
-      final rows = _sceneInt(sheet['rows'], 3).clamp(1, 12).toInt();
-
-      final values = await Future.wait<dynamic>(<Future<dynamic>>[
-        _loadUiImage(floorUrl),
-        if (atlasUrl.isNotEmpty)
-          _loadPreparedAtlas(atlasUrl, sheet, cols, rows)
-        else
-          Future<dynamic>.value(null),
-        if (playerUrl.isNotEmpty) _loadUiImage(playerUrl) else Future<dynamic>.value(null),
-      ]);
-      floorImage = values[0];
-      final preparedAtlas = values[1] as _PreparedSceneAtlas?;
-      atlasImage = preparedAtlas?.image;
-      playerImage = values[2];
-
-      return _LoadedSceneImages(
-        floor: floorImage,
-        atlas: atlasImage,
-        strip: null,
-        sprites: const <dynamic>[],
-        player: playerImage,
-        spriteRects: preparedAtlas?.spriteRects ?? const <Rect>[],
-      );
-    } catch (_) {
-      _disposeUiImage(floorImage);
-      _disposeUiImage(atlasImage);
-      _disposeUiImage(stripImage);
-      for (final image in spriteImages) {
-        _disposeUiImage(image);
-      }
-      _disposeUiImage(playerImage);
-      rethrow;
     }
   }
 
@@ -1792,6 +1804,7 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
               stripImage: hasScene ? images!.strip : null,
               spriteImages: hasScene ? images!.sprites : const <dynamic>[],
               playerImage: hasScene ? images!.player : null,
+              isFallbackPlayer: hasScene ? images!.isFallbackPlayer : false,
               spriteRects: hasScene ? images!.spriteRects : const <Rect>[],
               showFootprints: _showFootprints,
               onEntityTap: _handleEntityTap,
@@ -2035,6 +2048,7 @@ class _LoadedSceneImages {
     required this.strip,
     required this.sprites,
     required this.player,
+    required this.isFallbackPlayer, // ✨ 新增：是否为默认头像标识
     required this.spriteRects,
   });
 
@@ -2042,8 +2056,8 @@ class _LoadedSceneImages {
   final dynamic atlas;
   final dynamic strip;
   final List<dynamic> sprites;
-  // 非 final：允许立绘就绪较晚时原地替换，见 _syncPlayerPortrait。
   dynamic player;
+  bool isFallbackPlayer; // ✨ 新增
   final List<Rect> spriteRects;
 
   void dispose() {
@@ -2054,6 +2068,38 @@ class _LoadedSceneImages {
       _disposeUiImage(image);
     }
     _disposeUiImage(player);
+  }
+}
+
+Future<dynamic> _loadUiImage(String url) async {
+  // ✨ 新增：支持读取本地 assets 兜底头像
+  if (url.startsWith('assets/')) {
+    final completer = Completer<dynamic>();
+    final stream = AssetImage(url).resolve(ImageConfiguration.empty);
+    late ImageStreamListener listener;
+    listener = ImageStreamListener((info, _) {
+      stream.removeListener(listener);
+      completer.complete(info.image);
+    }, onError: (e, s) {
+      stream.removeListener(listener);
+      completer.completeError(e);
+    });
+    stream.addListener(listener);
+    return completer.future;
+  }
+
+  // 原有网络图片逻辑
+  final file = await DefaultCacheManager().getSingleFile(url);
+  final bytes = await file.readAsBytes();
+  if (bytes.isEmpty) {
+    throw NovelBackendException('图片为空：$url');
+  }
+  final codec = await instantiateImageCodec(Uint8List.fromList(bytes));
+  try {
+    final frame = await codec.getNextFrame();
+    return frame.image;
+  } finally {
+    codec.dispose();
   }
 }
 
@@ -2087,6 +2133,7 @@ class _SceneAssetCanvas extends StatefulWidget {
     required this.stripImage,
     required this.spriteImages,
     required this.playerImage,
+    required this.isFallbackPlayer,
     required this.spriteRects,
     required this.showFootprints,
     required this.onEntityTap,
@@ -2111,6 +2158,7 @@ class _SceneAssetCanvas extends StatefulWidget {
   final dynamic stripImage;
   final List<dynamic> spriteImages;
   final dynamic playerImage;
+  final bool isFallbackPlayer;
   final List<Rect> spriteRects;
   final bool showFootprints;
   final ValueChanged<JsonMap> onEntityTap;
@@ -2156,7 +2204,16 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   final Set<LogicalKeyboardKey> _pressedKeys = <LogicalKeyboardKey>{};
   Offset _joystickIntent = Offset.zero;
   bool _joystickActive = false;
+  // Input velocity is eased separately from the collision-resolved velocity.
+  // This removes the instant 0 -> max speed jump that makes a static portrait
+  // look as if it is sliding across the floor.
+  Offset _driveVelocityPx = Offset.zero;
   Offset _velocityPx = Offset.zero;
+  double _walkStrength = 0.0;
+  // Nullable on purpose: newly-added State fields can be undefined after a
+  // Flutter Web hot reload. All reads below fall back to a safe idle phase.
+  Timer? _idleTimer;
+  double? _idlePhase;
   Offset? _cameraWorldPos;
   Offset _smoothedVelocity = Offset.zero;
   // Timer.periodic(16ms) 驱动移动循环。（曾经试过换成 Ticker 以对齐
@@ -2177,6 +2234,7 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   void initState() {
     super.initState();
     _resetPlayer();
+    _ensureIdleLoop();
     widget.joystickIntent?.addListener(_onExternalJoystickIntent);
     widget.joystickActive?.addListener(_onExternalJoystickActive);
   }
@@ -2206,8 +2264,35 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   void dispose() {
     widget.joystickIntent?.removeListener(_onExternalJoystickIntent);
     widget.joystickActive?.removeListener(_onExternalJoystickActive);
+    _idleTimer?.cancel();
     _stopMotionLoop();
     super.dispose();
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    // Re-create the timer after a debug hot reload as well. The nullable phase
+    // prevents the old State instance from crashing before a hot restart.
+    _ensureIdleLoop();
+  }
+
+  void _ensureIdleLoop() {
+    if (_idleTimer != null) return;
+    _idleTimer = Timer.periodic(const Duration(milliseconds: 40), (_) {
+      if (!mounted) return;
+      final isIdle = _driveVelocityPx == Offset.zero && _walkStrength <= .01;
+      if (!isIdle) {
+        _idlePhase = 0.0;
+        return;
+      }
+      setState(() {
+        // One slow breathing cycle every 2.4 seconds (25 fps is sufficient
+        // for a sub-pixel idle motion and cheaper than the 60 fps move loop).
+        _idlePhase = ((_idlePhase ?? 0.0) + math.pi / 30) %
+            (math.pi * 2);
+      });
+    });
   }
 
   JsonMap get _grid => _sceneMap(widget.assetPackage['grid']);
@@ -2245,7 +2330,10 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   void _resetPlayer() {
     _stopMotionLoop();
     _lastMotionAt = null;
+    _driveVelocityPx = Offset.zero;
     _velocityPx = Offset.zero;
+    _walkStrength = 0.0;
+    _idlePhase = 0.0;
     _cameraWorldPos = null;
     _smoothedVelocity = Offset.zero;
     _joystickIntent = Offset.zero;
@@ -2370,17 +2458,15 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   }
 
   void _stopMotionImmediately({bool repaint = true}) {
-    final needsRepaint = _velocityPx != Offset.zero || _walkPhase != 0;
-    _velocityPx = Offset.zero;
+    final needsRepaint = _driveVelocityPx != Offset.zero ||
+        _velocityPx != Offset.zero ||
+        _walkStrength > .001;
     if (repaint && needsRepaint && mounted) {
       setState(() {
-        _walkPhase = 0;
-        _dustParticles.clear();
-        _moveHint = '左下摇杆移动 · WASD / 方向键移动 · 长按物件查看';
+        _moveHint = '正在停步…';
       });
     }
-    // Keep ticking briefly so velocity lookahead and camera follow can settle
-    // instead of freezing on the exact frame input is released.
+    // Keep ticking so the drive velocity, walk pose and camera can all settle.
     _ensureMotionLoop();
   }
 
@@ -2534,31 +2620,58 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final hasInput = intent.distance > .03;
     intent = _normalized(intent);
 
-    if (!hasInput) {
-      _joystickIntent = Offset.zero;
-      final wasMoving = _velocityPx != Offset.zero || _walkPhase != 0;
+    if (!hasInput) _joystickIntent = Offset.zero;
+
+    // Ease the actual drive velocity. Acceleration is deliberately softer
+    // than braking: the portrait leans into a walk but still stops promptly.
+    final targetVelocity = hasInput
+        ? Offset(intent.dx * _maxMoveSpeedPx, intent.dy * _maxMoveSpeedPx)
+        : Offset.zero;
+    final velocityResponse = hasInput ? 13.0 : 20.0;
+    final velocityFactor = 1.0 - math.exp(-velocityResponse * dt);
+    _driveVelocityPx = Offset(
+      _driveVelocityPx.dx +
+          (targetVelocity.dx - _driveVelocityPx.dx) * velocityFactor,
+      _driveVelocityPx.dy +
+          (targetVelocity.dy - _driveVelocityPx.dy) * velocityFactor,
+    );
+    if (!hasInput && _driveVelocityPx.distance < .5) {
+      _driveVelocityPx = Offset.zero;
+    }
+
+    final hasMotion = _driveVelocityPx != Offset.zero;
+    final nextWalkStrength =
+        (_driveVelocityPx.distance / _maxMoveSpeedPx)
+            .clamp(0.0, 1.0)
+            .toDouble();
+    final walkStrengthChanged =
+        (nextWalkStrength - _walkStrength).abs() > .001;
+
+    if (!hasMotion) {
+      final wasMoving = _velocityPx != Offset.zero ||
+          _walkPhase != 0 ||
+          _walkStrength > .001;
       _velocityPx = Offset.zero;
       final cameraChanged = _updateCamera(dt, metrics);
+      final hadDust = _dustParticles.isNotEmpty;
       _dustParticles.removeWhere((particle) => particle.isExpired(now));
-      if (wasMoving || cameraChanged) {
+      if (wasMoving || cameraChanged || hadDust) {
         setState(() {
+          _walkStrength = 0;
           _walkPhase = 0;
           _moveHint = '左下摇杆移动 · WASD / 方向键移动 · 长按物件查看';
         });
       }
-      if (_cameraIsSettled(metrics)) {
+      if (_cameraIsSettled(metrics) && _dustParticles.isEmpty) {
         _stopMotionLoop();
         _lastMotionAt = null;
       }
       return;
     }
 
-    var vx = intent.dx * _maxMoveSpeedPx;
-    var vy = intent.dy * _maxMoveSpeedPx;
-
     var nextPlayer = _player;
     var travelledPx = 0.0;
-    final totalDelta = Offset(vx * dt, vy * dt);
+    final totalDelta = _driveVelocityPx * dt;
     final steps = math.max(1, (totalDelta.distance / 7).ceil());
     final step = Offset(totalDelta.dx / steps, totalDelta.dy / steps);
     for (var i = 0; i < steps; i++) {
@@ -2580,19 +2693,23 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
       projectedDelta.dy / dt,
     );
     var nextFacing = _facing;
-    if (hasInput) {
-      if (intent.dx.abs() > .08) {
-        nextFacing = intent.dx < 0 ? 'W' : 'E';
-      } else if (intent.dy.abs() > .08) {
-        nextFacing = intent.dy < 0 ? 'N' : 'S';
+    final motionDirection = _normalized(_driveVelocityPx);
+    if (hasMotion) {
+      // Choose the dominant axis so a tiny diagonal component does not force
+      // the portrait to face east/west during mostly vertical movement.
+      if (motionDirection.dx.abs() >= motionDirection.dy.abs()) {
+        nextFacing = motionDirection.dx < 0 ? 'W' : 'E';
+      } else {
+        nextFacing = motionDirection.dy < 0 ? 'N' : 'S';
       }
     }
 
     final velocityChanged = (_velocityPx - actualVelocity).distanceSquared > .01;
-    if (movedDistance > .0001 || velocityChanged) {
+    if (movedDistance > .0001 || velocityChanged || walkStrengthChanged) {
       setState(() {
         _player = nextPlayer;
         _velocityPx = actualVelocity;
+        _walkStrength = nextWalkStrength;
         _updateCamera(dt, metrics);
         _facing = nextFacing;
         
@@ -2621,10 +2738,29 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
         }
         
         _dustParticles.removeWhere((p) => p.isExpired(now));
-        _moveHint = '摇杆 / WASD 连续移动 · 松开立即停止';
+        _moveHint = hasInput
+            ? '摇杆 / WASD 连续移动 · 松开平滑停步'
+            : '正在停步…';
       });
+
+      // ==========================================
+      // ✨ 自动拾取逻辑 ✨
+      // 人物处于移动状态，且当前未被其他强制交互打断时执行
+      // ==========================================
+      if (widget.interactionEnabled) {
+        final nearestLoot = _nearbyGroundLoot();
+        if (nearestLoot != null) {
+          final distance = (_player - nearestLoot.position).distance;
+          // 距离小于 0.6 格判定为触碰，直接拾取
+          if (distance < 0.6) {
+            widget.onPickUpLoot(nearestLoot.node);
+          }
+        }
+      }
+
     } else {
       _velocityPx = actualVelocity;
+      _walkStrength = nextWalkStrength;
       if (_updateCamera(dt, metrics)) setState(() {});
     }
   }
@@ -3085,26 +3221,56 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     }
   }
 
-  @override
+ @override
   Widget build(BuildContext context) {
     final metrics = _sceneMetrics();
     final objects = _objects;
     final floorSpec = _sceneMap(widget.assetPackage['floor']);
     final nearbyBuilding = _nearbyBuilding();
-    final nearbyBuildingName = nearbyBuilding == null
-        ? ''
-        : _sceneString(
-            nearbyBuilding['display_name'],
-            _sceneString(nearbyBuilding['name']),
-          );
     final nearbyTarget = _nearbyNavigationTarget();
     final nearbyInteraction = _nearbySceneInteraction();
     final nearbyLoot = _nearbyGroundLoot();
+
+    // ==========================================
+    // 专属的“圆形、毛玻璃、白边”底层按钮组件
+    // ==========================================
+    Widget buildActionButton({
+      required Widget child, // 接收任意 Widget（Icon 或是 Image）
+      required VoidCallback? onPressed,
+    }) {
+      return GestureDetector(
+        onTap: onPressed,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 150),
+          opacity: onPressed == null ? 0.4 : 1.0,
+          child: ClipOval(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
+              child: Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0x33FFFFFF), 
+                  border: Border.all(color: const Color(0xCCFFFFFF), width: 1.2),
+                ),
+                alignment: Alignment.center,
+                child: child,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return ColoredBox(
       color: const Color(0xFF111315),
       child: Stack(
         children: <Widget>[
+          // ==========================================
+          // 1. 底层：游戏主画布 (被你误删的部分找回来了)
+          // ==========================================
           Positioned.fill(
             child: Focus(
               autofocus: true,
@@ -3154,12 +3320,15 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                                 stripImage: widget.stripImage,
                                 spriteImages: widget.spriteImages,
                                 playerImage: widget.playerImage,
+                                isFallbackPlayer: widget.isFallbackPlayer,
                                 spriteRects: widget.spriteRects,
                                 player: _player,
                                 facing: _facing,
                                 metrics: metrics,
                                 showFootprints: widget.showFootprints,
                                 walkPhase: _walkPhase,
+                                walkStrength: _walkStrength,
+                                idlePhase: _idlePhase ?? 0.0,
                                 dustParticles: _dustParticles,
                                 nearbyBuilding: nearbyBuilding,
                               ),
@@ -3174,71 +3343,90 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
             ),
           ),
 
+          // ==========================================
+          // 2. 中层：场景里的问号/掉落物标记
+          // ==========================================
           Positioned.fill(child: _buildSceneMarkers(metrics, nearbyInteraction)),
 
-          if (nearbyTarget != null || nearbyLoot != null)
+          // ==========================================
+          // 3. 上层右下角：交互按钮面板 (带 Column 定位)
+          // ==========================================
+          if (nearbyTarget != null || nearbyLoot != null || nearbyInteraction != null)
             Positioned(
-              right: 18,
-              bottom: MediaQuery.paddingOf(context).bottom + 82,
+              right: 90, 
+              bottom: MediaQuery.paddingOf(context).bottom + 95, 
               child: SafeArea(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
+                    // 掉落物拾取按钮（自带白色 Icon）
                     if (nearbyLoot != null)
-                      OutlinedButton.icon(
-                        onPressed: widget.interactionEnabled
-                            ? () => widget.onPickUpLoot(nearbyLoot.node)
-                            : null,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFFECE9E2),
-                          backgroundColor: const Color(0xE01A1D22),
-                          side: const BorderSide(
-                            color: Color(0x33FFFFFF),
-                            width: .8,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 13,
-                            vertical: 9,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                        ),
-                        icon: const Icon(Icons.inventory_2_outlined, size: 16),
-                        label: Text(
-                          '拾取 ${_sceneString(nearbyLoot.node['label'], '物品')}',
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16.0),
+                        child: buildActionButton(
+                          child: const Icon(Icons.inventory_2_outlined, color: Colors.white, size: 26),
+                          onPressed: widget.interactionEnabled
+                              ? () => widget.onPickUpLoot(nearbyLoot.node)
+                              : null,
                         ),
                       ),
-                    if (nearbyTarget != null) ...<Widget>[
-                      if (nearbyLoot != null) const SizedBox(height: 8),
-                      FilledButton.tonalIcon(
-                        onPressed: widget.navigationEnabled
-                            ? () => widget.onNavigationTarget(nearbyTarget)
-                            : null,
-                        icon: const Icon(Icons.directions_walk_rounded),
-                        label: Text(
-                          _sceneString(
-                            nearbyTarget.navigationTrigger['prompt'],
-                            '前往${nearbyTarget.name}',
+                      
+                    // 场景调查按钮（这里使用你的透明 PNG 切图）
+                    if (nearbyInteraction != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16.0),
+                        child: buildActionButton(
+                          child: Image.asset(
+                            'assets/images/icon_investigate.webp', // 👈 你的放大镜图片
+                            width: 28,
+                            height: 28,
+                            fit: BoxFit.contain,
                           ),
+                          onPressed: widget.interactionEnabled
+                              ? () {
+                                  final anchor = _interactionAnchor(nearbyInteraction);
+                                  final sourcePosition = anchor ??
+                                      _nearestWalkable(_player + const Offset(1.0, 0));
+                                  if (!boolValue(nearbyInteraction['collectible'])) {
+                                    _showSearchEffect(sourcePosition);
+                                  }
+                                  widget.onRevealInteraction(
+                                    nearbyInteraction,
+                                    sourcePosition,
+                                  );
+                                }
+                              : null,
                         ),
                       ),
-                    ],
+                      
+                    // 导航目标按钮（自带白色 Icon）
+                    if (nearbyTarget != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16.0),
+                        child: buildActionButton(
+                          child: const Icon(Icons.directions_walk_rounded, color: Colors.white, size: 26),
+                          onPressed: widget.interactionEnabled
+                              ? () => widget.onNavigationTarget(nearbyTarget)
+                              : null,
+                        ),
+                      ),
                   ],
                 ),
               ),
             ),
           
-         if (widget.joystickIntent == null)
+          // ==========================================
+          // 4. 上层左下角：移动摇杆
+          // ==========================================
+          if (widget.joystickIntent == null)
             AnimatedPositioned(
               duration: const Duration(milliseconds: 250),
               curve: Curves.easeOutCubic,
-              // 【人体工学优化】：参考传统 MOBA，左边距拉大，底边距压低，使拇指自然落在热区
-              left: 84, // 👈 将左边距从 56 调大到 84（如果你的受众手机屏幕普遍偏大，甚至可以给到 96）
+              left: 84,
               bottom: (widget.isStoryActive && widget.canExitStory)
-                  ? MediaQuery.paddingOf(context).bottom + 88 // 👈 剧情模式下也相应调低（原为 112）
-                  : 28 + MediaQuery.paddingOf(context).bottom, // 👈 自由探索时底边距压低到 28（原为 48）
+                  ? MediaQuery.paddingOf(context).bottom + 88
+                  : 28 + MediaQuery.paddingOf(context).bottom,
               child: AnimatedOpacity(
                 opacity: !widget.isStoryActive ? 1.0 : (widget.canExitStory ? 1.0 : 0.0),
                 duration: const Duration(milliseconds: 250),
@@ -3260,7 +3448,6 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
       ),
     );
   }
-
 }
 
 class NovelExplorationJoystick extends StatefulWidget {
@@ -3524,12 +3711,15 @@ class _SceneAssetPainter extends CustomPainter {
     required this.stripImage,
     required this.spriteImages,
     required this.playerImage,
+    required this.isFallbackPlayer,
     required this.spriteRects,
     required this.player,
     required this.facing,
     required this.metrics,
     required this.showFootprints,
     required this.walkPhase,
+    required this.walkStrength,
+    required this.idlePhase,
     required this.dustParticles,
     this.nearbyBuilding,
   });
@@ -3543,12 +3733,15 @@ class _SceneAssetPainter extends CustomPainter {
   final dynamic stripImage;
   final List<dynamic> spriteImages;
   final dynamic playerImage;
+  final bool isFallbackPlayer;
   final List<Rect> spriteRects;
   final Offset player;
   final String facing;
   final _IsoMetrics metrics;
   final bool showFootprints;
   final double walkPhase;
+  final double walkStrength;
+  final double idlePhase;
   final List<_StepDustParticle> dustParticles;
   final JsonMap? nearbyBuilding;
 
@@ -4519,15 +4712,23 @@ class _SceneAssetPainter extends CustomPainter {
   void _drawPlayer(Canvas canvas) {
     final p = metrics.project(player.dx, player.dy, .03);
     
-    // 仅保留极其克制的垂直节奏，绝不进行旋转或拉伸形变
     final cycle = math.sin(walkPhase);
-    final isMoving = walkPhase > 0.001;
-    final bob = isMoving ? -cycle.abs() * 2.2 : 0.0;
+    final isMoving = walkStrength > .01;
+    // Pokemon-style idle: rise slowly from the grounded pose and settle back.
+    // Only the upper-body pass consumes these values; the feet stay planted.
+    final idleWave = isMoving ? 0.0 : (1.0 - math.cos(idlePhase)) * .5;
+    final idleUpperLift = idleWave * 1.0;
+    final idleUpperStretch = 1.0 + idleWave * .004;
+    final bob = isMoving
+        ? -math.pow(cycle.abs(), 1.55).toDouble() * 1.25 * walkStrength
+        : 0.0;
 
-    // 动态脚底阴影：步伐跃起时阴影轻微收缩淡化，触地时阴影扩散加重
-    final lift = (-bob / 2.2).clamp(0.0, 1.0);
+    final lift = isMoving
+        ? (-bob / (1.25 * walkStrength)).clamp(0.0, 1.0).toDouble()
+        : 0.0;
     final shadowScale = 1.0 - lift * 0.18; 
-    final shadowAlpha = (0.42 - lift * 0.12).clamp(0.1, 0.5); 
+    final shadowAlpha =
+        (0.42 - lift * 0.12).clamp(0.1, 0.5).toDouble();
 
     final playerShadowWidth = (metrics.tileWidth * .92 * shadowScale).clamp(24.0, 48.0).toDouble();
     final playerShadowHeight = (metrics.tileHeight * .42 * shadowScale).clamp(8.0, 16.0).toDouble();
@@ -4546,40 +4747,203 @@ class _SceneAssetPainter extends CustomPainter {
     if (playerImage != null) {
       final sourceWidth = (playerImage.width as int).toDouble();
       final sourceHeight = (playerImage.height as int).toDouble();
-      final playerDisplayScale = metrics.sideScroll ? 1.40 : 1.20;
-      final drawWidth = (metrics.groundWidth * .052 * playerDisplayScale)
-          .clamp(58.0, metrics.sideScroll ? 126.0 : 106.0)
-          .toDouble();
-      final drawHeight = drawWidth * sourceHeight / sourceWidth;
       final faceSign = facing == 'W' ? -1.0 : 1.0;
 
       canvas.save();
-      canvas.translate(p.dx, p.dy + bob); // 带有微弱起伏的平移
-      canvas.scale(faceSign, 1.0);        // 仅左右翻转
+      
+      // 1. 移动到脚底原点，这里已经包含了原有的上下起伏高度 (bob)
+      canvas.translate(p.dx, p.dy + bob); 
 
-      canvas.drawImageRect(
-        playerImage,
-        Rect.fromLTWH(0, 0, sourceWidth, sourceHeight),
-        Rect.fromLTWH(-drawWidth / 2, -drawHeight * .93, drawWidth, drawHeight),
-        Paint()..filterQuality = FilterQuality.high,
-      );
+      // 2. 纯粹的钟摆摇晃 (Rotation Sway)
+      // Keep the full-body motion very small. The lower-body pass below now
+      // carries most of the gait, so the portrait no longer rocks like a card.
+      if (isMoving) {
+        final swayAngle = math.cos(walkPhase) * 0.012 * walkStrength;
+        canvas.rotate(swayAngle);
+      }
+
+      // 3. 左右朝向翻转 (放在旋转之后，避免左右转向时摇摆相位发生突变)
+      canvas.scale(faceSign, 1.0);
+
+      if (isFallbackPlayer) {
+        // ✨ 当使用默认头像时：保持小巧精致的圆形棋子形态
+        // 将半径调小为 0.45 倍格子宽度（约 15px 半径，30px 直径）
+        final radius = metrics.tileWidth * 0.45; 
+        final avatarCenter = Offset(
+          0,
+          -radius - 6 - idleUpperLift * .55,
+        ); // 悬浮于阴影上方
+        
+        canvas.save();
+        // 裁切成正圆
+        canvas.clipPath(Path()..addOval(Rect.fromCircle(center: avatarCenter, radius: radius)));
+        
+        // 居中裁剪缩放（Aspect Fill）
+        final scale = (radius * 2) / math.min(sourceWidth, sourceHeight);
+        canvas.drawImageRect(
+          playerImage,
+          Rect.fromLTWH(0, 0, sourceWidth, sourceHeight),
+          Rect.fromLTWH(
+            avatarCenter.dx - sourceWidth * scale / 2, 
+            avatarCenter.dy - sourceHeight * scale / 2, 
+            sourceWidth * scale, 
+            sourceHeight * scale
+          ),
+          Paint()..filterQuality = FilterQuality.high,
+        );
+        canvas.restore();
+        
+        // 绘制白色描边（配合小头像，描边调细为 1.2）
+        canvas.drawCircle(
+          avatarCenter,
+          radius,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.2,
+        );
+      } else {
+        // 🌟 当使用真实立绘时：保持原来的高挑大尺寸不变
+        final playerDisplayScale = metrics.sideScroll ? 1.40 : 1.20;
+        final drawWidth = (metrics.groundWidth * .052 * playerDisplayScale)
+            .clamp(58.0, metrics.sideScroll ? 126.0 : 106.0)
+            .toDouble();
+        final drawHeight = drawWidth * sourceHeight / sourceWidth;
+        final sourceRect = Rect.fromLTWH(0, 0, sourceWidth, sourceHeight);
+        final destination = Rect.fromLTWH(
+          -drawWidth / 2,
+          -drawHeight * .93,
+          drawWidth,
+          drawHeight,
+        );
+        final imagePaint = Paint()..filterQuality = FilterQuality.high;
+
+        if (!isMoving) {
+          // Keep the legs/feet fixed and animate only the body above the hips.
+          // Both clips overlap, so long coats and dresses do not expose a gap.
+          final idleSplit = destination.top + destination.height * .56;
+          final idleOverlap = destination.height * .04;
+
+          canvas.save();
+          canvas.clipRect(
+            Rect.fromLTRB(
+              destination.left - 2,
+              idleSplit - idleOverlap,
+              destination.right + 2,
+              destination.bottom + 2,
+            ),
+          );
+          canvas.drawImageRect(
+            playerImage,
+            sourceRect,
+            destination,
+            imagePaint,
+          );
+          canvas.restore();
+
+          canvas.save();
+          canvas.clipRect(
+            Rect.fromLTRB(
+              destination.left - 2,
+              destination.top - 3,
+              destination.right + 2,
+              idleSplit + idleOverlap,
+            ),
+          );
+          canvas.translate(0, -idleUpperLift);
+          canvas.translate(0, idleSplit);
+          canvas.scale(1.0, idleUpperStretch);
+          canvas.translate(0, -idleSplit);
+          canvas.drawImageRect(
+            playerImage,
+            sourceRect,
+            destination,
+            imagePaint,
+          );
+          canvas.restore();
+        } else {
+          // Keep the portrait rigid while walking. Only the bottom 30% is
+          // divided into left/right halves, with opposite opacity phases.
+          // Each half is fully opaque at the split and fades progressively
+          // toward the feet, so no waist/body seam is visible.
+          final legTop = destination.top + destination.height * .70;
+          final overlap = destination.height * .025;
+          final centerX = destination.center.dx;
+          final phase01 = (math.sin(walkPhase) + 1.0) * .5;
+          final leftFootAlpha = .20 + .80 * phase01;
+          final rightFootAlpha = .20 + .80 * (1.0 - phase01);
+
+          void drawFadingHalf(Rect bounds, double footAlpha) {
+            canvas.saveLayer(bounds, Paint());
+            canvas.save();
+            canvas.clipRect(bounds);
+            canvas.drawImageRect(
+              playerImage,
+              sourceRect,
+              destination,
+              imagePaint,
+            );
+            canvas.restore();
+            canvas.drawRect(
+              bounds,
+              Paint()
+                ..shader = LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: <Color>[
+                    Colors.white,
+                    Color.fromRGBO(255, 255, 255, footAlpha),
+                  ],
+                  stops: const <double>[0.0, 1.0],
+                ).createShader(bounds)
+                ..blendMode = BlendMode.dstIn,
+            );
+            canvas.restore();
+          }
+
+          drawFadingHalf(
+            Rect.fromLTRB(
+              destination.left,
+              legTop - overlap,
+              centerX,
+              destination.bottom,
+            ),
+            leftFootAlpha,
+          );
+          drawFadingHalf(
+            Rect.fromLTRB(
+              centerX,
+              legTop - overlap,
+              destination.right,
+              destination.bottom,
+            ),
+            rightFootAlpha,
+          );
+
+          // The untouched upper 70% is drawn last and overlaps the fully
+          // opaque top of both leg masks, eliminating the old cut-body look.
+          canvas.save();
+          canvas.clipRect(
+            Rect.fromLTRB(
+              destination.left - 2,
+              destination.top - 2,
+              destination.right + 2,
+              legTop + overlap,
+            ),
+          );
+          canvas.drawImageRect(
+            playerImage,
+            sourceRect,
+            destination,
+            imagePaint,
+          );
+          canvas.restore();
+        }
+      }
+      
       canvas.restore();
       return;
     }
-
-    // 无图占位符也同步微弱起落
-    canvas.save();
-    canvas.translate(p.dx, p.dy + bob);
-    canvas.drawCircle(
-      const Offset(0, -34),
-      8,
-      Paint()..color = const Color(0xFFE9D7B9),
-    );
-    canvas.drawRect(
-      const Rect.fromLTWH(-7, -27, 14, 22),
-      Paint()..color = const Color(0xFF7F9AAA),
-    );
-    canvas.restore();
   }
 
   @override
@@ -4595,6 +4959,8 @@ class _SceneAssetPainter extends CustomPainter {
     return oldDelegate.player != player ||
         oldDelegate.facing != facing ||
         oldDelegate.walkPhase != walkPhase ||
+        oldDelegate.walkStrength != walkStrength ||
+        oldDelegate.idlePhase != idlePhase ||
         oldDelegate.showFootprints != showFootprints ||
         oldDelegate.nearbyBuilding != nearbyBuilding ||
         !identical(oldDelegate.objects, objects) ||

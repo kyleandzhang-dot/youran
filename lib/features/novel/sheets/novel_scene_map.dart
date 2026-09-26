@@ -1027,19 +1027,19 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                               ],
                             ),
                           ),
-                          const SizedBox(height: 6),
-                          // 模拟参考图下方的标签文字
-                          Text(
-                            entry.current ? '当前所在区域' : '探索 · 剧情 · 场景',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: entry.current
-                                  ? const Color(0xFFF2F0E8)
-                                  : const Color(0xFF9E9E9E),
-                              fontSize: 12,
-                              letterSpacing: 1.0,
+                          // 仅在当前位置时显示提示文字，非当前位置移除“探索 · 剧情 · 场景”
+                          if (entry.current) ...[
+                            const SizedBox(height: 6),
+                            const Text(
+                              '当前所在区域',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Color(0xFFF2F0E8),
+                                fontSize: 12,
+                                letterSpacing: 1.0,
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),
@@ -1066,18 +1066,23 @@ class _WorldSceneImage extends StatelessWidget {
       color: Colors.transparent,
     );
     if (clean.isEmpty) return fallback;
+    
     if (clean.startsWith('http://') || clean.startsWith('https://')) {
+      // 在这里如果你的项目中有 CdnUtil 等工具，可以包裹一下 clean 变量转为低分辨率 webp URL
       return Image.network(
         clean,
         fit: BoxFit.cover,
-        filterQuality: FilterQuality.high,
+        // 将 filterQuality 降为 medium，避免在缩放平移矩阵时消耗过多显存
+        filterQuality: FilterQuality.medium,
         errorBuilder: (context, error, stackTrace) => fallback,
       );
     }
+    
     return Image.asset(
       clean,
       fit: BoxFit.cover,
-      filterQuality: FilterQuality.high,
+      // 本地资源同样下调采样质量
+      filterQuality: FilterQuality.medium,
       errorBuilder: (context, error, stackTrace) => fallback,
     );
   }

@@ -313,13 +313,17 @@ class NovelWeatherOverlay extends StatefulWidget {
   const NovelWeatherOverlay({
     super.key,
     required this.effect,
+    this.pureParticles = false,
   });
 
   final NovelWeatherEffect effect;
+  final bool pureParticles;
 
   @override
   State<NovelWeatherOverlay> createState() => _NovelWeatherOverlayState();
 }
+
+
 
 class _NovelWeatherOverlayState extends State<NovelWeatherOverlay>
     with SingleTickerProviderStateMixin {
@@ -409,11 +413,13 @@ class _NovelWeatherPainter extends CustomPainter {
     required this.effect,
     required this.phase,
     required this.compact,
+    this.pureParticles = false,
   });
 
   final NovelWeatherEffect effect;
   final double phase;
   final bool compact;
+  final bool pureParticles;
 
   static double _hash(int index, int salt) {
     final value = math.sin(index * 127.1 + salt * 311.7) * 43758.5453123;
@@ -449,18 +455,19 @@ class _NovelWeatherPainter extends CustomPainter {
   }
 
   void _paintRain(Canvas canvas, Size size) {
-    // 雨丝尽量细、透明、分层。重点是“空气里有雨”，而不是满屏白色直线。
-    final hazePaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: <Color>[
-          const Color(0x11283B49),
-          const Color(0x061B2831),
-          const Color(0x0D33444F),
-        ],
-      ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, hazePaint);
+    if (!pureParticles) {
+      final hazePaint = Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            const Color(0x11283B49),
+            const Color(0x061B2831),
+            const Color(0x0D33444F),
+          ],
+        ).createShader(Offset.zero & size);
+      canvas.drawRect(Offset.zero & size, hazePaint);
+    }
 
     final count = compact ? 82 : 176;
     final backPaint = Paint()
@@ -491,7 +498,6 @@ class _NovelWeatherPainter extends CustomPainter {
           : depth < .82
               ? midPaint
               : frontPaint;
-      // 绝大多数雨丝都控制在 1px 以下，避免“粉笔线”质感。
       paint.strokeWidth = .28 + depth * .56;
 
       canvas.drawLine(
@@ -501,7 +507,6 @@ class _NovelWeatherPainter extends CustomPainter {
       );
     }
 
-    // 只留极少数镜头前雨丝，避免近景粗线让画面显假。
     final softPaint = Paint()
       ..strokeCap = StrokeCap.round
       ..color = const Color(0x30FFFFFF)
@@ -521,6 +526,8 @@ class _NovelWeatherPainter extends CustomPainter {
   }
 
   void _paintCloudy(Canvas canvas, Size size) {
+    if (pureParticles) return; // 纯阴天且没有粒子的话，什么都不画
+    
     final shade = Paint()
       ..shader = LinearGradient(
         begin: Alignment.topCenter,
@@ -544,8 +551,10 @@ class _NovelWeatherPainter extends CustomPainter {
   }
 
   void _paintHeavyRain(Canvas canvas, Size size) {
-    final dark = Paint()..color = const Color(0x24202B36);
-    canvas.drawRect(Offset.zero & size, dark);
+    if (!pureParticles) {
+      final dark = Paint()..color = const Color(0x24202B36);
+      canvas.drawRect(Offset.zero & size, dark);
+    }
     _paintRain(canvas, size);
 
     final extraPaint = Paint()
@@ -568,8 +577,10 @@ class _NovelWeatherPainter extends CustomPainter {
   }
 
   void _paintBlizzard(Canvas canvas, Size size) {
-    final veil = Paint()..color = const Color(0x283B4754);
-    canvas.drawRect(Offset.zero & size, veil);
+    if (!pureParticles) {
+      final veil = Paint()..color = const Color(0x283B4754);
+      canvas.drawRect(Offset.zero & size, veil);
+    }
     _paintSnow(canvas, size);
 
     final streakPaint = Paint()
@@ -593,36 +604,34 @@ class _NovelWeatherPainter extends CustomPainter {
   }
 
   void _paintThunderstorm(Canvas canvas, Size size) {
-    // 雷暴雨先持续压暗环境，再叠加细密暴雨和随机雷光。
-    // 暗部保持稳定，闪电出现时才有足够反差和压迫感。
-    final stormDarkPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: <Color>[
-          const Color(0x92050B12),
-          const Color(0x7208121C),
-          const Color(0x62050A10),
-        ],
-        stops: const <double>[0, .58, 1],
-      ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, stormDarkPaint);
+    if (!pureParticles) {
+      final stormDarkPaint = Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            const Color(0x92050B12),
+            const Color(0x7208121C),
+            const Color(0x62050A10),
+          ],
+          stops: const <double>[0, .58, 1],
+        ).createShader(Offset.zero & size);
+      canvas.drawRect(Offset.zero & size, stormDarkPaint);
 
-    // 顶部再压一层乌云阴影，让天空比地面更沉，不做成均匀黑色蒙版。
-    final cloudShadePaint = Paint()
-      ..shader = RadialGradient(
-        center: const Alignment(.18, -.92),
-        radius: 1.15,
-        colors: <Color>[
-          const Color(0x78101825),
-          const Color(0x3D111A24),
-          Colors.transparent,
-        ],
-        stops: const <double>[0, .52, 1],
-      ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, cloudShadePaint);
+      final cloudShadePaint = Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(.18, -.92),
+          radius: 1.15,
+          colors: <Color>[
+            const Color(0x78101825),
+            const Color(0x3D111A24),
+            Colors.transparent,
+          ],
+          stops: const <double>[0, .52, 1],
+        ).createShader(Offset.zero & size);
+      canvas.drawRect(Offset.zero & size, cloudShadePaint);
+    }
 
-    // 雷暴雨仍使用细雨丝，不用粗白线；强度主要来自密度、速度和环境压暗。
     _paintRain(canvas, size);
 
     final extraPaint = Paint()
@@ -644,7 +653,6 @@ class _NovelWeatherPainter extends CustomPainter {
       );
     }
 
-    // 12 秒循环里安排几组不等距闪光；双闪比固定“亮一下”自然得多。
     final seconds = phase * 12.0;
     double pulse(double center, double width) {
       final d = (seconds - center).abs();
@@ -659,11 +667,13 @@ class _NovelWeatherPainter extends CustomPainter {
     );
     if (flash <= 0) return;
 
-    final flashPaint = Paint()
-      ..color = const Color(0xFFE4EEFF).withOpacity((flash * .46).clamp(0.0, .46).toDouble());
-    canvas.drawRect(Offset.zero & size, flashPaint);
+    if (!pureParticles) {
+      final flashPaint = Paint()
+        ..color = const Color(0xFFE4EEFF)
+            .withOpacity((flash * .46).clamp(0.0, .46).toDouble());
+      canvas.drawRect(Offset.zero & size, flashPaint);
+    }
 
-    // 只有最强的一组闪光出现可见闪电枝杈，避免每次都像贴图特效。
     if (pulse(6.05, .09) > .35) {
       final bolt = Path()
         ..moveTo(size.width * .72, -8)
@@ -690,17 +700,19 @@ class _NovelWeatherPainter extends CustomPainter {
   }
 
   void _paintSnow(Canvas canvas, Size size) {
-    final veilPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: <Color>[
-          const Color(0x0AFFFFFF),
-          Colors.transparent,
-          const Color(0x102A3540),
-        ],
-      ).createShader(Offset.zero & size);
-    canvas.drawRect(Offset.zero & size, veilPaint);
+    if (!pureParticles) {
+      final veilPaint = Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            const Color(0x0AFFFFFF),
+            Colors.transparent,
+            const Color(0x102A3540),
+          ],
+        ).createShader(Offset.zero & size);
+      canvas.drawRect(Offset.zero & size, veilPaint);
+    }
 
     final count = compact ? 50 : 108;
     final crispPaint = Paint()..style = PaintingStyle.fill;
@@ -730,7 +742,6 @@ class _NovelWeatherPainter extends CustomPainter {
 
       canvas.drawCircle(Offset(x, fallY), radius, paint);
 
-      // 少量近景雪片不是完美圆点，略带椭圆拖尾，更像镜头前的真实飘雪。
       if (depth > .90) {
         canvas.drawOval(
           Rect.fromCenter(
@@ -748,7 +759,8 @@ class _NovelWeatherPainter extends CustomPainter {
   bool shouldRepaint(covariant _NovelWeatherPainter oldDelegate) {
     return oldDelegate.effect != effect ||
         oldDelegate.phase != phase ||
-        oldDelegate.compact != compact;
+        oldDelegate.compact != compact ||
+        oldDelegate.pureParticles != pureParticles; // 增加对比纯粒子状态
   }
 }
 
@@ -765,30 +777,20 @@ class NovelWorldBackground extends StatefulWidget {
     this.isGenerating = false,
     this.weatherEffect = NovelWeatherEffect.none,
     this.timePeriod = NovelTimePeriod.noon,
+    this.disableEnvironmentTint = true, // ⚠️ 直接把这里的 false 改成 true！
   });
 
   final String url;
-
-  /// 开发者/本地预览可直接把图片字节送进与正式剧情相同的 Depth + Shader 链路。
-  /// 正式剧情不传此参数，仍然只使用 [url]。
   final Uint8List? memoryBytes;
-
-  /// 本地图片的稳定缓存键。换图时应同时更换该 key，避免复用上一张图的 Depth。
   final String memoryCacheKey;
-
-  /// 2.5D 位移强度。正式剧情默认 1.5；开发者工具可临时覆盖以快速调试。
   final double parallaxStrength;
-
   final String fallbackAsset;
-
-  /// Storyboard CG already contains its own cinematic staging and featured characters.
-  /// Keep it as a flat image instead of running Depth Anything / 2.5D parallax.
-  /// Historical stitched sheets are also handled by the aspect-ratio fallback below.
   final bool storyboardMode;
   final bool characterPresent;
   final bool isGenerating;
   final NovelWeatherEffect weatherEffect;
   final NovelTimePeriod timePeriod;
+  final bool disableEnvironmentTint; // 新增变量声明
 
   @override
   State<NovelWorldBackground> createState() => _NovelWorldBackgroundState();
@@ -1266,11 +1268,9 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         return null;
       }
     }
+    
     if (value.startsWith('http://') || value.startsWith('https://')) {
-      final networkUrl = useOriginalNetworkUrl
-          ? value
-          : CdnUtil.resize(value, width: 1080);
-      return NetworkImage(networkUrl);
+      return NetworkImage(value); 
     }
     return AssetImage(value);
   }
@@ -1863,7 +1863,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   Widget build(BuildContext context) {
     // AI 背景统一后处理只发生在世界背景层内部：人物、正文、选项、输入框
     // 都不进入这条链路。时间 / 天气仍然在后面叠加，保留原有昼夜语义。
-    final weatherDim = switch (widget.weatherEffect) {
+    final weatherDim = widget.disableEnvironmentTint ? .0 : switch (widget.weatherEffect) {
       NovelWeatherEffect.thunderstorm => .18,
       NovelWeatherEffect.heavyRain => .09,
       NovelWeatherEffect.blizzard => .06,
@@ -1879,10 +1879,6 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     // 现在只留极轻的空气柔化；手机低功耗路径本身不会执行 ImageFiltered。
     final blur = widget.characterPresent ? .65 : 0.0;
 
-    // Do not keep the previous parallax painter alive during scene changes.
-    // Its ui.Image handles belong to this State and are disposed/replaced when
-    // the next Depth result arrives; a direct swap avoids an outgoing painter
-    // trying to sample an already released GPU image.
     final rawBackgroundLayer = _parallaxReady
         ? _buildParallaxSurface(blur)
         : _buildLegacyBackgroundLayer(blur);
@@ -1908,17 +1904,23 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         ),
 
         // 2. 原有时间 / 天气保持原顺序，避免统一滤镜破坏夜晚、雨雪等语义。
-        NovelTimeOverlay(
-          period: widget.timePeriod,
-          weatherEffect: widget.weatherEffect,
-        ),
+        if (!widget.disableEnvironmentTint)
+          NovelTimeOverlay(
+            period: widget.timePeriod,
+            weatherEffect: widget.weatherEffect,
+          ),
+          
         AnimatedContainer(
           duration: const Duration(milliseconds: 760),
           curve: Curves.easeOutCubic,
           color: Colors.black.withOpacity(dim),
         ),
+        
         if (widget.weatherEffect != NovelWeatherEffect.none)
-          NovelWeatherOverlay(effect: widget.weatherEffect),
+          NovelWeatherOverlay(
+            effect: widget.weatherEffect,
+            pureParticles: widget.disableEnvironmentTint, // 传递给天气画布
+          ),
 
         // 3. 中央主体基本不压；从约 70% 半径以后才逐步进入四周雾暗。
         // 这层主要压住 AI 背景常见的边缘高频细节，不会形成明显黑框。

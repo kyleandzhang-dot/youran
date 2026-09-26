@@ -7781,107 +7781,84 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     final isCompanions = _activeCategory == _BattleCommandCategory.companions;
     final isSkills = !isItems && !isCompanions;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: <Color>[
-            Colors.black.withOpacity(.34),
-            Colors.black.withOpacity(.16),
-            Colors.transparent,
-          ],
-        ),
+    // 直接返回 Padding，去掉了外层的 DecoratedBox 及其黑色渐变遮罩
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        veryShort ? 4 : 5,
+        veryShort ? 4 : 7,
+        veryShort ? 4 : 6,
+        veryShort ? 4 : 7,
       ),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          veryShort ? 4 : 5,
-          veryShort ? 4 : 7,
-          veryShort ? 4 : 6,
-          veryShort ? 4 : 7,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            _buildLandscapeRailButton(
-              label: '行动',
-              symbol: '01',
-              selected: isSkills,
-              veryShort: veryShort,
-              onTap: _canAct
-                  ? () => _toggleCategory(_BattleCommandCategory.skills)
-                  : null,
-            ),
-            SizedBox(height: veryShort ? 5 : 6),
-            _buildLandscapeRailButton(
-              label: '道具',
-              symbol: '02',
-              selected: isItems,
-              veryShort: veryShort,
-              onTap: _canAct
-                  ? () => _toggleCategory(_BattleCommandCategory.items)
-                  : null,
-            ),
-            SizedBox(height: veryShort ? 5 : 6),
-            _buildLandscapeRailButton(
-              label: '逃跑',
-              symbol: '03',
-              selected: false,
-              veryShort: veryShort,
-              onTap: _canAct ? () => unawaited(_confirmEscape()) : null,
-            ),
-          ],
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _buildLandscapeRailButton(
+            label: '行动',
+            symbol: '01',
+            selected: isSkills,
+            veryShort: veryShort,
+            onTap: _canAct
+                ? () => _toggleCategory(_BattleCommandCategory.skills)
+                : null,
+          ),
+          SizedBox(height: veryShort ? 5 : 6),
+          _buildLandscapeRailButton(
+            label: '道具',
+            symbol: '02',
+            selected: isItems,
+            veryShort: veryShort,
+            onTap: _canAct
+                ? () => _toggleCategory(_BattleCommandCategory.items)
+                : null,
+          ),
+          SizedBox(height: veryShort ? 5 : 6),
+          _buildLandscapeRailButton(
+            label: '逃跑',
+            symbol: '03',
+            selected: false,
+            veryShort: veryShort,
+            onTap: _canAct ? () => unawaited(_confirmEscape()) : null,
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildLandscapeCompanionRail({required bool veryShort}) {
     if (_battleCompanions.isEmpty) return const SizedBox.shrink();
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.centerRight,
-          end: Alignment.centerLeft,
-          colors: <Color>[
-            Colors.black.withOpacity(.32),
-            Colors.black.withOpacity(.12),
-            Colors.transparent,
-          ],
-        ),
+    
+    // 直接返回 Padding，去掉了外层的 DecoratedBox 及其黑色渐变遮罩
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        veryShort ? 4 : 6,
+        veryShort ? 5 : 7,
+        veryShort ? 4 : 5,
+        veryShort ? 5 : 7,
       ),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          veryShort ? 4 : 6,
-          veryShort ? 5 : 7,
-          veryShort ? 4 : 5,
-          veryShort ? 5 : 7,
-        ),
-        child: Column(
-          children: <Widget>[
-            Text(
-              '援助',
-              style: TextStyle(
-                color: Colors.white.withOpacity(.48),
-                fontSize: veryShort ? 8.0 : 8.7,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.5,
-              ),
+      child: Column(
+        children: <Widget>[
+          Text(
+            '援助',
+            style: TextStyle(
+              color: Colors.white.withOpacity(.48),
+              fontSize: veryShort ? 8.0 : 8.7,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.5,
             ),
-            SizedBox(height: veryShort ? 3 : 5),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: Center(
-                  child: _buildCompanionAvatarStrip(
-                    vertical: true,
-                    dense: true,
-                  ),
+          ),
+          SizedBox(height: veryShort ? 3 : 5),
+          Expanded(
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: Center(
+                child: _buildCompanionAvatarStrip(
+                  vertical: true,
+                  dense: true,
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

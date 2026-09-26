@@ -1569,7 +1569,9 @@ class _NovelGamePageState extends State<NovelGamePage>
       equipment: inventory,
       enemyName: enemy.name,
       enemies: <YoranBattleEnemy>[enemy],
-      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneBackground: controller.currentSceneBackdropUrl.isNotEmpty 
+    ? controller.currentSceneBackdropUrl 
+    : controller.world.backgroundUrl.trim(),
       sceneTitle: '探索测试 · 海滩边缘',
       sceneSubtitle:
           '${elite ? '高级敌人' : '普通敌人'} · 品质 ${quality.clamp(1, 6)}',
@@ -1644,7 +1646,9 @@ class _NovelGamePageState extends State<NovelGamePage>
       playerAvatar: localAvatar,
       playerPortrait: localPortrait,
       enemyName: opponentName,
-      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneBackground: controller.currentSceneBackdropUrl.isNotEmpty 
+    ? controller.currentSceneBackdropUrl 
+    : controller.world.backgroundUrl.trim(),
       sceneTitle: controller.locationTitle,
       sceneSubtitle: controller.locationSubtitle.trim(),
       socketService: controller.socket,
@@ -1709,7 +1713,9 @@ class _NovelGamePageState extends State<NovelGamePage>
       playerAvatar: localAvatar,
       playerPortrait: localPortrait,
       enemyName: targetName,
-      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneBackground: controller.currentSceneBackdropUrl.isNotEmpty 
+    ? controller.currentSceneBackdropUrl 
+    : controller.world.backgroundUrl.trim(),
       sceneTitle: controller.locationTitle,
       sceneSubtitle: controller.locationSubtitle.trim(),
       socketService: controller.socket,
@@ -1836,7 +1842,9 @@ class _NovelGamePageState extends State<NovelGamePage>
         enemyName: setup.enemy.name,
         enemyPortrait: setup.enemy.portrait,
         enemies: <YoranBattleEnemy>[setup.enemy],
-        sceneBackground: controller.world.backgroundUrl.trim(),
+        sceneBackground: controller.currentSceneBackdropUrl.isNotEmpty 
+    ? controller.currentSceneBackdropUrl 
+    : controller.world.backgroundUrl.trim(),
         sceneTitle: controller.locationTitle,
         sceneSubtitle: subtitleParts.join(' · '),
         socketService: controller.socket,
@@ -1922,7 +1930,9 @@ class _NovelGamePageState extends State<NovelGamePage>
       equipment: battleInventory,
       enemyName: '赛诺',
       enemyPortrait: 'assets/images/red_wolf.png',
-      sceneBackground: controller.world.backgroundUrl.trim(),
+      sceneBackground: controller.currentSceneBackdropUrl.isNotEmpty 
+    ? controller.currentSceneBackdropUrl 
+    : controller.world.backgroundUrl.trim(),
       sceneTitle: controller.locationTitle,
       sceneSubtitle: controller.locationSubtitle,
       socketService: controller.socket,
