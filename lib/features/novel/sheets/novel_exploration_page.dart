@@ -14,6 +14,12 @@ class _ScenePickupNotice {
   final List<MapEntry<String, int>> items;
 }
 
+// 交互必须发生在角色真正贴近物体时，避免隔着一大段距离就出现“可以检测”。
+// 物品尺寸通常约为 1 格，因此 0.75 格已经足够靠近，同时保留一点操作余量。
+const double _sceneObjectInteractionDefaultRadius = .75;
+const double _sceneObjectInteractionMaxRadius = .9;
+const double _sceneLootPickupRadius = .65;
+
 /// 正式自由探索页：
 /// - 直接读取 Controller 中由后端生成并登记到 scene-map 的当前场景；
 /// - 使用后端生成的 1 张 1536x864 完整横版场景图；
@@ -62,6 +68,7 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
   int _generationSerial = 0;
   bool _showFootprints = false;
   bool _controllerSyncScheduled = false;
+  bool _groundLootSyncScheduled = false;
   bool _sceneActionRunning = false;
   final Map<String, _SceneGroundLoot> _groundLoot = <String, _SceneGroundLoot>{};
   final Set<String> _locallyPickedIds = <String>{};
@@ -191,6 +198,7 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
       // 场景本身没变，但立绘 URL 可能是刚刚才就绪的（后端异步生成），
       // 单独同步一下，不必把整张场景图重新走一遍。
       unawaited(_syncPlayerPortrait());
+      _scheduleUnanchoredGroundLootSync();
       return;
     }
 
@@ -223,6 +231,7 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
       });
       _loadingSceneIdentity = '';
       previous?.dispose();
+      _scheduleUnanchoredGroundLootSync();
     } catch (error) {
       if (!mounted || serial != _generationSerial) return;
       _loadingSceneIdentity = '';
@@ -1561,6 +1570,105 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
         .toList(growable: false);
   }
 
+  JsonMap _rewardPreview(JsonMap node) {
+    final preview = _sceneMap(node['reward_preview']);
+    return preview.isNotEmpty ? preview : _sceneMap(node['reward']);
+  }
+
+  String _sceneObjectId(JsonMap object) => _sceneString(
+        object['id'] ?? object['scene_object_id'] ?? object['object_id'],
+      );
+
+  bool _hasSceneObjectAnchor(JsonMap node) {
+    final package = _assetPackage;
+    if (package == null) return false;
+    final objectId = _sceneString(node['scene_object_id']);
+    if (objectId.isEmpty) return false;
+    return _sceneList(package['objects'])
+        .map(_sceneMap)
+        .any((object) => _sceneObjectId(object) == objectId);
+  }
+
+  int _stableLootHash(String value) {
+    // 31 位滚动哈希：Web/移动端结果一致，也不依赖运行时 Random 状态。
+    var hash = 0x345678;
+    for (final codeUnit in value.codeUnits) {
+      hash = (hash * 31 + codeUnit) & 0x7FFFFFFF;
+    }
+    return hash;
+  }
+
+  double _stableLootUnit(String key) =>
+      (_stableLootHash(key) % 1000000) / 999999.0;
+
+  Offset _stableLowerLootLanding(
+    JsonMap node, {
+    Iterable<Offset> occupied = const <Offset>[],
+  }) {
+    final package = _assetPackage;
+    if (package == null) return Offset.zero;
+    final grid = _sceneMap(package['grid']);
+    final width = _sceneInt(grid['width'], 32).clamp(1, 200).toInt();
+    final height = _sceneInt(grid['height'], 32).clamp(1, 200).toInt();
+    final payload = widget.controller?.surroundingsData ?? const <String, dynamic>{};
+    final sceneIdentity = _sceneString(
+      payload['scene_seed'],
+      _sceneString(payload['scene_key'], _loadedSceneId),
+    );
+    final nodeId = _sceneString(node['id'], _sceneString(node['label'], 'loot'));
+
+    // 场景上半部通常是建筑/背景；把奖励限制在下方可移动带，再吸附到可行走点。
+    final minX = math.min(width * .12, 2.0).clamp(.35, width * .45).toDouble();
+    final maxX = math.max(width - minX, minX + .1);
+    final minY = (height * .56).clamp(.35, height * .82).toDouble();
+    final maxY = (height * .90).clamp(minY + .1, height - .25).toDouble();
+    final occupiedList = occupied.toList(growable: false);
+
+    for (var attempt = 0; attempt < 32; attempt++) {
+      final key = '$sceneIdentity|$nodeId|$attempt';
+      final candidate = Offset(
+        minX + (maxX - minX) * _stableLootUnit('$key|x'),
+        minY + (maxY - minY) * _stableLootUnit('$key|y'),
+      );
+      final landing = _nearestLootLanding(candidate);
+      if (landing.dy < minY - .5 || landing.dy > maxY + .5) continue;
+      if (occupiedList.any((position) => (position - landing).distance < 1.15)) {
+        continue;
+      }
+      return landing;
+    }
+
+    return _nearestLootLanding(Offset(width * .5, height * .74));
+  }
+
+  void _scheduleUnanchoredGroundLootSync() {
+    if (_groundLootSyncScheduled || !mounted || _assetPackage == null) return;
+    _groundLootSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _groundLootSyncScheduled = false;
+      if (!mounted || _assetPackage == null) return;
+
+      final additions = <String, _SceneGroundLoot>{};
+      final occupied = <Offset>[
+        ..._groundLoot.values.map((loot) => loot.position),
+      ];
+      for (final node in _visibleSceneInteractions()) {
+        if (!boolValue(node['collectible']) || _hasSceneObjectAnchor(node)) continue;
+        final id = _sceneString(node['id']);
+        if (id.isEmpty || _groundLoot.containsKey(id) ||
+            _locallyPickedIds.contains(id)) {
+          continue;
+        }
+        final position = _stableLowerLootLanding(node, occupied: occupied);
+        additions[id] = _SceneGroundLoot(node: node, position: position);
+        occupied.add(position);
+      }
+      if (additions.isNotEmpty) {
+        setState(() => _groundLoot.addAll(additions));
+      }
+    });
+  }
+
   Map<String, int> _inventoryAmounts() {
     final inventory = widget.controller?.inventory;
     if (inventory == null) return <String, int>{};
@@ -1613,16 +1721,52 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
     );
   }
 
+  Offset _groundLootLandingForNode(
+    JsonMap node,
+    Offset fallback, {
+    Iterable<Offset> occupied = const <Offset>[],
+  }) {
+    if (_assetPackage == null) return fallback;
+
+    final objectId = _sceneString(node['scene_object_id']);
+    final objects = _sceneList(_assetPackage?['objects'])
+        .map(_sceneMap)
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    final object = objects
+        .where((item) => _sceneObjectId(item) == objectId)
+        .firstOrNull;
+    if (object != null) {
+      final left = _sceneNum(object['x']);
+      final top = _sceneNum(object['y']);
+      final width = math.max(1.0, _sceneNum(object['width'], 1));
+      final height = math.max(1.0, _sceneNum(object['height'], 1));
+
+      // 调查标记和掉落物使用同一个“物体中心 -> 最近可行走点”锚点，
+      // 这样调查后不会跳到另一个随机位置，同时仍保证角色能够走到。
+      return _nearestLootLanding(
+        Offset(left + width / 2, top + height / 2),
+      );
+    }
+
+    // 没有场景锚点的系统奖励，才在下方可移动区域内稳定随机生成。
+    return _stableLowerLootLanding(node, occupied: occupied);
+  }
+
   Future<void> _revealSceneNode(JsonMap node, Offset groundPosition) async {
     final id = _sceneString(node['id']);
     if (id.isEmpty || _sceneActionRunning) return;
 
     if (boolValue(node['collectible'])) {
+      final occupied = _groundLoot.values.map((loot) => loot.position).toList();
       setState(() {
         _groundLoot[id] = _SceneGroundLoot(
           node: node,
-          // ⚠️ 第一处修改：去掉 _nearestLootLanding，直接用 groundPosition
-          position: groundPosition, 
+          position: _groundLootLandingForNode(
+            node,
+            groundPosition,
+            occupied: occupied,
+          ),
         );
       });
       return;
@@ -1640,19 +1784,21 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
         .toList(growable: false);
 
     if (revealed.isNotEmpty) {
+      final occupied = _groundLoot.values.map((loot) => loot.position).toList();
+      final additions = <String, _SceneGroundLoot>{};
+      for (final entry in revealed) {
+        final newId = _sceneString(entry['id']);
+        if (newId.isEmpty) continue;
+        final position = _groundLootLandingForNode(
+          entry,
+          groundPosition,
+          occupied: occupied,
+        );
+        additions[newId] = _SceneGroundLoot(node: entry, position: position);
+        occupied.add(position);
+      }
       setState(() {
-        for (var i = 0; i < revealed.length; i++) {
-          final entry = revealed[i];
-          final newId = _sceneString(entry['id']);
-          if (newId.isEmpty) continue;
-          
-          // ⚠️ 第二处修改：把原来计算随机 angle、radius 和 candidate 的那 3 行代码全删掉！
-          // 直接让物品的位置等于 groundPosition 即可。
-          _groundLoot[newId] = _SceneGroundLoot(
-            node: entry,
-            position: groundPosition, // 👈 强制原地掉落在刚才那个问号的坐标上
-          );
-        }
+        _groundLoot.addAll(additions);
       });
     }
   }
@@ -1691,10 +1837,33 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
         _statusText = '';
       });
       if (gained.isEmpty) {
-        final reward = _sceneMap(node['reward']);
+        final claimedReward = _sceneMap(controller.surroundingsData['reward']);
+        final preview = claimedReward.isNotEmpty
+            ? claimedReward
+            : _rewardPreview(node);
+        final itemType = _sceneString(
+          preview['item_type'] ?? preview['type'],
+        ).toLowerCase();
+        final reveal = _sceneMap(preview['reveal']);
+        final displayReward = itemType == 'blind_box' && reveal.isNotEmpty
+            ? reveal
+            : preview;
+        final displayName = _sceneString(
+          displayReward['name'],
+          _sceneString(node['label'], '物品'),
+        );
+        final displayQuantity = math.max(
+          1,
+          _sceneInt(
+            displayReward['quantity'],
+            _sceneInt(displayReward['score'], 1),
+          ),
+        );
         gained.add(MapEntry(
-          _sceneString(reward['name'], _sceneString(node['label'], '物品')),
-          math.max(1, _sceneInt(reward['quantity'], _sceneInt(node['quantity'], 1))),
+          itemType == 'blind_box' && reveal.isNotEmpty
+              ? '福袋 → $displayName'
+              : displayName,
+          displayQuantity,
         ));
       }
       _showPickupNotice(gained);
@@ -1838,8 +2007,6 @@ class _NovelExplorationPageState extends State<NovelExplorationPage> {
               ),
             ),
           ),
-
-        // 👈 注意：这里原本的 if (_pickupNotices.isNotEmpty) 块已经被完全删除。
 
         if (!hasScene && (_loading || _error != null))
           Positioned(
@@ -2224,6 +2391,7 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   // 再切回去即可。）
   Timer? _motionTimer;
   DateTime? _lastMotionAt;
+  bool _autoPickupRunning = false;
 
   void _stopMotionLoop() {
     _motionTimer?.cancel();
@@ -2743,25 +2911,28 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
             : '正在停步…';
       });
 
-      // ==========================================
-      // ✨ 自动拾取逻辑 ✨
-      // 人物处于移动状态，且当前未被其他强制交互打断时执行
-      // ==========================================
-      if (widget.interactionEnabled) {
-        final nearestLoot = _nearbyGroundLoot();
-        if (nearestLoot != null) {
-          final distance = (_player - nearestLoot.position).distance;
-          // 距离小于 0.6 格判定为触碰，直接拾取
-          if (distance < 0.6) {
-            widget.onPickUpLoot(nearestLoot.node);
-          }
-        }
-      }
+      _tryAutoPickUpLoot();
 
     } else {
       _velocityPx = actualVelocity;
       _walkStrength = nextWalkStrength;
       if (_updateCamera(dt, metrics)) setState(() {});
+      _tryAutoPickUpLoot();
+    }
+  }
+
+  void _tryAutoPickUpLoot() {
+    if (!widget.interactionEnabled || _autoPickupRunning) return;
+    final nearestLoot = _nearbyGroundLoot();
+    if (nearestLoot == null) return;
+    final distance = (_player - nearestLoot.position).distance;
+    if (distance <= _sceneLootPickupRadius) {
+      _autoPickupRunning = true;
+      unawaited(
+        widget.onPickUpLoot(nearestLoot.node).whenComplete(() {
+          if (mounted) _autoPickupRunning = false;
+        }),
+      );
     }
   }
 
@@ -2835,6 +3006,13 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
         ? top - _player.dy
         : (_player.dy > bottom ? _player.dy - bottom : 0.0);
     return math.sqrt(dx * dx + dy * dy);
+  }
+
+  double _sceneObjectInteractionRadius(JsonMap object) {
+    return _sceneNum(
+      object['interaction_radius_tiles'],
+      _sceneObjectInteractionDefaultRadius,
+    ).clamp(.45, _sceneObjectInteractionMaxRadius).toDouble();
   }
 
   NovelSceneMapNode? _nearbyNavigationTarget() {
@@ -2918,11 +3096,12 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
       if (objectId.isEmpty) continue;
       final object = _objects.where((item) => _objectId(item) == objectId).firstOrNull;
       if (object == null) continue;
-      final distance = _distanceToObject(object);
-      final radius = _sceneNum(
-        object['interaction_radius_tiles'],
-        1.8,
-      ).clamp(.5, 5.0).toDouble();
+      final anchor = _interactionAnchor(node);
+      if (anchor == null) continue;
+      // 以调查标记的实际锚点计算距离，不再以整个物体矩形计算。
+      // 这样大型建筑/物体不会让玩家隔着很远也触发调查。
+      final distance = (_player - anchor).distance;
+      final radius = _sceneObjectInteractionRadius(object);
       if (distance <= radius && distance < bestDistance) {
         nearest = node;
         bestDistance = distance;
@@ -2939,7 +3118,7 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     for (final entry in widget.groundLoot.entries) {
       if (!visibleIds.contains(entry.key)) continue;
       final distance = (_player - entry.value.position).distance;
-      if (distance <= 1.15 && distance < bestDistance) {
+      if (distance <= _sceneLootPickupRadius && distance < bestDistance) {
         nearest = entry.value;
         bestDistance = distance;
       }
@@ -2956,9 +3135,8 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final right = left + math.max(1.0, _sceneNum(object['width'], 1));
     final bottom = top + math.max(1.0, _sceneNum(object['height'], 1));
     
-    // ⚠️ 修改：直接计算并返回物体的绝对中心点。去掉了原本的距离判断和 clamp，
-    // 这样交互标记就会死死钉在物体上，再也不会“跟随角色”滑动了。
-    return Offset((left + right) / 2, (top + bottom) / 2); 
+    // 调查标记、触发距离和掉落物共用同一个可达锚点。
+    return _nearestWalkable(Offset((left + right) / 2, (top + bottom) / 2));
   }
 
   void _showSearchEffect(Offset position) {
@@ -2974,6 +3152,12 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   IconData _surroundRewardIcon(String itemType) {
     return switch (itemType.trim().toLowerCase()) {
       'score' => Icons.star_outline_rounded,
+      'consumable' => Icons.medication_liquid_outlined,
+      'health_potion' => Icons.medication_liquid_outlined,
+      'energy_potion' => Icons.medication_liquid_outlined,
+      'weapon' => Icons.gavel_outlined,
+      'armor' => Icons.shield_outlined,
+      'accessory' => Icons.diamond_outlined,
       'gift' => Icons.card_giftcard_rounded,
       'lucky_card' => Icons.style_outlined,
       'skill_book' => Icons.menu_book_outlined,
@@ -2985,9 +3169,15 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   }
 
   Widget _buildLootIcon(JsonMap node) {
-    final reward = _sceneMap(node['reward']);
+    final reward = _sceneMap(node['reward_preview']).isNotEmpty
+        ? _sceneMap(node['reward_preview'])
+        : _sceneMap(node['reward']);
     final rewardType = _sceneString(
-      reward['type'] ?? reward['item_type'] ?? node['type'],
+      reward['type'] ??
+          reward['item_type'] ??
+          reward['kind'] ??
+          node['item_type'] ??
+          node['type'],
     ).trim().toLowerCase();
     return Icon(
       _surroundRewardIcon(rewardType),
@@ -3082,7 +3272,16 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTap: widget.interactionEnabled
-                            ? () => widget.onPickUpLoot(entry.value.node)
+                            ? () {
+                                // 物理距离由探索画布校验；父状态只负责结算。
+                                if ((_player - entry.value.position).distance >
+                                    _sceneLootPickupRadius) {
+                                  return;
+                                }
+                                unawaited(
+                                  widget.onPickUpLoot(entry.value.node),
+                                );
+                              }
                             : null,
                         // ⚠️ 修改：使用 SizedBox 限制宽度，并使用 Column 垂直排列图标和文字
                         child: SizedBox(
@@ -3109,13 +3308,8 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                                     ),
                                   ],
                                 ),
-                                child: const Center(
-                                  // ⚠️ 修改：原为 _buildLootIcon(entry.value.node)，现改为固定的问号图标
-                                  child: Icon(
-                                    Icons.question_mark_rounded,
-                                    color: Color(0xFFE7E4DD),
-                                    size: 20,
-                                  ),
+                                child: Center(
+                                  child: _buildLootIcon(entry.value.node),
                                 ),
                               ),
                               const SizedBox(height: 4),
@@ -3229,7 +3423,6 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final nearbyBuilding = _nearbyBuilding();
     final nearbyTarget = _nearbyNavigationTarget();
     final nearbyInteraction = _nearbySceneInteraction();
-    final nearbyLoot = _nearbyGroundLoot();
 
     // ==========================================
     // 专属的“圆形、毛玻璃、白边”底层按钮组件
@@ -3351,7 +3544,7 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
           // ==========================================
           // 3. 上层右下角：交互按钮面板 (带 Column 定位)
           // ==========================================
-          if (nearbyTarget != null || nearbyLoot != null || nearbyInteraction != null)
+          if (nearbyTarget != null || nearbyInteraction != null)
             Positioned(
               right: 90, 
               bottom: MediaQuery.paddingOf(context).bottom + 95, 
@@ -3360,18 +3553,6 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    // 掉落物拾取按钮（自带白色 Icon）
-                    if (nearbyLoot != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: buildActionButton(
-                          child: const Icon(Icons.inventory_2_outlined, color: Colors.white, size: 26),
-                          onPressed: widget.interactionEnabled
-                              ? () => widget.onPickUpLoot(nearbyLoot.node)
-                              : null,
-                        ),
-                      ),
-                      
                     // 场景调查按钮（这里使用你的透明 PNG 切图）
                     if (nearbyInteraction != null)
                       Padding(
@@ -4803,11 +4984,14 @@ class _SceneAssetPainter extends CustomPainter {
             ..strokeWidth = 1.2,
         );
       } else {
-        // 🌟 当使用真实立绘时：保持原来的高挑大尺寸不变
+        // 🌟 真实立绘：先按场景自适应，再统一缩小 10%。
         final playerDisplayScale = metrics.sideScroll ? 1.40 : 1.20;
-        final drawWidth = (metrics.groundWidth * .052 * playerDisplayScale)
+        final baseDrawWidth = (metrics.groundWidth * .052 * playerDisplayScale)
             .clamp(58.0, metrics.sideScroll ? 126.0 : 106.0)
             .toDouble();
+        // Keep the original responsive sizing and clamps, then reduce the
+        // final portrait uniformly by 10% in every scene mode.
+        final drawWidth = baseDrawWidth * .90;
         final drawHeight = drawWidth * sourceHeight / sourceWidth;
         final sourceRect = Rect.fromLTWH(0, 0, sourceWidth, sourceHeight);
         final destination = Rect.fromLTWH(
