@@ -1,23 +1,18 @@
 part of '../novel_sheets.dart';
 
+
 // ============================================================================
 // 经历 / 回溯页
-// 页面入口 / 对外入口：
-//   - showNovelJourneySheet(...)
-//   - NovelJourneyTab
-//   - showNovelRevertDialog(...)
-// 其余以下划线 `_` 开头的类型/方法均为该页面内部实现或共享私有实现。
 // ============================================================================
 
-const Color _journeyInk = Color(0xFF090E1A);
-const Color _journeyInkSoft = Color(0xFF111A2C);
-const Color _journeyBlue = Color(0xFF506FEF);
-const Color _journeyGold = Color(0xFFC9B778);
-const Color _journeyGoldSoft = Color(0xFF86794D);
-const Color _journeyText = Color(0xFFF2F0E8);
-const Color _journeyTextSoft = Color(0xFFB9C0D0);
-const Color _journeyMuted = Color(0xFF737C91);
-const Color _journeyLine = Color(0x1FFFFFFF);
+// 【色彩重构】抛弃土味的蓝金配色，采用极致的暗场+纯白+高亮绿点缀
+const Color _journeyInk = Color(0xFF171B22); // 呼应地图的深空黑
+const Color _journeyInkSoft = Color(0xFF242A33); // 深灰背景
+const Color _journeyAccent = Color(0xFF76B900); // 极简现代感的高亮核心色
+const Color _journeyText = Color(0xFFFFFFFF); // 纯白，保留你喜欢的“白”的干净感
+const Color _journeyTextSoft = Color(0xFFE0E0E0);
+const Color _journeyMuted = Color(0x80FFFFFF); // 半透白
+const Color _journeyLine = Color(0x15FFFFFF); // 极弱的分割线，减少边框感
 
 Future<void> showNovelJourneySheet(
   BuildContext context,
@@ -31,7 +26,6 @@ Future<void> showNovelJourneySheet(
   });
 }
 
-/// 主游戏底部 Tab 使用的经历页。
 class NovelJourneyTab extends StatelessWidget {
   const NovelJourneyTab({
     super.key,
@@ -80,9 +74,9 @@ Future<bool> showNovelRevertDialog(
                   child: OutlinedButton(
                     style: OutlinedButton.styleFrom(
                       foregroundColor: _journeyTextSoft,
-                      side: BorderSide(color: Colors.white.withOpacity(.12)),
+                      side: BorderSide(color: Colors.white.withOpacity(.10)), // 极简边框
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(6), // 细微圆角
                       ),
                     ),
                     onPressed: () => Navigator.of(context).pop(false),
@@ -93,10 +87,10 @@ Future<bool> showNovelRevertDialog(
                 Expanded(
                   child: FilledButton(
                     style: FilledButton.styleFrom(
-                      backgroundColor: _journeyBlue, // 统一使用主题蓝
-                      foregroundColor: Colors.white,
+                      backgroundColor: _journeyAccent, // 使用极简绿作为主按钮色
+                      foregroundColor: Colors.black, // 绿底黑字，对比度更高更现代
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(6), // 细微圆角
                       ),
                     ),
                     onPressed: () => Navigator.of(context).pop(true),
@@ -310,7 +304,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                     const Text(
                       '“',
                       style: TextStyle(
-                        color: _journeyBlue, // 空状态符号改为蓝色
+                        color: _journeyAccent, // 替换为高亮绿
                         fontSize: 52,
                         height: .8,
                         fontWeight: FontWeight.w300,
@@ -350,31 +344,30 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
           embedded: widget.embedded,
           lightTheme: false,
           child: DecoratedBox(
-            // 【关键修改点】将深邃蓝渐变背景移到最外层，包裹住 Header 和内容
+            // 【背景统一】采用和场景地图完全一致的深空渐变
             decoration: const BoxDecoration(
               gradient: RadialGradient(
-                center: Alignment(-.45, -.35),
-                radius: 1.15,
+                center: Alignment(0, -.18),
+                radius: 1.05,
                 colors: <Color>[
-                  Color(0xFF111A2C),
-                  _journeyInk,
-                  Color(0xFF070B15),
+                  Color(0xFF303641),
+                  Color(0xFF242A33),
+                  Color(0xFF171B22),
                 ],
-                stops: <double>[0, .58, 1],
+                stops: <double>[0, .52, 1],
               ),
             ),
             child: Column(
               children: <Widget>[
                 LayoutBuilder(
                   builder: (context, constraints) {
-                    // 横纵屏及桌面端统一的页头响应式处理
                     final isLandscape = constraints.maxWidth > constraints.maxHeight;
                     final desktopMode = widget.controller.desktopMode;
                     final leftInset = desktopMode ? 46.0 : (isLandscape ? 24.0 : 10.0);
                     final rightInset = desktopMode ? 54.0 : (isLandscape ? 24.0 : 12.0);
                     final contentMaxWidth = desktopMode ? 1440.0 : (isLandscape ? 900.0 : 560.0);
                     final topInset = desktopMode ? 14.0 : (isLandscape ? 4.0 : 4.0);
-                    final hideHeader = isLandscape && !desktopMode; // 手机横屏为了阅读空间直接隐藏Header
+                    final hideHeader = isLandscape && !desktopMode; 
 
                     if (hideHeader) return SizedBox(height: topInset);
 
@@ -401,14 +394,12 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final desktopMode = widget.controller.desktopMode;
-                      // 用宽高比判断横屏 (也适用于移动设备横屏)
                       final isLandscape = constraints.maxWidth > constraints.maxHeight;
                       
                       final leftInset = desktopMode ? 46.0 : (isLandscape ? 24.0 : 10.0);
                       final rightInset = desktopMode ? 54.0 : (isLandscape ? 24.0 : 12.0);
                       final contentMaxWidth = desktopMode ? 1440.0 : (isLandscape ? 900.0 : 560.0);
 
-                      // 电脑端或横屏：极简双栏布局，无冗余嵌套框，直接在渐变背景上铺设文字。
                       if (desktopMode || isLandscape) {
                         return Center(
                           child: ConstrainedBox(
@@ -422,12 +413,11 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                               ),
                               child: RefreshIndicator(
                                 onRefresh: _refresh,
-                                color: _journeyGold,
+                                color: _journeyAccent,
                                 backgroundColor: _journeyInkSoft,
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    // 左侧栏：故事梗概 (宽35%)
                                     Expanded(
                                       flex: 35,
                                       child: SingleChildScrollView(
@@ -439,12 +429,11 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                                           achievements: achievements.length,
                                           events: events.length,
                                           milestones: milestones.length,
-                                          isLandscape: true, // 横屏标识，隐藏底部分割线
+                                          isLandscape: true, 
                                         ),
                                       ),
                                     ),
-                                    const SizedBox(width: 48), // 宽广的呼吸空间
-                                    // 右侧栏：经历与事件流水 (宽65%)
+                                    const SizedBox(width: 48),
                                     Expanded(
                                       flex: 65,
                                       child: hasContent
@@ -482,7 +471,6 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                         );
                       }
 
-                      // 竖屏：保持原有的单栏流式布局。
                       return Center(
                         child: ConstrainedBox(
                           constraints: BoxConstraints(maxWidth: contentMaxWidth),
@@ -495,7 +483,7 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                             ),
                             child: RefreshIndicator(
                               onRefresh: _refresh,
-                              color: _journeyGold,
+                              color: _journeyAccent,
                               backgroundColor: _journeyInkSoft,
                               child: hasContent
                                   ? ListView(
@@ -630,10 +618,10 @@ class _JourneyStoryOpening extends StatelessWidget {
           const Text(
             'STORY JOURNAL',
             style: TextStyle(
-              color: _journeyGold, // 使用点缀金
+              color: _journeyTextSoft, // 摒弃土味金，用干净的浅灰白
               fontSize: 8.5,
               fontWeight: FontWeight.w800,
-              letterSpacing: 2.4,
+              letterSpacing: 3.0,
             ),
           ),
           const SizedBox(height: 9),
@@ -648,47 +636,51 @@ class _JourneyStoryOpening extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          // 彻底去掉横屏左栏的框线和色块，仅用左侧的指示线作为视觉引导
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.fromLTRB(isLandscape ? 12 : 16, 14, 16, 14),
-            decoration: BoxDecoration(
-              color: isLandscape ? Colors.transparent : _journeyInkSoft.withOpacity(.6),
-              borderRadius: isLandscape ? null : BorderRadius.circular(4),
-              border: isLandscape
-                  ? const Border(left: BorderSide(color: _journeyBlue, width: 2.5))
-                  : Border(
-                      left: const BorderSide(color: _journeyBlue, width: 2.5),
-                      top: BorderSide(color: Colors.white.withOpacity(.05), width: .8),
-                      right: BorderSide(color: Colors.white.withOpacity(.05), width: .8),
-                      bottom: BorderSide(color: Colors.white.withOpacity(.05), width: .8),
-                    ),
-            ),
-            child: Text(
-              summary.isEmpty
-                  ? '故事仍在继续。每一次选择、相遇与转折，都会在这里留下痕迹。'
-                  : summary,
-              style: const TextStyle(
-                color: _journeyTextSoft,
-                fontSize: 12.6,
-                height: 1.8,
-                fontWeight: FontWeight.w500,
+          // 【玻璃态框线】使用纯粹的白边半透明和高对比度绿条，摒弃实色填充
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6), // 极细微圆角
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.fromLTRB(isLandscape ? 12 : 16, 14, 16, 14),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.03),
+                  border: isLandscape
+                      ? const Border(left: BorderSide(color: _journeyAccent, width: 2.5))
+                      : Border(
+                          left: const BorderSide(color: _journeyAccent, width: 2.5),
+                          top: BorderSide(color: Colors.white.withOpacity(.04), width: 1),
+                          right: BorderSide(color: Colors.white.withOpacity(.04), width: 1),
+                          bottom: BorderSide(color: Colors.white.withOpacity(.04), width: 1),
+                        ),
+                ),
+                child: Text(
+                  summary.isEmpty
+                      ? '故事仍在继续。每一次选择、相遇与转折，都会在这里留下痕迹。'
+                      : summary,
+                  style: const TextStyle(
+                    color: _journeyTextSoft,
+                    fontSize: 12.6,
+                    height: 1.8,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
             ),
           ),
           const SizedBox(height: 20),
           Wrap(
-            spacing: 15,
-            runSpacing: 6,
+            spacing: 12,
+            runSpacing: 8,
             children: <Widget>[
               _JourneyCountText(label: '经历', value: achievements),
               _JourneyCountText(label: '事件', value: events),
               _JourneyCountText(label: '节点', value: milestones),
             ],
           ),
-          // 横屏模式去掉了底部分割线，让界面更连贯
           if (!isLandscape) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             Container(height: 1, color: _journeyLine),
           ]
         ],
@@ -711,14 +703,14 @@ class _JourneyCountText extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: _journeyBlue.withOpacity(.12),
+        color: Colors.black.withOpacity(0.3), // 半透纯黑托底
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: _journeyBlue.withOpacity(.2)),
+        border: Border.all(color: Colors.white.withOpacity(0.08)), // 极其微弱的边框
       ),
       child: Text(
         '$label  $value',
         style: const TextStyle(
-          color: _journeyText,
+          color: _journeyTextSoft,
           fontSize: 9.8,
           fontWeight: FontWeight.w700,
           letterSpacing: .25,
@@ -749,7 +741,7 @@ class _GameStyleJourneySection extends StatelessWidget {
           Text(
             eyebrow,
             style: const TextStyle(
-              color: _journeyGold, // 小标题英文改用金色
+              color: _journeyTextSoft, // 替代金色
               fontSize: 8.5,
               fontWeight: FontWeight.w800,
               letterSpacing: 2.0,
@@ -821,7 +813,6 @@ class _GameStyleJourneyEntry extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          // 左侧：序号与微型时间线设计
           SizedBox(
             width: 36,
             child: Column(
@@ -831,7 +822,7 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                   child: Text(
                     number,
                     style: const TextStyle(
-                      color: _journeyBlue, // 序号蓝调
+                      color: _journeyAccent, // 序号用高亮绿，作为时间线核心锚点
                       fontSize: 10.5,
                       fontWeight: FontWeight.w900,
                       letterSpacing: .7,
@@ -849,7 +840,7 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                   Text(
                     record.time,
                     style: const TextStyle(
-                      color: _journeyGoldSoft,
+                      color: _journeyTextSoft, // 弃用金色，改用高级灰白
                       fontSize: 9.5,
                       fontWeight: FontWeight.w700,
                       letterSpacing: .3,
@@ -871,10 +862,10 @@ class _GameStyleJourneyEntry extends StatelessWidget {
                   Text(
                     record.detail,
                     style: const TextStyle(
-                      color: _journeyTextSoft,
+                      color: _journeyMuted, // 略微降低详细文本透明度，增强层次感
                       fontSize: 12.0,
                       height: 1.75,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w400, // 降低字重让视觉更轻量
                     ),
                   ),
                 ],

@@ -16,6 +16,14 @@ import 'app_shared.dart';
 import 'api/api_client.dart';
 import 'api/scenario_editor_api.dart';
 
+const Color _editorInk = Color(0xFF171B22);
+const Color _editorInkSoft = Color(0xFF242A33);
+const Color _editorAccent = Color(0xFF76B900);
+const Color _editorText = Color(0xFFFFFFFF);
+const Color _editorTextSoft = Color(0xFFE0E0E0);
+const Color _editorMuted = Color(0x80FFFFFF);
+const Color _editorLine = Color(0x15FFFFFF);
+
 enum ScenarioEditorSection {
   overview,
   characters,
@@ -79,7 +87,7 @@ class ScenarioEditPage extends StatefulWidget {
 }
 
 class _ScenarioEditPageState extends State<ScenarioEditPage> {
-  static const Color _pageBg = Color(0xFF0A0A0A);
+  static const Color _pageBg = _editorInk;
   static const Color _danger = Color(0xFFE0554A);
 
   late final ScenarioEditorApi _api;
@@ -486,11 +494,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message, style: TextStyle(color: error ? _danger : AppColors.accent)),
+        content: Text(message, style: TextStyle(color: error ? _danger : _editorAccent)),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: const Color(0xFF161616),
+        backgroundColor: _editorInkSoft,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(4),
+          side: const BorderSide(color: _editorLine),
         ),
         duration: const Duration(seconds: 2),
       ),
@@ -753,10 +762,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF161616),
+          backgroundColor: _editorInkSoft,
           surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: _editorLine),
           ),
           title: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           content: TextField(
@@ -959,8 +969,9 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             margin: const EdgeInsets.all(12),
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
             decoration: BoxDecoration(
-              color: const Color(0xFF161616),
-              borderRadius: BorderRadius.circular(16),
+              color: _editorInkSoft,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _editorLine),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1008,12 +1019,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.zero,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.02),
-          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _editorLine),
         ),
         child: Row(
           children: [
@@ -1052,10 +1063,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final result = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF161616),
+        backgroundColor: _editorInkSoft,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: _editorLine),
         ),
         title: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: Text(description, style: const TextStyle(color: AppColors.textOnDarkMuted, height: 1.5)),
@@ -1126,8 +1138,13 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final landscape = media.size.width > media.size.height;
+    final phoneLandscape = landscape &&
+        media.size.height <= 560 &&
+        media.size.width <= 1100;
     final sidebarWidth = landscape
-        ? (media.size.width * .22).clamp(208.0, 264.0).toDouble()
+        ? phoneLandscape
+            ? (media.size.width * .21).clamp(148.0, 184.0).toDouble()
+            : (media.size.width * .20).clamp(220.0, 270.0).toDouble()
         : 0.0;
 
     return Theme(
@@ -1135,7 +1152,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: _pageBg,
         colorScheme: Theme.of(context).colorScheme.copyWith(
-              primary: AppColors.accent,
+              primary: _editorAccent,
               surface: _pageBg,
             ),
         inputDecorationTheme: const InputDecorationTheme(
@@ -1146,25 +1163,54 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       child: Scaffold(
         backgroundColor: _pageBg,
         resizeToAvoidBottomInset: true,
-        body: _loading
-            ? _buildLoading()
-            : _error != null
-                ? _buildError()
-                : Stack(
+        body: DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -.18),
+              radius: 1.05,
+              colors: <Color>[
+                Color(0xFF303641),
+                Color(0xFF242A33),
+                Color(0xFF171B22),
+              ],
+              stops: <double>[0, .52, 1],
+            ),
+          ),
+          child: _loading
+              ? _buildLoading()
+              : _error != null
+                  ? _buildError()
+                  : Stack(
                     children: [
                       if (landscape)
-                        _buildLandscapeEditor(sidebarWidth)
+                        _buildLandscapeEditor(
+                          sidebarWidth,
+                          phoneLandscape: phoneLandscape,
+                        )
                       else
                         CustomScrollView(
                           physics: const BouncingScrollPhysics(),
                           slivers: [
                             _buildAppBar(),
-                            SliverToBoxAdapter(child: _buildHero()),
+                            SliverToBoxAdapter(
+                              child: Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 760),
+                                  child: _buildHero(),
+                                ),
+                              ),
+                            ),
                             SliverToBoxAdapter(child: _buildSectionTabs()),
                             SliverPadding(
                               padding: EdgeInsets.fromLTRB(20, 16, 20, _dirty ? 120 : 28),
                               sliver: SliverToBoxAdapter(
-                                child: _buildCurrentSection(),
+                                child: Align(
+                                  alignment: Alignment.topCenter,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(maxWidth: 960),
+                                    child: _buildCurrentSection(),
+                                  ),
+                                ),
                               ),
                             ),
                           ],
@@ -1177,6 +1223,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                             : 0,
                         rightInset: landscape ? media.padding.right : 0,
                         compact: landscape,
+                        phoneLandscape: phoneLandscape,
                       ),
                       if (_actionLoading)
                         Positioned.fill(
@@ -1192,16 +1239,20 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                         ),
                     ],
                   ),
+        ),
       ),
     );
   }
 
-  Widget _buildLandscapeEditor(double sidebarWidth) {
+  Widget _buildLandscapeEditor(
+    double sidebarWidth, {
+    required bool phoneLandscape,
+  }) {
     return SafeArea(
       bottom: false,
       child: Column(
         children: [
-          _buildLandscapeTopBar(),
+          _buildLandscapeTopBar(compact: phoneLandscape),
           Expanded(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1210,21 +1261,26 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                   width: sidebarWidth,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(.015),
+                      color: _editorInkSoft.withOpacity(.22),
                       border: Border(
                         right: BorderSide(
-                          color: Colors.white.withOpacity(.055),
+                          color: _editorLine,
                           width: 1,
                         ),
                       ),
                     ),
                     child: ListView(
                       physics: const BouncingScrollPhysics(),
-                      padding: EdgeInsets.fromLTRB(10, 8, 10, _dirty ? 82 : 14),
+                      padding: EdgeInsets.fromLTRB(
+                        phoneLandscape ? 8 : 12,
+                        phoneLandscape ? 6 : 10,
+                        phoneLandscape ? 8 : 12,
+                        _dirty ? (phoneLandscape ? 62 : 82) : 14,
+                      ),
                       children: [
-                        _buildLandscapeHero(),
-                        const SizedBox(height: 12),
-                        _buildVerticalSectionTabs(),
+                        _buildLandscapeHero(compact: phoneLandscape),
+                        SizedBox(height: phoneLandscape ? 8 : 14),
+                        _buildVerticalSectionTabs(compact: phoneLandscape),
                       ],
                     ),
                   ),
@@ -1232,7 +1288,9 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 Expanded(
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      final horizontalPadding = constraints.maxWidth >= 1100
+                      final horizontalPadding = phoneLandscape
+                          ? 10.0
+                          : constraints.maxWidth >= 1100
                           ? 20.0
                           : constraints.maxWidth >= 720
                               ? 16.0
@@ -1241,14 +1299,14 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                         physics: const BouncingScrollPhysics(),
                         padding: EdgeInsets.fromLTRB(
                           horizontalPadding,
-                          12,
+                          phoneLandscape ? 8 : 12,
                           horizontalPadding,
-                          _dirty ? 84 : 16,
+                          _dirty ? (phoneLandscape ? 62 : 84) : 16,
                         ),
                         child: Align(
                           alignment: Alignment.topCenter,
                           child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 1480),
+                            constraints: const BoxConstraints(maxWidth: 1280),
                             child: _buildCurrentSection(),
                           ),
                         ),
@@ -1264,11 +1322,15 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     );
   }
 
-  Widget _buildLandscapeTopBar() {
+  Widget _buildLandscapeTopBar({required bool compact}) {
     return SizedBox(
-      height: 46,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6),
+      height: compact ? 42 : 52,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: _editorLine)),
+        ),
+        child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 8),
         child: Row(
           children: [
             IconButton(
@@ -1278,16 +1340,17 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               icon: const Icon(
                 Icons.arrow_back_ios_new_rounded,
                 size: 18,
-                color: AppColors.textOnDark,
+                color: _editorTextSoft,
               ),
             ),
             const SizedBox(width: 4),
             const Text(
               '编辑世界',
               style: TextStyle(
-                color: AppColors.textOnDark,
+                color: _editorText,
                 fontSize: 14.5,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w800,
+                letterSpacing: .8,
               ),
             ),
             if (_dirty) ...[
@@ -1295,13 +1358,13 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: AppColors.accent.withOpacity(.10),
-                  borderRadius: BorderRadius.circular(99),
+                  color: _editorAccent.withOpacity(.10),
+                  border: Border.all(color: _editorAccent.withOpacity(.24)),
                 ),
                 child: const Text(
                   '未保存',
                   style: TextStyle(
-                    color: AppColors.accent,
+                    color: _editorAccent,
                     fontSize: 9.5,
                     fontWeight: FontWeight.w700,
                   ),
@@ -1315,16 +1378,17 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               onPressed: _showMoreMenu,
               icon: const Icon(
                 Icons.more_horiz_rounded,
-                color: AppColors.textOnDark,
+                color: _editorTextSoft,
               ),
             ),
           ],
+        ),
         ),
       ),
     );
   }
 
-  Widget _buildLandscapeHero() {
+  Widget _buildLandscapeHero({required bool compact}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1337,11 +1401,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 clipBehavior: Clip.none,
                 children: [
                   Container(
-                    width: 64,
-                    height: 64,
+                    width: compact ? 52 : 68,
+                    height: compact ? 52 : 68,
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.04),
-                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: _editorLine),
                     ),
                     clipBehavior: Clip.antiAlias,
                     child: _coverUrl.isEmpty
@@ -1360,14 +1424,13 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                           ),
                   ),
                   Positioned(
-                    right: -5,
-                    bottom: -5,
+                    right: -4,
+                    bottom: -4,
                     child: Container(
-                      width: 24,
-                      height: 24,
+                      width: compact ? 21 : 24,
+                      height: compact ? 21 : 24,
                       decoration: BoxDecoration(
-                        color: AppColors.accent,
-                        borderRadius: BorderRadius.circular(9),
+                        color: _editorAccent,
                         border: Border.all(color: _pageBg, width: 3),
                       ),
                       child: _uploadingCover
@@ -1388,7 +1451,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: compact ? 9 : 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1399,15 +1462,15 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                       vertical: 3,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.accent.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(6),
+                      color: _editorAccent.withOpacity(0.1),
+                      border: Border.all(color: _editorAccent.withOpacity(.18)),
                     ),
                     child: Text(
                       _modeLabel(_mode),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: AppColors.accent,
+                        color: _editorAccent,
                         fontSize: 9.5,
                         fontWeight: FontWeight.w700,
                       ),
@@ -1418,9 +1481,9 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     controller: _titleController,
                     onChanged: (_) => _markDirty(),
                     maxLines: 2,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textOnDark,
-                      fontSize: 15.5,
+                      fontSize: compact ? 13.5 : 15.5,
                       height: 1.12,
                       fontWeight: FontWeight.w700,
                     ),
@@ -1435,22 +1498,24 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          'ID  ${_id.isEmpty ? widget.scenarioId : _id}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppColors.textOnDarkMuted,
-            fontSize: 9.8,
-            fontFamily: 'Courier',
+        if (!compact) ...[
+          const SizedBox(height: 8),
+          Text(
+            'ID  ${_id.isEmpty ? widget.scenarioId : _id}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _editorMuted,
+              fontSize: 9.8,
+              fontFamily: 'Courier',
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
 
-  Widget _buildVerticalSectionTabs() {
+  Widget _buildVerticalSectionTabs({required bool compact}) {
     final tabs = <(ScenarioEditorSection, String, IconData)>[
       (ScenarioEditorSection.overview, '基础', Icons.tune_rounded),
       (ScenarioEditorSection.characters, '角色', Icons.people_alt_outlined),
@@ -1465,56 +1530,57 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.circular(11),
+              borderRadius: BorderRadius.zero,
               onTap: () => _setSection(item.$1),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 8 : 10,
+                  vertical: compact ? 7 : 10,
+                ),
                 decoration: BoxDecoration(
                   color: _section == item.$1
-                      ? AppColors.accent.withOpacity(.10)
+                      ? _editorAccent.withOpacity(.10)
                       : Colors.transparent,
-                  borderRadius: BorderRadius.circular(11),
+                  border: Border(
+                    left: BorderSide(
+                      color: _section == item.$1
+                          ? _editorAccent
+                          : Colors.transparent,
+                      width: 2,
+                    ),
+                  ),
                 ),
                 child: Row(
                   children: [
                     Icon(
                       item.$3,
-                      size: 17,
+                      size: compact ? 15 : 17,
                       color: _section == item.$1
-                          ? AppColors.accent
-                          : AppColors.textOnDarkMuted,
+                          ? _editorAccent
+                          : _editorMuted,
                     ),
-                    const SizedBox(width: 11),
+                    SizedBox(width: compact ? 8 : 11),
                     Text(
                       item.$2,
                       style: TextStyle(
                         color: _section == item.$1
-                            ? AppColors.textOnDark
-                            : AppColors.textOnDarkMuted,
-                        fontSize: 12.5,
+                            ? _editorText
+                            : _editorMuted,
+                        fontSize: compact ? 11.5 : 12.5,
                         fontWeight: _section == item.$1
                             ? FontWeight.w700
                             : FontWeight.w500,
                       ),
                     ),
                     const Spacer(),
-                    if (_section == item.$1)
-                      Container(
-                        width: 5,
-                        height: 5,
-                        decoration: const BoxDecoration(
-                          color: AppColors.accent,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
                   ],
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 3),
+          SizedBox(height: compact ? 1 : 3),
         ],
       ],
     );
@@ -1522,7 +1588,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Widget _buildLoading() {
     return const Center(
-      child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.accent),
+      child: CircularProgressIndicator(strokeWidth: 2.2, color: _editorAccent),
     );
   }
 
@@ -1560,30 +1626,30 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       pinned: true,
       elevation: 0,
       scrolledUnderElevation: 0,
-      backgroundColor: _pageBg.withOpacity(0.95),
+      backgroundColor: _editorInkSoft.withOpacity(0.94),
       surfaceTintColor: Colors.transparent,
       leading: IconButton(
         onPressed: () => Navigator.of(context).maybePop(),
-        icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19, color: AppColors.textOnDark),
+        icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19, color: _editorTextSoft),
       ),
       centerTitle: true,
       title: Column(
         children: [
           const Text(
             '编辑世界',
-            style: TextStyle(color: AppColors.textOnDark, fontSize: 15, fontWeight: FontWeight.w700),
+            style: TextStyle(color: _editorText, fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: .8),
           ),
           if (_dirty)
             const Text(
               '有未保存修改',
-              style: TextStyle(color: AppColors.accent, fontSize: 9.5, fontWeight: FontWeight.w500),
+              style: TextStyle(color: _editorAccent, fontSize: 9.5, fontWeight: FontWeight.w600),
             ),
         ],
       ),
       actions: [
         IconButton(
           onPressed: _showMoreMenu,
-          icon: const Icon(Icons.more_horiz_rounded, color: AppColors.textOnDark),
+          icon: const Icon(Icons.more_horiz_rounded, color: _editorTextSoft),
         ),
         const SizedBox(width: 4),
       ],
@@ -1592,7 +1658,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Widget _buildHero() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 22),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -1606,7 +1672,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                   height: 96,
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.04),
-                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: _editorLine),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: _coverUrl.isEmpty
@@ -1627,8 +1693,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     width: 32,
                     height: 32,
                     decoration: BoxDecoration(
-                      color: AppColors.accent,
-                      borderRadius: BorderRadius.circular(10),
+                      color: _editorAccent,
                       border: Border.all(color: _pageBg, width: 3),
                     ),
                     child: _uploadingCover
@@ -1653,13 +1718,13 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: AppColors.accent.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
+                    color: _editorAccent.withOpacity(0.1),
+                    border: Border.all(color: _editorAccent.withOpacity(.18)),
                   ),
                   child: Text(
                     _modeLabel(_mode),
                     style: const TextStyle(
-                      color: AppColors.accent,
+                      color: _editorAccent,
                       fontSize: 10.5,
                       fontWeight: FontWeight.w600,
                     ),
@@ -1710,7 +1775,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     ];
 
     return SizedBox(
-      height: 44,
+      height: 46,
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(horizontal: 20),
         scrollDirection: Axis.horizontal,
@@ -1723,23 +1788,28 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           return Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.zero,
               onTap: () => _setSection(item.$1),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: selected ? AppColors.accent.withOpacity(0.12) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(24),
+                  color: selected ? _editorAccent.withOpacity(0.10) : Colors.transparent,
+                  border: Border(
+                    bottom: BorderSide(
+                      color: selected ? _editorAccent : Colors.transparent,
+                      width: 2,
+                    ),
+                  ),
                 ),
                 child: Row(
                   children: [
-                    Icon(item.$3, size: 16, color: selected ? AppColors.accent : AppColors.textOnDarkMuted),
+                    Icon(item.$3, size: 16, color: selected ? _editorAccent : _editorMuted),
                     const SizedBox(width: 6),
                     Text(
                       item.$2,
                       style: TextStyle(
-                        color: selected ? AppColors.accent : AppColors.textOnDarkMuted,
+                        color: selected ? _editorAccent : _editorMuted,
                         fontSize: 13,
                         fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                       ),
@@ -1782,8 +1852,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 padding: const EdgeInsets.fromLTRB(11, 7, 7, 7),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.04),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white.withOpacity(.035)),
+                  border: Border.all(color: _editorLine),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1810,12 +1879,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             ),
           InkWell(
             onTap: _addTag,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.zero,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: AppColors.accent.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(8),
+                color: _editorAccent.withOpacity(0.08),
+                border: Border.all(color: _editorAccent.withOpacity(.18)),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1882,7 +1951,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           const SizedBox(height: 16),
           LayoutBuilder(
             builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 720;
+              final wide = constraints.maxWidth >= 600;
               if (!wide) {
                 return Column(
                   children: [
@@ -1923,9 +1992,9 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           : LayoutBuilder(
               builder: (context, constraints) {
                 final width = constraints.maxWidth;
-                final columns = width >= 1080
+                final columns = width >= 1040
                     ? 3
-                    : width >= 620
+                    : width >= 520
                         ? 2
                         : 1;
                 const gap = 10.0;
@@ -1982,13 +2051,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
     return InkWell(
       onTap: () => _editCharacter(realIndex),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.zero,
       child: Container(
         padding: EdgeInsets.all(compact ? 10 : 12),
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.025),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withOpacity(0.045)),
+          border: Border.all(color: _editorLine),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -1998,7 +2066,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               height: avatarSize,
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(compact ? 12 : 14),
+                border: Border.all(color: _editorLine),
               ),
               clipBehavior: Clip.antiAlias,
               child: avatar.isEmpty
@@ -2142,7 +2210,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 780;
+        final wide = constraints.maxWidth >= 640;
         if (!wide) {
           return Column(
             children: [
@@ -2153,8 +2221,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           );
         }
 
-        final outlineWidth = (constraints.maxWidth * .33)
-            .clamp(300.0, 420.0)
+        final outlineWidth = (constraints.maxWidth * .36)
+            .clamp(240.0, 380.0)
             .toDouble();
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2205,12 +2273,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       tilePadding: const EdgeInsets.fromLTRB(12, 2, 8, 2),
       childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
       collapsedShape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.white.withOpacity(.035)),
+        borderRadius: BorderRadius.zero,
+        side: const BorderSide(color: _editorLine),
       ),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: AppColors.accent.withOpacity(.12)),
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: _editorAccent.withOpacity(.32)),
       ),
       backgroundColor: Colors.white.withOpacity(0.028),
       collapsedBackgroundColor: Colors.white.withOpacity(0.022),
@@ -2219,8 +2287,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         height: 30,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: AppColors.accent.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(8),
+          color: _editorAccent.withOpacity(0.12),
+          border: Border.all(color: _editorAccent.withOpacity(.2)),
         ),
         child: Text(
           '${index + 1}',
@@ -2388,7 +2456,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.02),
-        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _editorLine),
       ),
       child: Row(
         children: [
@@ -2397,8 +2465,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             height: 40,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: AppColors.accent.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
+              color: _editorAccent.withOpacity(0.1),
+              border: Border.all(color: _editorAccent.withOpacity(.18)),
             ),
             child: Icon(
               uploading ? LucideIcons.loaderCircle : LucideIcons.music2,
@@ -2460,8 +2528,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 height: 36,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: isPreviewing ? AppColors.accent.withOpacity(0.12) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
+                  color: isPreviewing ? _editorAccent.withOpacity(0.12) : Colors.transparent,
+                  border: Border.all(
+                    color: isPreviewing
+                        ? _editorAccent.withOpacity(.22)
+                        : Colors.transparent,
+                  ),
                 ),
                 child: Icon(
                   isPreviewing ? LucideIcons.pause : LucideIcons.play,
@@ -2494,8 +2566,10 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: uploading ? Colors.white.withOpacity(0.04) : AppColors.accent.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
+                color: uploading ? Colors.white.withOpacity(0.04) : _editorAccent.withOpacity(0.1),
+                border: Border.all(
+                  color: uploading ? _editorLine : _editorAccent.withOpacity(.22),
+                ),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -2568,7 +2642,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.02),
-        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _editorLine),
       ),
       child: Column(
         children: [
@@ -2614,6 +2688,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     double leftInset = 0,
     double rightInset = 0,
     bool compact = false,
+    bool phoneLandscape = false,
   }) {
     // 只有发生未保存修改时才显示底部保存栏；保存成功后自动隐藏。
     if (!_dirty && !_saving) return const SizedBox.shrink();
@@ -2624,13 +2699,14 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       bottom: 0,
       child: Container(
         padding: EdgeInsets.fromLTRB(
-          compact ? 16 : 20,
-          compact ? 8 : 12,
-          compact ? 16 : 20,
-          (compact ? 8 : 16) + MediaQuery.paddingOf(context).bottom,
+          phoneLandscape ? 10 : (compact ? 16 : 20),
+          phoneLandscape ? 6 : (compact ? 8 : 12),
+          phoneLandscape ? 10 : (compact ? 16 : 20),
+          (phoneLandscape ? 6 : (compact ? 8 : 16)) +
+              MediaQuery.paddingOf(context).bottom,
         ),
         decoration: BoxDecoration(
-          color: _pageBg.withOpacity(0.95),
+          color: _editorInkSoft.withOpacity(0.96),
           border: compact
               ? Border(
                   top: BorderSide(
@@ -2640,14 +2716,18 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 )
               : null,
         ),
-        child: Material(
-          color: AppColors.accent,
-          borderRadius: BorderRadius.circular(compact ? 10 : 12),
-          child: InkWell(
-            onTap: _saving ? null : _save,
-            borderRadius: BorderRadius.circular(compact ? 10 : 12),
-            child: Container(
-              height: compact ? 42 : 52,
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: SizedBox(
+            width: phoneLandscape ? 174 : double.infinity,
+            child: Material(
+              color: _editorAccent,
+              borderRadius: BorderRadius.zero,
+              child: InkWell(
+                onTap: _saving ? null : _save,
+                borderRadius: BorderRadius.zero,
+                child: Container(
+              height: phoneLandscape ? 36 : (compact ? 42 : 52),
               alignment: Alignment.center,
               child: _saving
                   ? SizedBox(
@@ -2677,6 +2757,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                         ),
                       ],
                     ),
+                ),
+              ),
             ),
           ),
         ),
@@ -2692,13 +2774,13 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   }) {
     final size = MediaQuery.sizeOf(context);
     final dense = size.width > size.height;
+    final phoneLandscape = dense && size.height <= 560 && size.width <= 1100;
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(dense ? 16 : 20),
+      padding: EdgeInsets.all(phoneLandscape ? 12 : (dense ? 16 : 20)),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.024),
-        borderRadius: BorderRadius.circular(dense ? 14 : 16),
-        border: Border.all(color: Colors.white.withOpacity(.04)),
+        color: Colors.white.withOpacity(0.026),
+        border: Border.all(color: _editorLine),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2713,7 +2795,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     Text(
                       title,
                       style: TextStyle(
-                        color: AppColors.textOnDark,
+                        color: _editorText,
                         fontSize: dense ? 15 : 16,
                         fontWeight: FontWeight.w700,
                       ),
@@ -2722,7 +2804,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     Text(
                       subtitle,
                       style: TextStyle(
-                        color: AppColors.textOnDarkMuted,
+                        color: _editorMuted,
                         fontSize: dense ? 11.2 : 12,
                         height: 1.35,
                       ),
@@ -2733,7 +2815,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               if (trailing != null) trailing,
             ],
           ),
-          SizedBox(height: dense ? 14 : 18),
+          SizedBox(height: phoneLandscape ? 10 : (dense ? 14 : 18)),
           child,
         ],
       ),
@@ -2800,7 +2882,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         const SizedBox(height: 10),
         DropdownButtonFormField<String>(
           value: safeValue,
-          dropdownColor: const Color(0xFF161616),
+          dropdownColor: _editorInkSoft,
           isExpanded: true,
           decoration: _inputDecoration(''),
           icon: const Icon(Icons.expand_more_rounded, size: 18, color: AppColors.textOnDarkMuted),
@@ -2841,19 +2923,19 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         fontSize: dense ? 12.3 : 13,
       ),
       filled: true,
-      fillColor: Colors.white.withOpacity(0.03),
+      fillColor: Colors.white.withOpacity(0.035),
       contentPadding: EdgeInsets.symmetric(
         horizontal: dense ? 13 : 16,
         vertical: dense ? 12 : 16,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(dense ? 10 : 12),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.zero,
+        borderSide: const BorderSide(color: _editorLine),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(dense ? 10 : 12),
+        borderRadius: BorderRadius.zero,
         borderSide: BorderSide(
-          color: AppColors.accent.withOpacity(0.4),
+          color: _editorAccent.withOpacity(0.7),
           width: 1,
         ),
       ),
@@ -2871,7 +2953,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       ),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.02),
-        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _editorLine),
       ),
       child: Column(
         children: [
@@ -2889,8 +2971,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: AppColors.accent.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(6),
+        color: _editorAccent.withOpacity(0.1),
+        border: Border.all(color: _editorAccent.withOpacity(.18)),
       ),
       child: Text(text, style: const TextStyle(color: AppColors.accent, fontSize: 10, fontWeight: FontWeight.w600)),
     );
@@ -2901,7 +2983,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _editorLine),
       ),
       child: Text(
         _arcLabel(arc),
@@ -2977,10 +3059,11 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
         horizontal: landscape ? 18 : 20,
         vertical: landscape ? 10 : 20,
       ),
-      backgroundColor: const Color(0xFF141414),
+      backgroundColor: _editorInkSoft,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: _editorLine),
       ),
       child: SizedBox(
         width: dialogWidth,
@@ -3124,7 +3207,7 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
 
   Widget _buildCropSurface() {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.zero,
       child: ColoredBox(
         color: Colors.black,
         child: Crop(
@@ -3179,7 +3262,7 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
               backgroundColor: Colors.white.withOpacity(0.04),
               minimumSize: Size.fromHeight(compact ? 42 : 50),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(compact ? 10 : 12),
+                borderRadius: BorderRadius.zero,
               ),
             ),
             child: Text(
@@ -3193,11 +3276,11 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
           child: FilledButton(
             onPressed: _cropping ? null : _confirmCrop,
             style: FilledButton.styleFrom(
-              backgroundColor: AppColors.accent,
+              backgroundColor: _editorAccent,
               foregroundColor: const Color(0xFF0B0B0B),
               minimumSize: Size.fromHeight(compact ? 42 : 50),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(compact ? 10 : 12),
+                borderRadius: BorderRadius.zero,
               ),
             ),
             child: _cropping
@@ -3240,7 +3323,7 @@ class _CharacterEditorSheet extends StatefulWidget {
 }
 
 class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
-  static const Color _bg = Color(0xFF0A0A0A);
+  static const Color _bg = _editorInk;
 
   late final Map<String, dynamic> _character;
   late final TextEditingController _name;
@@ -3389,6 +3472,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     final size = media.size;
     final availableHeight = math.max(320.0, size.height - bottomInset).toDouble();
     final landscape = size.width > size.height;
+    final phoneLandscape = landscape && size.height <= 560 && size.width <= 1100;
     final portrait = _portraitUrl.text.trim();
     final avatar = _avatarUrl.text.trim();
     final isPlayer = _character['role']?.toString() == 'player';
@@ -3398,26 +3482,30 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Container(
         height: landscape ? availableHeight : availableHeight * 0.94,
-        decoration: BoxDecoration(
-          color: _bg,
-          borderRadius: BorderRadius.zero,
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(0, -.18),
+            radius: 1.05,
+            colors: <Color>[
+              Color(0xFF303641),
+              Color(0xFF242A33),
+              Color(0xFF171B22),
+            ],
+            stops: <double>[0, .52, 1],
+          ),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
           children: [
             Container(
-              height: landscape ? 50 : 56,
-              padding: EdgeInsets.symmetric(horizontal: landscape ? 10 : 16),
-              decoration: landscape
-                  ? BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(
-                          color: Colors.white.withOpacity(.05),
-                          width: 1,
-                        ),
-                      ),
-                    )
-                  : null,
+              height: phoneLandscape ? 44 : (landscape ? 50 : 56),
+              padding: EdgeInsets.symmetric(
+                horizontal: phoneLandscape ? 6 : (landscape ? 10 : 16),
+              ),
+              decoration: const BoxDecoration(
+                color: Color(0x66242A33),
+                border: Border(bottom: BorderSide(color: _editorLine)),
+              ),
               child: Row(
                 children: [
                   TextButton(
@@ -3426,7 +3514,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       '取消',
                       style: TextStyle(
                         color: AppColors.textOnDarkMuted,
-                        fontSize: landscape ? 13.5 : 15,
+                        fontSize: phoneLandscape ? 12.5 : (landscape ? 13.5 : 15),
                       ),
                     ),
                   ),
@@ -3436,8 +3524,9 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: AppColors.textOnDark,
-                        fontSize: landscape ? 14.5 : 16,
-                        fontWeight: FontWeight.w700,
+                        fontSize: phoneLandscape ? 13.5 : (landscape ? 14.5 : 16),
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: .7,
                       ),
                     ),
                   ),
@@ -3448,7 +3537,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       style: TextStyle(
                         color: AppColors.accent,
                         fontWeight: FontWeight.w700,
-                        fontSize: landscape ? 13.5 : 15,
+                        fontSize: phoneLandscape ? 12.5 : (landscape ? 13.5 : 15),
                       ),
                     ),
                   ),
@@ -3457,7 +3546,11 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             ),
             Expanded(
               child: landscape
-                  ? _buildLandscapeCharacterEditor(portrait, avatar)
+                  ? _buildLandscapeCharacterEditor(
+                      portrait,
+                      avatar,
+                      phoneLandscape: phoneLandscape,
+                    )
                   : ListView(
                       physics: const BouncingScrollPhysics(),
                       padding: const EdgeInsets.fromLTRB(20, 16, 20, 48),
@@ -3476,25 +3569,34 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     );
   }
 
-  Widget _buildLandscapeCharacterEditor(String portrait, String avatar) {
+  Widget _buildLandscapeCharacterEditor(
+    String portrait,
+    String avatar, {
+    required bool phoneLandscape,
+  }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final leftWidth = (constraints.maxWidth * .28)
-            .clamp(220.0, 320.0)
-            .toDouble();
+        final leftWidth = phoneLandscape
+            ? (constraints.maxWidth * .29).clamp(190.0, 240.0).toDouble()
+            : (constraints.maxWidth * .28).clamp(220.0, 320.0).toDouble();
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
               width: leftWidth,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+                padding: EdgeInsets.fromLTRB(
+                  phoneLandscape ? 7 : 10,
+                  phoneLandscape ? 7 : 10,
+                  phoneLandscape ? 6 : 8,
+                  phoneLandscape ? 7 : 10,
+                ),
                 child: Column(
                   children: [
                     Expanded(
                       child: _buildPortraitEditor(portrait, fill: true),
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: phoneLandscape ? 6 : 8),
                     _buildIdentityEditor(avatar, compact: true),
                   ],
                 ),
@@ -3508,7 +3610,12 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             Expanded(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(10, 10, 12, 20),
+                padding: EdgeInsets.fromLTRB(
+                  phoneLandscape ? 8 : 10,
+                  phoneLandscape ? 7 : 10,
+                  phoneLandscape ? 10 : 12,
+                  phoneLandscape ? 12 : 20,
+                ),
                 child: _buildCharacterSettingsEditor(compact: true),
               ),
             ),
@@ -3522,7 +3629,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     final surface = Container(
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.circular(fill ? 14 : 16),
+        border: Border.all(color: _editorLine),
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
@@ -3642,7 +3749,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
               height: compact ? 58 : 72,
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(compact ? 16 : 20),
+                border: Border.all(color: _editorLine),
               ),
               clipBehavior: Clip.antiAlias,
               child: Stack(
@@ -3709,7 +3816,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
               Expanded(
                 child: DropdownButtonFormField<String>(
                   value: _genderValue,
-                  dropdownColor: const Color(0xFF161616),
+                  dropdownColor: _editorInkSoft,
                   decoration: _decoration(
                     '性别',
                     compact: compact,
@@ -3892,10 +3999,11 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     final value = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF161616),
+        backgroundColor: _editorInkSoft,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: _editorLine),
         ),
         title: Text(title, style: const TextStyle(color: AppColors.textOnDark, fontWeight: FontWeight.w600, fontSize: 16)),
         content: TextField(controller: temp, style: const TextStyle(color: AppColors.textOnDark), decoration: _decoration('输入 URL')),
@@ -3919,10 +4027,10 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
   }) {
     return Material(
       color: Colors.black.withOpacity(0.6),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.zero,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.zero,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
@@ -3960,8 +4068,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       padding: EdgeInsets.all(compact ? 14 : 20),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.024),
-        borderRadius: BorderRadius.circular(compact ? 12 : 16),
-        border: Border.all(color: Colors.white.withOpacity(.04)),
+        border: Border.all(color: _editorLine),
       ),
       child: child,
     );
@@ -4020,12 +4127,12 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
         vertical: compact ? 11 : 16,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(compact ? 9 : 12),
-        borderSide: BorderSide(color: Colors.white.withOpacity(.025)),
+        borderRadius: BorderRadius.zero,
+        borderSide: const BorderSide(color: _editorLine),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(compact ? 9 : 12),
-        borderSide: BorderSide(color: AppColors.accent.withOpacity(0.4)),
+        borderRadius: BorderRadius.zero,
+        borderSide: BorderSide(color: _editorAccent.withOpacity(0.7)),
       ),
     );
   }
@@ -4059,7 +4166,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                 ),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.04),
-                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _editorLine),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -4088,10 +4195,11 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                 final value = await showDialog<String>(
                   context: context,
                   builder: (dialogContext) => AlertDialog(
-                    backgroundColor: const Color(0xFF161616),
+                    backgroundColor: _editorInkSoft,
                     surfaceTintColor: Colors.transparent,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(8),
+                      side: const BorderSide(color: _editorLine),
                     ),
                     title: Text('添加$label', style: const TextStyle(color: AppColors.textOnDark, fontWeight: FontWeight.w600, fontSize: 16)),
                     content: TextField(controller: controller, autofocus: true, style: const TextStyle(color: AppColors.textOnDark), decoration: _decoration('输入内容')),
@@ -4117,8 +4225,8 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                   vertical: compact ? 7 : 8,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.accent.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
+                  color: _editorAccent.withOpacity(0.1),
+                  border: Border.all(color: _editorAccent.withOpacity(.2)),
                 ),
                 child: Text(
                   '+ 添加',

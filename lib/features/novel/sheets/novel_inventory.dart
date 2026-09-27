@@ -4,16 +4,14 @@ part of '../novel_sheets.dart';
 // 背包页
 // ============================================================================
 
-const Color _inventoryInk = Color(0xFF090E1A);
-const Color _inventoryInkSoft = Color(0xFF111A2C);
-const Color _inventoryBlue = Color(0xFF506FEF);
-const Color _inventoryGold = Color(0xFFC9B778);
-const Color _inventoryGoldSoft = Color(0xFF86794D);
-const Color _inventoryHighEnhancement = Color(0xFFE75B62);
-const Color _inventoryText = Color(0xFFF2F0E8);
-const Color _inventoryTextSoft = Color(0xFFB9C0D0);
-const Color _inventoryMuted = Color(0xFF737C91);
-
+// 【色彩重构】全面对齐深空背景与赛博绿点缀
+const Color _inventoryInk = Color(0xFF171B22); // 深空黑
+const Color _inventoryInkSoft = Color(0xFF242A33); // 辅助暗灰
+const Color _inventoryAccent = Color(0xFF76B900); // 核心高亮绿 (NVIDIA Green)
+const Color _inventoryHighEnhancement = Color(0xFFFF5252); // 高强化警示红
+const Color _inventoryText = Color(0xFFFFFFFF); // 纯白
+const Color _inventoryTextSoft = Color(0xFFE0E0E0); // 柔和白
+const Color _inventoryMuted = Color(0x80FFFFFF); // 半透白
 
 enum _InventoryViewportMode { portrait, landscape, desktop }
 
@@ -510,8 +508,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     try {
       await widget.controller.setEquipped(item, targetEquipped);
 
-      // 不依赖 controller 是否主动 notify：穿戴成功后强制重新读取当前背包，
-      // 保证“已穿戴 / 卸下”状态和左侧装备加成立即刷新。
       await widget.controller.refreshInventory(notify: false);
       if (mounted) setState(() {});
     } catch (error) {
@@ -549,7 +545,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
   }
 
   Future<JsonMap> _requestEnhanceEquipment(NovelInventoryItem item) {
-    // 正式链路：Inventory UI -> NovelGameController -> NovelBackend -> HTTP -> Gateway -> Router。
     return widget.controller.enhanceNovelEquipment(item);
   }
 
@@ -583,7 +578,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                 busy.isEmpty;
             final enhanceTone = enhancement > 5
                 ? _inventoryHighEnhancement
-                : _inventoryGold;
+                : _inventoryAccent;
 
             void showFlash({required bool success, required String text}) {
               final serial = ++flashSerial;
@@ -694,10 +689,10 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                       children: <Widget>[
                         Container(
                           decoration: BoxDecoration(
-                            color: _inventoryInkSoft,
+                            color: _inventoryInk.withOpacity(.95),
                             border: Border.all(
-                              color: _inventoryGold.withOpacity(.28),
-                              width: .8,
+                              color: Colors.white.withOpacity(.08),
+                              width: 1,
                             ),
                             borderRadius: BorderRadius.circular(6),
                             boxShadow: const <BoxShadow>[
@@ -787,8 +782,8 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                 ),
                               ),
                               Container(
-                                height: .7,
-                                color: Colors.white.withOpacity(.08),
+                                height: 1,
+                                color: Colors.white.withOpacity(.05),
                               ),
                               Expanded(
                                 child: SingleChildScrollView(
@@ -821,8 +816,8 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                       if (wearable) ...<Widget>[
                                         const SizedBox(height: 12),
                                         Container(
-                                          height: .7,
-                                          color: Colors.white.withOpacity(.07),
+                                          height: 1,
+                                          color: Colors.white.withOpacity(.04),
                                         ),
                                         const SizedBox(height: 9),
                                         effectRow('基础效果', _baseEquipmentEffect(item)),
@@ -846,11 +841,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                             vertical: 7,
                                           ),
                                           decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(.032),
+                                            color: Colors.white.withOpacity(.03),
                                             borderRadius: BorderRadius.circular(4),
                                             border: Border.all(
                                               color: enhanceStoneQuantity > 0
-                                                  ? Colors.white.withOpacity(.07)
+                                                  ? Colors.white.withOpacity(.05)
                                                   : _inventoryHighEnhancement.withOpacity(.28),
                                             ),
                                           ),
@@ -865,7 +860,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                                   errorBuilder: (_, __, ___) => const Icon(
                                                     Icons.diamond_outlined,
                                                     size: 15,
-                                                    color: _inventoryGold,
+                                                    color: _inventoryAccent,
                                                   ),
                                                 ),
                                               ),
@@ -901,22 +896,22 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                           child: FilledButton(
                                             style: FilledButton.styleFrom(
                                               backgroundColor: enhancement >= 10
-                                                  ? Colors.white.withOpacity(.05)
+                                                  ? Colors.white.withOpacity(.04)
                                                   : enhanceStoneQuantity <= 0
-                                                      ? Colors.white.withOpacity(.045)
+                                                      ? Colors.white.withOpacity(.04)
                                                       : enhanceTone.withOpacity(.18),
                                               foregroundColor: enhancement >= 10 ||
                                                       enhanceStoneQuantity <= 0
                                                   ? _inventoryMuted
                                                   : _inventoryText,
                                               disabledBackgroundColor:
-                                                  Colors.white.withOpacity(.045),
+                                                  Colors.white.withOpacity(.04),
                                               disabledForegroundColor: _inventoryMuted,
                                               side: BorderSide(
                                                 color: canEnhance
                                                     ? enhanceTone.withOpacity(.72)
-                                                    : Colors.white.withOpacity(.10),
-                                                width: canEnhance ? 1.05 : .8,
+                                                    : Colors.transparent,
+                                                width: 1,
                                               ),
                                               elevation: 0,
                                               padding: EdgeInsets.zero,
@@ -984,7 +979,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                                   Text(
                                                     '+${affix.value}%',
                                                     style: const TextStyle(
-                                                      color: _inventoryGold,
+                                                      color: _inventoryAccent,
                                                       fontSize: 11,
                                                       fontWeight: FontWeight.w900,
                                                     ),
@@ -1000,8 +995,8 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                               ),
                               if (wearable) ...<Widget>[
                                 Container(
-                                  height: .7,
-                                  color: Colors.white.withOpacity(.08),
+                                  height: 1,
+                                  color: Colors.white.withOpacity(.05),
                                 ),
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(18, 10, 18, 12),
@@ -1011,21 +1006,21 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                     child: FilledButton(
                                       style: FilledButton.styleFrom(
                                         backgroundColor: item.isEquipped
-                                            ? Colors.white.withOpacity(.07)
-                                            : _inventoryBlue.withOpacity(.24),
+                                            ? Colors.white.withOpacity(.05)
+                                            : _inventoryAccent,
                                         foregroundColor: item.isEquipped
                                             ? _inventoryTextSoft
-                                            : _inventoryText,
+                                            : Colors.black, // 高亮绿配黑色文字更硬核
                                         side: BorderSide(
                                           color: item.isEquipped
                                               ? Colors.white.withOpacity(.12)
-                                              : _inventoryGold.withOpacity(.44),
-                                          width: .9,
+                                              : Colors.transparent,
+                                          width: 1,
                                         ),
                                         elevation: 0,
                                         shape: const RoundedRectangleBorder(
                                           borderRadius: BorderRadius.all(
-                                            Radius.circular(4),
+                                            Radius.circular(6),
                                           ),
                                         ),
                                       ),
@@ -1036,10 +1031,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                               unawaited(_toggleWear(item));
                                             },
                                       child: Text(
-                                        item.isEquipped ? '卸下' : '穿上',
+                                        item.isEquipped ? '卸下' : '穿戴',
                                         style: const TextStyle(
-                                          fontSize: 11.5,
+                                          fontSize: 12.0,
                                           fontWeight: FontWeight.w900,
+                                          letterSpacing: 1.2,
                                         ),
                                       ),
                                     ),
@@ -1081,7 +1077,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                                         ),
                                         decoration: BoxDecoration(
                                           color: (flashSuccess == true
-                                                  ? _inventoryGold
+                                                  ? _inventoryAccent
                                                   : _inventoryHighEnhancement)
                                               .withOpacity(.94),
                                           borderRadius: BorderRadius.circular(99),
@@ -1133,10 +1129,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     final identity = stringValue(status['identity'] ?? host?.persona['identity']).trim();
     final level = stringValue(status['level']).trim();
     final condition = widget.controller.protagonistCondition.trim();
-    // 游戏内头像统一从立绘截取：优先 portrait，缺失时再退回 avatar。
-    // 只有真实远端头像存在时才做头部聚焦（放大 + 上移）。
-    // 如果没有真实头像、只能使用本地男女默认资源，则保持原始构图居中显示，
-    // 不再套用放大和上移，避免默认资源被过度裁切。
+    
     final avatar = (host?.portraitUrl.trim().isNotEmpty ?? false)
         ? host!.portraitUrl.trim()
         : (host?.avatarUrl.trim() ?? '');
@@ -1257,11 +1250,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                     vertical: landscape ? 3 : 4,
                   ),
                   decoration: BoxDecoration(
-                    color: _inventoryInkSoft.withOpacity(landscape ? .32 : .72),
+                    color: Colors.white.withOpacity(.04),
                     borderRadius: BorderRadius.circular(landscape ? 2 : 4),
                     border: landscape
                         ? null
-                        : Border.all(color: Colors.white.withOpacity(.06)),
+                        : Border.all(color: Colors.white.withOpacity(.08)),
                   ),
                   child: Text(
                     meta.isEmpty ? skill.name : '${skill.name} · $meta',
@@ -1342,7 +1335,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                         landscape ? 4 : 6,
                       ),
                       decoration: BoxDecoration(
-                        color: _inventoryInkSoft.withOpacity(landscape ? .34 : .74),
+                        color: Colors.white.withOpacity(.04),
                         borderRadius: BorderRadius.circular(landscape ? 2 : 4),
                         border: landscape
                             ? null
@@ -1402,37 +1395,29 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
+  // 统一替换为无边框毛玻璃面板
   Widget _buildGlassPanel({
     required Widget child,
     bool quiet = false,
   }) {
-    final radius = BorderRadius.circular(quiet ? 2 : 6);
+    final radius = BorderRadius.circular(quiet ? 4 : 8);
     return ClipRRect(
       borderRadius: radius,
       child: BackdropFilter(
         filter: ImageFilter.blur(
-          sigmaX: quiet ? 8 : 18,
-          sigmaY: quiet ? 8 : 18,
+          sigmaX: quiet ? 8 : 12,
+          sigmaY: quiet ? 8 : 12,
         ),
         child: Container(
           decoration: BoxDecoration(
-            color: _inventoryInkSoft.withOpacity(quiet ? .20 : .55),
+            color: Colors.white.withOpacity(quiet ? .02 : .035),
             borderRadius: radius,
             border: quiet
                 ? null
                 : Border.all(
-                    color: Colors.white.withOpacity(.08),
-                    width: .8,
+                    color: Colors.white.withOpacity(.05),
+                    width: 1,
                   ),
-            boxShadow: quiet
-                ? const <BoxShadow>[]
-                : <BoxShadow>[
-                    BoxShadow(
-                      color: Colors.black.withOpacity(.15),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
           ),
           child: child,
         ),
@@ -1562,25 +1547,18 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         final backpackItems = items.where((item) => !item.isEquipped).toList();
         final filteredItems = backpackItems.where((item) {
           if (_filterIndex == 1) {
-            // 1. 穿戴：装备类物品
             return _isWearable(item);
           }
           
           if (_filterIndex == 2) {
-            // 2. 道具：非穿戴物品，且必须包含 icon
             return !_isWearable(item) && _inventoryItemImageSource(item).isNotEmpty;
           }
           
           if (_filterIndex == 0) {
-            // 0. 任务：精准匹配 + 无图标物品兜底
-            // 检查是否来源于后端的剧情道具列表
             final isStoryItem = data.storyItems.contains(item);
-            // 检查类型
             final type = item.itemType.trim().toLowerCase();
             final isQuest = type == 'quest' || type == 'story' || type == 'material';
-            // 兜底：既不是穿戴，也没有图标的物品，强制扔进“任务”里，防止在背包里彻底隐形
             final noIconFallback = !_isWearable(item) && _inventoryItemImageSource(item).isEmpty;
-            
             return isStoryItem || isQuest || noIconFallback;
           }
           
@@ -1619,7 +1597,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                               child: _buildGlassPanel(
                                 child: RefreshIndicator(
                                   onRefresh: _refresh,
-                                  color: _inventoryGold,
+                                  color: _inventoryAccent,
                                   backgroundColor: _inventoryInkSoft,
                                   child: ListView(
                                     padding: EdgeInsets.zero,
@@ -1658,7 +1636,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: _refresh,
-                  color: _inventoryGold,
+                  color: _inventoryAccent,
                   backgroundColor: _inventoryInkSoft,
                   child: CustomScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -1700,7 +1678,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                     Expanded(
                       flex: 4,
                       child: _buildGlassPanel(
-                        quiet: false, // 恢复跑团风格的外围线条与玻璃质感
+                        quiet: false, 
                         child: ListView(
                           physics: const BouncingScrollPhysics(),
                           padding: const EdgeInsets.only(top: 8, bottom: 12),
@@ -1722,10 +1700,10 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                         children: <Widget>[
                           Expanded(
                             child: _buildGlassPanel(
-                              quiet: false, // 恢复跑团风格的外围线条与玻璃质感
+                              quiet: false,
                               child: RefreshIndicator(
                                 onRefresh: _refresh,
-                                color: _inventoryGold,
+                                color: _inventoryAccent,
                                 backgroundColor: _inventoryInkSoft,
                                 child: ListView(
                                   padding: EdgeInsets.zero,
@@ -1744,7 +1722,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                           _inventoryFilterBar(
                             isDesktop: true,
                             dense: true,
-                            quiet: false, // 恢复底部三个按钮的边框线条
+                            quiet: false,
                           ),
                         ],
                       ),
@@ -1783,7 +1761,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 1440),
                           child: Padding(
-                            // 缩小左右边距，移除大边框感
                             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
                             child: desktopLayout(),
                           ),
@@ -1824,23 +1801,11 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         height: dense ? 34 : 44,
         constraints: BoxConstraints(maxWidth: dense ? 300 : 360),
         decoration: BoxDecoration(
-          color: _inventoryInkSoft.withOpacity(quiet ? .28 : .65),
-          borderRadius: BorderRadius.circular(quiet ? 2 : 6),
+          color: Colors.white.withOpacity(.03),
+          borderRadius: BorderRadius.circular(quiet ? 4 : 6),
           border: quiet
               ? null
-              : Border.all(
-                  color: Colors.white.withOpacity(.08),
-                  width: .8,
-                ),
-          boxShadow: quiet
-              ? const <BoxShadow>[]
-              : <BoxShadow>[
-                  BoxShadow(
-                    color: Colors.black.withOpacity(.2),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+              : Border.all(color: Colors.white.withOpacity(.06)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1888,27 +1853,17 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
           alignment: Alignment.center,
           decoration: selected
               ? BoxDecoration(
-                  color: _inventoryBlue.withOpacity(0.2), 
-                  borderRadius: BorderRadius.circular(quiet ? 2 : 6),
+                  color: _inventoryAccent.withOpacity(0.12), 
+                  borderRadius: BorderRadius.circular(quiet ? 4 : 6),
                   border: quiet
                       ? null
-                      : Border.all(
-                          color: _inventoryGold.withOpacity(.3),
-                        ),
-                  boxShadow: quiet
-                      ? const <BoxShadow>[]
-                      : <BoxShadow>[
-                          BoxShadow(
-                            color: _inventoryBlue.withOpacity(.12),
-                            blurRadius: 8,
-                          ),
-                        ],
+                      : Border.all(color: _inventoryAccent.withOpacity(.3)),
                 )
               : const BoxDecoration(),
           child: Text(
             label,
             style: TextStyle(
-              color: selected ? _inventoryGold : _inventoryMuted,
+              color: selected ? _inventoryAccent : _inventoryMuted,
               fontSize: 11.5,
               fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
               letterSpacing: 0.8,
@@ -1920,16 +1875,6 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
   }
 }
 
-
-/// 背包页主角头像。
-///
-/// 关键点：远端地址存在，并不代表屏幕上最终显示的一定是远端图。
-/// NovelArtwork 的 assetCandidates 会在远端加载失败时显示本地默认图；如果
-/// fallback 仍位于 Transform.scale 内，本地图也会被一起放大裁切。
-///
-/// 这里先单独探测远端图：只有远端图真正解码成功后才启用头部聚焦。
-/// 加载中或失败都直接显示本地静态图，而且本地图会读取真实像素宽高，
-/// 按宽高比计算“可完整放进圆框”的最大矩形，因此不会被圆形头像框截角。
 class _InventoryHeroAvatar extends StatefulWidget {
   const _InventoryHeroAvatar({
     required this.avatar,
@@ -2035,12 +1980,12 @@ class _InventoryHeroAvatarState extends State<_InventoryHeroAvatar> {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           border: Border.all(
-            color: _inventoryGold.withOpacity(widget.landscape ? .24 : .42),
+            color: Colors.white.withOpacity(widget.landscape ? .15 : .2),
             width: widget.landscape ? .7 : 1,
           ),
           boxShadow: <BoxShadow>[
             BoxShadow(
-              color: _inventoryBlue.withOpacity(widget.landscape ? .10 : .22),
+              color: Colors.black.withOpacity(0.3),
               blurRadius: widget.landscape ? 9 : 16,
             ),
           ],
@@ -2048,12 +1993,10 @@ class _InventoryHeroAvatarState extends State<_InventoryHeroAvatar> {
         clipBehavior: Clip.antiAlias,
         child: ClipRect(
           child: Transform.scale(
-            // 仅在远端图片已经真实解码成功时才启用聚焦放大。
             scale: widget.landscape ? 1.82 : 1.88,
             alignment: const Alignment(0, -0.38),
             child: NovelArtwork(
               url: _remoteUrl,
-              // 不再把本地默认图放进这个 Transform.scale 里。
               assetCandidates: const <String>[],
               fit: BoxFit.cover,
               alignment: const Alignment(0, -1.3),
@@ -2160,9 +2103,6 @@ class _ResolutionAwareLocalAvatarState
     final sourceWidth = _pixelWidth;
     final sourceHeight = _pixelHeight;
 
-    // 把完整矩形图片放进圆框时，不能只做 BoxFit.contain：
-    // contain 是“矩形放进正方形”，图片四角仍可能落在圆外被 ClipOval 截掉。
-    // 这里根据真实像素宽高计算圆的内接矩形。
     var drawWidth = widget.extent * .68;
     var drawHeight = widget.extent * .68;
     if (sourceWidth != null && sourceHeight != null) {
@@ -2183,12 +2123,12 @@ class _ResolutionAwareLocalAvatarState
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(
-          color: _inventoryGold.withOpacity(widget.landscape ? .24 : .42),
+          color: Colors.white.withOpacity(widget.landscape ? .15 : .2),
           width: widget.landscape ? .7 : 1,
         ),
         boxShadow: <BoxShadow>[
           BoxShadow(
-            color: _inventoryBlue.withOpacity(widget.landscape ? .10 : .22),
+            color: Colors.black.withOpacity(0.3),
             blurRadius: widget.landscape ? 9 : 16,
           ),
         ],
@@ -2228,54 +2168,21 @@ class _InventoryBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 替换为深空暗黑统一渐变，去掉花里胡哨的圆形线框
     return DecoratedBox(
       decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+        gradient: RadialGradient(
+          center: Alignment(0, -.18),
+          radius: 1.05,
           colors: <Color>[
-            Color(0xFF070B15),
-            Color(0xFF101A30),
-            _inventoryInk,
+            Color(0xFF303641),
+            Color(0xFF242A33),
+            Color(0xFF171B22),
           ],
-          stops: <double>[0, .56, 1],
+          stops: <double>[0, .52, 1],
         ),
       ),
-      child: Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          Positioned(
-            left: -180,
-            top: -250,
-            child: Container(
-              width: 520,
-              height: 520,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: _inventoryGold.withOpacity(.12)),
-              ),
-            ),
-          ),
-          Positioned(
-            right: -220,
-            bottom: -300,
-            child: Container(
-              width: 620,
-              height: 620,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: <Color>[
-                    _inventoryBlue.withOpacity(.16),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            ),
-          ),
-          child,
-        ],
-      ),
+      child: child,
     );
   }
 }
@@ -2385,7 +2292,7 @@ class _InventoryItemIcon extends StatelessWidget {
     final fallback = Icon(
       Icons.inventory_2_outlined,
       size: size * .62,
-      color: _inventoryGoldSoft,
+      color: _inventoryTextSoft, // 替换原来的 GoldSoft
     );
     final errorBuilder = (
       BuildContext _,
@@ -2427,7 +2334,7 @@ int _inventoryItemQuality(NovelInventoryItem item) {
 
 Color _inventoryQualityColor(int quality) {
   final value = quality.clamp(1, 10).toInt();
-
+  // 保持原有阶梯色，仅将最低档稍作调整使其在暗色模式下更干净
   return switch (value) {
     10 => const Color(0xFFFF7B7B),
     9 => const Color(0xFFFF83B7),
@@ -2438,7 +2345,7 @@ Color _inventoryQualityColor(int quality) {
     4 => const Color(0xFF83B7EC),
     3 => const Color(0xFF77C890),
     2 => const Color(0xFF8FB99A),
-    _ => const Color(0xFFB9C0D0),
+    _ => _inventoryTextSoft, 
   };
 }
 
@@ -2454,7 +2361,7 @@ class _QualitySegments extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final normalized = level.clamp(0, 10).toInt();
-    const activeColor = _inventoryGold;
+    const activeColor = _inventoryAccent;
     
     return Row(
       children: List<Widget>.generate(3, (index) { 
@@ -2559,7 +2466,7 @@ class _EquipmentBonusMeter extends StatelessWidget {
               maxLines: 1,
               textAlign: TextAlign.right,
               style: const TextStyle(
-                color: _inventoryGold,
+                color: _inventoryAccent,
                 fontSize: 9.5,
                 fontWeight: FontWeight.w800,
               ),
@@ -2592,7 +2499,7 @@ class _InventoryEnhancementStars extends StatelessWidget {
     if (normalized <= 0) return const SizedBox.shrink();
     final secondStage = normalized > 5;
     final visibleStars = secondStage ? normalized - 5 : normalized;
-    final color = secondStage ? _inventoryHighEnhancement : _inventoryGold;
+    final color = secondStage ? _inventoryHighEnhancement : _inventoryAccent;
     final size = compact ? 8.5 : 10.5;
 
     return Semantics(
@@ -2626,7 +2533,6 @@ class _InventoryEnhancementStars extends StatelessWidget {
     );
   }
 }
-
 
 class _GameStyleInventoryRow extends StatelessWidget {
   const _GameStyleInventoryRow({
@@ -2669,11 +2575,11 @@ class _GameStyleInventoryRow extends StatelessWidget {
             vertical: dense ? 7 : 9,
           ),
           decoration: BoxDecoration(
-            color: _inventoryInkSoft.withOpacity(dense ? .34 : .68),
+            color: Colors.white.withOpacity(dense ? .02 : .035),
             borderRadius: BorderRadius.circular(dense ? 2 : 4),
             border: dense
                 ? null
-                : Border.all(color: qualityColor.withOpacity(.18)),
+                : Border.all(color: Colors.white.withOpacity(.05)),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -2718,14 +2624,14 @@ class _GameStyleInventoryRow extends StatelessWidget {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                             decoration: BoxDecoration(
-                              color: _inventoryBlue.withOpacity(.14),
+                              color: _inventoryAccent.withOpacity(.15),
                               borderRadius: BorderRadius.circular(3),
-                              border: Border.all(color: _inventoryGold.withOpacity(.2)),
+                              border: Border.all(color: _inventoryAccent.withOpacity(.3)),
                             ),
                             child: const Text(
                               '已穿戴',
                               style: TextStyle(
-                                color: _inventoryGold,
+                                color: _inventoryAccent,
                                 fontSize: 8.5,
                                 height: 1.0,
                                 fontWeight: FontWeight.w800,
@@ -2736,10 +2642,10 @@ class _GameStyleInventoryRow extends StatelessWidget {
                         ],
                       ],
                     ),
-                    const SizedBox(height: 4), // 缩短标题与描述的间距
+                    const SizedBox(height: 4), 
                     Text(
                       description.isEmpty ? '点击查看详情' : description,
-                      maxLines: 1, // 强制限制为单行
+                      maxLines: 1, 
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: description.isEmpty
@@ -2780,18 +2686,16 @@ class _GameStyleInventoryRow extends StatelessWidget {
                         borderRadius: BorderRadius.circular(4),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 160),
-                          height: 26, // 进一步压缩按钮高度
+                          height: 26, 
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
                             color: equipped
-                                ? Colors.white.withOpacity(.07)
-                                : _inventoryBlue.withOpacity(.18),
+                                ? Colors.white.withOpacity(.05)
+                                : _inventoryAccent,
                             borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: equipped
-                                  ? Colors.white.withOpacity(.08)
-                                  : _inventoryGold.withOpacity(.22),
-                            ),
+                            border: equipped
+                                ? Border.all(color: Colors.white.withOpacity(.1))
+                                : null,
                           ),
                           child: busy
                               ? SizedBox.square(
@@ -2800,15 +2704,15 @@ class _GameStyleInventoryRow extends StatelessWidget {
                                     strokeWidth: 1.5,
                                     color: equipped
                                         ? Colors.white
-                                        : _inventoryGold,
+                                        : Colors.black,
                                   ),
                                 )
                               : Text(
                                   equipped ? '卸下' : '穿戴',
                                   style: TextStyle(
                                     color: equipped
-                                        ? Colors.white
-                                        : _inventoryText,
+                                        ? _inventoryTextSoft
+                                        : Colors.black,
                                     fontSize: 10.5,
                                     fontWeight: FontWeight.w800,
                                   ),
@@ -2854,14 +2758,14 @@ class _GameStyleMetaText extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: _inventoryInkSoft.withOpacity(.72),
+        color: Colors.white.withOpacity(.04),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: _inventoryGold.withOpacity(.16)),
+        border: Border.all(color: Colors.white.withOpacity(.08)),
       ),
       child: Text(
         text,
         style: TextStyle(
-          color: accent ? _inventoryGold : _inventoryTextSoft,
+          color: accent ? _inventoryAccent : _inventoryTextSoft,
           fontSize: 10.5,
           fontWeight: FontWeight.w600,
         ),

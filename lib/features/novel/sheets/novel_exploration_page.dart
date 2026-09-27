@@ -2883,7 +2883,7 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
         
         if (movedDistance > .001 && travelledPx > .05) {
           final oldPhase = _walkPhase;
-          _walkPhase = (_walkPhase + travelledPx * .045) % (math.pi * 2);
+          _walkPhase = (_walkPhase + travelledPx * .055) % (math.pi * 2);
           
           // 步态越过0点（踩地瞬间）生成粒子
           if ((math.sin(oldPhase) < 0 && math.sin(_walkPhase) >= 0) ||
@@ -3957,6 +3957,7 @@ class _SceneAssetPainter extends CustomPainter {
   /// so an exact-contour outline is not available without a separate
   /// segmentation pass. A rounded rect approximation reads fine at this
   /// interaction distance.
+  /// 靠近建筑时显示的提示标签
   void _drawBuildingHighlight(Canvas canvas, JsonMap object) {
     final x = _sceneNum(object['x']);
     final width = math.max(1.0, _sceneNum(object['width'], 1));
@@ -3973,27 +3974,12 @@ class _SceneAssetPainter extends CustomPainter {
     final name = _sceneString(object['display_name'], _sceneString(object['name'], '未知区域'));
     if (name.isEmpty) return;
 
-    // ==========================================
-    // 底板变透明后，图文必须换回纯白，并自带微弱阴影防干扰
-    // ==========================================
     const textColor = Color(0xFFF2F2F2);
     const textShadows = [
       Shadow(color: Color(0x99000000), blurRadius: 3, offset: Offset(0, 1)),
     ];
 
-    final iconPainter = TextPainter(
-      text: TextSpan(
-        text: String.fromCharCode(Icons.search.codePoint),
-        style: const TextStyle(
-          fontFamily: 'MaterialIcons',
-          color: textColor, 
-          fontSize: 16,
-          shadows: textShadows, // 加上轻微阴影
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-
+    // 1. 去掉放大镜，仅保留名称文字 Painter
     final textPainter = TextPainter(
       text: TextSpan(
         text: name,
@@ -4001,17 +3987,18 @@ class _SceneAssetPainter extends CustomPainter {
           color: textColor,
           fontSize: 14,
           fontWeight: FontWeight.w600,
-          shadows: textShadows, // 加上轻微阴影
+          letterSpacing: 1.2, // 增加一点字间距，纯文字时会显得更优雅
+          shadows: textShadows,
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
 
-    const gap = 4.0;
-    final contentWidth = iconPainter.width + gap + textPainter.width;
-    final contentHeight = math.max(iconPainter.height, textPainter.height);
+    final contentWidth = textPainter.width;
+    final contentHeight = textPainter.height;
 
-    final labelCenter = Offset(centerX, buildingBaseline - 45);
+    // 2. 位置放得更高一些：从 - 45 改为 - 85 (数字越大越靠上，可微调)
+    final labelCenter = Offset(centerX, buildingBaseline - 85);
 
     // ==========================================
     // 绘制：极透白底 + 胶囊圆角 + 细白边
@@ -4020,19 +4007,19 @@ class _SceneAssetPainter extends CustomPainter {
     final rrect = RRect.fromRectAndRadius(
       Rect.fromCenter(
         center: labelCenter,
-        width: contentWidth + 24, 
+        width: contentWidth + 28, // 左右留出各 14px 的 Padding
         height: boxHeight,
       ),
-      Radius.circular(boxHeight / 2), // 保持胶囊圆角
+      Radius.circular(boxHeight / 2),
     );
 
-    // 1. 内部高透底色 (15% 不透明度的纯白，也就是 0x26，足够剔透)
+    // 内部高透底色
     canvas.drawRRect(
       rrect,
       Paint()..color = const Color(0x26FFFFFF), 
     );
 
-    // 2. 白色描边 (50% 不透明度 0x80，1.0 像素细线，模拟玻璃边缘的高光反光)
+    // 白色描边
     canvas.drawRRect(
       rrect,
       Paint()
@@ -4042,18 +4029,12 @@ class _SceneAssetPainter extends CustomPainter {
     );
 
     // ==========================================
-    // 居中绘制图文
+    // 3. 完美居中绘制文字
     // ==========================================
     final startX = labelCenter.dx - contentWidth / 2;
-    
-    iconPainter.paint(
-      canvas,
-      Offset(startX, labelCenter.dy - iconPainter.height / 2),
-    );
-
     textPainter.paint(
       canvas,
-      Offset(startX + iconPainter.width + gap, labelCenter.dy - textPainter.height / 2),
+      Offset(startX, labelCenter.dy - contentHeight / 2),
     );
   }
 
@@ -4895,25 +4876,32 @@ class _SceneAssetPainter extends CustomPainter {
     
     final cycle = math.sin(walkPhase);
     final isMoving = walkStrength > .01;
-    // Pokemon-style idle: rise slowly from the grounded pose and settle back.
-    // Only the upper-body pass consumes these values; the feet stay planted.
     final idleWave = isMoving ? 0.0 : (1.0 - math.cos(idlePhase)) * .5;
     final idleUpperLift = idleWave * 1.0;
     final idleUpperStretch = 1.0 + idleWave * .004;
+    
+    // 1. 沉稳的上下起伏幅度
     final bob = isMoving
-        ? -math.pow(cycle.abs(), 1.55).toDouble() * 1.25 * walkStrength
+        ? -math.pow(cycle.abs(), 1.55).toDouble() * 2.2 * walkStrength
         : 0.0;
 
     final lift = isMoving
-        ? (-bob / (1.25 * walkStrength)).clamp(0.0, 1.0).toDouble()
+        ? (-bob / (2.2 * walkStrength)).clamp(0.0, 1.0).toDouble()
         : 0.0;
-    final shadowScale = 1.0 - lift * 0.18; 
-    final shadowAlpha =
-        (0.42 - lift * 0.12).clamp(0.1, 0.5).toDouble();
-
-    final playerShadowWidth = (metrics.tileWidth * .92 * shadowScale).clamp(24.0, 48.0).toDouble();
-    final playerShadowHeight = (metrics.tileHeight * .42 * shadowScale).clamp(8.0, 16.0).toDouble();
+        
+    // 🌟 强化版阴影参数 🌟
+    // 起跳时影子缩小的幅度稍微加大一点，空间感更强
+    final shadowScale = 1.0 - lift * 0.25; 
     
+    // 把基础透明度从 0.42 提高到 0.65，影子颜色更深更实
+    final shadowAlpha = (0.65 - lift * 0.25).clamp(0.15, 0.75).toDouble();
+
+    // 把影子的宽度系数从 .92 增加到 1.25，适应立绘的长袍或张开的腿
+    final playerShadowWidth = (metrics.tileWidth * 1.25 * shadowScale).clamp(32.0, 64.0).toDouble();
+    // 影子高度稍微压扁一点，透视感更好
+    final playerShadowHeight = (metrics.tileHeight * .38 * shadowScale).clamp(8.0, 20.0).toDouble();
+    
+    // 绘制脚底阴影（这里保持不变，它会使用上面修改过的新参数）
     canvas.drawOval(
       Rect.fromCenter(
         center: Offset(p.dx, p.dy + metrics.tileHeight * .07),
@@ -4928,38 +4916,35 @@ class _SceneAssetPainter extends CustomPainter {
     if (playerImage != null) {
       final sourceWidth = (playerImage.width as int).toDouble();
       final sourceHeight = (playerImage.height as int).toDouble();
+      
+      // 保持左右朝向翻转因子
       final faceSign = facing == 'W' ? -1.0 : 1.0;
 
       canvas.save();
       
-      // 1. 移动到脚底原点，这里已经包含了原有的上下起伏高度 (bob)
+      // 移动到脚底原点（包含顿挫起伏）
       canvas.translate(p.dx, p.dy + bob); 
 
-      // 2. 纯粹的钟摆摇晃 (Rotation Sway)
-      // Keep the full-body motion very small. The lower-body pass below now
-      // carries most of the gait, so the portrait no longer rocks like a card.
       if (isMoving) {
-        final swayAngle = math.cos(walkPhase) * 0.012 * walkStrength;
+        // 2. 摇摆幅度收敛（不到2度），只保留轻微的肩膀晃动
+        final swayAngle = math.cos(walkPhase) * 0.02 * walkStrength;
         canvas.rotate(swayAngle);
       }
 
-      // 3. 左右朝向翻转 (放在旋转之后，避免左右转向时摇摆相位发生突变)
+      // 翻转朝向
       canvas.scale(faceSign, 1.0);
 
       if (isFallbackPlayer) {
         // ✨ 当使用默认头像时：保持小巧精致的圆形棋子形态
-        // 将半径调小为 0.45 倍格子宽度（约 15px 半径，30px 直径）
         final radius = metrics.tileWidth * 0.45; 
         final avatarCenter = Offset(
           0,
           -radius - 6 - idleUpperLift * .55,
-        ); // 悬浮于阴影上方
+        );
         
         canvas.save();
-        // 裁切成正圆
         canvas.clipPath(Path()..addOval(Rect.fromCircle(center: avatarCenter, radius: radius)));
         
-        // 居中裁剪缩放（Aspect Fill）
         final scale = (radius * 2) / math.min(sourceWidth, sourceHeight);
         canvas.drawImageRect(
           playerImage,
@@ -4974,7 +4959,6 @@ class _SceneAssetPainter extends CustomPainter {
         );
         canvas.restore();
         
-        // 绘制白色描边（配合小头像，描边调细为 1.2）
         canvas.drawCircle(
           avatarCenter,
           radius,
@@ -4984,13 +4968,12 @@ class _SceneAssetPainter extends CustomPainter {
             ..strokeWidth = 1.2,
         );
       } else {
-        // 🌟 真实立绘：先按场景自适应，再统一缩小 10%。
+        // 🌟 真实立绘：先按场景自适应，再统一缩小 10%
         final playerDisplayScale = metrics.sideScroll ? 1.40 : 1.20;
         final baseDrawWidth = (metrics.groundWidth * .052 * playerDisplayScale)
             .clamp(58.0, metrics.sideScroll ? 126.0 : 106.0)
             .toDouble();
-        // Keep the original responsive sizing and clamps, then reduce the
-        // final portrait uniformly by 10% in every scene mode.
+        
         final drawWidth = baseDrawWidth * .90;
         final drawHeight = drawWidth * sourceHeight / sourceWidth;
         final sourceRect = Rect.fromLTWH(0, 0, sourceWidth, sourceHeight);
@@ -5003,8 +4986,7 @@ class _SceneAssetPainter extends CustomPainter {
         final imagePaint = Paint()..filterQuality = FilterQuality.high;
 
         if (!isMoving) {
-          // Keep the legs/feet fixed and animate only the body above the hips.
-          // Both clips overlap, so long coats and dresses do not expose a gap.
+          // 站立闲置时的呼吸动画（下半身固定，上半身拉伸）
           final idleSplit = destination.top + destination.height * .56;
           final idleOverlap = destination.height * .04;
 
@@ -5046,21 +5028,27 @@ class _SceneAssetPainter extends CustomPainter {
           );
           canvas.restore();
         } else {
-          // Keep the portrait rigid while walking. Only the bottom 30% is
-          // divided into left/right halves, with opposite opacity phases.
-          // Each half is fully opaque at the split and fades progressively
-          // toward the feet, so no waist/body seam is visible.
+          // 3. 恢复你喜欢的“物理抬脚”！
           final legTop = destination.top + destination.height * .70;
           final overlap = destination.height * .025;
           final centerX = destination.center.dx;
+          
           final phase01 = (math.sin(walkPhase) + 1.0) * .5;
           final leftFootAlpha = .20 + .80 * phase01;
           final rightFootAlpha = .20 + .80 * (1.0 - phase01);
 
-          void drawFadingHalf(Rect bounds, double footAlpha) {
+          // 🌟 计算悬空脚的抬起高度（透明度越低，物理上抬得越高）
+          final leftLift = (1.0 - phase01) * 12.0 * walkStrength;
+          final rightLift = phase01 * 12.0 * walkStrength;
+
+          void drawFadingHalf(Rect bounds, double footAlpha, double liftY) {
             canvas.saveLayer(bounds, Paint());
             canvas.save();
             canvas.clipRect(bounds);
+            
+            // 🌟 核心：给这半边腿加上真实的抬高位移
+            canvas.translate(0, -liftY);
+            
             canvas.drawImageRect(
               playerImage,
               sourceRect,
@@ -5068,6 +5056,7 @@ class _SceneAssetPainter extends CustomPainter {
               imagePaint,
             );
             canvas.restore();
+            
             canvas.drawRect(
               bounds,
               Paint()
@@ -5085,6 +5074,7 @@ class _SceneAssetPainter extends CustomPainter {
             canvas.restore();
           }
 
+          // 绘制左腿部分（传入左腿抬高值）
           drawFadingHalf(
             Rect.fromLTRB(
               destination.left,
@@ -5093,7 +5083,10 @@ class _SceneAssetPainter extends CustomPainter {
               destination.bottom,
             ),
             leftFootAlpha,
+            leftLift,
           );
+          
+          // 绘制右腿部分（传入右腿抬高值）
           drawFadingHalf(
             Rect.fromLTRB(
               centerX,
@@ -5102,10 +5095,10 @@ class _SceneAssetPainter extends CustomPainter {
               destination.bottom,
             ),
             rightFootAlpha,
+            rightLift,
           );
 
-          // The untouched upper 70% is drawn last and overlaps the fully
-          // opaque top of both leg masks, eliminating the old cut-body look.
+          // 绘制上半身 70%（盖在双腿上方，消除拼接缝隙）
           canvas.save();
           canvas.clipRect(
             Rect.fromLTRB(

@@ -3064,9 +3064,26 @@ class _SpeechBubblePainter extends CustomPainter {
     // 主体圆角矩形
     path.addRRect(RRect.fromRectAndRadius(rect, Radius.circular(cornerRadius)));
 
-    // 绘制小尾巴，让它指向侧面的立绘
+    // --- 自适应小尾巴位置逻辑 ---
     final tailPath = Path();
-    final tailStartY = 24.0; // 尾巴距离气泡顶部的垂直距离
+    
+    // 理想的默认起始位置
+    double preferredTailStartY = 24.0; 
+    
+    // 尾巴最上方不能画到顶部圆角里
+    double minTailStartY = cornerRadius;
+    // 尾巴最下方不能画到底部圆角里
+    double maxTailStartY = size.height - cornerRadius - tailBaseWidth;
+    
+    double tailStartY;
+    if (maxTailStartY < minTailStartY) {
+      // 极端情况：如果气泡特别矮（比如一行字且 padding 很小），连直边都不够画尾巴，就让它强制垂直居中
+      tailStartY = (size.height - tailBaseWidth) / 2;
+    } else {
+      // 正常情况：限制在安全范围内
+      tailStartY = preferredTailStartY.clamp(minTailStartY, maxTailStartY);
+    }
+    // ----------------------------
 
     if (isHost) {
       // 主角（气泡在左，立绘在右），尾巴在右侧边缘，向右指

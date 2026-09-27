@@ -5,7 +5,7 @@ part of '../novel_sheets.dart';
 const Color _characterHighStar = Color(0xFFE75B62);
 const int _characterRecruitFragmentsRequired = 15;
 const int _characterUpgradeFragmentsRequired = 10;
-// 深色队伍 / 结缘 / 图鉴 / 伙伴养成页
+// 赛博绿极简暗黑：队伍 / 结缘 / 图鉴 / 伙伴养成页
 // 页面入口 / 对外入口：
 //   - NovelTeamTab
 //
@@ -34,15 +34,16 @@ class NovelTeamTab extends StatelessWidget {
 // 游戏化角色中心
 // ============================================================================
 
-const Color _characterInk = Color(0xFF090E1A);
-const Color _characterInkSoft = Color(0xFF111A2C);
-const Color _characterBlue = Color(0xFF506FEF);
-const Color _characterBlueBright = Color(0xFF7D98FF);
-const Color _characterGold = Color(0xFFC9B778);
-const Color _characterGoldSoft = Color(0xFF86794D);
-const Color _characterText = Color(0xFFF2F0E8);
-const Color _characterTextSoft = Color(0xFFB9C0D0);
-const Color _characterTextMuted = Color(0xFF737C91);
+const Color _characterInk = Color(0xFF171B22);
+const Color _characterInkSoft = Color(0xFF242A33);
+const Color _characterBlue = Color(0xFF76B900);
+const Color _characterBlueBright = Color(0xFF92D126);
+const Color _characterGold = Color(0xFF76B900);
+const Color _characterGoldSoft = Color(0xFF679E0B);
+const Color _characterText = Color(0xFFFFFFFF);
+const Color _characterTextSoft = Color(0xFFE0E0E0);
+const Color _characterTextMuted = Color(0x80FFFFFF);
+const Color _characterLine = Color(0x15FFFFFF);
 
 
 void _showCharacterFloatingNotice(BuildContext context, String message) {
@@ -232,58 +233,26 @@ class _CharacterGameBackdrop extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+        gradient: RadialGradient(
+          center: Alignment(0, -.18),
+          radius: 1.05,
           colors: <Color>[
-            Color(0xFF070B15),
-            Color(0xFF101A30),
-            Color(0xFF090E1A),
+            Color(0xFF303641),
+            Color(0xFF242A33),
+            Color(0xFF171B22),
           ],
-          stops: <double>[0, .56, 1],
+          stops: <double>[0, .52, 1],
         ),
       ),
       child: Stack(
         fit: StackFit.expand,
         children: <Widget>[
           Positioned(
-            left: -170,
-            top: -240,
-            child: Container(
-              width: 520,
-              height: 520,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: _characterGold.withOpacity(.13),
-                  width: 1,
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            right: -230,
-            bottom: -310,
-            child: Container(
-              width: 650,
-              height: 650,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: RadialGradient(
-                  colors: <Color>[
-                    _characterBlue.withOpacity(.17),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            left: 90,
-            right: 90,
+            left: 24,
+            right: 24,
             top: 0,
             height: 1,
-            child: ColoredBox(color: _characterGoldSoft.withOpacity(.16)),
+            child: ColoredBox(color: _characterLine),
           ),
           child,
         ],
@@ -577,7 +546,7 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
     final results = await showGeneralDialog<List<_CharacterDrawResult>>(
       context: context,
       barrierDismissible: false,
-      barrierColor: const Color(0xEE05080E), 
+      barrierColor: const Color(0xEE171B22),
       transitionDuration: const Duration(milliseconds: 300),
       pageBuilder: (context, _, __) {
         return _SummonProcessModal(
@@ -824,9 +793,9 @@ class _NovelCharacterHubState extends State<_NovelCharacterHub> {
                   case _CharacterViewportMode.desktop:
                     return Center(
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1440),
+                        constraints: const BoxConstraints(maxWidth: 1280),
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(46, 14, 54, 12),
+                          padding: const EdgeInsets.all(10),
                           child: buildBody(mode),
                         ),
                       ),
@@ -968,9 +937,9 @@ class _CharacterGameHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gap = dense ? 13.0 : 20.0;
+    final gap = dense ? 12.0 : 18.0;
     return SizedBox(
-      height: dense ? 44 : 68,
+      height: dense ? 48 : 56,
       child: Row(
         children: <Widget>[
           Expanded(
@@ -1074,10 +1043,8 @@ class _CharacterHeaderNavAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selectedColor = featured ? _characterGoldSoft : _characterText;
-    final idleColor = featured
-        ? _characterGoldSoft.withOpacity(.78)
-        : _characterTextMuted.withOpacity(.88);
+    final selectedColor = _characterGold;
+    final idleColor = _characterTextMuted;
     final color = selected ? selectedColor : idleColor;
 
     // 顶部导航不使用 InkWell，避免手机按下时出现方形白色遮罩。
@@ -1267,11 +1234,11 @@ class _CharacterGameCard extends StatelessWidget {
         : character.portraitUrl;
         
     return Container(
-          decoration: BoxDecoration(
-            color: _characterInkSoft,
-            borderRadius: BorderRadius.circular(4), 
+        decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.035),
+            borderRadius: BorderRadius.zero,
             border: Border.all(
-              color: Colors.white.withOpacity(0.08),
+              color: _characterLine,
             ),
           ),
           clipBehavior: Clip.antiAlias,
@@ -1310,8 +1277,8 @@ class _CharacterGameCard extends StatelessWidget {
                       end: Alignment.bottomCenter,
                       colors: <Color>[
                         Colors.transparent,
-                        Color(0xD9090E1A),
-                        Color(0xFF090E1A),
+                        Color(0xD9171B22),
+                        Color(0xFF171B22),
                       ],
                       stops: <double>[0, .4, 1],
                     ),
@@ -1473,27 +1440,32 @@ class _CharacterSummonView extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: enabled ? onTap : null,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.zero,
         child: Container(
           width: 150,
           height: 48,
           decoration: BoxDecoration(
-            color: !enabled ? Colors.white.withOpacity(0.04) : primary ? _characterBlue.withOpacity(0.85) : Colors.white.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: primary && enabled ? _characterGold.withOpacity(0.7) : Colors.white.withOpacity(0.12)),
-            boxShadow: primary && enabled ? [BoxShadow(color: _characterBlue.withOpacity(0.4), blurRadius: 15, offset: const Offset(0, 4))] : [],
+            color: !enabled
+                ? Colors.white.withOpacity(.04)
+                : primary
+                    ? _characterGold
+                    : Colors.white.withOpacity(.08),
+            borderRadius: BorderRadius.zero,
+            border: Border.all(
+              color: primary && enabled ? _characterGold : _characterLine,
+            ),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(label, style: TextStyle(color: enabled ? _characterText : _characterTextMuted, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+              Text(label, style: TextStyle(color: enabled ? (primary ? Colors.black : _characterText) : _characterTextMuted, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
               const SizedBox(width: 8),
               Opacity(
                 opacity: enabled ? 1.0 : 0.4,
                 child: Image.asset('assets/images/gift.webp', width: 18, height: 18, fit: BoxFit.contain, errorBuilder: (_, __, ___) => Icon(Icons.local_florist_rounded, size: 16, color: enabled ? _characterGold : _characterTextMuted)),
               ),
               const SizedBox(width: 4),
-              Text('$cost', style: TextStyle(color: enabled ? _characterGold : _characterTextMuted, fontSize: 14, fontWeight: FontWeight.w900)),
+              Text('$cost', style: TextStyle(color: enabled ? (primary ? Colors.black : _characterGold) : _characterTextMuted, fontSize: 14, fontWeight: FontWeight.w900)),
             ],
           ),
         ),
@@ -1782,12 +1754,13 @@ class _CharacterDrawResultCardState extends State<_CharacterDrawResultCard> with
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Colors.white.withOpacity(.12), _characterGoldSoft.withOpacity(.15), Colors.white.withOpacity(.04)]),
-        border: Border.all(color: _characterGold.withOpacity(.4)), borderRadius: BorderRadius.circular(6), boxShadow: [BoxShadow(color: _characterGold.withOpacity(.15), blurRadius: 15, offset: const Offset(0, 5))],
+        border: Border.all(color: _characterGold.withOpacity(.4)),
+        borderRadius: BorderRadius.zero,
       ),
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Positioned.fill(child: Padding(padding: const EdgeInsets.all(8.0), child: Container(decoration: BoxDecoration(borderRadius: BorderRadius.circular(4), border: Border.all(color: _characterGoldSoft.withOpacity(.3)), gradient: const RadialGradient(colors: [Colors.transparent, Color(0x33000000)], radius: 0.8)), child: Center(child: Icon(Icons.change_history_rounded, color: _characterGold.withOpacity(0.5), size: 28))))),
+          Positioned.fill(child: Padding(padding: const EdgeInsets.all(8.0), child: Container(decoration: BoxDecoration(borderRadius: BorderRadius.zero, border: Border.all(color: _characterGoldSoft.withOpacity(.3)), gradient: const RadialGradient(colors: [Colors.transparent, Color(0x33000000)], radius: 0.8)), child: Center(child: Icon(Icons.change_history_rounded, color: _characterGold.withOpacity(0.5), size: 28))))),
           const Positioned(left: 0, right: 0, bottom: 15, child: Text('启示', textAlign: TextAlign.center, style: TextStyle(color: _characterGold, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 4.0))),
         ],
       ),
@@ -1800,8 +1773,8 @@ class _CharacterDrawResultCardState extends State<_CharacterDrawResultCard> with
       decoration: BoxDecoration(
         color: _characterInkSoft,
         border: Border.all(color: result.direct ? _characterGold.withOpacity(.7) : Colors.white.withOpacity(.08), width: result.direct ? 1.5 : 1.0),
-        borderRadius: BorderRadius.circular(6),
-        boxShadow: result.direct && _revealed ? [BoxShadow(color: _characterGold.withOpacity(.25), blurRadius: 20, spreadRadius: 2)] : [],
+        borderRadius: BorderRadius.zero,
+        boxShadow: result.direct && _revealed ? [BoxShadow(color: _characterGold.withOpacity(.12), blurRadius: 12)] : [],
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
@@ -1838,7 +1811,7 @@ class _CharacterDrawResultCardState extends State<_CharacterDrawResultCard> with
               ),
               Container(
                 width: double.infinity, padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
-                decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Color(0xFF090E1A), Color(0xCC090E1A), Colors.transparent])),
+                decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Color(0xFF171B22), Color(0xCC171B22), Colors.transparent])),
                 child: Column(
                   children: <Widget>[
                     Text(character.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _characterText, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.0)),
@@ -1962,7 +1935,7 @@ class _CharacterPortraitRail extends StatelessWidget {
                               color: _characterBlueBright,
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: const Color(0xFF101827),
+                                color: _characterInkSoft,
                                 width: 1.5,
                               ),
                             ),
@@ -2664,7 +2637,7 @@ class _CharacterStarUpgradeAction extends StatelessWidget {
     final fullStar = star >= 10;
     final canUpgrade = !fullStar && fragments >= _characterUpgradeFragmentsRequired;
     const accent = _characterGold;
-    final radius = BorderRadius.circular(99);
+    const radius = BorderRadius.zero;
 
     final foreground = fullStar
         ? accent.withOpacity(.92)
@@ -2868,7 +2841,7 @@ class _CharacterGlassDialogFrame extends StatelessWidget {
     return Container(
       width: width,
       decoration: BoxDecoration(
-        color: const Color(0xA6101721),
+        color: _characterInkSoft.withOpacity(.65),
         border: Border.all(
           color: Colors.white.withOpacity(.09),
           width: .8,
@@ -3660,7 +3633,7 @@ class _CompanionSkillEvolutionDialogState
             height: landscape ? 126 : 218,
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              color: const Color(0xFF050711),
+              color: _characterInk,
               border: Border.all(color: Colors.white.withOpacity(.08)),
               boxShadow: <BoxShadow>[
                 BoxShadow(
@@ -4002,7 +3975,7 @@ class _CompanionSkillVfxPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF050711));
+    canvas.drawRect(Offset.zero & size, Paint()..color = _characterInk);
     final caster = Offset(size.width * .27, size.height * .50);
     final target = Offset(size.width * .72, size.height * .46);
     final center = Offset(size.width * .5, size.height * .46);
@@ -5263,7 +5236,7 @@ Future<String?> _showCompanionSkillDetails(
         height: previewHeight,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          color: const Color(0xFF050711),
+          color: _characterInk,
           border: Border.all(color: color.withOpacity(.24), width: .8),
           boxShadow: <BoxShadow>[
             BoxShadow(
@@ -6543,9 +6516,9 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
           decoration: BoxDecoration(
             // 用轻量半透明底色保证立绘上的可读性，不再依赖黑色文字描边。
             color: _characterInk.withOpacity(widget.dense ? .42 : .34),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.zero,
             border: Border.all(
-              color: Colors.white.withOpacity(0.18),
+              color: _characterLine,
             ),
           ),
           child: Row(
@@ -6582,7 +6555,7 @@ class _CharacterInlineChatState extends State<_CharacterInlineChat> {
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: _canChat && !_loading && !_sending ? _send : null,
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.zero,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -6664,7 +6637,7 @@ class _CharacterChatLineView extends StatelessWidget {
               ? _characterBlue.withOpacity(dense ? .38 : .42)
               // NPC 气泡只保留轻薄的半透明层，不再用大面积深黑遮住立绘。
               : _characterInkSoft.withOpacity(dense ? .20 : .24),
-          borderRadius: BorderRadius.circular(dense ? 4 : 7),
+          borderRadius: BorderRadius.circular(2),
           border: Border.all(
             color: message.isUser
                 ? _characterBlueBright.withOpacity(.30)
@@ -6779,7 +6752,7 @@ class _CharacterGameDetail extends StatelessWidget {
           radius: 1.05,
           colors: <Color>[
             _characterBlue.withOpacity(.2),
-            const Color(0x0010182B),
+            const Color(0x00171B22),
           ],
         ),
       ),
@@ -7060,4 +7033,3 @@ class _CharacterLockedNotice extends StatelessWidget {
     );
   }
 }
-

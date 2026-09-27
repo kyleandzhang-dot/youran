@@ -592,10 +592,12 @@ class _ImmersiveNovelChoiceItemState
             ? 1.0
             : active
                 ? .99
-                : .90;
+                : .85; // 稍微降低默认透明度，使其更不显眼
+                
+    // 1. 字体变小：比正文（通常14+）明显小一号，建立层级差异
     final fontSize = shortWide
-        ? 11.7
-        : (compact ? 12.4 : 13.0);
+        ? 11.0 
+        : (compact ? 11.6 : 12.0); 
 
     return Semantics(
       button: true,
@@ -622,7 +624,7 @@ class _ImmersiveNovelChoiceItemState
               if (_pressed == value || !mounted) return;
               setState(() => _pressed = value);
             },
-            splashColor: Colors.white.withOpacity(.035),
+            splashColor: Colors.white.withOpacity(.025),
             highlightColor: Colors.transparent,
             hoverColor: Colors.transparent,
             focusColor: Colors.transparent,
@@ -634,8 +636,6 @@ class _ImmersiveNovelChoiceItemState
                 right: compact ? 7.0 : 9.0,
               ),
               decoration: BoxDecoration(
-                // 默认 / Hover 都不画卡片；只有手指或鼠标真正按下时
-                // 才出现极淡的一层光，作为触摸反馈。
                 color: _pressed && !widget.dimmed
                     ? const Color(0xFFF1C36A).withOpacity(.045)
                     : Colors.transparent,
@@ -643,6 +643,7 @@ class _ImmersiveNovelChoiceItemState
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: <Widget>[
+                  // 前置的指示箭头，保持原本的黄色并弱化未选中状态
                   SizedBox(
                     width: compact ? 14.0 : 16.0,
                     child: AnimatedOpacity(
@@ -652,18 +653,11 @@ class _ImmersiveNovelChoiceItemState
                         '›',
                         style: TextStyle(
                           color: const Color(0xFFF1C36A).withOpacity(
-                            widget.selected ? .96 : .82,
+                            widget.selected ? .96 : .62,
                           ),
                           fontSize: compact ? 15.0 : 16.5,
                           height: 1,
                           fontWeight: FontWeight.w500,
-                          shadows: const <Shadow>[
-                            Shadow(
-                              color: Color(0xB3000000),
-                              blurRadius: 5,
-                              offset: Offset(0, 1),
-                            ),
-                          ],
                         ),
                       ),
                     ),
@@ -674,27 +668,24 @@ class _ImmersiveNovelChoiceItemState
                       duration: duration,
                       curve: Curves.easeOutCubic,
                       style: TextStyle(
+                        // 2. 颜色调整：统一使用黄色系 (Color(0xFFF1C36A))，根据状态改变透明度
                         color: widget.selected
                             ? const Color(0xFFF1C36A).withOpacity(.96)
                             : active
-                                ? const Color(0xFFFFF7DD)
-                                : const Color(0xFFF4F1E8).withOpacity(.95),
+                                ? const Color(0xFFF1C36A).withOpacity(.85)
+                                : const Color(0xFFF1C36A).withOpacity(.55), // 默认状态为半透明的暗黄
                         fontSize: fontSize,
                         height: shortWide ? 1.08 : 1.16,
-                        fontWeight:
-                            active ? FontWeight.w600 : FontWeight.w500,
+                        fontWeight: active ? FontWeight.w500 : FontWeight.w400, // 字重也稍微减轻
                         letterSpacing: active ? .08 : .02,
-                        shadows: const <Shadow>[
-                          Shadow(
-                            color: Color(0xC0000000),
-                            blurRadius: 5,
-                            offset: Offset(0, 1),
-                          ),
+                        // 3. 弱化阴影：移除原本浓重的黑色底阴影，让它看起来像轻量级的文本标签
+                        shadows: active ? const <Shadow>[
                           Shadow(
                             color: Color(0x66000000),
-                            blurRadius: 10,
+                            blurRadius: 4,
+                            offset: Offset(0, 1),
                           ),
-                        ],
+                        ] : null,
                       ),
                       child: Text(
                         widget.choice.text,

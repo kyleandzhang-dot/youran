@@ -55,7 +55,11 @@ class DiscoverDetailWindow extends StatefulWidget {
 }
 
 class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
-  static const Color _pageBg = Color(0xFF0A0A0A);
+  static const Color _pageBg = Color(0xFF08090B);
+  static const Color _surface = Color(0xFF0D0E10);
+  static const Color _surfaceStrong = Color(0xFF151619);
+  static const Color _accent = Color(0xFFE7E4DC);
+  static const Color _hairline = Color(0x24FFFFFF);
   static const Color _danger = Color(0xFFE0554A);
 
   OverlayEntry? _currentToast;
@@ -247,15 +251,15 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             },
             child: Center(
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(4),
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF161616).withOpacity(0.75),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(color: Colors.white.withOpacity(0.08), width: 0.5),
+                      color: _surfaceStrong.withOpacity(0.88),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: _hairline, width: 0.7),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -603,9 +607,10 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF161616),
+        backgroundColor: _surfaceStrong,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16), 
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: _hairline, width: .8),
         ),
         title: const Text('删除评论', style: TextStyle(color: AppColors.textOnDark, fontSize: 16, fontWeight: FontWeight.w600)),
         content: const Text(
@@ -739,12 +744,18 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
 
   bool _useLandscapeLayout(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    return size.width > size.height && size.width >= 640;
+    return size.width > size.height * 1.12 && size.height >= 260;
   }
 
   bool _compactLandscape(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     return _useLandscapeLayout(context) && size.height < 560;
+  }
+
+  bool _phoneLandscape(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return _useLandscapeLayout(context) &&
+        (size.height <= 430 || size.width < 900);
   }
 
   @override
@@ -754,13 +765,17 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
     final safeBottom = mediaQuery.padding.bottom;
     final landscape = _useLandscapeLayout(context);
     final compactLandscape = _compactLandscape(context);
+    final phoneLandscape = _phoneLandscape(context);
 
     if (landscape) {
-      final leftWidth = (mediaQuery.size.width * .43)
-          .clamp(compactLandscape ? 300.0 : 360.0, 620.0)
+      final leftWidth = (mediaQuery.size.width * (phoneLandscape ? .40 : .43))
+          .clamp(phoneLandscape ? 200.0 : 360.0, phoneLandscape ? 360.0 : 620.0)
           .toDouble();
-      final dockReserve =
-          (_replyingTo == null ? 62.0 : 92.0) + bottomInset + safeBottom;
+      final dockReserve = (_replyingTo == null
+              ? (phoneLandscape ? 56.0 : 62.0)
+              : (phoneLandscape ? 82.0 : 92.0)) +
+          bottomInset +
+          safeBottom;
 
       return Scaffold(
         backgroundColor: _pageBg,
@@ -776,7 +791,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   ),
                   Container(
                     width: 1,
-                    color: Colors.white.withOpacity(.055),
+                    color: _hairline,
                   ),
                   Expanded(
                     child: Stack(
@@ -788,12 +803,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                             padding: EdgeInsets.zero,
                             physics: const BouncingScrollPhysics(),
                             children: <Widget>[
-                              _buildArticleInfo(),
-                              _buildTags(),
-                              _buildCharacters(),
-                              _buildMainEnterButton(),
-                              _buildCommentSection(),
-                              SizedBox(height: compactLandscape ? 28 : 44),
+                              _buildDetailSections(
+                                bottomSpace: compactLandscape ? 28 : 44,
+                              ),
                             ],
                           ),
                         ),
@@ -828,19 +840,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
       body: Stack(
         children: [
           Positioned.fill(
-            bottom: (_replyingTo == null ? 72 : 108) + bottomInset,
+            bottom: (_replyingTo == null ? 72 : 108) + bottomInset + safeBottom,
             child: ListView(
               controller: _scrollController,
               padding: EdgeInsets.zero,
               physics: const BouncingScrollPhysics(),
               children: [
                 _buildMediaArea(),
-                _buildArticleInfo(),
-                _buildTags(),
-                _buildCharacters(),
-                _buildMainEnterButton(),
-                _buildCommentSection(),
-                const SizedBox(height: 60),
+                _buildDetailSections(bottomSpace: 60),
               ],
             ),
           ),
@@ -859,6 +866,26 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             child: _buildStickyBottomDock(),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDetailSections({required double bottomSpace}) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            _buildArticleInfo(),
+            _buildTags(),
+            _buildCharacters(),
+            _buildMainEnterButton(),
+            _buildCommentSection(),
+            SizedBox(height: bottomSpace),
+          ],
+        ),
       ),
     );
   }
@@ -940,7 +967,8 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.black.withOpacity(0.4),
-                borderRadius: BorderRadius.circular(12), 
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: _hairline, width: .7),
               ),
               child: Text(
                 '${_currentMediaIndex + 1}/${media.length}',
@@ -1050,7 +1078,8 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                 ),
                 decoration: BoxDecoration(
                   color: Colors.black.withOpacity(.42),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: _hairline, width: .7),
                 ),
                 child: Text(
                   '${_currentMediaIndex + 1}/${media.length}',
@@ -1146,15 +1175,17 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
   Widget _buildStickyActionButton(IconData icon, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
-      child: ClipOval(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Container(
             width: 40, 
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.4), 
-              shape: BoxShape.circle,
+              color: _surface.withOpacity(0.72),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: _hairline, width: .8),
             ),
             child: Icon(icon, size: 20, color: AppColors.textOnDark),
           ),
@@ -1201,7 +1232,8 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                 width: compact ? 24 : 28,
                 height: compact ? 24 : 28,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(compact ? 6 : 8),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: _hairline, width: .7),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: avatar.isEmpty
@@ -1228,13 +1260,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   vertical: compact ? 3 : 4,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.accent.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(6),
+                  color: _accent.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: _accent.withOpacity(.24), width: .7),
                 ),
                 child: Text(
                   _modeLabel(detail?.mode),
                   style: TextStyle(
-                    color: AppColors.accent,
+                    color: _accent,
                     fontSize: compact ? 9.5 : 11,
                     fontWeight: FontWeight.w700,
                   ),
@@ -1298,8 +1331,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   vertical: compact ? 4 : 6,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.white.withOpacity(0.025),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: _hairline, width: .7),
                 ),
                 child: Text(
                   tag,
@@ -1358,8 +1392,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                           width: avatarSize,
                           height: avatarSize,
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.04),
-                            borderRadius: BorderRadius.circular(compact ? 11 : 16),
+                            color: Colors.white.withOpacity(0.035),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: _hairline, width: .7),
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: (char.avatarUrl ?? '').isEmpty
@@ -1404,10 +1439,10 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
         compact ? 18 : 32,
       ),
       child: Material(
-        color: AppColors.accent,
-        borderRadius: BorderRadius.circular(compact ? 10 : 14),
+        color: _accent,
+        borderRadius: BorderRadius.zero,
         child: InkWell(
-          borderRadius: BorderRadius.circular(compact ? 10 : 14),
+          borderRadius: BorderRadius.zero,
           onTap: _launching ? null : _playScenario,
           child: Container(
             width: double.infinity,
@@ -1477,7 +1512,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   height: 20,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: AppColors.accent,
+                    color: _accent,
                   ),
                 ),
               ),
@@ -1503,7 +1538,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       const Text(
                         '重试',
                         style: TextStyle(
-                          color: AppColors.accent,
+                          color: _accent,
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1557,8 +1592,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
       padding: isTarget ? const EdgeInsets.all(12) : EdgeInsets.zero,
       decoration: isTarget
           ? BoxDecoration(
-              color: Colors.white.withOpacity(0.04), 
-              borderRadius: BorderRadius.circular(10),
+              color: Colors.white.withOpacity(0.035),
+              borderRadius: BorderRadius.circular(3),
+              border: Border.all(color: _hairline, width: .7),
             )
           : null,
       child: Row(
@@ -1600,13 +1636,14 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: AppColors.accent.withOpacity(0.12), 
-                          borderRadius: BorderRadius.circular(4),
+                          color: _accent.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(2),
+                          border: Border.all(color: _accent.withOpacity(.22), width: .6),
                         ),
                         child: const Text(
                           '作者',
                           style: TextStyle(
-                            color: AppColors.accent,
+                            color: _accent,
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
                           ),
@@ -1734,7 +1771,7 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       child: Text(
                         '展开更多回复 (${comment.replies.length - visibleCount})',
                         style: const TextStyle(
-                          color: AppColors.accent,
+                          color: _accent,
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1770,8 +1807,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
       builder: (sheetContext) => Container(
         margin: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFF161616),
-          borderRadius: BorderRadius.circular(16), 
+          color: _surfaceStrong,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _hairline, width: .8),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1826,11 +1864,18 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
             (compact ? 8 : 14) + bottomPadding,
           ),
           decoration: BoxDecoration(
-            color: _pageBg.withOpacity(0.85),
+            color: _pageBg.withOpacity(0.92),
+            border: const Border(
+              top: BorderSide(color: _hairline, width: .7),
+            ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
               if (_replyingTo != null) ...[
                 Row(
                   children: [
@@ -1866,8 +1911,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                         horizontal: compact ? 12 : 16,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(.06), 
-                        borderRadius: BorderRadius.circular(compact ? 18 : 21), 
+                        color: _surfaceStrong.withOpacity(.82),
+                        borderRadius: BorderRadius.circular(3),
+                        border: Border.all(color: _hairline, width: .8),
                       ),
                       alignment: Alignment.centerLeft,
                       child: TextField(
@@ -1911,8 +1957,8 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                                 vertical: compact ? 8 : 10,
                               ),
                               decoration: BoxDecoration(
-                                color: AppColors.accent,
-                                borderRadius: BorderRadius.circular(20), 
+                                color: _accent,
+                                borderRadius: BorderRadius.circular(3),
                               ),
                               child: _sendingComment
                                   ? const SizedBox(
@@ -1983,7 +2029,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                   ),
                 ],
               ),
-            ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1997,8 +2045,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
       builder: (sheetContext) => Container(
         margin: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFF161616),
-          borderRadius: BorderRadius.circular(16), 
+          color: _surfaceStrong,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _hairline, width: .8),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2037,8 +2086,9 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
           width: 320,
           constraints: const BoxConstraints(maxHeight: 520),
           decoration: BoxDecoration(
-            color: const Color(0xFF161616),
-            borderRadius: BorderRadius.circular(20), 
+            color: _surfaceStrong,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _hairline, width: .8),
           ),
           clipBehavior: Clip.antiAlias,
           child: SingleChildScrollView(
@@ -2085,15 +2135,16 @@ class _DiscoverDetailWindowState extends State<DiscoverDetailWindow> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: AppColors.accent.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(6),
+                          color: _accent.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(3),
+                          border: Border.all(color: _accent.withOpacity(.22), width: .7),
                         ),
                         child: Text(
                           (character.identity ?? '').isNotEmpty
                               ? character.identity!
                               : '神秘角色',
                           style: const TextStyle(
-                            color: AppColors.accent,
+                            color: _accent,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),

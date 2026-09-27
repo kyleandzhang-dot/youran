@@ -2971,7 +2971,7 @@ class _BattleSetupLoadingOverlay extends StatelessWidget {
                   SizedBox(
                     width: compact ? 176 : 210,
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
+                      borderRadius: BorderRadius.zero,
                       child: LinearProgressIndicator(
                         minHeight: 1.15,
                         backgroundColor: Colors.white.withOpacity(.07),
@@ -3024,7 +3024,7 @@ class _BattleSetupLoadingOverlay extends StatelessWidget {
                       minimumSize: const Size(0, 34),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(3),
+                        borderRadius: BorderRadius.zero,
                         side: BorderSide(
                           color: Colors.white.withOpacity(.16),
                           width: .7,
@@ -3623,7 +3623,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         : (isSelected
                             ? const Color(0xD9181A1D)
                             : const Color(0x99121416)),
-                    borderRadius: BorderRadius.circular(compact ? 8 : 10),
                     border: Border.all(
                       color: isSelected
                           ? Colors.white.withOpacity(.82)
@@ -3755,7 +3754,10 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         duration: const Duration(milliseconds: 1500),
         behavior: SnackBarBehavior.floating,
         backgroundColor: const Color(0xEE111317),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: _BattleColors.borderBright),
+        ),
         margin: const EdgeInsets.fromLTRB(18, 0, 18, 18),
       ),
     );
@@ -3799,7 +3801,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
               : (selected
                   ? const Color(0xD9181A1D)
                   : const Color(0x99121416)),
-          borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: selected
                 ? Colors.white.withOpacity(.84)
@@ -5616,7 +5617,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           backgroundColor: const Color(0xFF0D0E10),
           insetPadding: const EdgeInsets.symmetric(horizontal: 28),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(8),
             side: BorderSide(color: Colors.white.withOpacity(.12), width: .8),
           ),
           child: Padding(
@@ -5659,7 +5660,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                           ),
                           minimumSize: const Size.fromHeight(40),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.zero,
                           ),
                         ),
                         child: const Text(
@@ -5678,7 +5679,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                           minimumSize: const Size.fromHeight(40),
                           elevation: 0,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.zero,
                           ),
                         ),
                         child: const Text(
@@ -6800,45 +6801,56 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           final compactHeight = constraints.maxHeight < 720;
           final landscapeMode =
               constraints.maxWidth > constraints.maxHeight * 1.12;
+          final phoneLandscape = landscapeMode &&
+              constraints.maxHeight <= 560 &&
+              constraints.maxWidth <= 1100;
 
           if (landscapeMode) {
-            final veryShort = constraints.maxHeight < 360;
-            final roomyLandscape = constraints.maxHeight > 560;
-            final statusHeight =
-                veryShort ? 48.0 : (roomyLandscape ? 64.0 : 56.0);
-            final historyHeight =
-                veryShort ? 26.0 : (roomyLandscape ? 38.0 : 32.0);
-            final commandRailWidth =
-                veryShort ? 70.0 : (roomyLandscape ? 88.0 : 78.0);
+            final veryShort = phoneLandscape && constraints.maxHeight < 360;
+            final roomyLandscape = !phoneLandscape && constraints.maxHeight > 560;
+            final statusHeight = phoneLandscape
+                ? 54.0
+                : (roomyLandscape ? 64.0 : 56.0);
+            final historyHeight = phoneLandscape
+                ? (veryShort ? 24.0 : 28.0)
+                : (roomyLandscape ? 38.0 : 32.0);
+            final commandRailWidth = phoneLandscape
+                ? (veryShort ? 64.0 : 70.0)
+                : (roomyLandscape ? 88.0 : 78.0);
             final companionRailWidth = _battleCompanions.isEmpty
-                ? 8.0
-                : (veryShort ? 46.0 : (roomyLandscape ? 60.0 : 54.0));
-            final trayHeight =
-                veryShort ? 128.0 : (roomyLandscape ? 152.0 : 136.0);
+                ? 6.0
+                : phoneLandscape
+                    ? (veryShort ? 44.0 : 48.0)
+                    : (roomyLandscape ? 60.0 : 54.0);
+            final trayHeight = phoneLandscape
+                ? (veryShort ? 120.0 : 128.0)
+                : (roomyLandscape ? 152.0 : 136.0);
             final stageBottom = trayHeight -
-                (veryShort ? 12.0 : (roomyLandscape ? 28.0 : 16.0));
+                (phoneLandscape
+                    ? 10.0
+                    : (roomyLandscape ? 28.0 : 16.0));
 
             return Stack(
               fit: StackFit.expand,
               children: <Widget>[
                 // 中央舞台明确避开左右操作栏和底部手牌区，横屏不再依赖互相覆盖。
                 Positioned(
-                  left: commandRailWidth + 6,
-                  right: companionRailWidth + 6,
+                  left: commandRailWidth + (phoneLandscape ? 3 : 6),
+                  right: companionRailWidth + (phoneLandscape ? 3 : 6),
                   top: statusHeight + historyHeight - 2,
                   bottom: stageBottom,
                   child: _buildStage(landscape: true),
                 ),
                 Positioned(
-                  left: 8,
-                  right: 8,
+                  left: phoneLandscape ? 6 : 8,
+                  right: phoneLandscape ? 6 : 8,
                   top: 0,
                   height: statusHeight,
                   child: _buildStatusBars(landscape: true),
                 ),
                 Positioned(
-                  left: commandRailWidth + 12,
-                  right: companionRailWidth + 12,
+                  left: commandRailWidth + (phoneLandscape ? 8 : 12),
+                  right: companionRailWidth + (phoneLandscape ? 8 : 12),
                   top: statusHeight - 2,
                   height: historyHeight,
                   child: _buildHistory(compact: true),
@@ -7732,7 +7744,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           color: light
               ? const Color(0xFFF0EEE8).withOpacity(enabled ? 1 : .30)
               : Colors.black.withOpacity(.16),
-          borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: light
                 ? const Color(0xFFF0EEE8).withOpacity(enabled ? .88 : .28)
@@ -7869,7 +7880,8 @@ class _YoranBattlePageState extends State<YoranBattlePage>
 
     String title = '技能卡';
     String detail = '点击查看 · 上滑松手可直接释放';
-    IconData icon = Icons.auto_awesome_rounded;
+    // 🎨 优化 1：替换掉原本的“三个星星”，使用代表卡牌的 style_rounded 或战斗的 flash_on_rounded
+    IconData icon = Icons.style_rounded; 
 
     if (isItems) {
       icon = Icons.inventory_2_outlined;
@@ -7915,12 +7927,23 @@ class _YoranBattlePageState extends State<YoranBattlePage>
       ),
       child: Row(
         children: <Widget>[
-          Icon(
-            icon,
-            size: veryShort ? 13 : 14,
-            color: Colors.white.withOpacity(.60),
+          // 🎨 优化 2：为图标增加一个精致的微透底板，提升游戏UI质感
+          Container(
+            padding: EdgeInsets.all(veryShort ? 3 : 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.06),
+              border: Border.all(
+                color: Colors.white.withOpacity(.12),
+                width: 0.8,
+              ),
+            ),
+            child: Icon(
+              icon,
+              size: veryShort ? 12 : 14,
+              color: Colors.white.withOpacity(.85),
+            ),
           ),
-          const SizedBox(width: 7),
+          const SizedBox(width: 8),
           ConstrainedBox(
             constraints: BoxConstraints(maxWidth: veryShort ? 90 : 116),
             child: Text(
@@ -7963,7 +7986,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
     required bool veryShort,
     required bool enabled,
   }) {
-    final size = veryShort ? 54.0 : 62.0;
+    final size = veryShort ? 52.0 : 58.0;
     final borderColor = Colors.white.withOpacity(enabled ? .78 : .14);
 
     return Semantics(
@@ -7983,7 +8006,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
             width: size,
             height: size,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
               gradient: RadialGradient(
                 center: const Alignment(-.18, -.24),
                 radius: .95,
@@ -8021,7 +8043,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                     padding: EdgeInsets.all(veryShort ? 5 : 6),
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        shape: BoxShape.circle,
                         border: Border.all(
                           color: Colors.white.withOpacity(enabled ? .16 : .05),
                           width: .6,
@@ -8236,7 +8257,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                           horizontal: landscape ? 20 : 15,
                         ),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.zero,
                         ),
                         textStyle: TextStyle(
                           fontSize: landscape ? 13.5 : 11.5,
@@ -8424,7 +8445,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           color: isSelected
               ? const Color(0xFFF0EEE8)
               : Colors.white.withOpacity(.025),
-          borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: isSelected
                 ? const Color(0xFFF0EEE8)
@@ -8481,7 +8501,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(.025),
-            borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: Colors.white.withOpacity(.24),
               width: 1.0,
@@ -8686,7 +8705,6 @@ class _YoranBattlePageState extends State<YoranBattlePage>
         padding: const EdgeInsets.fromLTRB(22, 23, 22, 18),
         decoration: BoxDecoration(
           color: const Color(0xFF0D0E10),
-          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: Colors.white.withOpacity(.13),
             width: .8,
@@ -8736,7 +8754,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                           backgroundColor: Colors.transparent,
                           padding: const EdgeInsets.symmetric(horizontal: 8),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.zero,
                             side: BorderSide(
                               color: Colors.white.withOpacity(.12),
                               width: .8,
@@ -8817,7 +8835,7 @@ class _YoranBattlePageState extends State<YoranBattlePage>
                         disabledForegroundColor: Colors.white30,
                         elevation: 0,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.zero,
                         ),
                       ),
                       child: Text(
@@ -8859,7 +8877,7 @@ class _BattleColors {
   static const Color mutedLight = Color(0xFFB8B6AF);
   static const Color muted = Color(0xFF777871);
 
-  // 黑白为主体；状态色全部降饱和，只在反馈节点出现。
+  // 白色调承担交互强调，玩家与能量仅保留轻微灰青层次。
   static const Color accent = Color(0xFFE7E4DC);
   static const Color accentSoft = Color(0x1FE7E4DC);
   static const Color player = Color(0xFFA7B6AC);
@@ -8937,8 +8955,8 @@ class _BattleSceneBackground extends StatelessWidget {
     final fallback = const DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
           colors: <Color>[
             Color(0xFF13233B),
             Color(0xFF0B1423),
@@ -9246,7 +9264,6 @@ class _BattleStatusBar extends StatelessWidget {
                         width: constraints.maxWidth,
                         decoration: BoxDecoration(
                           color: Colors.black.withOpacity(.62),
-                          borderRadius: BorderRadius.circular(3),
                           border: Border.all(
                             color: Colors.white.withOpacity(.055),
                             width: .6,
@@ -9259,7 +9276,6 @@ class _BattleStatusBar extends StatelessWidget {
                         width: constraints.maxWidth * progress,
                         decoration: BoxDecoration(
                           color: hpColor,
-                          borderRadius: BorderRadius.circular(3),
                         ),
                       ),
                     ],
@@ -10987,7 +11003,7 @@ class _BattleCardHandState extends State<_BattleCardHand>
 }
 
 /// 单张卡牌的美术呈现
-/// 卡面使用通透的炭灰层级；选中态通过亮面、白边与极轻品质色光晕聚焦。
+/// 卡面使用通透的暗灰层级；选中态通过米白细边和轻微品质光晕聚焦。
 class _BattleCard extends StatelessWidget {
   const _BattleCard({
     super.key,
@@ -11037,7 +11053,7 @@ class _BattleCard extends StatelessWidget {
             end: Alignment.bottomRight,
             colors: <Color>[topSurface, bottomSurface],
           ),
-          borderRadius: BorderRadius.circular(compact ? 8 : 10),
+          borderRadius: BorderRadius.zero,
           border: Border.all(
             color: borderColor,
             width: isSelected ? 1.25 : .8,
@@ -11083,7 +11099,6 @@ class _BattleCard extends StatelessWidget {
                     color: isEnergyShort
                         ? _BattleColors.enemy.withOpacity(.14)
                         : Colors.white.withOpacity(.075),
-                    borderRadius: BorderRadius.circular(compact ? 4 : 5),
                     border: Border.all(
                       color: isEnergyShort
                           ? _BattleColors.enemy.withOpacity(.48)

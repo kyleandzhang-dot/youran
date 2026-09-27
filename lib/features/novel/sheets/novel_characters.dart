@@ -1,16 +1,16 @@
 part of '../novel_sheets.dart';
 
 // ============================================================================
-// 角色 / 人物档案页（绿白主题）
-// 页面入口 / 对外入口：
-//   - showNovelCharactersSheet(...)
-//   - NovelCharactersTab
-//   - showNovelCharacterProfileSheet(...)
-//   - showNovelNpcProfileSheet(...)  // 兼容旧调用
-//   - showNovelPortraitSheet(...)
-//
-// 深色“队伍 / 结缘 / 伙伴养成”页保留在 novel_character.dart。
+// 角色 / 人物档案页（赛博绿极简暗黑主题）
 // ============================================================================
+
+const Color _charInk = Color(0xFF171B22); // 深空黑
+const Color _charInkSoft = Color(0xFF242A33); // 辅助暗灰
+const Color _charAccent = Color(0xFF76B900); // 核心高亮绿 (NVIDIA Green)
+const Color _charText = Color(0xFFFFFFFF); // 纯白
+const Color _charTextSoft = Color(0xFFE0E0E0); // 柔和白
+const Color _charMuted = Color(0x80FFFFFF); // 半透白
+const Color _charLine = Color(0x15FFFFFF); // 极简线
 
 Future<void> showNovelCharactersSheet(
   BuildContext context,
@@ -37,8 +37,6 @@ class NovelCharactersTab extends StatelessWidget {
   final String focusCharacterKey;
   final int focusRequestId;
 
-  /// 只有从剧情里的角色头像进入人物页时才传入。
-  /// 右侧一级导航直接进入人物页时保持 null，因此不显示左上角返回按钮。
   final VoidCallback? onBackToStory;
 
   @override
@@ -76,7 +74,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
   int filter = 0; 
   bool loading = true;
   String selectedCharacterKey = '';
-
 
   @override
   void initState() {
@@ -200,9 +197,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
 
         Widget header(_CharacterViewportMode mode) => _CharacterArchiveHeader(
               dense: mode == _CharacterViewportMode.landscape,
-              // 左上角返回只由真实入口决定：
-              // 从剧情角色头像进入时由 NovelGamePage 传入回调；
-              // 从右侧一级导航进入时回调为 null，因此完全不显示。
               onBack: widget.embedded ? widget.onBackToStory : null,
               onClose: widget.embedded
                   ? null
@@ -264,8 +258,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
               );
             case _CharacterViewportMode.landscape:
               return Padding(
-                // 横屏给顶部 / 底部真正的呼吸空间；右侧悬浮导航的避让
-                // 由人物舞台内部单独处理，避免无意义地压缩整页。
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 7),
                 child: content,
               );
@@ -386,7 +378,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                 ),
               );
 
-              // 新增：构建供竖屏和桌面端使用的底部模块（筛选 + 角色列表）
               final portraitFooter = Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -414,7 +405,6 @@ class _CharactersPanelState extends State<_CharactersPanel> {
                     : null,
               );
 
-              // 统一结构：不论横屏还是竖屏/桌面端，都将内容完全交由 stage 排版
               return shell(
                 mode,
                 Column(
@@ -468,8 +458,19 @@ class _CharacterArchiveBackground extends StatelessWidget {
         ? _NovelPrimaryTabSafeContent(child: child)
         : SafeArea(child: child);
 
-    return ColoredBox(
-      color: _archiveBackground,
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: RadialGradient(
+          center: Alignment(0, -.18),
+          radius: 1.05,
+          colors: <Color>[
+            Color(0xFF303641),
+            Color(0xFF242A33),
+            Color(0xFF171B22),
+          ],
+          stops: <double>[0, .52, 1],
+        ),
+      ),
       child: content,
     );
   }
@@ -491,8 +492,6 @@ class _CharacterArchiveHeader extends StatelessWidget {
     if (dense) {
       if (onBack == null && onClose == null) return const SizedBox(height: 7);
 
-      // 横屏只压缩内容排版，不压缩系统级导航控件。
-      // 返回按钮始终保留标准手机 48dp 触控区域，避免横屏下变得过小难点。
       return SizedBox(
         height: 48,
         child: Row(
@@ -530,7 +529,7 @@ class _CharacterArchiveHeader extends StatelessWidget {
                 softWrap: false,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: Color(0xFF272824),
+                  color: _charText,
                   fontSize: 23,
                   height: 1,
                   fontWeight: FontWeight.w800,
@@ -558,8 +557,6 @@ class _CharacterBackButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 使用 Flutter 自带的 BackButtonIcon，让箭头跟随手机平台/文字方向，
-    // 同时固定 48dp 触控区域；横竖屏都保持同一套导航规格。
     return IconButton(
       tooltip: '返回剧情',
       onPressed: onTap,
@@ -569,7 +566,7 @@ class _CharacterBackButton extends StatelessWidget {
       icon: const IconTheme(
         data: IconThemeData(
           size: 22,
-          color: _archiveTextSoft,
+          color: _charTextSoft,
         ),
         child: BackButtonIcon(),
       ),
@@ -605,9 +602,7 @@ class _CharacterHeaderButton extends StatelessWidget {
             child: Icon(
               icon,
               size: compact ? 18 : 22,
-              color: onTap == null
-                  ? _archiveMutedSoft
-                  : _archiveTextSoft,
+              color: onTap == null ? _charMuted : _charTextSoft,
             ),
           ),
         ),
@@ -704,20 +699,16 @@ class _CharacterFilterText extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: selected
-                    ? _archiveText
-                    : _archiveMuted,
+                color: selected ? _charAccent : _charMuted,
                 fontSize: dense ? 10.2 : 11.5,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
               ),
             ),
             SizedBox(width: dense ? 3 : 4),
             Text(
               '$count',
               style: TextStyle(
-                color: selected
-                    ? _archiveMuted
-                    : _archiveMutedSoft,
+                color: selected ? _charMuted : _charMuted.withOpacity(0.4),
                 fontSize: dense ? 8.4 : 9.5,
                 fontWeight: FontWeight.w600,
               ),
@@ -736,7 +727,7 @@ class _CharacterShowcaseStage extends StatefulWidget {
     required this.summary,
     required this.identity,
     this.landscapeFooter,
-    this.portraitFooter, // <--- 新增
+    this.portraitFooter, 
     _CharacterViewportMode? mode,
     bool? compact,
   }) : mode = mode ??
@@ -749,7 +740,7 @@ class _CharacterShowcaseStage extends StatefulWidget {
   final String summary;
   final String identity;
   final Widget? landscapeFooter;
-  final Widget? portraitFooter; // <--- 新增
+  final Widget? portraitFooter; 
   final _CharacterViewportMode mode;
 
   @override
@@ -792,20 +783,16 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final h = constraints.maxHeight;
         final desktop = widget.mode == _CharacterViewportMode.desktop;
         final landscape = widget.mode == _CharacterViewportMode.landscape;
         final compact = !desktop;
 
         if (landscape) {
-          // 修改点：三栏布局，左侧资料，中间立绘，右侧编辑器
           final infoWidth =
               (constraints.maxWidth * .31).clamp(220.0, 315.0).toDouble();
           final editorWidth =
               (constraints.maxWidth * .27).clamp(220.0, 300.0).toDouble();
 
-          // 右侧一级悬浮导航覆盖在人物页上方，因此编辑器必须主动留出
-          // 一条不可占用的安全带。宽屏留 76px，较窄横屏略收紧。
           final rightFloatingRailReserve =
               constraints.maxWidth < 780 ? 62.0 : 76.0;
 
@@ -833,8 +820,6 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              // 左侧资料区独占整段高度。横屏底部筛选/头像不再压缩这里，
-              // 因此左下角也能完整留给人物资料信息。
               SizedBox(
                 width: infoWidth,
                 child: Padding(
@@ -859,7 +844,6 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: <Widget>[
-                          // 中间：角色大立绘
                           Expanded(
                             child: ClipRect(
                               child: Padding(
@@ -872,9 +856,7 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                               ),
                             ),
                           ),
-                          // 右侧：立绘生成编辑器区
                           SizedBox(
-                            // 把悬浮导航的安全带算进右栏总宽度，保证编辑器自身不会被挤窄。
                             width: editorWidth + rightFloatingRailReserve,
                             child: Padding(
                               padding: EdgeInsets.fromLTRB(
@@ -908,8 +890,6 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
           );
         }
 
-        // ... 前面的 landscape 代码保持不变 ...
-
         final portraitWidth = desktop
             ? math.min(constraints.maxWidth * .55, 620.0)
             : landscape
@@ -930,11 +910,9 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
         return Column(
           children: <Widget>[
             Expanded(
-              // 新增：内部 LayoutBuilder，获取扣除底部列表后的真实剩余高度
               child: LayoutBuilder(
                 builder: (context, innerConstraints) {
                   final innerH = innerConstraints.maxHeight;
-                  // 根据真实的剩余高度 (innerH) 计算尺寸，彻底解决立绘超出的问题
                   final portraitHeight = desktop
                       ? innerH * 1.02
                       : landscape
@@ -982,7 +960,7 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                       ),
                       Positioned(
                         right: desktop ? 38 : 7,
-                        top: 0, // 修改点：将距离顶部的多余 30/13 边距设为 0，与左侧标题/立绘顶部平行
+                        top: 0, 
                         bottom: 0,
                         width: infoWidth,
                         child: SingleChildScrollView(
@@ -1004,7 +982,6 @@ class _CharacterShowcaseStageState extends State<_CharacterShowcaseStage> {
                 },
               ),
             ),
-            // 底部操作区，角色列表靠左，立绘模块固定在右侧
             Padding(
               padding: EdgeInsets.only(
                 top: 8,
@@ -1116,7 +1093,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: _archiveMuted,
+              color: _charMuted,
               fontSize: landscapeDense ? 8.5 : 9.2,
               fontWeight: FontWeight.w800,
               letterSpacing: 1.1,
@@ -1126,7 +1103,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
           Text(
             value,
             style: TextStyle(
-              color: _archiveTextSoft.withOpacity(.92),
+              color: _charTextSoft.withOpacity(.92),
               fontSize: landscapeDense ? 9.8 : (compact ? 10.5 : 11.5),
               height: landscapeDense ? 1.42 : 1.55,
               fontWeight: FontWeight.w500,
@@ -1185,6 +1162,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
       milestones,
       aliases,
     ].any((value) => value.isNotEmpty);
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -1193,7 +1171,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: _archiveText,
+            color: _charText,
             fontSize: nameSize,
             height: .95,
             fontWeight: FontWeight.w900,
@@ -1208,7 +1186,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: const Color(0xFF616B64),
+            color: _charMuted,
             fontSize: landscapeDense ? 10.3 : 11.5,
             fontWeight: FontWeight.w700,
             letterSpacing: .4,
@@ -1218,7 +1196,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
         Container(
           width: landscapeDense ? 48 : 64,
           height: 1,
-          color: _archiveLine,
+          color: _charLine,
         ),
         if (character.isMain && mainStatus.isNotEmpty) ...<Widget>[
           SizedBox(height: landscapeDense ? 7 : 10),
@@ -1227,7 +1205,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: _archiveText,
+              color: _charText,
               fontSize: compact ? 10.4 : 11.2,
               height: 1.45,
               fontWeight: FontWeight.w700,
@@ -1243,7 +1221,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
                   ? Icons.stars_rounded
                   : Icons.favorite_border_rounded,
               size: landscapeDense ? 12 : 14,
-              color: _archiveMuted,
+              color: _charAccent,
             ),
             const SizedBox(width: 6),
             Expanded(
@@ -1252,7 +1230,7 @@ class _CharacterShowcaseInfo extends StatelessWidget {
                     ? relationLabel
                     : '$relationLabel  ·  ${character.affection}',
                 style: TextStyle(
-                  color: const Color(0xFF4E5851),
+                  color: _charMuted,
                   fontSize: landscapeDense ? 9.8 : 10.7,
                   fontWeight: FontWeight.w700,
                 ),
@@ -1377,11 +1355,12 @@ class _CharacterQuickPortraitEditorState
                     height: dialogHeight,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        color: _archiveSurface,
-                        borderRadius: BorderRadius.circular(18),
+                        color: _charInkSoft,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.white.withOpacity(.08)),
                         boxShadow: <BoxShadow>[
                           BoxShadow(
-                            color: Colors.black.withOpacity(.20),
+                            color: Colors.black.withOpacity(.40),
                             blurRadius: 32,
                             offset: const Offset(0, 16),
                           ),
@@ -1397,7 +1376,7 @@ class _CharacterQuickPortraitEditorState
                               child: Text(
                                 '立绘预览',
                                 style: TextStyle(
-                                  color: _archiveText,
+                                  color: _charText,
                                   fontSize: 14,
                                   fontWeight: FontWeight.w800,
                                 ),
@@ -1405,16 +1384,16 @@ class _CharacterQuickPortraitEditorState
                             ),
                             Expanded(
                               child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius: BorderRadius.circular(6),
                                 child: ColoredBox(
-                                  color: _archiveSurfaceSoft,
+                                  color: Colors.white.withOpacity(.04),
                                   child: NovelArtwork(
                                     url: portraitUrl,
                                     assetCandidates: <String>[
-                    fallbackAsset,
-                    'assets/images/portrait_female.webp',
-                    'assets/images/portrait_male.png',
-                  ],
+                                      fallbackAsset,
+                                      'assets/images/portrait_female.webp',
+                                      'assets/images/portrait_male.png',
+                                    ],
                                     fit: BoxFit.contain,
                                     alignment: Alignment.center,
                                     fallbackText: '',
@@ -1430,17 +1409,17 @@ class _CharacterQuickPortraitEditorState
                                 children: <Widget>[
                                   Expanded(
                                     child: Material(
-                                      color: _archiveSurfaceSoft,
-                                      borderRadius: BorderRadius.circular(11),
+                                      color: Colors.white.withOpacity(.05),
+                                      borderRadius: BorderRadius.circular(6),
                                       child: InkWell(
-                                        borderRadius: BorderRadius.circular(11),
+                                        borderRadius: BorderRadius.circular(6),
                                         onTap: () =>
                                             Navigator.of(dialogContext).pop(false),
                                         child: const Center(
                                           child: Text(
                                             '放弃',
                                             style: TextStyle(
-                                              color: _archiveTextSoft,
+                                              color: _charTextSoft,
                                               fontSize: 12.5,
                                               fontWeight: FontWeight.w700,
                                             ),
@@ -1452,17 +1431,17 @@ class _CharacterQuickPortraitEditorState
                                   const SizedBox(width: 10),
                                   Expanded(
                                     child: Material(
-                                      color: _archiveThemeGreen,
-                                      borderRadius: BorderRadius.circular(11),
+                                      color: _charAccent,
+                                      borderRadius: BorderRadius.circular(6),
                                       child: InkWell(
-                                        borderRadius: BorderRadius.circular(11),
+                                        borderRadius: BorderRadius.circular(6),
                                         onTap: () =>
                                             Navigator.of(dialogContext).pop(true),
                                         child: const Center(
                                           child: Text(
                                             '使用立绘',
                                             style: TextStyle(
-                                              color: NovelPalette.accentDark,
+                                              color: Colors.black,
                                               fontSize: 12.5,
                                               fontWeight: FontWeight.w800,
                                             ),
@@ -1530,15 +1509,11 @@ class _CharacterQuickPortraitEditorState
         return;
       }
 
-      // 生成结果不再直接加载/保存原图。预览窗最大只有约 420px，
-      // 使用 800px CDN 版本可兼顾高 DPI 清晰度与加载速度。
       final lightweightPortraitUrl = CdnUtil.resize(
         result.portraitUrl,
         width: 800,
       );
 
-      // 弹窗前先把轻量图放进 Flutter image cache。
-      // 即使预加载失败也不阻断流程，NovelArtwork 仍会自行加载/fallback。
       try {
         await precacheImage(
           NetworkImage(lightweightPortraitUrl),
@@ -1563,9 +1538,6 @@ class _CharacterQuickPortraitEditorState
         return;
       }
 
-      // 与 novel_character.dart 的可用页面保持一致：生成接口本身已经返回
-      // portraitUrl + avatarUrl，保存时直接把两者一起写回。不要丢掉 result.avatarUrl
-      // 再在后台二次裁剪，否则底部人物条会长时间拿到旧头像/空头像。
       final generatedPortraitUrl = result.portraitUrl.trim();
       final generatedAvatarUrl = result.avatarUrl.trim();
       final savedPortraitUrl = generatedPortraitUrl.isNotEmpty
@@ -1633,8 +1605,6 @@ class _CharacterQuickPortraitEditorState
         contentType: _imageContentType(file.name),
       );
 
-      // 本地上传只有立绘，没有独立头像时保持 avatarUrl 为空。
-      // 这样所有消费端都能准确判断“没有头像”，并自然回退到 portraitUrl。
       final avatarUrl = target.avatarUrl.trim();
 
       await widget.controller.updateCharacterVisuals(
@@ -1668,13 +1638,12 @@ class _CharacterQuickPortraitEditorState
 
   @override
   Widget build(BuildContext context) {
-    // 1. 输入框容器（改为直角、无描边）
     Widget inputFieldContainer = Container(
       decoration: BoxDecoration(
-        color: _archiveSurface,
-        borderRadius: BorderRadius.zero, // 直角
+        color: Colors.white.withOpacity(.04),
+        borderRadius: BorderRadius.zero, 
         border: Border.all(
-          color: _archiveLine, // 使用主题的浅色线条颜色作为描边
+          color: _charLine, 
           width: 1,
         ),
       ),
@@ -1690,7 +1659,6 @@ class _CharacterQuickPortraitEditorState
         widget.landscapeDense ? 7 : 10,
       ),
       child: TextField(
-      
         controller: _promptController,
         focusNode: _promptFocusNode,
         enabled: !_generating,
@@ -1699,9 +1667,9 @@ class _CharacterQuickPortraitEditorState
         expands: widget.fillHeight,
         textAlignVertical: widget.fillHeight ? TextAlignVertical.top : null,
         scrollPadding: EdgeInsets.zero,
-        cursorColor: NovelPalette.accent,
+        cursorColor: _charAccent,
         style: TextStyle(
-          color: _archiveText,
+          color: _charText,
           fontSize: widget.landscapeDense ? 10.0 : (widget.compact ? 10.6 : 11.2),
           height: 1.45,
         ),
@@ -1713,7 +1681,7 @@ class _CharacterQuickPortraitEditorState
           contentPadding: EdgeInsets.zero,
           hintText: '可留空直接生成；也可写发型、服装、气质等调整…',
           hintStyle: TextStyle(
-            color: Color(0x88727C75),
+            color: Color(0x66FFFFFF),
             fontSize: 10.2,
             height: 1.4,
           ),
@@ -1738,7 +1706,7 @@ class _CharacterQuickPortraitEditorState
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: Color(0xFFD98A83),
+                color: Color(0xFFFF5252),
                 fontSize: 9.5,
                 height: 1.35,
               ),
@@ -1746,7 +1714,6 @@ class _CharacterQuickPortraitEditorState
           ],
           SizedBox(height: widget.landscapeDense ? 7 : 10),
 
-          // 2. 生成立绘按钮（改为直角、无描边）
           SizedBox(
             width: double.infinity,
             height: widget.landscapeDense ? 36 : 42,
@@ -1761,11 +1728,10 @@ class _CharacterQuickPortraitEditorState
                   duration: const Duration(milliseconds: 160),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.zero, // 直角
+                    borderRadius: BorderRadius.zero, 
                     color: _generating
-                        ? _archiveSurfaceSoft
-                        : _archiveThemeGreen,
-                    // 移除 border: Border.all(...)
+                        ? Colors.white.withOpacity(.05)
+                        : _charAccent,
                   ),
                   child: _generating
                       ? const Row(
@@ -1776,14 +1742,14 @@ class _CharacterQuickPortraitEditorState
                               dimension: 12,
                               child: CircularProgressIndicator(
                                 strokeWidth: 1.5,
-                                color: NovelPalette.accent,
+                                color: _charAccent,
                               ),
                             ),
                             SizedBox(width: 7),
                             Text(
                               '生成中…',
                               style: TextStyle(
-                                color: Color(0xFF4E514C),
+                                color: _charMuted,
                                 fontSize: 10.5,
                                 fontWeight: FontWeight.w700,
                               ),
@@ -1793,9 +1759,9 @@ class _CharacterQuickPortraitEditorState
                       : const Text(
                           '生成立绘',
                           style: TextStyle(
-                            color: NovelPalette.accentDark,
+                            color: Colors.black,
                             fontSize: 11.4,
-                            fontWeight: FontWeight.w800,
+                            fontWeight: FontWeight.w900,
                             letterSpacing: .6,
                           ),
                         ),
@@ -1805,8 +1771,6 @@ class _CharacterQuickPortraitEditorState
           ),
           SizedBox(height: widget.landscapeDense ? 7 : 10),
 
-          // 3. 本地上传按钮（改为直角、无描边）
-          // 3. 本地上传按钮（直角、无描边、浅灰色填充）
           SizedBox(
             width: double.infinity,
             height: widget.landscapeDense ? 36 : 42,
@@ -1823,11 +1787,10 @@ class _CharacterQuickPortraitEditorState
                   duration: const Duration(milliseconds: 160),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.zero, // 直角
-                    // 使用很浅的灰色作为默认填充色
+                    borderRadius: BorderRadius.zero, 
                     color: _uploading 
-                        ? _archiveSurfaceSoft 
-                        : _archiveSurfaceSoft.withOpacity(0.6), 
+                        ? Colors.white.withOpacity(.04) 
+                        : Colors.white.withOpacity(.08), 
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1838,7 +1801,7 @@ class _CharacterQuickPortraitEditorState
                           dimension: 11,
                           child: CircularProgressIndicator(
                             strokeWidth: 1.4,
-                            color: NovelPalette.accentDeep,
+                            color: _charAccent,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -1846,7 +1809,7 @@ class _CharacterQuickPortraitEditorState
                       Text(
                         _uploading ? '上传中…' : '本地上传',
                         style: const TextStyle(
-                          color: _archiveAccent, // 保持文字颜色
+                          color: _charText,
                           fontSize: 10.4,
                           fontWeight: FontWeight.w700,
                           letterSpacing: .35,
@@ -1892,9 +1855,6 @@ class _CharacterThumbStrip extends StatelessWidget {
       final avatarImage = character.avatarUrl.trim();
       final portraitImage = character.portraitUrl.trim();
 
-      // 有独立头像时显示头像；没有头像时显示立绘。
-      // 兼容旧数据：过去本地上传会把 portraitUrl 原样写进 avatarUrl，
-      // 这种 avatarUrl == portraitUrl 不算真正的头像，仍按“无头像”处理。
       final hasAvatar = avatarImage.isNotEmpty &&
           (portraitImage.isEmpty || avatarImage != portraitImage);
       final cardWidth = vertical
@@ -1916,25 +1876,16 @@ class _CharacterThumbStrip extends StatelessWidget {
                 width: cardWidth,
                 height: imageHeight,
                 decoration: BoxDecoration(
-                  color: _archiveSurfaceSoft,
+                  color: Colors.white.withOpacity(.03),
                   borderRadius: BorderRadius.zero,
                   border: Border.all(
-                    color: selected ? _archiveThemeGreen : _archiveLine,
+                    color: selected ? _charAccent : Colors.white.withOpacity(.05),
                     width: selected ? 1.35 : 1,
                   ),
                 ),
                 child: Stack(
                   fit: StackFit.expand,
                   children: <Widget>[
-                    // 这里不能只用 avatarUrl.isNotEmpty 判断“有头像”。
-                    // 后端/历史数据里可能残留一个非空但已经失效的头像 URL；
-                    // NovelArtwork 加载它失败后会直接掉到默认男女图，所以才会出现
-                    // “明明有立绘，底部却全是黑色默认人形”的现象。
-                    //
-                    // 正确顺序：
-                    // 1. 有独立头像时先尝试原始 avatarUrl（头像本身已经很小，不再走 CDN resize）；
-                    // 2. 头像网络加载失败，立即回退到 portraitUrl；
-                    // 3. 立绘也失败/为空，最后才使用默认男女资源。
                     Builder(
                       builder: (context) {
                         Widget portraitFallback() => NovelArtwork(
@@ -1959,8 +1910,6 @@ class _CharacterThumbStrip extends StatelessWidget {
                         final isNetworkAvatar = resolvedAvatar.startsWith('http://') ||
                             resolvedAvatar.startsWith('https://');
 
-                        // 网络头像用 Image.network 的 errorBuilder 做真正的二级回退。
-                        // 不把 portrait 当 assetCandidates，因为它是远程 URL，不是 asset。
                         if (isNetworkAvatar) {
                           return Image.network(
                             resolvedAvatar,
@@ -1975,8 +1924,6 @@ class _CharacterThumbStrip extends StatelessWidget {
                           );
                         }
 
-                        // 极少数非 http(s) 的头像（例如 data URI / asset）仍交给
-                        // NovelArtwork 处理；正常业务头像基本都是网络 URL。
                         return NovelArtwork(
                           key: ValueKey<String>(
                             'character-thumb-avatar-${_keyOf(character)}-$resolvedAvatar',
@@ -2001,7 +1948,7 @@ class _CharacterThumbStrip extends StatelessWidget {
                         child: Icon(
                           Icons.check_circle_rounded,
                           size: 13,
-                          color: _archiveThemeGreen,
+                          color: _charAccent,
                         ),
                       ),
                   ],
@@ -2016,7 +1963,7 @@ class _CharacterThumbStrip extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: selected ? _archiveText : _archiveTextSoft,
+                    color: selected ? _charText : _charTextSoft,
                     fontSize: vertical ? 8.2 : (dense ? 8.0 : 9.2),
                     fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
                     letterSpacing: .1,
@@ -2048,8 +1995,6 @@ class _CharacterThumbStrip extends StatelessWidget {
       height: dense ? 60 : 106,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        // 横屏人物页右侧留白更多，头像从右向左铺开，把左侧空间留给资料阅读区。
-        // 竖屏仍保持原来的左起顺序，避免改变手机竖屏的使用习惯。
         reverse: dense,
         physics: const BouncingScrollPhysics(),
         padding: EdgeInsets.fromLTRB(
@@ -2086,7 +2031,6 @@ Future<void> showNovelCharacterProfileSheet(
   });
 }
 
-// 旧调用继续可用；主角和 NPC 现在实际共用同一套人物资料页。
 Future<void> showNovelNpcProfileSheet(
   BuildContext context,
   NovelGameController controller,
@@ -2320,7 +2264,7 @@ class _InlineCharacterVisualEditorState
             '暂无立绘，点击这里上传',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: _archiveMuted,
+              color: _charMuted,
               fontSize: 11.5,
               height: 1.45,
               fontWeight: FontWeight.w600,
@@ -2333,8 +2277,6 @@ class _InlineCharacterVisualEditorState
 
   @override
   Widget build(BuildContext context) {
-    const Color primaryGreen = NovelPalette.accent;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -2344,7 +2286,7 @@ class _InlineCharacterVisualEditorState
               width: 3,
               height: 14,
               decoration: BoxDecoration(
-                color: primaryGreen,
+                color: _charAccent,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -2352,7 +2294,7 @@ class _InlineCharacterVisualEditorState
             const Text(
               '形象设定',
               style: TextStyle(
-                color: _archiveText,
+                color: _charText,
                 fontSize: 13.5,
                 fontWeight: FontWeight.w800,
               ),
@@ -2370,12 +2312,13 @@ class _InlineCharacterVisualEditorState
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: (_generating || _saving) ? null : _pickLocalImage,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(8),
                   child: Container(
                     clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.white.withOpacity(.04),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white.withOpacity(.08)),
                     ),
                     child: Stack(
                       fit: StackFit.expand,
@@ -2389,7 +2332,7 @@ class _InlineCharacterVisualEditorState
                                 dimension: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  color: primaryGreen,
+                                  color: _charAccent,
                                 ),
                               ),
                             ),
@@ -2408,7 +2351,7 @@ class _InlineCharacterVisualEditorState
             child: Text(
               '点击立绘可上传',
               style: TextStyle(
-                color: _archiveMutedSoft,
+                color: _charMuted,
                 fontSize: 10.2,
               ),
             ),
@@ -2420,7 +2363,7 @@ class _InlineCharacterVisualEditorState
         Text(
           '额外形象要求（可选）',
           style: TextStyle(
-            color: _archiveMuted,
+            color: _charMuted,
             fontSize: 11,
             fontWeight: FontWeight.w700,
           ),
@@ -2429,27 +2372,28 @@ class _InlineCharacterVisualEditorState
         Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           decoration: BoxDecoration(
-            color: Colors.white, 
-            borderRadius: BorderRadius.circular(8),
+            color: Colors.white.withOpacity(.04), 
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.white.withOpacity(.08)),
           ),
           child: TextField(
             controller: _promptController,
             enabled: !_generating && !_saving,
             minLines: 3,
             maxLines: 5,
-            cursorColor: primaryGreen,
+            cursorColor: _charAccent,
             style: const TextStyle(
-              color: _archiveText,
+              color: _charText,
               fontSize: 12,
               height: 1.5,
             ),
-            decoration: InputDecoration(
+            decoration: const InputDecoration(
               border: InputBorder.none,
               isDense: true,
               contentPadding: EdgeInsets.zero,
               hintText: '留空按角色完整设定生成；例如：裙摆更轻盈、气质更清冷、仙气更强……',
               hintStyle: TextStyle(
-                color: _archiveMutedSoft,
+                color: Color(0x66FFFFFF),
                 fontSize: 11,
               ),
             ),
@@ -2461,7 +2405,7 @@ class _InlineCharacterVisualEditorState
           Text(
             _errorText,
             style: const TextStyle(
-              color: Color(0xFFE07A78),
+              color: Color(0xFFFF5252),
               fontSize: 10.5,
               height: 1.4,
             ),
@@ -2477,15 +2421,15 @@ class _InlineCharacterVisualEditorState
             color: Colors.transparent,
             child: InkWell(
               onTap: (_generating || _saving) ? null : _generatePortrait,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(6),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                   color: (_generating || _saving)
-                      ? _archiveMutedSoft.withOpacity(0.3)
-                      : primaryGreen,
+                      ? Colors.white.withOpacity(.05)
+                      : _charAccent,
                 ),
                 child: _generating
                     ? const Row(
@@ -2496,14 +2440,14 @@ class _InlineCharacterVisualEditorState
                             dimension: 14,
                             child: CircularProgressIndicator(
                               strokeWidth: 1.6,
-                              color: Colors.white,
+                              color: _charAccent,
                             ),
                           ),
                           SizedBox(width: 8),
                           Text(
                             '生成中…',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: _charMuted,
                               fontSize: 11.2,
                               fontWeight: FontWeight.w700,
                             ),
@@ -2513,9 +2457,9 @@ class _InlineCharacterVisualEditorState
                     : const Text(
                         '生成立绘',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: Colors.black,
                           fontSize: 13,
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w900,
                           letterSpacing: 1.0,
                         ),
                       ),
@@ -2531,12 +2475,13 @@ class _InlineCharacterVisualEditorState
             height: 42,
             child: FilledButton(
               style: FilledButton.styleFrom(
-                backgroundColor: _archiveText,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: _archiveMutedSoft.withOpacity(0.3),
+                backgroundColor: _charInkSoft,
+                foregroundColor: _charText,
+                disabledBackgroundColor: Colors.white.withOpacity(.03),
+                side: BorderSide(color: Colors.white.withOpacity(.1)),
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
               ),
               onPressed: (_generating || _saving) ? null : _savePortrait,
@@ -2545,7 +2490,7 @@ class _InlineCharacterVisualEditorState
                       dimension: 16,
                       child: CircularProgressIndicator(
                         strokeWidth: 1.8,
-                        color: Colors.white,
+                        color: _charText,
                       ),
                     )
                   : const Text(
@@ -2580,15 +2525,19 @@ class _VisualStyleChoice extends StatelessWidget {
     final disabled = onTap == null && !selected;
     return Material(
       color: selected
-          ? _archiveSurfaceSoft
+          ? Colors.white.withOpacity(.1)
           : disabled
-              ? _archiveBackground
-              : _archiveSurface,
-      borderRadius: BorderRadius.circular(8),
+              ? Colors.transparent
+              : Colors.white.withOpacity(.04),
+      borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            border: selected ? Border.all(color: _charAccent.withOpacity(.5)) : null,
+          ),
           padding: const EdgeInsets.symmetric(
             horizontal: 14,
             vertical: 8,
@@ -2597,10 +2546,10 @@ class _VisualStyleChoice extends StatelessWidget {
             label,
             style: TextStyle(
               color: selected
-                  ? _archiveText
+                  ? _charAccent
                   : disabled
-                      ? _archiveMutedSoft
-                      : _archiveMuted,
+                      ? _charMuted.withOpacity(.4)
+                      : _charMuted,
               fontSize: 11.5,
               fontWeight:
                   selected ? FontWeight.w700 : FontWeight.w600,
@@ -2635,16 +2584,20 @@ class _ProfileSoftAction extends StatelessWidget {
 
     return Material(
       color: greenPrimary
-          ? (enabled ? _archiveThemeGreen : _archiveSurfaceSoft)
+          ? (enabled ? _charAccent : Colors.white.withOpacity(.05))
           : primary
-              ? (enabled ? _archiveText : _archiveSurfaceSoft)
-              : (enabled ? _archiveSurfaceSoft : _archiveBackground),
-      borderRadius: BorderRadius.circular(8),
+              ? (enabled ? Colors.white.withOpacity(.1) : Colors.white.withOpacity(.05))
+              : (enabled ? Colors.white.withOpacity(.05) : Colors.transparent),
+      borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
           height: 40,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            border: (primary && enabled) ? Border.all(color: Colors.white.withOpacity(.15)) : null,
+          ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
@@ -2654,10 +2607,10 @@ class _ProfileSoftAction extends StatelessWidget {
                   child: CircularProgressIndicator(
                     strokeWidth: 1.7,
                     color: greenPrimary
-                        ? NovelPalette.accentDark
+                        ? Colors.black
                         : (primary
-                            ? _archiveSurface
-                            : _archiveMuted),
+                            ? _charText
+                            : _charMuted),
                   ),
                 )
               else
@@ -2665,10 +2618,10 @@ class _ProfileSoftAction extends StatelessWidget {
                   icon,
                   size: 13,
                   color: greenPrimary
-                      ? NovelPalette.accentDark
+                      ? Colors.black
                       : (primary
-                          ? _archiveSurface
-                          : _archiveMuted),
+                          ? _charText
+                          : _charMuted),
                 ),
               const SizedBox(width: 6),
               Flexible(
@@ -2678,13 +2631,13 @@ class _ProfileSoftAction extends StatelessWidget {
                   style: TextStyle(
                     color: greenPrimary
                         ? (enabled
-                            ? NovelPalette.accentDark
-                            : _archiveMutedSoft)
+                            ? Colors.black
+                            : _charMuted)
                         : (primary
-                            ? _archiveSurface
+                            ? _charText
                             : (enabled
-                                ? _archiveText
-                                : _archiveMutedSoft)),
+                                ? _charText
+                                : _charMuted)),
                     fontSize: 11.2,
                     fontWeight: FontWeight.w700,
                   ),
@@ -2910,13 +2863,13 @@ Future<void> showNovelPortraitSheet(
                       Icon(
                         Icons.add_photo_alternate_outlined,
                         size: 26,
-                        color: _archiveMuted,
+                        color: _charMuted,
                       ),
                       const SizedBox(height: 10),
                       Text(
                         '点击上传',
                         style: TextStyle(
-                          color: _archiveText,
+                          color: _charText,
                           fontSize: 11.6,
                           fontWeight: FontWeight.w700,
                         ),
@@ -2925,7 +2878,7 @@ Future<void> showNovelPortraitSheet(
                       Text(
                         '或在下方生成新的立绘',
                         style: TextStyle(
-                          color: _archiveMutedSoft,
+                          color: _charMuted,
                           fontSize: 10.2,
                         ),
                       ),
@@ -2975,7 +2928,7 @@ Future<void> showNovelPortraitSheet(
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: _archiveText,
+                              color: _charText,
                               fontSize: 13.5,
                               fontWeight: FontWeight.w700,
                             ),
@@ -2984,7 +2937,7 @@ Future<void> showNovelPortraitSheet(
                         Text(
                           target.isMain ? '主角' : '角色',
                           style: TextStyle(
-                            color: _archiveMutedSoft,
+                            color: _charMuted,
                             fontSize: 10,
                           ),
                         ),
@@ -2998,8 +2951,9 @@ Future<void> showNovelPortraitSheet(
                       alignment: Alignment.bottomCenter,
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
-                        color: _archiveSurfaceSoft,
+                        color: Colors.white.withOpacity(.04),
                         borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.white.withOpacity(.08)),
                       ),
                       child: Stack(
                         fit: StackFit.expand,
@@ -3017,15 +2971,14 @@ Future<void> showNovelPortraitSheet(
                                       dimension: 20,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 1.7,
-                                        color: _archiveText,
+                                        color: _charAccent,
                                       ),
                                     ),
                                     const SizedBox(height: 10),
                                     Text(
                                       '正在生成…',
                                       style: TextStyle(
-                                        color:
-                                            NovelPalette.text.withOpacity(.86),
+                                        color: _charText.withOpacity(.86),
                                         fontSize: 11,
                                       ),
                                     ),
@@ -3050,8 +3003,7 @@ Future<void> showNovelPortraitSheet(
                                     child: Icon(
                                       Icons.photo_camera_back_outlined,
                                       size: 16,
-                                      color:
-                                          NovelPalette.text.withOpacity(.88),
+                                      color: _charText.withOpacity(.88),
                                     ),
                                   ),
                                 ),
@@ -3084,19 +3036,17 @@ Future<void> showNovelPortraitSheet(
                     Text(
                       '立绘会自动读取完整角色资料；下方只需填写本次想额外调整的方向。',
                       style: TextStyle(
-                        color: _archiveMutedSoft,
+                        color: _charMuted,
                         fontSize: 10.2,
                       ),
                     ),
 
                     const SizedBox(height: 16),
 
-      
-
                     Text(
                       '额外形象要求（可选）',
                       style: TextStyle(
-                        color: _archiveMuted,
+                        color: _charMuted,
                         fontSize: 10.5,
                         fontWeight: FontWeight.w600,
                       ),
@@ -3106,27 +3056,28 @@ Future<void> showNovelPortraitSheet(
                     Container(
                       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                       decoration: BoxDecoration(
-                        color: _archiveSurfaceSoft,
-                        borderRadius: BorderRadius.circular(8),
+                        color: Colors.white.withOpacity(.04),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.white.withOpacity(.08)),
                       ),
                       child: TextField(
                         controller: promptController,
                         enabled: !generating && !saving,
                         minLines: 3,
                         maxLines: 5,
-                        cursorColor: NovelPalette.accent,
+                        cursorColor: _charAccent,
                         style: const TextStyle(
-                          color: _archiveText,
+                          color: _charText,
                           fontSize: 12.3,
                           height: 1.55,
                         ),
-                        decoration: InputDecoration(
+                        decoration: const InputDecoration(
                           border: InputBorder.none,
                           isDense: true,
                           hintText:
                               '留空按角色完整设定生成；例如：服装更轻盈、气质更清冷、减少华丽首饰…',
                           hintStyle: TextStyle(
-                            color: _archiveMutedSoft,
+                            color: Color(0x66FFFFFF),
                             fontSize: 11.1,
                           ),
                         ),
@@ -3138,7 +3089,7 @@ Future<void> showNovelPortraitSheet(
                       Text(
                         errorText,
                         style: const TextStyle(
-                          color: NovelPalette.danger,
+                          color: Color(0xFFFF5252),
                           fontSize: 11,
                           height: 1.45,
                         ),
@@ -3214,12 +3165,12 @@ class _CharacterCard extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         child: Container(
           padding: const EdgeInsets.fromLTRB(8, 9, 8, 9),
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(.016),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(6),
             border: Border.all(color: Colors.white.withOpacity(.065)),
           ),
           child: Row(
@@ -3228,10 +3179,10 @@ class _CharacterCard extends StatelessWidget {
                 width: 54,
                 height: 54,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                   border: Border.all(
                     color: character.isMain
-                        ? NovelPalette.accent.withOpacity(.28)
+                        ? _charAccent.withOpacity(.28)
                         : Colors.white.withOpacity(.07),
                   ),
                 ),
@@ -3260,7 +3211,7 @@ class _CharacterCard extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: NovelPalette.text,
+                              color: _charText,
                               fontSize: 13.8,
                               fontWeight: FontWeight.w700,
                             ),
@@ -3270,8 +3221,8 @@ class _CharacterCard extends StatelessWidget {
                           relationship,
                           style: TextStyle(
                             color: character.isMain
-                                ? NovelPalette.accent
-                                : NovelPalette.muted,
+                                ? _charAccent
+                                : _charMuted,
                             fontSize: 9.8,
                             fontWeight: FontWeight.w600,
                           ),
@@ -3289,8 +3240,8 @@ class _CharacterCard extends StatelessWidget {
                               child: LinearProgressIndicator(
                                 value: progress,
                                 backgroundColor: Colors.white.withOpacity(.06),
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  NovelPalette.accent.withOpacity(.82),
+                                valueColor: const AlwaysStoppedAnimation<Color>(
+                                  _charAccent,
                                 ),
                               ),
                             ),
@@ -3301,8 +3252,8 @@ class _CharacterCard extends StatelessWidget {
                           character.isMain ? '—' : '${character.affection}',
                           style: TextStyle(
                             color: character.isMain
-                                ? NovelPalette.muted
-                                : NovelPalette.accent,
+                                ? _charMuted
+                                : _charAccent,
                             fontSize: 10.5,
                             fontWeight: FontWeight.w700,
                           ),
@@ -3320,7 +3271,7 @@ class _CharacterCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: NovelPalette.muted,
+                          color: _charMuted,
                           fontSize: 9.8,
                         ),
                       ),
@@ -3330,9 +3281,9 @@ class _CharacterCard extends StatelessWidget {
               ),
               if (onTap != null) ...<Widget>[
                 const SizedBox(width: 7),
-                Icon(
+                const Icon(
                   Icons.chevron_right_rounded,
-                  color: NovelPalette.muted.withOpacity(.48),
+                  color: _charMuted,
                   size: 17,
                 ),
               ],
