@@ -653,7 +653,7 @@ class _ImmersiveNovelChoiceItemState
                         '›',
                         style: TextStyle(
                           color: const Color(0xFFF1C36A).withOpacity(
-                            widget.selected ? .96 : .62,
+                            widget.selected ? .96 : .75,
                           ),
                           fontSize: compact ? 15.0 : 16.5,
                           height: 1,
@@ -673,7 +673,7 @@ class _ImmersiveNovelChoiceItemState
                             ? const Color(0xFFF1C36A).withOpacity(.96)
                             : active
                                 ? const Color(0xFFF1C36A).withOpacity(.85)
-                                : const Color(0xFFF1C36A).withOpacity(.55), // 默认状态为半透明的暗黄
+                                : const Color(0xFFF1C36A).withOpacity(.75), // 默认状态为半透明的暗黄
                         fontSize: fontSize,
                         height: shortWide ? 1.08 : 1.16,
                         fontWeight: active ? FontWeight.w500 : FontWeight.w400, // 字重也稍微减轻

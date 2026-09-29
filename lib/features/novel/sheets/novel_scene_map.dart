@@ -148,8 +148,7 @@ class _WorldMapEntry {
 }
 
 // ----------------------------------------------------------------------------
-// 核心：独立地形碎片生成与紧密排布。
-// 每块场景都有自己的凹口、尖角和半岛凸起，避免变成规则卡片或胶囊。
+// 核心：空间分割 (Space Partitioning / Voronoi) 生成紧密咬合的地形碎片
 // ----------------------------------------------------------------------------
 class _WorldMapPlateGeometry {
   const _WorldMapPlateGeometry({
@@ -173,86 +172,182 @@ class _WorldMapOrganicLayout {
   final List<_WorldMapPlateGeometry> plates;
 }
 
+/// 在正六边形晶格上，从原点开始"紧凑生长"，选出 [count] 个站位点，再做轻微抖动。
+/// 每一步都选 "与已选点相邻 + 离当前质心最近" 的晶格点，所以无论 count 多大都是一团，
+/// 不会拉成一条线；同一个 seed 下，count 增加时前面的点位置不变（新增区域只是"长出来"）。
 List<Offset> _packedTerrainSites(
   int count,
   double tileWidth,
   double tileHeight,
+  math.Random rng,
 ) {
-  if (count <= 1) return const <Offset>[Offset.zero];
-  if (count == 2) {
-    return <Offset>[
-      Offset(-tileWidth * .45, tileHeight * .10),
-      Offset(tileWidth * .45, -tileHeight * .10),
-    ];
-  }
-  if (count == 3) {
-    return <Offset>[
-      Offset(0, -tileHeight * .43),
-      Offset(-tileWidth * .43, tileHeight * .38),
-      Offset(tileWidth * .43, tileHeight * .38),
-    ];
-  }
-  if (count == 4) {
-    return <Offset>[
-      Offset(-tileWidth * .40, -tileHeight * .39),
-      Offset(tileWidth * .43, -tileHeight * .46),
-      Offset(-tileWidth * .47, tileHeight * .43),
-      Offset(tileWidth * .39, tileHeight * .41),
-    ];
+  if (count <= 0) return const <Offset>[];
+
+  final sx = tileWidth * .86; // 横向邻居间距
+  final sy = tileHeight * .74; // 行间距
+  final half = math.sqrt(3) / 2;
+
+  // 正则六边形晶格（相邻点距离恒为 1）
+  const radius = 8;
+  final lattice = <Offset>[
+    for (var r = -radius; r <= radius; r++)
+      for (var q = -radius; q <= radius; q++) Offset(q + r / 2, r * half),
+  ];
+
+  final chosen = <Offset>[Offset.zero];
+  while (chosen.length < count) {
+    var cx = 0.0, cy = 0.0;
+    for (final c in chosen) {
+      cx += c.dx;
+      cy += c.dy;
+    }
+    final centroid = Offset(cx / chosen.length, cy / chosen.length);
+
+    Offset? best;
+    var bestScore = double.infinity;
+    for (final p in lattice) {
+      if (chosen.any((c) => (c - p).distance < .01)) continue; // 已选
+      if (!chosen.any((c) => (c - p).distance <= 1.05)) continue; // 必须相邻
+      final score = (p - centroid).distance + rng.nextDouble() * .18;
+      if (score < bestScore) {
+        best = p;
+        bestScore = score;
+      }
+    }
+    if (best == null) break;
+    chosen.add(best);
   }
 
-  final columns = math.max(2, math.sqrt(count * 1.18).ceil());
-  final rows = (count / columns).ceil();
-  final sites = <Offset>[];
-  for (var row = 0; row < rows; row++) {
-    final rowCount = math.min(columns, count - sites.length);
-    final stagger = row.isOdd ? tileWidth * .22 : -tileWidth * .05;
-    for (var column = 0; column < rowCount; column++) {
-      sites.add(Offset(
-        (column - (rowCount - 1) / 2) * tileWidth * .86 + stagger,
-        (row - (rows - 1) / 2) * tileHeight * .80,
-      ));
-    }
-  }
-  sites.sort((a, b) => a.distanceSquared.compareTo(b.distanceSquared));
-  return sites;
+  // 拉伸到真实尺寸 + 抖动（抖动幅度 ±15%，保证邻居距离不会小于 ~0.7 个间距）
+  return <Offset>[
+    for (final p in chosen)
+      Offset(
+        p.dx * sx + (rng.nextDouble() - .5) * sx * .30,
+        p.dy * (sy / half) + (rng.nextDouble() - .5) * sy * .30,
+      ),
+  ];
 }
 
-List<Offset> _buildTerrainOutline({
-  required Offset center,
-  required double width,
-  required double height,
-  required int seed,
-}) {
-  final random = math.Random(seed);
-  final pointCount = 15 + random.nextInt(4);
-  final phase = -math.pi / 2 + (random.nextDouble() - .5) * .18;
-  final notchA = random.nextInt(pointCount);
-  var notchB = (notchA + pointCount ~/ 2 + random.nextInt(3) - 1) % pointCount;
-  if (notchB < 0) notchB += pointCount;
-  final peninsula = (notchA + 3 + random.nextInt(4)) % pointCount;
-  final points = <Offset>[];
+/// Sutherland–Hodgman：只保留 (x - linePoint)·normal >= 0 的一侧。
+List<Offset> _clipPolygonByHalfPlane(
+  List<Offset> poly,
+  Offset linePoint,
+  Offset normal,
+) {
+  final result = <Offset>[];
+  if (poly.isEmpty) return result;
 
-  for (var index = 0; index < pointCount; index++) {
-    final angle = phase + index * math.pi * 2 / pointCount;
-    var radius = .84 + random.nextDouble() * .19;
-    if (index == notchA || index == notchB) radius *= .60;
-    if (index == (notchA + 1) % pointCount ||
-        index == (notchB + pointCount - 1) % pointCount) {
-      radius *= .78;
+  double side(Offset p) =>
+      (p.dx - linePoint.dx) * normal.dx + (p.dy - linePoint.dy) * normal.dy;
+
+  for (var i = 0; i < poly.length; i++) {
+    final current = poly[i];
+    final prev = poly[(i - 1 + poly.length) % poly.length];
+    final dc = side(current);
+    final dp = side(prev);
+    final currentInside = dc >= 0;
+    final prevInside = dp >= 0;
+
+    if (currentInside != prevInside) {
+      final t = dp / (dp - dc); // 一定不会除 0：两侧符号不同
+      result.add(Offset.lerp(prev, current, t)!);
     }
-    if (index == peninsula) radius *= 1.10;
+    if (currentInside) result.add(current);
+  }
+  return result;
+}
 
-    // 不同频率的波动叠加，让轮廓更像海岸线而不是规则多边形。
-    final coastWave = 1 +
-        math.sin(angle * 3 + seed * .013) * .055 +
-        math.cos(angle * 5 - seed * .007) * .035;
-    points.add(center + Offset(
-      math.cos(angle) * width * .5 * radius * coastWave,
-      math.sin(angle) * height * .5 * radius * coastWave,
+/// Chaikin 切角：让尖角变成圆润的"碎石角"。
+List<Offset> _chaikin(
+  List<Offset> poly, {
+  int iterations = 2,
+  double ratio = .25,
+}) {
+  var current = poly;
+  for (var it = 0; it < iterations; it++) {
+    final next = <Offset>[];
+    for (var i = 0; i < current.length; i++) {
+      final a = current[i];
+      final b = current[(i + 1) % current.length];
+      next.add(Offset.lerp(a, b, ratio)!);
+      next.add(Offset.lerp(a, b, 1 - ratio)!);
+    }
+    current = next;
+  }
+  return current;
+}
+
+/// 把过长的边切成 <= step 的小段（变形前必须加密，否则长直边只有两个端点会被扭，中间还是直的）。
+List<Offset> _densify(List<Offset> poly, double step) {
+  final out = <Offset>[];
+  for (var i = 0; i < poly.length; i++) {
+    final a = poly[i];
+    final b = poly[(i + 1) % poly.length];
+    final n = math.max(1, ((b - a).distance / step).ceil());
+    for (var k = 0; k < n; k++) {
+      out.add(Offset.lerp(a, b, k / n)!);
+    }
+  }
+  return out;
+}
+
+/// 位移场里的一道正弦波：沿 [axis] 方向传播，把点沿 [push] 方向推 amplitude * sin(...)。
+class _WarpWave {
+  const _WarpWave({
+    required this.axis,
+    required this.push,
+    required this.frequency,
+    required this.amplitude,
+    required this.phase,
+  });
+
+  final Offset axis; // 传播方向（单位向量）
+  final Offset push; // 位移方向（单位向量）
+  final double frequency; // 2π / 波长
+  final double amplitude;
+  final double phase;
+}
+
+/// 位移场 D(p) = Σ 各波位移。每道波的 Lipschitz 常数 = amplitude * frequency，
+/// 总和必须 < 1，p -> p + D(p) 才是双射（不会折叠、不会让两块板互相穿过去）。
+/// 下面的参数总和约 0.70，留了足够余量。
+List<_WarpWave> _buildWarpWaves(math.Random rng, double tileWidth) {
+  // [波长(占 tileWidth 的比例), 振幅(占 tileWidth 的比例)]
+  const specs = <List<double>>[
+    <double>[.75, .030], // 大起伏：决定整体"歪不歪"
+    <double>[.42, .013], // 中起伏：边缘的波浪感
+    <double>[.26, .005], // 小起伏：细碎的岩石感
+    <double>[.14, .003], // 微起伏：边界上的小锯齿
+  ];
+  final waves = <_WarpWave>[];
+  var lipschitz = 0.0;
+  for (final spec in specs) {
+    final a = rng.nextDouble() * math.pi * 2;
+    final b = rng.nextDouble() * math.pi * 2;
+    final frequency = math.pi * 2 / (spec[0] * tileWidth);
+    final amplitude = spec[1] * tileWidth;
+    lipschitz += frequency * amplitude;
+    waves.add(_WarpWave(
+      axis: Offset(math.cos(a), math.sin(a)),
+      push: Offset(math.cos(b), math.sin(b)),
+      frequency: frequency,
+      amplitude: amplitude,
+      phase: rng.nextDouble() * math.pi * 2,
     ));
   }
-  return points;
+  assert(lipschitz < .9, '位移场太强，板块可能重叠：$lipschitz');
+  return waves;
+}
+
+Offset _warpPoint(Offset p, List<_WarpWave> waves) {
+  var x = p.dx, y = p.dy;
+  for (final w in waves) {
+    final s = w.amplitude *
+        math.sin(w.frequency * (w.axis.dx * p.dx + w.axis.dy * p.dy) + w.phase);
+    x += w.push.dx * s;
+    y += w.push.dy * s;
+  }
+  return Offset(x, y);
 }
 
 _WorldMapOrganicLayout _buildOrganicMapLayout({
@@ -263,88 +358,142 @@ _WorldMapOrganicLayout _buildOrganicMapLayout({
   final tileWidth = desktop ? 340.0 : 238.0;
   final tileHeight = desktop ? 300.0 : 216.0;
   final padding = desktop ? 360.0 : 250.0;
-  final sites = _packedTerrainSites(count, tileWidth, tileHeight);
-  final rawCells = <List<Offset>>[];
-  for (var index = 0; index < sites.length; index++) {
-    final shapeRandom = math.Random(seed + index * 7919);
-    rawCells.add(_buildTerrainOutline(
-      center: sites[index],
-      width: tileWidth * (.90 + shapeRandom.nextDouble() * .18),
-      height: tileHeight * (.90 + shapeRandom.nextDouble() * .18),
-      seed: seed + index * 3571,
-    ));
+
+  if (count <= 0) {
+    return const _WorldMapOrganicLayout(
+      size: Size.zero,
+      contentBounds: Rect.zero,
+      plates: <_WorldMapPlateGeometry>[],
+    );
   }
 
-  var minX = rawCells.first.first.dx;
-  var maxX = rawCells.first.first.dx;
-  var minY = rawCells.first.first.dy;
-  var maxY = rawCells.first.first.dy;
-  for (final cell in rawCells) {
-    for (final point in cell) {
-      minX = math.min(minX, point.dx).toDouble();
-      maxX = math.max(maxX, point.dx).toDouble();
-      minY = math.min(minY, point.dy).toDouble();
-      maxY = math.max(maxY, point.dy).toDouble();
+  final rng = math.Random(seed);
+  final sites = _packedTerrainSites(count, tileWidth, tileHeight, rng);
+  final sx = tileWidth * .86;
+  final sy = tileHeight * .74;
+  final gap = tileWidth * .034; // 板块之间的缝宽（世界坐标）。想更宽/更窄改这里。
+  // 加权 Voronoi（power diagram）：每块板有自己的"体量"，边界向体量小的一边偏移，
+  // 板块大小就不再千篇一律。仍然是凸多边形分割，互不重叠。
+  final weights = <double>[
+    for (var i = 0; i < sites.length; i++)
+      (math.Random(seed + i * 104729).nextDouble() * 2 - 1) *
+          (sx * .36) *
+          (sx * .36),
+  ];
+  final waves = _buildWarpWaves(math.Random(seed + 12345), tileWidth);
+
+  // ---- 第一遍：算出每块板在"世界坐标"下的最终多边形 ----
+  final worldPolys = <List<Offset>>[];
+  for (var i = 0; i < sites.length; i++) {
+    final site = sites[i];
+    final r = math.Random(seed + i * 7919);
+    // 1) 外圈轮廓（海岸线）：领地半径要 > 六边形单元外接圆（≈.58 个间距），
+    //    否则板块填不满自己的单元，就会像"漂在水上的鹅卵石"。
+    //    叠加从低频到高频 6 档谐波：既有大起伏，也有碎裂的小缺口。
+    //    内部邻接处会被中垂线裁掉，所以这些起伏只体现在最外圈。
+    const harmonics = <List<double>>[
+      <double>[2, .07],
+      <double>[3, .06],
+      <double>[5, .05],
+      <double>[7, .045],
+      <double>[9, .035],
+      <double>[13, .025],
+    ];
+    final phases = <double>[
+      for (var h = 0; h < harmonics.length; h++) r.nextDouble() * math.pi * 2,
+    ];
+    const blobSteps = 64;
+    final blob = <Offset>[
+      for (var k = 0; k < blobSteps; k++)
+        () {
+          final t = math.pi * 2 * k / blobSteps;
+          var f = 1.0;
+          for (var h = 0; h < harmonics.length; h++) {
+            f += harmonics[h][1] * math.sin(harmonics[h][0] * t + phases[h]);
+          }
+          return Offset(
+            site.dx + math.cos(t) * sx * .92 * f,
+            site.dy + math.sin(t) * sy * .92 * 1.08 * f,
+          );
+        }(),
+    ];
+
+    // 2) 与每个邻居的中垂线做半平面裁切；中垂线向自己这边平移 gap/2 → 缝宽恒定
+    var cell = blob;
+    for (var j = 0; j < sites.length; j++) {
+      if (i == j) continue;
+      final delta = site - sites[j];
+      final dist = delta.distance;
+      if (dist < 1e-6) continue;
+      final normal = delta / dist; // 指向自己
+      // 边界离邻居 e 处（无权重时 e = dist/2），再向自己这边让出 gap/2 作为缝
+      final e = (dist * dist + weights[j] - weights[i]) / (2 * dist);
+      final linePoint = sites[j] + normal * (e + gap / 2);
+      cell = _clipPolygonByHalfPlane(cell, linePoint, normal);
+      if (cell.isEmpty) break;
+    }
+    if (cell.length < 3) cell = blob; // 兜底：保证 plates 与 entries 下标一一对应
+
+    // 3) 轻微切角（保留棱角，别磨成圆的）→ 加密 → 全局位移场扭曲
+    cell = _chaikin(cell, iterations: 1, ratio: .07);
+    cell = _densify(cell, tileWidth * .05);
+    cell = <Offset>[for (final p in cell) _warpPoint(p, waves)];
+    worldPolys.add(cell);
+  }
+
+  // ---- 第二遍：统一平移到正坐标（旧代码的 bug 就出在这里，必须用"最终"的全局包围盒）----
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = double.negativeInfinity, maxY = double.negativeInfinity;
+  for (final poly in worldPolys) {
+    for (final p in poly) {
+      minX = math.min(minX, p.dx);
+      minY = math.min(minY, p.dy);
+      maxX = math.max(maxX, p.dx);
+      maxY = math.max(maxY, p.dy);
     }
   }
+  final shift = Offset(padding - minX, padding - minY);
 
   final plates = <_WorldMapPlateGeometry>[];
-  for (final cell in rawCells) {
-    var cellMinX = cell.first.dx;
-    var cellMaxX = cell.first.dx;
-    var cellMinY = cell.first.dy;
-    var cellMaxY = cell.first.dy;
-    for (final point in cell.skip(1)) {
-      cellMinX = math.min(cellMinX, point.dx).toDouble();
-      cellMaxX = math.max(cellMaxX, point.dx).toDouble();
-      cellMinY = math.min(cellMinY, point.dy).toDouble();
-      cellMaxY = math.max(cellMaxY, point.dy).toDouble();
+  for (final poly in worldPolys) {
+    var pMinX = double.infinity, pMinY = double.infinity;
+    var pMaxX = double.negativeInfinity, pMaxY = double.negativeInfinity;
+    for (final p in poly) {
+      pMinX = math.min(pMinX, p.dx);
+      pMinY = math.min(pMinY, p.dy);
+      pMaxX = math.max(pMaxX, p.dx);
+      pMaxY = math.max(pMaxY, p.dy);
     }
-    final worldBounds = Rect.fromLTRB(cellMinX, cellMinY, cellMaxX, cellMaxY);
-    final positionedBounds =
-        worldBounds.shift(Offset(padding - minX, padding - minY));
+    final worldBounds = Rect.fromLTRB(pMinX, pMinY, pMaxX, pMaxY);
     plates.add(_WorldMapPlateGeometry(
-      bounds: positionedBounds,
-      points: <Offset>[
-        for (final point in cell) point - worldBounds.topLeft,
-      ],
+      bounds: worldBounds.shift(shift), // 所有板块共用同一个 shift
+      points: <Offset>[for (final p in poly) p - worldBounds.topLeft],
     ));
   }
 
+  final totalWidth = maxX - minX;
+  final totalHeight = maxY - minY;
   return _WorldMapOrganicLayout(
-    size: Size(maxX - minX + padding * 2, maxY - minY + padding * 2),
-    contentBounds: Rect.fromLTWH(
-      padding,
-      padding,
-      maxX - minX,
-      maxY - minY,
-    ),
+    size: Size(totalWidth + padding * 2, totalHeight + padding * 2),
+    contentBounds: Rect.fromLTWH(padding, padding, totalWidth, totalHeight),
     plates: plates,
   );
 }
 
+/// 闭合折线 -> 平滑曲线：取每条边的中点做曲线端点，原顶点做二次贝塞尔控制点。
+/// 因为顶点已经被加密过，所以不需要再做"圆角比例"了。
 Path _buildOrganicPlatePath(List<Offset> points) {
   final path = Path();
   if (points.length < 3) return path;
-  const cornerRatio = .035;
 
-  Offset toward(Offset from, Offset to) => Offset.lerp(from, to, cornerRatio)!;
+  Offset mid(Offset a, Offset b) => Offset.lerp(a, b, .5)!;
 
-  final first = toward(points.first, points[1]);
-  path.moveTo(first.dx, first.dy);
-  for (var index = 1; index <= points.length; index++) {
-    final corner = points[index % points.length];
-    final previous = points[(index - 1) % points.length];
-    final next = points[(index + 1) % points.length];
-    final beforeCorner = toward(corner, previous);
-    final afterCorner = toward(corner, next);
-    path.lineTo(beforeCorner.dx, beforeCorner.dy);
-    path.quadraticBezierTo(
-      corner.dx,
-      corner.dy,
-      afterCorner.dx,
-      afterCorner.dy,
-    );
+  final start = mid(points.last, points.first);
+  path.moveTo(start.dx, start.dy);
+  for (var i = 0; i < points.length; i++) {
+    final p = points[i];
+    final m = mid(p, points[(i + 1) % points.length]);
+    path.quadraticBezierTo(p.dx, p.dy, m.dx, m.dy);
   }
   path.close();
   return path;
@@ -441,6 +590,32 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
   TapDownDetails? _doubleTapDetails;
 
   NovelGameController get controller => widget.controller;
+
+  _WorldMapOrganicLayout? _layoutCache;
+  String _layoutKey = '';
+
+  _WorldMapOrganicLayout _layoutFor(int count, bool desktop) {
+    final key = '$count|$desktop|$_layoutSeed';
+    if (key != _layoutKey || _layoutCache == null) {
+      _layoutKey = key;
+      _layoutCache = _buildOrganicMapLayout(
+        count: count,
+        seed: _layoutSeed,
+        desktop: desktop,
+      );
+    }
+    return _layoutCache!;
+  }
+
+  // 热重载时 State 不会重建，缓存里还是旧算法算出来的布局 → 改了算法却看不到效果。
+  // 每次 reassemble（热重载）都清掉缓存，并让镜头重新居中。
+  @override
+  void reassemble() {
+    super.reassemble();
+    _layoutCache = null;
+    _layoutKey = '';
+    _isCameraInitialized = false;
+  }
 
   @override
   void initState() {
@@ -640,11 +815,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                           _isCameraInitialized = false;
                         }
                         
-                        final mapLayout = _buildOrganicMapLayout(
-                          count: entries.length,
-                          seed: _layoutSeed,
-                          desktop: isDesktop,
-                        );
+                        final mapLayout = _layoutFor(entries.length, isDesktop);
                         final canvasWidth = mapLayout.size.width;
                         final canvasHeight = mapLayout.size.height;
 
@@ -858,6 +1029,64 @@ class _WorldMapPageHeader extends StatelessWidget {
   }
 }
 
+/// 文字块底边落在板块高度的这个比例处（0~1，越小越靠上）。嫌文字低/高就改这里。
+const double _kPlateTextBottomFraction = .74;
+
+class _PlateTextSlot {
+  const _PlateTextSlot(this.left, this.width, this.bottom);
+
+  final double left; // 文字块左边（相对板块外接矩形）
+  final double width; // 文字块宽度
+  final double bottom; // 文字块底边离外接矩形底边的距离
+}
+
+/// 水平线 y 与多边形相交的最左/最右 x（dx=最左，dy=最右）；不相交返回 null。
+Offset? _horizontalSpanAt(List<Offset> pts, double y) {
+  var lo = double.infinity, hi = double.negativeInfinity;
+  for (var i = 0; i < pts.length; i++) {
+    final a = pts[i];
+    final b = pts[(i + 1) % pts.length];
+    if ((a.dy <= y && b.dy > y) || (b.dy <= y && a.dy > y)) {
+      final x = a.dx + (y - a.dy) / (b.dy - a.dy) * (b.dx - a.dx);
+      lo = math.min(lo, x);
+      hi = math.max(hi, x);
+    }
+  }
+  return lo.isFinite && hi.isFinite ? Offset(lo, hi) : null;
+}
+
+/// 在不规则板块内为文字找位置：沿文字块占用的高度取几条水平线，
+/// 用它们的"公共宽度"作为文字宽度并居中，这样文字永远落在板块形状里，不会被边缘切掉。
+/// points 是相对板块外接矩形左上角的坐标（最小值为 0）。
+_PlateTextSlot _plateTextSlot(List<Offset> points) {
+  var w = 0.0, h = 0.0;
+  for (final p in points) {
+    w = math.max(w, p.dx);
+    h = math.max(h, p.dy);
+  }
+  if (points.length < 3 || w <= 0 || h <= 0) {
+    return const _PlateTextSlot(20, 120, 24);
+  }
+
+  final bottomY = h * _kPlateTextBottomFraction;
+  double? left, right;
+  for (var s = 0; s <= 4; s++) {
+    final span = _horizontalSpanAt(points, bottomY - s * 16.0); // 覆盖约 64px 高的文字块
+    if (span == null) continue;
+    left = left == null ? span.dx : math.max(left, span.dx);
+    right = right == null ? span.dy : math.min(right, span.dy);
+  }
+  final l = left ?? 0.0;
+  final r = right ?? w;
+  final centerX = (l + r) / 2;
+  final width = math.max(90.0, r - l - 24.0); // 左右各留 12px
+  return _PlateTextSlot(
+    (centerX - width / 2).clamp(0.0, math.max(0.0, w - width)).toDouble(),
+    width,
+    h - bottomY,
+  );
+}
+
 class _IrregularScenePlate extends StatefulWidget {
   const _IrregularScenePlate({
     required this.entry,
@@ -879,6 +1108,17 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulseController;
   bool _isPressed = false;
+
+  List<Offset>? _slotPoints;
+  _PlateTextSlot? _slot;
+
+  _PlateTextSlot get _textSlot {
+    if (_slot == null || !identical(_slotPoints, widget.points)) {
+      _slotPoints = widget.points;
+      _slot = _plateTextSlot(widget.points);
+    }
+    return _slot!;
+  }
 
   @override
   void initState() {
@@ -965,7 +1205,7 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                                   Color(0xCC000000),
                                   Color(0xF2000000),
                                 ],
-                                stops: <double>[0.3, 0.6, 0.85, 1.0],
+                                stops: <double>[0.3, 0.5, 0.75, 1.0],
                               ),
                             ),
                           ),
@@ -987,7 +1227,8 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                   if (disabled)
                     const Positioned.fill(
                       child: IgnorePointer(
-                        child: Center(
+                        child: Align(
+                          alignment: Alignment(0, -.3),
                           child: Icon(
                             Icons.lock,
                             size: 28,
@@ -999,9 +1240,9 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
 
                   // 悬浮在板块上的文字信息区
                   Positioned(
-                    left: 20,
-                    right: 20,
-                    bottom: 24,
+                    left: _textSlot.left,
+                    width: _textSlot.width,
+                    bottom: _textSlot.bottom,
                     child: IgnorePointer(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
