@@ -69,6 +69,7 @@ class _NovelInputBarState extends State<NovelInputBar> {
   bool _inventoryRefreshing = false;
   final Set<String> _referencedItemNames = <String>{};
   final GlobalKey _layoutMeasureKey = GlobalKey();
+  final GlobalKey _textFieldKey = GlobalKey();
   double _lastReportedLayoutHeight = -1;
 
   bool get _interactionEnabled =>
@@ -107,7 +108,8 @@ class _NovelInputBarState extends State<NovelInputBar> {
   }
 
   bool _globalPointInsideInputBar(Offset globalPosition) {
-    final renderObject = _layoutMeasureKey.currentContext?.findRenderObject();
+    // 将 _layoutMeasureKey 替换为精确的 _textFieldKey
+    final renderObject = _textFieldKey.currentContext?.findRenderObject();
     if (renderObject is! RenderBox || !renderObject.hasSize) return false;
     final origin = renderObject.localToGlobal(Offset.zero);
     return (origin & renderObject.size).contains(globalPosition);
@@ -1268,14 +1270,10 @@ class _NovelInputBarState extends State<NovelInputBar> {
 
                 // 2. 占据剩余空间的输入框部分
                 // 2. 占据剩余空间的输入框部分
+                // 2. 占据剩余空间的输入框部分
                 Expanded(
                   child: Listener(
-                    // 改用 Listener 而不是 GestureDetector：TextField 内部
-                    // 自带一套 TapGestureRecognizer，如果外层再套一个同样监听
-                    // onTap 的 GestureDetector，两者会在同一个手势竞技场里抢
-                    // 判定，导致第一下点击经常被外层吞掉，要点第二次才真正
-                    // 聚焦、弹出键盘。Listener 只监听原始指针事件、不参与竞技场
-                    // 仲裁，天然不会跟 TextField 的内建识别器冲突。
+                    key: _textFieldKey, // 将 Key 绑定在这里
                     behavior: HitTestBehavior.opaque,
                     onPointerDown: (_) {
                       if (interactionEnabled && !speaking && !_speechFinishing) {

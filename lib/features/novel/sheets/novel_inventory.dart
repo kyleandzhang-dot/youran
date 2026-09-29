@@ -95,7 +95,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
   String busy = '';
   bool _skillsExpanded = false;
   bool _equippedExpanded = false;
-  int _filterIndex = 0;
+  int _filterIndex = 0; // 0: 剧情, 1: 穿戴, 2: 道具
 
   static const Set<String> _wearableTypes = <String>{
     'weapon',
@@ -176,7 +176,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     return switch (type.trim().toLowerCase()) {
       'consumable' => '消耗品',
       'material' => '材料',
-      'quest' => '任务物品',
+      'quest' => '剧情物品',
       'gift' => '赠礼',
       'blind_box' => '特殊物品',
       'lucky_card' => '特殊物品',
@@ -440,23 +440,28 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
 
     return Padding(
       padding: EdgeInsets.only(top: dense ? 8 : 14),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: EdgeInsets.zero,
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: dense ? 5 : 8,
-          crossAxisSpacing: dense ? 10 : 16,
-          mainAxisExtent: dense ? 14 : 16,
-        ),
-        itemCount: bonuses.length,
-        itemBuilder: (context, index) {
-          final bonus = bonuses[index];
-          return _EquipmentBonusMeter(
-            label: bonus.label,
-            level: bonus.level,
-            valueText: bonus.valueText,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final crossAxisCount = constraints.maxWidth > 500 ? 4 : 2;
+          return GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              mainAxisSpacing: dense ? 5 : 8,
+              crossAxisSpacing: dense ? 10 : 16,
+              mainAxisExtent: dense ? 14 : 16,
+            ),
+            itemCount: bonuses.length,
+            itemBuilder: (context, index) {
+              final bonus = bonuses[index];
+              return _EquipmentBonusMeter(
+                label: bonus.label,
+                level: bonus.level,
+                valueText: bonus.valueText,
+              );
+            },
           );
         },
       ),
@@ -1116,6 +1121,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
       },
     );
   }
+
   Widget _hero(
     NovelCharacter? host,
     List<NovelInventoryItem> equipped,
@@ -1142,286 +1148,237 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         .where((s) => s.isNotEmpty)
         .join('  ·  ');
 
-    return Padding(
-      padding: landscape
-          ? const EdgeInsets.fromLTRB(14, 6, 18, 8)
-          : const EdgeInsets.fromLTRB(16, 8, 24, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: <Widget>[
-              _InventoryHeroAvatar(
-                avatar: avatar,
-                fallbackAsset: fallbackAsset,
-                extent: avatarExtent,
-                landscape: landscape,
-                name: name,
-              ),
-              SizedBox(width: landscape ? 10 : 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            _InventoryHeroAvatar(
+              avatar: avatar,
+              fallbackAsset: fallbackAsset,
+              extent: avatarExtent,
+              landscape: landscape,
+              name: name,
+            ),
+            SizedBox(width: landscape ? 10 : 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _inventoryText,
+                      fontSize: landscape ? 15.5 : 18,
+                      height: 1.1,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: landscape ? .35 : .5,
+                    ),
+                  ),
+                  if (metaTags.isNotEmpty) ...[
+                    SizedBox(height: landscape ? 3 : 4),
                     Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      metaTags,
                       style: TextStyle(
-                        color: _inventoryText,
-                        fontSize: landscape ? 15.5 : 18,
-                        height: 1.1,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: landscape ? .35 : .5,
+                        color: _inventoryTextSoft,
+                        fontSize: landscape ? 9.4 : 10.5,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    if (metaTags.isNotEmpty) ...[
-                      SizedBox(height: landscape ? 3 : 4),
-                      Text(
-                        metaTags,
-                        style: TextStyle(
-                          color: _inventoryTextSoft,
-                          fontSize: landscape ? 9.4 : 10.5,
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        
+        _equipmentBonusPanel(equipped, dense: landscape),
+        
+        if (skills.isNotEmpty) ...<Widget>[
+          SizedBox(height: landscape ? 10 : 16),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  '技能  ${skills.length}',
+                  style: TextStyle(
+                    color: _inventoryTextSoft,
+                    fontSize: landscape ? 9.5 : 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .5,
+                  ),
+                ),
+              ),
+              if (skills.length > 3)
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => setState(() => _skillsExpanded = !_skillsExpanded),
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), 
+                      child: Text(
+                        _skillsExpanded ? '收起' : '展开',
+                        style: const TextStyle(
+                          color: _inventoryMuted,
+                          fontSize: 10,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                    ],
-                  ],
+                    ),
+                  ),
                 ),
-              ),
             ],
           ),
-          
-          _equipmentBonusPanel(equipped, dense: landscape),
-          
-          if (skills.isNotEmpty) ...<Widget>[
-            SizedBox(height: landscape ? 10 : 16),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: landscape
-                      ? Text(
-                          '技能  ${skills.length}',
-                          style: const TextStyle(
-                            color: _inventoryTextSoft,
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: .5,
-                          ),
-                        )
-                      : _GameStyleSectionTitle(
-                          title: '技能',
-                          count: skills.length,
-                        ),
+          SizedBox(height: landscape ? 5 : 8),
+          Wrap(
+            spacing: landscape ? 5 : 6,
+            runSpacing: landscape ? 5 : 6,
+            children: skills.take(_skillsExpanded ? skills.length : 3).map((skill) {
+              final meta = skill.isAbility
+                  ? '能力'
+                  : (skill.mastery.isEmpty ? '' : skill.mastery);
+              return Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: landscape ? 7 : 8,
+                  vertical: landscape ? 3 : 4,
                 ),
-                if (skills.length > 3)
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => setState(() => _skillsExpanded = !_skillsExpanded),
-                      borderRadius: BorderRadius.circular(4),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), 
-                        child: Text(
-                          _skillsExpanded ? '收起' : '展开',
-                          style: const TextStyle(
-                            color: _inventoryMuted,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            SizedBox(height: landscape ? 5 : 8),
-            Wrap(
-              spacing: landscape ? 5 : 6,
-              runSpacing: landscape ? 5 : 6,
-              children: skills.take(_skillsExpanded ? skills.length : 3).map((skill) {
-                final meta = skill.isAbility
-                    ? '能力'
-                    : (skill.mastery.isEmpty ? '' : skill.mastery);
-                return Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: landscape ? 7 : 8,
-                    vertical: landscape ? 3 : 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(.04),
-                    borderRadius: BorderRadius.circular(landscape ? 2 : 4),
-                    border: landscape
-                        ? null
-                        : Border.all(color: Colors.white.withOpacity(.08)),
-                  ),
-                  child: Text(
-                    meta.isEmpty ? skill.name : '${skill.name} · $meta',
-                    style: TextStyle(
-                      color: _inventoryTextSoft,
-                      fontSize: landscape ? 9.2 : 10,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
-          
-          if (equipped.isNotEmpty) ...<Widget>[
-            SizedBox(height: landscape ? 10 : 16),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: landscape
-                      ? Text(
-                          '当前穿戴  ${equipped.length}',
-                          style: const TextStyle(
-                            color: _inventoryTextSoft,
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: .5,
-                          ),
-                        )
-                      : _GameStyleSectionTitle(
-                          title: '当前穿戴',
-                          count: equipped.length,
-                        ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.04),
+                  borderRadius: BorderRadius.circular(landscape ? 2 : 4),
+                  border: Border.all(color: Colors.white.withOpacity(.08)),
                 ),
-                if (equipped.length > 3)
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => setState(() => _equippedExpanded = !_equippedExpanded),
-                      borderRadius: BorderRadius.circular(4),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        child: Text(
-                          _equippedExpanded ? '收起' : '展开',
-                          style: const TextStyle(
-                            color: _inventoryMuted,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
+                child: Text(
+                  meta.isEmpty ? skill.name : '${skill.name} · $meta',
+                  style: TextStyle(
+                    color: _inventoryTextSoft,
+                    fontSize: landscape ? 9.2 : 10,
+                    fontWeight: FontWeight.w600,
                   ),
-              ],
-            ),
-            SizedBox(height: landscape ? 5 : 8),
-            Wrap(
-              spacing: landscape ? 6 : 8,
-              runSpacing: landscape ? 6 : 8,
-              children: equipped
-                  .take(_equippedExpanded ? equipped.length : 3)
-                  .map((item) {
-                final quality = _inventoryItemQuality(item);
-                final qualityColor = _inventoryQualityColor(quality);
-                final enhancement = _equipmentEnhancement(item);
-                final itemBusy = busy.isNotEmpty && busy == item.id;
-                return Material(
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+        
+        if (equipped.isNotEmpty) ...<Widget>[
+          SizedBox(height: landscape ? 10 : 16),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  '当前穿戴  ${equipped.length}',
+                  style: TextStyle(
+                    color: _inventoryTextSoft,
+                    fontSize: landscape ? 9.5 : 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .5,
+                  ),
+                ),
+              ),
+              if (equipped.length > 3)
+                Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    onTap: itemBusy ? null : () => unawaited(_showItemDetail(item)),
+                    onTap: () => setState(() => _equippedExpanded = !_equippedExpanded),
                     borderRadius: BorderRadius.circular(4),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      padding: EdgeInsets.fromLTRB(
-                        landscape ? 7 : 8,
-                        landscape ? 4 : 6,
-                        landscape ? 6 : 6,
-                        landscape ? 4 : 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(.04),
-                        borderRadius: BorderRadius.circular(landscape ? 2 : 4),
-                        border: landscape
-                            ? null
-                            : Border.all(color: qualityColor.withOpacity(.22)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          Flexible(
-                            child: Text(
-                              item.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: qualityColor,
-                                fontSize: landscape ? 9.6 : 10.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          if (enhancement > 0) ...<Widget>[
-                            const SizedBox(width: 6),
-                            _InventoryEnhancementStars(
-                              level: enhancement,
-                              compact: true,
-                              showLabel: true,
-                            ),
-                          ],
-                          const SizedBox(width: 6),
-                          if (itemBusy)
-                            const SizedBox.square(
-                              dimension: 10,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.4,
-                                color: _inventoryMuted,
-                              ),
-                            )
-                          else
-                            const Text(
-                              '详情',
-                              style: TextStyle(
-                                color: _inventoryMuted,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                        ],
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: Text(
+                        _equippedExpanded ? '收起' : '展开',
+                        style: const TextStyle(
+                          color: _inventoryMuted,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
-                );
-              }).toList(),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // 统一替换为无边框毛玻璃面板
-  Widget _buildGlassPanel({
-    required Widget child,
-    bool quiet = false,
-  }) {
-    final radius = BorderRadius.circular(quiet ? 4 : 8);
-    return ClipRRect(
-      borderRadius: radius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: quiet ? 8 : 12,
-          sigmaY: quiet ? 8 : 12,
-        ),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(quiet ? .02 : .035),
-            borderRadius: radius,
-            border: quiet
-                ? null
-                : Border.all(
-                    color: Colors.white.withOpacity(.05),
-                    width: 1,
-                  ),
+                ),
+            ],
           ),
-          child: child,
-        ),
-      ),
+          SizedBox(height: landscape ? 5 : 8),
+          Wrap(
+            spacing: landscape ? 6 : 8,
+            runSpacing: landscape ? 6 : 8,
+            children: equipped
+                .take(_equippedExpanded ? equipped.length : 3)
+                .map((item) {
+              final quality = _inventoryItemQuality(item);
+              final qualityColor = _inventoryQualityColor(quality);
+              final enhancement = _equipmentEnhancement(item);
+              final itemBusy = busy.isNotEmpty && busy == item.id;
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: itemBusy ? null : () => unawaited(_showItemDetail(item)),
+                  borderRadius: BorderRadius.circular(4),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    padding: EdgeInsets.fromLTRB(
+                      landscape ? 7 : 8,
+                      landscape ? 4 : 6,
+                      landscape ? 6 : 6,
+                      landscape ? 4 : 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(.04),
+                      borderRadius: BorderRadius.circular(landscape ? 2 : 4),
+                      border: Border.all(color: qualityColor.withOpacity(.22)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Flexible(
+                          child: Text(
+                            item.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: qualityColor,
+                              fontSize: landscape ? 9.6 : 10.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        if (enhancement > 0) ...<Widget>[
+                          const SizedBox(width: 6),
+                          _InventoryEnhancementStars(
+                            level: enhancement,
+                            compact: true,
+                            showLabel: true,
+                          ),
+                        ],
+                        const SizedBox(width: 6),
+                        if (itemBusy)
+                          const SizedBox.square(
+                            dimension: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.4,
+                              color: _inventoryMuted,
+                            ),
+                          )
+                        else
+                          const Text(
+                            '详情',
+                            style: TextStyle(
+                              color: _inventoryMuted,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ],
     );
   }
 
@@ -1430,69 +1387,61 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     bool isDesktop = false,
     bool dense = false,
   }) {
-    return Padding(
-      padding: isDesktop
-          ? EdgeInsets.symmetric(
-              horizontal: dense ? 12 : 24,
-              vertical: dense ? 8 : 24,
-            )
-          : const EdgeInsets.fromLTRB(16, 12, 24, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          if (items.isEmpty)
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.symmetric(vertical: isDesktop ? 64 : 32),
-              alignment: Alignment.center,
-              child: Text(
-                loading ? '正在整理…' : '空空如也',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: _inventoryMuted,
-                  fontSize: 11,
-                ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (items.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(vertical: isDesktop ? 64 : 32),
+            alignment: Alignment.center,
+            child: Text(
+              loading ? '正在整理…' : '空空如也',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _inventoryMuted,
+                fontSize: 11,
               ),
-            )
-          else
-            isDesktop
-                ? LayoutBuilder(
-                    builder: (context, constraints) {
-                      final crossAxisCount = constraints.maxWidth > 500 ? 2 : 1;
-                      const spacing = 12.0;
-                      final itemWidth = (constraints.maxWidth - (crossAxisCount - 1) * spacing) / crossAxisCount;
+            ),
+          )
+        else
+          isDesktop
+              ? LayoutBuilder(
+                  builder: (context, constraints) {
+                    final crossAxisCount = constraints.maxWidth > 500 ? 2 : 1;
+                    const spacing = 12.0;
+                    final itemWidth = (constraints.maxWidth - (crossAxisCount - 1) * spacing) / crossAxisCount;
 
-                      return Wrap(
-                        spacing: spacing,
-                        runSpacing: spacing,
-                        children: List.generate(items.length, (index) {
-                          return SizedBox(
-                            width: itemWidth,
-                            child: _buildAnimatedRow(
-                              items[index],
-                              index,
-                              dense: dense,
-                            ),
-                          );
-                        }),
-                      );
-                    },
-                  )
-                : Column(
-                    children: <Widget>[
-                      for (var index = 0; index < items.length; index++) ...<Widget>[
-                        _buildAnimatedRow(
-                          items[index],
-                          index,
-                          dense: dense,
-                        ),
-                        if (index != items.length - 1)
-                          const SizedBox(height: 6),
-                      ],
+                    return Wrap(
+                      spacing: spacing,
+                      runSpacing: spacing,
+                      children: List.generate(items.length, (index) {
+                        return SizedBox(
+                          width: itemWidth,
+                          child: _buildAnimatedRow(
+                            items[index],
+                            index,
+                            dense: dense,
+                          ),
+                        );
+                      }),
+                    );
+                  },
+                )
+              : Column(
+                  children: <Widget>[
+                    for (var index = 0; index < items.length; index++) ...<Widget>[
+                      _buildAnimatedRow(
+                        items[index],
+                        index,
+                        dense: dense,
+                      ),
+                      if (index != items.length - 1)
+                        const SizedBox(height: 6),
                     ],
-                  ),
-        ],
-      ),
+                  ],
+                ),
+      ],
     );
   }
 
@@ -1526,6 +1475,175 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
+  // 桌面端布局：左右分屏，右侧底部悬浮导航胶囊
+  Widget desktopLayout(NovelCharacter? host, List<NovelInventoryItem> equipped, List<_GameStyleSkillView> skills, List<NovelInventoryItem> filteredItems) {
+    return Column(
+      children: <Widget>[
+        _InventoryHeader(
+          horizontalPadding: EdgeInsets.zero,
+          onClose: widget.embedded ? null : () => Navigator.of(context).pop(),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Expanded(
+                  flex: 35,
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 24, right: 12),
+                    child: _hero(host, equipped, skills, landscape: false),
+                  ),
+                ),
+                const SizedBox(width: 24),
+                Expanded(
+                  flex: 65,
+                  child: Stack(
+                    children: <Widget>[
+                      RefreshIndicator(
+                        onRefresh: _refresh,
+                        color: _inventoryAccent,
+                        backgroundColor: _inventoryInkSoft,
+                        child: ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.only(bottom: 86), // 给悬浮条让出空间
+                          children: <Widget>[
+                            _inventoryList(filteredItems, isDesktop: true, dense: false),
+                          ],
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 16,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: _floatingFilterBar(dense: false),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 手机横屏布局：左右分屏，右侧底部悬浮导航胶囊
+  Widget landscapeLayout(NovelCharacter? host, List<NovelInventoryItem> equipped, List<_GameStyleSkillView> skills, List<NovelInventoryItem> filteredItems) {
+    return Column(
+      children: <Widget>[
+        _InventoryHeader(
+          dense: true,
+          showTitle: false,
+          horizontalPadding: EdgeInsets.zero,
+          onClose: widget.embedded ? null : () => Navigator.of(context).pop(),
+        ),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Expanded(
+                flex: 35,
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.only(top: 8, bottom: 12, right: 8),
+                  child: _hero(host, equipped, skills, landscape: true),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                flex: 65,
+                child: Stack(
+                  children: <Widget>[
+                    RefreshIndicator(
+                      onRefresh: _refresh,
+                      color: _inventoryAccent,
+                      backgroundColor: _inventoryInkSoft,
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.only(bottom: 70), // 给悬浮条让出空间
+                        children: <Widget>[
+                          _inventoryList(filteredItems, isDesktop: true, dense: true),
+                        ],
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 8,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: _floatingFilterBar(dense: true),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 手机竖屏布局：单列，全局底部悬浮导航胶囊
+  Widget portraitLayout(NovelCharacter? host, List<NovelInventoryItem> equipped, List<_GameStyleSkillView> skills, List<NovelInventoryItem> filteredItems) {
+    return Stack(
+      children: <Widget>[
+        Column(
+          children: <Widget>[
+            _InventoryHeader(
+              horizontalPadding: EdgeInsets.zero,
+              onClose: widget.embedded ? null : () => Navigator.of(context).pop(),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _refresh,
+                color: _inventoryAccent,
+                backgroundColor: _inventoryInkSoft,
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: <Widget>[
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 20),
+                        child: _hero(host, equipped, skills, landscape: false),
+                      ),
+                    ),
+                    if (filteredItems.isEmpty)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: _inventoryList(filteredItems, isDesktop: false, dense: false),
+                      )
+                    else
+                      SliverToBoxAdapter(
+                        child: _inventoryList(filteredItems, isDesktop: false, dense: false),
+                      ),
+                    const SliverToBoxAdapter(
+                      child: SizedBox(height: 86), // 给悬浮条让出空间
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        Positioned(
+          bottom: 16,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: _floatingFilterBar(dense: false),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -1546,193 +1664,18 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
         final skills = _skills(host);
         final backpackItems = items.where((item) => !item.isEquipped).toList();
         final filteredItems = backpackItems.where((item) {
-          if (_filterIndex == 1) {
-            return _isWearable(item);
-          }
-          
-          if (_filterIndex == 2) {
-            return !_isWearable(item) && _inventoryItemImageSource(item).isNotEmpty;
-          }
-          
+          if (_filterIndex == 1) return _isWearable(item);
+          if (_filterIndex == 2) return !_isWearable(item) && _inventoryItemImageSource(item).isNotEmpty;
           if (_filterIndex == 0) {
+            // “剧情”筛选逻辑：属于 storyItems、或者类型是 quest/story/material、或者没有图标的纯文本物品
             final isStoryItem = data.storyItems.contains(item);
             final type = item.itemType.trim().toLowerCase();
             final isQuest = type == 'quest' || type == 'story' || type == 'material';
             final noIconFallback = !_isWearable(item) && _inventoryItemImageSource(item).isEmpty;
             return isStoryItem || isQuest || noIconFallback;
           }
-          
           return false;
         }).toList();
-        Widget desktopLayout() {
-          return Column(
-            children: <Widget>[
-              _InventoryHeader(
-                horizontalPadding: EdgeInsets.zero,
-                onClose: widget.embedded
-                    ? null
-                    : () => Navigator.of(context).pop(),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Expanded(
-                        flex: 4,
-                        child: _buildGlassPanel(
-                          child: ListView(
-                            padding: const EdgeInsets.only(top: 12, bottom: 24),
-                            children: <Widget>[_hero(host, equipped, skills)],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 24),
-                      Expanded(
-                        flex: 7,
-                        child: Column(
-                          children: <Widget>[
-                            Expanded(
-                              child: _buildGlassPanel(
-                                child: RefreshIndicator(
-                                  onRefresh: _refresh,
-                                  color: _inventoryAccent,
-                                  backgroundColor: _inventoryInkSoft,
-                                  child: ListView(
-                                    padding: EdgeInsets.zero,
-                                    children: <Widget>[
-                                      _inventoryList(
-                                        filteredItems,
-                                        isDesktop: true,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            _inventoryFilterBar(isDesktop: true),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          );
-        }
-
-        Widget portraitLayout() {
-          return Column(
-            children: <Widget>[
-              _InventoryHeader(
-                horizontalPadding: EdgeInsets.zero,
-                onClose: widget.embedded
-                    ? null
-                    : () => Navigator.of(context).pop(),
-              ),
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: _refresh,
-                  color: _inventoryAccent,
-                  backgroundColor: _inventoryInkSoft,
-                  child: CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    slivers: <Widget>[
-                      SliverToBoxAdapter(child: _hero(host, equipped, skills)),
-                      if (filteredItems.isEmpty)
-                        SliverFillRemaining(
-                          hasScrollBody: false,
-                          child: _inventoryList(filteredItems),
-                        )
-                      else
-                        SliverToBoxAdapter(
-                          child: _inventoryList(filteredItems),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              _inventoryFilterBar(),
-            ],
-          );
-        }
-
-        Widget landscapeLayout() {
-          return Column(
-            children: <Widget>[
-              _InventoryHeader(
-                dense: true,
-                showTitle: false,
-                horizontalPadding: EdgeInsets.zero,
-                onClose: widget.embedded
-                    ? null
-                    : () => Navigator.of(context).pop(),
-              ),
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    Expanded(
-                      flex: 4,
-                      child: _buildGlassPanel(
-                        quiet: false, 
-                        child: ListView(
-                          physics: const BouncingScrollPhysics(),
-                          padding: const EdgeInsets.only(top: 8, bottom: 12),
-                          children: <Widget>[
-                            _hero(
-                              host,
-                              equipped,
-                              skills,
-                              landscape: false,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      flex: 6,
-                      child: Column(
-                        children: <Widget>[
-                          Expanded(
-                            child: _buildGlassPanel(
-                              quiet: false,
-                              child: RefreshIndicator(
-                                onRefresh: _refresh,
-                                color: _inventoryAccent,
-                                backgroundColor: _inventoryInkSoft,
-                                child: ListView(
-                                  padding: EdgeInsets.zero,
-                                  children: <Widget>[
-                                    _inventoryList(
-                                      filteredItems,
-                                      isDesktop: true,
-                                      dense: false,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          _inventoryFilterBar(
-                            isDesktop: true,
-                            dense: true,
-                            quiet: false,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        }
 
         return _InventoryBackdrop(
           child: SafeArea(
@@ -1756,28 +1699,28 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   );
 
                   switch (mode) {
-                   case _InventoryViewportMode.desktop:
+                    case _InventoryViewportMode.desktop:
                       return Center(
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 1440),
+                          constraints: const BoxConstraints(maxWidth: 1100),
                           child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-                            child: desktopLayout(),
+                            child: desktopLayout(host, equipped, skills, filteredItems),
                           ),
                         ),
                       );
                     case _InventoryViewportMode.landscape:
                       return Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 2, 10, 2),
-                        child: landscapeLayout(),
+                        padding: const EdgeInsets.fromLTRB(20, 2, 20, 2),
+                        child: landscapeLayout(host, equipped, skills, filteredItems),
                       );
                     case _InventoryViewportMode.portrait:
                       return Center(
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 560),
                           child: Padding(
-                            padding: const EdgeInsets.fromLTRB(10, 4, 12, 4),
-                            child: portraitLayout(),
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                            child: portraitLayout(host, equipped, skills, filteredItems),
                           ),
                         ),
                       );
@@ -1791,82 +1734,67 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
     );
   }
 
-  Widget _inventoryFilterBar({
-    bool isDesktop = false,
-    bool dense = false,
-    bool quiet = false,
-  }) {
-    final child = Center(
-      child: Container(
-        height: dense ? 34 : 44,
-        constraints: BoxConstraints(maxWidth: dense ? 300 : 360),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(.03),
-          borderRadius: BorderRadius.circular(quiet ? 4 : 6),
-          border: quiet
-              ? null
-              : Border.all(color: Colors.white.withOpacity(.06)),
+  // 底部悬浮毛玻璃胶囊
+  Widget _floatingFilterBar({bool dense = false}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(99),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(.45), // 深色毛玻璃
+            borderRadius: BorderRadius.circular(99),
+            border: Border.all(color: Colors.white.withOpacity(.08)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(.3),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              _buildFilterBtn('剧情', 0, dense: dense),
+              const SizedBox(width: 4),
+              _buildFilterBtn('穿戴', 1, dense: dense),
+              const SizedBox(width: 4),
+              _buildFilterBtn('道具', 2, dense: dense),
+            ],
+          ),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Expanded(child: _buildFilterBtn('任务', 0, quiet: quiet)),
-            Expanded(child: _buildFilterBtn('穿戴', 1, quiet: quiet)),
-            Expanded(child: _buildFilterBtn('道具', 2, quiet: quiet)),
-          ],
-        ),
-      ),
-    );
-
-    if (isDesktop) {
-      return SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.only(bottom: dense ? 2 : 8),
-          child: child,
-        ),
-      );
-    }
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(0, 8, 0, 16),
-        child: child,
       ),
     );
   }
 
-  Widget _buildFilterBtn(
-    String label,
-    int index, {
-    bool quiet = false,
-  }) {
+  Widget _buildFilterBtn(String label, int index, {bool dense = false}) {
     final selected = _filterIndex == index;
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: () => setState(() => _filterIndex = index),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(99),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
-          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(
+            horizontal: dense ? 20 : 26,
+            vertical: dense ? 6 : 8,
+          ),
           decoration: selected
               ? BoxDecoration(
-                  color: _inventoryAccent.withOpacity(0.12), 
-                  borderRadius: BorderRadius.circular(quiet ? 4 : 6),
-                  border: quiet
-                      ? null
-                      : Border.all(color: _inventoryAccent.withOpacity(.3)),
+                  color: _inventoryAccent,
+                  borderRadius: BorderRadius.circular(99),
                 )
               : const BoxDecoration(),
           child: Text(
             label,
             style: TextStyle(
-              color: selected ? _inventoryAccent : _inventoryMuted,
-              fontSize: 11.5,
-              fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-              letterSpacing: 0.8,
+              color: selected ? Colors.black : _inventoryTextSoft,
+              fontSize: dense ? 11.5 : 13,
+              fontWeight: selected ? FontWeight.w900 : FontWeight.w600,
+              letterSpacing: 1.0,
             ),
           ),
         ),
@@ -2168,7 +2096,6 @@ class _InventoryBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 替换为深空暗黑统一渐变，去掉花里胡哨的圆形线框
     return DecoratedBox(
       decoration: const BoxDecoration(
         gradient: RadialGradient(
@@ -2292,7 +2219,7 @@ class _InventoryItemIcon extends StatelessWidget {
     final fallback = Icon(
       Icons.inventory_2_outlined,
       size: size * .62,
-      color: _inventoryTextSoft, // 替换原来的 GoldSoft
+      color: _inventoryTextSoft, 
     );
     final errorBuilder = (
       BuildContext _,
@@ -2334,7 +2261,6 @@ int _inventoryItemQuality(NovelInventoryItem item) {
 
 Color _inventoryQualityColor(int quality) {
   final value = quality.clamp(1, 10).toInt();
-  // 保持原有阶梯色，仅将最低档稍作调整使其在暗色模式下更干净
   return switch (value) {
     10 => const Color(0xFFFF7B7B),
     9 => const Color(0xFFFF83B7),
