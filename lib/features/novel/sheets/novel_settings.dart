@@ -76,9 +76,12 @@ class _AdaptiveSettingsDrawerFrame extends StatelessWidget {
     final size = MediaQuery.sizeOf(context);
     final compactLandscape = _settingsCompactLandscape(context);
 
-    final drawerWidth = compactLandscape
+    // 宽度规则与左侧游戏抽屉（game_drawer.dart）完全一致：
+    // 手机矮横屏取屏宽 40%（286–320），其余取屏宽 82% 且最宽 300。
+    final shortLandscape = size.width > size.height && size.height < 520;
+    final drawerWidth = shortLandscape
         ? (size.width * .40).clamp(286.0, 320.0).toDouble()
-        : math.min(size.width * .90, 420.0);
+        : math.min(size.width * .82, 300.0);
 
     return Align(
       alignment: Alignment.centerRight,
@@ -1166,7 +1169,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
               SizedBox(height: compactLandscape ? 6 : 10),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final stackChoices = constraints.maxWidth < 220;
+                  final stackChoices = constraints.maxWidth < 300;
                   final standard = _ReadingModeChoice(
                     label: '标准',
                     caption: '竖屏 · 专注阅读',
@@ -1788,11 +1791,12 @@ class _CleanSettingsRow extends StatelessWidget {
                   SizedBox(height: compactLandscape ? 2 : 3),
                   Text(
                     subtitle,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: AppColors.textOnDarkMuted,
                       fontSize: compactLandscape ? 8.8 : 10.5,
+                      height: 1.2,
                     ),
                   ),
                 ],
