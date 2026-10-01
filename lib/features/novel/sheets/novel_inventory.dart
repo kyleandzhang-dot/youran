@@ -1699,19 +1699,20 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                   );
 
                   switch (mode) {
+                    // 修改后
                     case _InventoryViewportMode.desktop:
                       return Center(
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 1100),
                           child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                            padding: const EdgeInsets.fromLTRB(24, 14, 24, 12), // 增加左右边距
                             child: desktopLayout(host, equipped, skills, filteredItems),
                           ),
                         ),
                       );
                     case _InventoryViewportMode.landscape:
                       return Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 2, 20, 2),
+                        padding: const EdgeInsets.fromLTRB(28, 2, 28, 2), // 增加左右边距
                         child: landscapeLayout(host, equipped, skills, filteredItems),
                       );
                     case _InventoryViewportMode.portrait:
@@ -1719,7 +1720,7 @@ class _GameStyleInventoryPageState extends State<_GameStyleInventoryPage> {
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 560),
                           child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                            padding: const EdgeInsets.fromLTRB(24, 4, 24, 4), // 增加左右边距
                             child: portraitLayout(host, equipped, skills, filteredItems),
                           ),
                         ),

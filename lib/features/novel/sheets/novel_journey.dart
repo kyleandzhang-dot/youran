@@ -342,20 +342,20 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
           controller: widget.controller,
           embedded: widget.embedded,
           lightTheme: false,
-          child: DecoratedBox(
-            decoration: const BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment(0, -.18),
-                radius: 1.05,
-                colors: <Color>[
-                  Color(0xFF303641),
-                  Color(0xFF242A33),
-                  Color(0xFF171B22),
-                ],
-                stops: <double>[0, .52, 1],
-              ),
+          // 背景渐变交给 backdrop 全屏铺满，避免被 SafeArea 缩进后左右露出黑边
+          background: const BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(0, -.18),
+              radius: 1.05,
+              colors: <Color>[
+                Color(0xFF303641),
+                Color(0xFF242A33),
+                Color(0xFF171B22),
+              ],
+              stops: <double>[0, .52, 1],
             ),
-            child: Column(
+          ),
+          child: Column(
               children: <Widget>[
                 LayoutBuilder(
                   builder: (context, constraints) {
@@ -448,7 +448,6 @@ class _GameStyleJourneyPageState extends State<_GameStyleJourneyPage> {
                   ),
                 ),
               ],
-            ),
           ),
         );
       },

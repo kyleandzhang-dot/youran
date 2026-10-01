@@ -9,6 +9,13 @@ part of '../novel_sheets.dart';
 
 const Color _novelDrawerAccent = NovelPalette.accent;
 
+/// 右侧设置抽屉是否使用「手机紧凑横屏」样式。
+/// 现在统一返回 false：手机横屏与电脑模式 / 竖屏使用同一套标准样式
+/// （宽抽屉 + 单列 ListView，内容可滚动）。
+/// 如果以后想恢复横屏专用的窄侧栏 + 分页 Tab 样式，改回
+/// `NovelViewportMetrics.of(context).shortWide` 即可。
+bool _settingsCompactLandscape(BuildContext context) => false;
+
 Future<void> showNovelSettingsSheet(
   BuildContext context,
   NovelGameController controller, {
@@ -67,7 +74,7 @@ class _AdaptiveSettingsDrawerFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+    final compactLandscape = _settingsCompactLandscape(context);
 
     final drawerWidth = compactLandscape
         ? (size.width * .40).clamp(286.0, 320.0).toDouble()
@@ -127,7 +134,7 @@ class _SettingsDrawerScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+    final compactLandscape = _settingsCompactLandscape(context);
     final buttonSize = compactLandscape ? 28.0 : 32.0;
 
     return Column(
@@ -841,7 +848,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
       builder: (context, _) {
         final settings = controller.settings;
         final developerPreview = widget.developerPreview;
-        final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+        final compactLandscape = _settingsCompactLandscape(context);
         if (_showDeveloperTools &&
             widget.isAdmin &&
             developerPreview != null) {
@@ -1309,7 +1316,7 @@ class _ArtStyleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+    final compactLandscape = _settingsCompactLandscape(context);
     final disabled = onTap == null && !selected;
     final cardWidth = fullWidth ? double.infinity : (compactLandscape ? 82.0 : 108.0);
     final aspectRatio = fullWidth
@@ -1604,7 +1611,7 @@ class _CleanSettingsHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+    final compactLandscape = _settingsCompactLandscape(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -1692,7 +1699,7 @@ class _CleanSettingChoice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+    final compactLandscape = _settingsCompactLandscape(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1747,7 +1754,7 @@ class _CleanSettingsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compactLandscape = NovelViewportMetrics.of(context).shortWide;
+    final compactLandscape = _settingsCompactLandscape(context);
     return SizedBox(
       height: compactLandscape ? 48 : 60,
       child: Padding(

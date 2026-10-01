@@ -2208,8 +2208,13 @@ class _NovelGamePageState extends State<NovelGamePage>
             );
             final desktopMode = controller.desktopMode;
 
+            // 通过 defaultTargetPlatform 判断是否为真正的桌面系统
+            final isDesktopOS = defaultTargetPlatform == TargetPlatform.macOS || 
+                                defaultTargetPlatform == TargetPlatform.windows || 
+                                defaultTargetPlatform == TargetPlatform.linux;
+
             final previewingPhoneOnDesktop = !desktopMode &&
-                !_isNativeMobilePlatform &&
+                isDesktopOS && 
                 rootMedia.size.width > 600;
             const referencePhoneSize = Size(430, 932);
             final previewHeight = previewingPhoneOnDesktop

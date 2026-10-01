@@ -573,6 +573,7 @@ class _GameStyleBackdrop extends StatelessWidget {
     this.embedded = false,
     this.overlayColor = const Color(0x42000000),
     this.lightTheme = false,
+    this.background,
   });
 
   final NovelGameController controller;
@@ -580,6 +581,8 @@ class _GameStyleBackdrop extends StatelessWidget {
   final bool embedded;
   final Color overlayColor;
   final bool lightTheme;
+  // 可选：自定义全屏背景（画在 SafeArea 之外，会铺满整个屏幕）
+  final Decoration? background;
 
   @override
   Widget build(BuildContext context) {
@@ -593,6 +596,8 @@ class _GameStyleBackdrop extends StatelessWidget {
       children: <Widget>[
         if (lightTheme) ...<Widget>[
           const ColoredBox(color: _archiveBackground),
+        ] else if (background != null) ...<Widget>[
+          DecoratedBox(decoration: background!),
         ] else ...<Widget>[
           const DecoratedBox(
             decoration: BoxDecoration(

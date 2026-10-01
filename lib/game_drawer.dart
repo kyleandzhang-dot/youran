@@ -1154,7 +1154,7 @@ class _DrawerHeader extends StatelessWidget {
             ),
           ),
           
-          // 修改点：去掉了 `&& isMine`，只要登录了就全局显示签到按钮
+          // 签到按钮仅在登录后显示，未登录时完全隐藏
           if (isLoggedIn) ...[
             SizedBox(width: compactLandscape ? 5 : 8),
             _HeaderCheckinButton(

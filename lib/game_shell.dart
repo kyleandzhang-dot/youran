@@ -1051,7 +1051,9 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final drawer = GameDrawer(
+    // 同一套导航：剧情中走 Scaffold.drawer，没选世界时固定为不透明侧栏。
+    GameDrawer buildDrawer(GameDrawerPresentation presentation) => GameDrawer(
+      presentation: presentation,
       games: _games,
       selectedGameIndex: _selectedGameIndex,
       onGameSelected: _onGameSelected,
@@ -1110,14 +1112,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
               ),
               Align(
                 alignment: Alignment.centerLeft,
-                child: SizedBox(
-                  width: math.min(
-                    MediaQuery.sizeOf(context).width * 0.82,
-                    300.0,
-                  ),
-                  height: double.infinity,
-                  child: drawer,
-                ),
+                // 不再外包 SizedBox，宽度和不透明深色底由 sidebar 自己决定
+                child: buildDrawer(GameDrawerPresentation.sidebar),
               ),
             ],
           ),
@@ -1147,7 +1143,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         resizeToAvoidBottomInset: widget.resizeToAvoidBottomInset,
         backgroundColor: widget.backgroundColor,
         drawerScrimColor: Colors.black.withOpacity(.78),
-        drawer: drawer,
+        drawer: buildDrawer(GameDrawerPresentation.drawer),
         body: pageBody,
       ),
     );

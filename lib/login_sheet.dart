@@ -81,6 +81,9 @@ class _LoginSheetState extends State<LoginSheet> {
   static const String _backgroundAsset =
       'assets/images/login_background.png';
 
+  /// 是否显示背景图。暂时关闭（白色背景）；想恢复背景图时改为 true。
+  static const bool _showBackgroundImage = false;
+
   static const Color _accent =
       Color.fromARGB(255, 129, 246, 112);
   static const Color _ink = Color(0xFF273026);
@@ -386,14 +389,17 @@ AI 生成内容仅供娱乐，我们不对内容的准确性、完整性或适�
       body: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          const _LoginBackground(
-            asset: _backgroundAsset,
-          ),
+          if (_showBackgroundImage)
+            const _LoginBackground(
+              asset: _backgroundAsset,
+            )
+          else
+            const ColoredBox(color: Colors.white),
 
           // 只做极轻的统一提亮，不给页面再盖一层“白卡片”。
           IgnorePointer(
             child: Container(
-              color: Colors.white.withOpacity(.08),
+              color: Colors.white.withOpacity(_showBackgroundImage ? .08 : 0),
             ),
           ),
 
