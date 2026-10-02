@@ -4,10 +4,13 @@
 // App 冷启动时使用 refresh token 恢复登录状态。
 // ApiClient 是全项目唯一的内存 access token 来源。
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
 import '../api/auth_api.dart';
+import 'auth_redirect.dart';
 import 'token_storage.dart';
 
 class UserSession {
@@ -49,6 +52,13 @@ class SessionManager {
   static Future<void> expireSession() async {
     _sessionExpiredNoticePending = true;
     await logout();
+  }
+
+  /// 运行中 refresh 被服务端明确拒绝时：先清会话，再统一回到登录页。
+  /// 只用于 _refreshAccessTokenInternal；restore()（冷启动）由 _StartupGate 自己弹登录页。
+  static Future<void> _expireAndRedirect() async {
+    await expireSession();
+    unawaited(AuthRedirect.go(expire: false)); // 已经 expire 过，不重复
   }
 
   /// 登录成功后调用。
@@ -97,7 +107,7 @@ class SessionManager {
   static Future<String?> _refreshAccessTokenInternal() async {
     final refreshToken = await TokenStorage.readRefreshToken();
     if (refreshToken == null || refreshToken.trim().isEmpty) {
-      await expireSession();
+      await _expireAndRedirect();
       return null;
     }
 
@@ -116,7 +126,7 @@ class SessionManager {
     } on ApiException catch (error) {
       // 只有明确的凭证失效才清空本地会话；5xx / 临时网络问题不误登出。
       if (_isCredentialRejected(error.statusCode)) {
-        await expireSession();
+        await _expireAndRedirect();
         return null;
       }
       rethrow;

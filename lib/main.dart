@@ -10,6 +10,7 @@ import 'features/novel/novel.dart';
 import 'game_shell.dart';
 import 'services/session_manager.dart';
 import 'services/depth_service.dart';
+import 'services/auth_redirect.dart';
 import 'login_sheet.dart'; // 引入登录面板组件
 
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -47,16 +48,25 @@ final NovelRuntime novelRuntime = NovelRuntime(
   tokenProvider: () => ApiClient.instance.accessToken,
   userIdProvider: () => ApiClient.instance.userId,
   tokenRefresher: SessionManager.refreshAccessToken,
-  onKicked: _handleForcedLogout,
+  onKicked: () => _handleForcedLogout(),
   endpoints: _novelEndpoints,
   fallbackBackgroundAsset: 'assets/images/home_background.jpg',
 );
 
-Future<void> _handleForcedLogout() async {
+/// 统一的“回到登录页”入口。
+/// - 接口 401 且 refresh 被服务端拒绝（SessionManager）
+/// - WebSocket 被踢下线（NovelRuntime.onKicked）
+/// - 用户主动退出登录（GameShell._logout，message: ''，expire: false）
+Future<void> _handleForcedLogout({
+  String? message,
+  bool expire = true,
+}) async {
   if (_forcedLoginRouteActive) return;
   _forcedLoginRouteActive = true;
 
-  await SessionManager.expireSession();
+  // 清掉 GameShell 的 15 秒身份交接缓存，防止空 Shell 把已失效的旧 token 接回 ApiClient。
+  GameShell.clearAuthHandoff();
+  if (expire) await SessionManager.expireSession();
 
   final navigator = appNavigatorKey.currentState;
   if (navigator == null) {
@@ -66,9 +76,9 @@ Future<void> _handleForcedLogout() async {
 
   navigator.pushAndRemoveUntil<void>(
     MaterialPageRoute<void>(
-      builder: (_) => const _StartupGate(
+      builder: (_) => _StartupGate(
         forceLogin: true,
-        loginMessage: '身份已过期，请重新登录',
+        loginMessage: message ?? '身份已过期，请重新登录',
       ),
     ),
     (route) => false,
@@ -77,6 +87,8 @@ Future<void> _handleForcedLogout() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  AuthRedirect.register(_handleForcedLogout);
 
   debugPrint('HTTP API：${ApiClient.baseUrl}');
   debugPrint('WebSocket：${ApiClient.webSocketBaseUrl}');

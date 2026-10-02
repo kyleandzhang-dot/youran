@@ -15,6 +15,7 @@ import 'features/novel/novel_socket_service.dart';
 import 'login_sheet.dart';
 import 'mine_dialogs.dart';
 import 'scenario_edit_page.dart';
+import 'services/auth_redirect.dart';
 import 'services/session_manager.dart';
 import 'share_world_page.dart';
 
@@ -44,6 +45,9 @@ class GameShell extends StatefulWidget {
   final bool autoOpenDrawer;
   final Color backgroundColor;
   final bool resizeToAvoidBottomInset;
+
+  /// 强制登出时清掉跨路由的短期身份交接，避免旧 token 被新 Shell 接回。
+  static void clearAuthHandoff() => _GameShellState._clearHandoffStatics();
 
   @override
   State<GameShell> createState() => _GameShellState();
@@ -159,11 +163,13 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     _routeAuthCapturedAt = DateTime.now();
   }
 
-  void _clearRouteAuthHandoff() {
+  static void _clearHandoffStatics() {
     _routeAuthToken = '';
     _routeAuthUserId = '';
     _routeAuthCapturedAt = null;
   }
+
+  void _clearRouteAuthHandoff() => _clearHandoffStatics();
 
   bool _restoreRouteAuthHandoffIfNeeded() {
     final currentToken = ApiClient.instance.accessToken?.trim() ?? '';
@@ -1000,12 +1006,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     ApiClient.instance.userId = null;
     if (!mounted) return;
 
-    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => const GameShellPage(autoOpenDrawer: true),
-      ),
-      (route) => false,
-    );
+    // 主动退出：直接回到登录页，不提示“身份已过期”。
+    await AuthRedirect.go(message: '', expire: false);
   }
 
   void _openLoginSheet() {

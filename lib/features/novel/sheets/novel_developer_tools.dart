@@ -191,6 +191,18 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
     );
   }
 
+  Future<void> _openWorldMapBoardPreview() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final navigator = Navigator.of(context);
+    navigator.pop();
+    await Future<void>.delayed(const Duration(milliseconds: 280));
+    await navigator.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const _WorldMapBoardPreviewPage(),
+      ),
+    );
+  }
+
   Future<void> _testGeneratedOpponent() async {
     final submit = actions.testGeneratedOpponent;
     final name = _opponentNameController.text.trim();
@@ -1026,8 +1038,14 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(
                   title: '世界地图',
-                  subtitle: '四个场景填充斜角地图格；白线分隔并随机分布',
+                  subtitle: '正式世界地图预览：大区域与场景板块',
                   onTap: () => _openPreview(actions.previewWorldMap),
+                ),
+                _DeveloperPreviewDivider(),
+                _DeveloperPreviewRow(
+                  title: '世界地图板块案例',
+                  subtitle: '乌坦城、黑岩城、魔兽山脉、云岚宗；每个区域内显示二级场景',
+                  onTap: _openWorldMapBoardPreview,
                 ),
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(
@@ -1331,6 +1349,539 @@ class _DeveloperPreviewRow extends StatelessWidget {
       ),
     );
   }
+}
+
+// ============================================================================
+// 世界地图板块预览
+//
+// 这是开发者设置里的本地视觉案例，不写入存档，也不依赖后端场景数据。
+// 它专门展示正式地图要采用的空间层级：
+//   世界大画布 -> 多个大场景板块 -> 每个板块内的二级场景。
+// 第三级及更小的场景不在这里铺开，进入具体探索场景后再处理。
+// ============================================================================
+
+class _WorldMapBoardPreviewPage extends StatefulWidget {
+  const _WorldMapBoardPreviewPage();
+
+  @override
+  State<_WorldMapBoardPreviewPage> createState() =>
+      _WorldMapBoardPreviewPageState();
+}
+
+class _WorldMapBoardPreviewPageState
+    extends State<_WorldMapBoardPreviewPage> {
+  final TransformationController _transformationController =
+      TransformationController();
+
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    super.dispose();
+  }
+
+  void _resetViewport() {
+    _transformationController.value = Matrix4.identity();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const canvasSize = Size(1840, 1240);
+    final regions = <_WorldMapRegionDemoData>[
+      _WorldMapRegionDemoData(
+        name: '乌坦城',
+        subtitle: '城市区域 · 生活与剧情中心',
+        left: 72,
+        top: 82,
+        width: 790,
+        height: 470,
+        palette: _WorldMapPalette.city,
+        children: const <_WorldMapChildDemoData>[
+          _WorldMapChildDemoData('萧家大厅', .12, .43, Icons.account_balance_rounded),
+          _WorldMapChildDemoData('萧家后院', .52, .66, Icons.park_rounded),
+          _WorldMapChildDemoData('乌坦城坊市', .68, .24, Icons.storefront_rounded),
+        ],
+      ),
+      _WorldMapRegionDemoData(
+        name: '黑岩城',
+        subtitle: '城邦区域 · 交易与势力交汇',
+        left: 978,
+        top: 82,
+        width: 790,
+        height: 470,
+        palette: _WorldMapPalette.cityDark,
+        children: const <_WorldMapChildDemoData>[
+          _WorldMapChildDemoData('城主府', .16, .28, Icons.castle_rounded),
+          _WorldMapChildDemoData('黑市', .58, .62, Icons.storefront_rounded),
+        ],
+      ),
+      _WorldMapRegionDemoData(
+        name: '魔兽山脉',
+        subtitle: '野外区域 · 山林与危险路线',
+        left: 72,
+        top: 688,
+        width: 790,
+        height: 470,
+        palette: _WorldMapPalette.wilderness,
+        children: const <_WorldMapChildDemoData>[
+          _WorldMapChildDemoData('山脚', .16, .60, Icons.terrain_rounded),
+          _WorldMapChildDemoData('密林入口', .60, .25, Icons.park_rounded),
+        ],
+      ),
+      _WorldMapRegionDemoData(
+        name: '云岚宗',
+        subtitle: '宗门区域 · 山门与外门路线',
+        left: 978,
+        top: 688,
+        width: 790,
+        height: 470,
+        palette: _WorldMapPalette.mountain,
+        children: const <_WorldMapChildDemoData>[
+          _WorldMapChildDemoData('山门', .18, .30, Icons.account_balance_rounded),
+          _WorldMapChildDemoData('外门区域', .58, .64, Icons.account_balance_rounded),
+        ],
+      ),
+    ];
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF111716),
+      appBar: AppBar(
+        title: const Text('世界地图板块案例'),
+        backgroundColor: const Color(0xFF111716),
+        foregroundColor: AppColors.textOnDark,
+        actions: <Widget>[
+          IconButton(
+            tooltip: '重置视角',
+            onPressed: _resetViewport,
+            icon: const Icon(Icons.center_focus_strong_rounded),
+          ),
+        ],
+      ),
+      body: Stack(
+        children: <Widget>[
+          InteractiveViewer(
+            transformationController: _transformationController,
+            minScale: .32,
+            maxScale: 2.8,
+            boundaryMargin: const EdgeInsets.all(420),
+            constrained: false,
+            child: SizedBox(
+              width: canvasSize.width,
+              height: canvasSize.height,
+              child: Stack(
+                children: <Widget>[
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _WorldMapCanvasPainter(),
+                    ),
+                  ),
+                  for (final region in regions)
+                    Positioned(
+                      left: region.left,
+                      top: region.top,
+                      width: region.width,
+                      height: region.height,
+                      child: _WorldMapRegionBoard(
+                        data: region,
+                        onChildTap: (child) {
+                          ScaffoldMessenger.of(context)
+                            ..hideCurrentSnackBar()
+                            ..showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  '${region.name} · ${child.name}：这是二级场景入口，进入后加载独立探索地图。',
+                                ),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            top: 14,
+            child: IgnorePointer(
+              child: _WorldMapHintCard(
+                text: '拖动查看世界地图 · 双指或滚轮缩放 · 当前展示两级：大区域 + 重要二级场景',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorldMapRegionBoard extends StatelessWidget {
+  const _WorldMapRegionBoard({
+    required this.data,
+    required this.onChildTap,
+  });
+
+  final _WorldMapRegionDemoData data;
+  final ValueChanged<_WorldMapChildDemoData> onChildTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withOpacity(.35),
+            blurRadius: 28,
+            offset: const Offset(0, 16),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: Stack(
+          children: <Widget>[
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _WorldRegionTerrainPainter(palette: data.palette),
+              ),
+            ),
+            Positioned(
+              left: 26,
+              top: 22,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    data.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 30,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.2,
+                      shadows: <Shadow>[
+                        Shadow(color: Colors.black54, blurRadius: 8),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    data.subtitle,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.78),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            for (final child in data.children)
+              Positioned(
+                left: child.x * (data.width - 210),
+                top: 116 + child.y * (data.height - 190),
+                child: _WorldMapChildTile(
+                  data: child,
+                  onTap: () => onChildTap(child),
+                ),
+              ),
+            Positioned(
+              right: 22,
+              bottom: 18,
+              child: Text(
+                '二级场景 ${data.children.length} 个',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.70),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WorldMapChildTile extends StatelessWidget {
+  const _WorldMapChildTile({
+    required this.data,
+    required this.onTap,
+  });
+
+  final _WorldMapChildDemoData data;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          width: 190,
+          height: 82,
+          decoration: BoxDecoration(
+            color: const Color(0xDD17201D),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withOpacity(.28)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withOpacity(.30),
+                blurRadius: 12,
+                offset: const Offset(0, 7),
+              ),
+            ],
+          ),
+          child: Row(
+            children: <Widget>[
+              const SizedBox(width: 12),
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDFC79D).withOpacity(.18),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFE6D2A7).withOpacity(.55)),
+                ),
+                child: Icon(data.icon, color: const Color(0xFFF0DDB5), size: 22),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      data.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '进入探索',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.62),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(right: 10),
+                child: Icon(Icons.chevron_right_rounded, color: Colors.white54, size: 18),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorldMapHintCard extends StatelessWidget {
+  const _WorldMapHintCard({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xE617201D),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withOpacity(.14)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+          child: Text(
+            text,
+            style: TextStyle(
+              color: Colors.white.withOpacity(.86),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorldMapCanvasPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final background = Paint()..color = const Color(0xFF101816);
+    canvas.drawRect(Offset.zero & size, background);
+
+    final grid = Paint()
+      ..color = Colors.white.withOpacity(.025)
+      ..strokeWidth = 1;
+    for (var x = 0.0; x <= size.width; x += 80) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
+    }
+    for (var y = 0.0; y <= size.height; y += 80) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+
+    final route = Paint()
+      ..color = const Color(0xFFB7A276).withOpacity(.22)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 10
+      ..strokeCap = StrokeCap.round;
+    final path = Path()
+      ..moveTo(850, 305)
+      ..cubicTo(915, 260, 948, 260, 1014, 310)
+      ..moveTo(470, 560)
+      ..cubicTo(520, 625, 700, 645, 860, 700)
+      ..moveTo(1100, 560)
+      ..cubicTo(1080, 625, 1030, 660, 1012, 712);
+    canvas.drawPath(path, route);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _WorldRegionTerrainPainter extends CustomPainter {
+  const _WorldRegionTerrainPainter({required this.palette});
+
+  final _WorldMapPalette palette;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final background = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: <Color>[palette.top, palette.bottom],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, background);
+
+    final contour = Paint()
+      ..color = Colors.white.withOpacity(.055)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    for (var i = 0; i < 6; i++) {
+      final rect = Rect.fromLTWH(
+        50 + i * 28,
+        130 + i * 18,
+        size.width - 150 - i * 40,
+        size.height - 210 - i * 26,
+      );
+      canvas.drawOval(rect, contour);
+    }
+
+    final road = Paint()
+      ..color = palette.road.withOpacity(.60)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+    final roadPath = Path()
+      ..moveTo(size.width * .12, size.height * .82)
+      ..cubicTo(
+        size.width * .30,
+        size.height * .60,
+        size.width * .55,
+        size.height * .70,
+        size.width * .88,
+        size.height * .28,
+      );
+    canvas.drawPath(roadPath, road);
+
+    final terrain = Paint()..color = palette.accent.withOpacity(.12);
+    for (var i = 0; i < 12; i++) {
+      final x = ((i * 97) % 620).toDouble() + 70;
+      final y = ((i * 53) % 250).toDouble() + 150;
+      canvas.drawCircle(Offset(x, y), 18 + (i % 3) * 8, terrain);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _WorldRegionTerrainPainter oldDelegate) =>
+      oldDelegate.palette != palette;
+}
+
+class _WorldMapRegionDemoData {
+  const _WorldMapRegionDemoData({
+    required this.name,
+    required this.subtitle,
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+    required this.palette,
+    required this.children,
+  });
+
+  final String name;
+  final String subtitle;
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+  final _WorldMapPalette palette;
+  final List<_WorldMapChildDemoData> children;
+}
+
+class _WorldMapChildDemoData {
+  const _WorldMapChildDemoData(this.name, this.x, this.y, this.icon);
+
+  final String name;
+  final double x;
+  final double y;
+  final IconData icon;
+}
+
+class _WorldMapPalette {
+  const _WorldMapPalette({
+    required this.top,
+    required this.bottom,
+    required this.accent,
+    required this.road,
+  });
+
+  final Color top;
+  final Color bottom;
+  final Color accent;
+  final Color road;
+
+  static const city = _WorldMapPalette(
+    top: Color(0xFF536B62),
+    bottom: Color(0xFF263F37),
+    accent: Color(0xFFE2C98D),
+    road: Color(0xFFD2BA85),
+  );
+  static const cityDark = _WorldMapPalette(
+    top: Color(0xFF515E68),
+    bottom: Color(0xFF27333E),
+    accent: Color(0xFFB7C8D8),
+    road: Color(0xFFD1B57D),
+  );
+  static const wilderness = _WorldMapPalette(
+    top: Color(0xFF3F664F),
+    bottom: Color(0xFF1E372B),
+    accent: Color(0xFFA8C77F),
+    road: Color(0xFFC9B378),
+  );
+  static const mountain = _WorldMapPalette(
+    top: Color(0xFF59606B),
+    bottom: Color(0xFF292E3A),
+    accent: Color(0xFFE1D7B4),
+    road: Color(0xFFD8BC87),
+  );
 }
 
 // ============================================================================

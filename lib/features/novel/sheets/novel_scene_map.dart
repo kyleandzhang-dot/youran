@@ -135,6 +135,7 @@ class _WorldMapEntry {
     required this.unlocked,
     this.current = false,
     this.node,
+    this.children = const <_WorldMapEntry>[],
   });
 
   final String id;
@@ -143,6 +144,7 @@ class _WorldMapEntry {
   final bool unlocked;
   final bool current;
   final NovelSceneMapNode? node;
+  final List<_WorldMapEntry> children;
 
   bool get showsImage => imageUrl.trim().isNotEmpty;
 }
@@ -354,10 +356,13 @@ _WorldMapOrganicLayout _buildOrganicMapLayout({
   required int count,
   required int seed,
   required bool desktop,
+  List<double>? areaWeights,
+  double sizeScale = 1.0,
+  double seamFactor = .034,
 }) {
-  final tileWidth = desktop ? 340.0 : 238.0;
-  final tileHeight = desktop ? 300.0 : 216.0;
-  final padding = desktop ? 360.0 : 250.0;
+  final tileWidth = (desktop ? 340.0 : 238.0) * sizeScale;
+  final tileHeight = (desktop ? 300.0 : 216.0) * sizeScale;
+  final padding = (desktop ? 360.0 : 250.0) * sizeScale;
 
   if (count <= 0) {
     return const _WorldMapOrganicLayout(
@@ -371,14 +376,20 @@ _WorldMapOrganicLayout _buildOrganicMapLayout({
   final sites = _packedTerrainSites(count, tileWidth, tileHeight, rng);
   final sx = tileWidth * .86;
   final sy = tileHeight * .74;
-  final gap = tileWidth * .034; // 板块之间的缝宽（世界坐标）。想更宽/更窄改这里。
-  // 加权 Voronoi（power diagram）：每块板有自己的"体量"，边界向体量小的一边偏移，
-  // 板块大小就不再千篇一律。仍然是凸多边形分割，互不重叠。
+  final gap = tileWidth * seamFactor;
+  // 加权 Voronoi（power diagram）：子场景越多的父板块拥有更大的权重，
+  // 因此会获得更多地形面积；随机项只保留少量自然起伏。
   final weights = <double>[
     for (var i = 0; i < sites.length; i++)
       (math.Random(seed + i * 104729).nextDouble() * 2 - 1) *
-          (sx * .36) *
-          (sx * .36),
+              (sx * .18) *
+              (sx * .18) +
+          (((areaWeights != null && i < areaWeights.length)
+                      ? areaWeights[i]
+                      : 1.0) -
+                  1.0) *
+              (sx * .30) *
+              (sx * .30),
   ];
   final waves = _buildWarpWaves(math.Random(seed + 12345), tileWidth);
 
@@ -500,30 +511,65 @@ Path _buildOrganicPlatePath(List<Offset> points) {
 }
 
 class _OrganicPlateClipper extends CustomClipper<Path> {
-  const _OrganicPlateClipper(this.points);
+  const _OrganicPlateClipper(this.points, {this.smooth = true});
 
   final List<Offset> points;
+  final bool smooth;
 
   @override
-  Path getClip(Size size) => _buildOrganicPlatePath(points);
+  Path getClip(Size size) =>
+      smooth ? _buildOrganicPlatePath(points) : _buildPolygonPath(points);
 
   @override
   bool shouldReclip(covariant _OrganicPlateClipper oldClipper) =>
-      oldClipper.points != points;
+      oldClipper.points != points || oldClipper.smooth != smooth;
+}
+
+/// 子场景使用直线多边形边界。
+///
+/// 父区域可以用圆润的曲线，但子区域必须使用同一组 Voronoi 边界的原始
+/// 线段。每个子区域单独做曲线平滑会把共享边界向内缩，最终就会产生黑色
+/// 缝隙和重复露出的父区域。
+Path _buildPolygonPath(List<Offset> points) {
+  final path = Path();
+  if (points.length < 3) return path;
+  path.moveTo(points.first.dx, points.first.dy);
+  for (var i = 1; i < points.length; i++) {
+    path.lineTo(points[i].dx, points[i].dy);
+  }
+  path.close();
+  return path;
 }
 
 class _OrganicPlateBorderPainter extends CustomPainter {
   const _OrganicPlateBorderPainter({
     required this.points,
     required this.current,
+    this.nested = false,
   });
 
   final List<Offset> points;
   final bool current;
+  final bool nested;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = _buildOrganicPlatePath(points);
+    final path = nested ? _buildPolygonPath(points) : _buildOrganicPlatePath(points);
+
+    // 子场景共享边界，不能再画父区域那种黑色宽描边和阴影，否则相邻
+    // 单元之间会看成一条很粗的黑缝。
+    if (nested) {
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.15
+          ..strokeJoin = StrokeJoin.miter
+          ..color = Colors.white.withOpacity(current ? .92 : .72),
+      );
+      return;
+    }
+
     canvas.drawShadow(
       path,
       Colors.black.withOpacity(.46),
@@ -552,11 +598,14 @@ class _OrganicPlateBorderPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _OrganicPlateBorderPainter oldDelegate) =>
-      oldDelegate.points != points || oldDelegate.current != current;
+      oldDelegate.points != points ||
+      oldDelegate.current != current ||
+      oldDelegate.nested != nested;
 
   @override
   bool hitTest(Offset position) =>
-      _buildOrganicPlatePath(points).contains(position);
+      (nested ? _buildPolygonPath(points) : _buildOrganicPlatePath(points))
+          .contains(position);
 }
 // ----------------------------------------------------------------------------
 
@@ -594,14 +643,34 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
   _WorldMapOrganicLayout? _layoutCache;
   String _layoutKey = '';
 
-  _WorldMapOrganicLayout _layoutFor(int count, bool desktop) {
-    final key = '$count|$desktop|$_layoutSeed';
+  double _regionAreaScale(int childCount) {
+    // 父区域保留最低尺寸；子场景越多，父板块越有空间，世界画布也会随之增长。
+    final extra = math.max(0, childCount - 3);
+    return (1.0 + math.sqrt(extra / 5.0) * .28).clamp(1.0, 1.72).toDouble();
+  }
+
+  _WorldMapOrganicLayout _layoutFor(
+    int count,
+    bool desktop,
+    List<int> childCounts,
+  ) {
+    final areaWeights = <double>[
+      for (var index = 0; index < count; index++)
+        _regionAreaScale(index < childCounts.length ? childCounts[index] : 0),
+    ];
+    final maxChildren = childCounts.isEmpty
+        ? 0
+        : childCounts.reduce(math.max);
+    final globalScale = _regionAreaScale(maxChildren);
+    final key = '$count|$desktop|${childCounts.join(',')}|$globalScale|$_layoutSeed';
     if (key != _layoutKey || _layoutCache == null) {
       _layoutKey = key;
       _layoutCache = _buildOrganicMapLayout(
         count: count,
         seed: _layoutSeed,
         desktop: desktop,
+        areaWeights: areaWeights,
+        sizeScale: globalScale,
       );
     }
     return _layoutCache!;
@@ -674,16 +743,67 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
 
   List<_WorldMapEntry> _entries(NovelSceneMapData map) {
     if (widget.developerPreview) {
+      const names = <String>['乌坦城', '黑岩城', '魔兽山脉', '云岚宗'];
+      const childNames = <List<String>>[
+        <String>[
+          '萧家大厅',
+          '萧家后院',
+          '乌坦城坊市',
+          '萧家演武场',
+          '家族议事厅',
+          '萧家药房',
+          '东院长廊',
+          '城门街区',
+        ],
+        <String>[
+          '城主府',
+          '黑市',
+          '城门广场',
+          '炼药师公会',
+          '商会街',
+          '佣兵大厅',
+          '北城墙',
+        ],
+        <String>[
+          '山脚',
+          '密林入口',
+          '溪谷',
+          '采药坡',
+          '魔兽巢穴',
+          '断崖营地',
+          '古树区',
+          '山中石台',
+          '猎人营地',
+        ],
+        <String>[
+          '山门',
+          '外门区域',
+          '登云梯',
+          '练功台',
+          '藏书阁',
+          '长老峰',
+          '云海栈道',
+        ],
+      ];
       return <_WorldMapEntry>[
-        for (var index = 0;
-            index < _developerWorldMapScenes.length;
-            index++)
+        for (var index = 0; index < names.length; index++)
           _WorldMapEntry(
-            id: _developerWorldMapScenes[index].id,
-            name: _developerWorldMapScenes[index].name,
+            id: 'preview-region-$index',
+            name: names[index],
             imageUrl: _developerWorldMapScenes[index].imageUrl,
             unlocked: true,
             current: index == 0,
+            children: <_WorldMapEntry>[
+              for (var childIndex = 0;
+                  childIndex < childNames[index].length;
+                  childIndex++)
+                _WorldMapEntry(
+                  id: 'preview-region-$index-child-$childIndex',
+                  name: childNames[index][childIndex],
+                  imageUrl: '',
+                  unlocked: true,
+                ),
+            ],
           ),
       ];
     }
@@ -692,39 +812,74 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
     final knownMajorScenes = map.majorScenes.isNotEmpty
         ? map.majorScenes
         : map.targets.where((node) => node.isMajorScene).toList(growable: false);
+    final majorById = <String, NovelSceneMapNode>{
+      for (final node in knownMajorScenes)
+        if (node.isMajorScene && node.sceneId.trim().isNotEmpty)
+          node.sceneId.trim(): node,
+    };
+
     final parentMajor = rawCurrent.parentSceneId.isEmpty
         ? null
-        : knownMajorScenes
-            .where((node) => node.sceneId == rawCurrent.parentSceneId)
-            .firstOrNull;
-    final current = rawCurrent.isMajorScene ? rawCurrent : (parentMajor ?? rawCurrent);
-    final currentName = current.name.trim().isNotEmpty
-        ? current.name.trim()
-        : controller.locationTitle.trim();
-    final currentImage = current.imageUrl.trim();
-    
-    return <_WorldMapEntry>[
-      _WorldMapEntry(
-        id: current.sceneId.trim().isEmpty
-            ? 'current-scene'
-            : current.sceneId.trim(),
-        name: currentName.isEmpty ? '当前位置' : currentName,
-        imageUrl: currentImage,
-        unlocked: true,
-        current: true,
-        node: current,
-      ),
-      for (final node in knownMajorScenes.where(
-        (node) => node.sceneId != current.sceneId && node.isMajorScene,
-      ))
+        : majorById[rawCurrent.parentSceneId.trim()];
+    final currentRegion = rawCurrent.isMajorScene
+        ? rawCurrent
+        : (parentMajor ?? rawCurrent);
+    if (currentRegion.sceneId.trim().isNotEmpty) {
+      majorById[currentRegion.sceneId.trim()] = currentRegion;
+    }
+
+    final childrenByParent = <String, List<NovelSceneMapNode>>{};
+    for (final node in map.targets) {
+      final parentId = node.parentSceneId.trim();
+      if (node.isMajorScene || parentId.isEmpty) continue;
+      childrenByParent.putIfAbsent(parentId, () => <NovelSceneMapNode>[]).add(node);
+    }
+    if (!rawCurrent.isMajorScene && rawCurrent.sceneId.trim().isNotEmpty) {
+      final parentId = rawCurrent.parentSceneId.trim();
+      if (parentId.isNotEmpty &&
+          !(childrenByParent[parentId] ?? const <NovelSceneMapNode>[])
+              .any((node) => node.sceneId == rawCurrent.sceneId)) {
+        childrenByParent
+            .putIfAbsent(parentId, () => <NovelSceneMapNode>[])
+            .add(rawCurrent);
+      }
+    }
+
+    final entries = <_WorldMapEntry>[];
+    for (final node in majorById.values) {
+      final regionId = node.sceneId.trim();
+      final children = <_WorldMapEntry>[
+        for (final child in childrenByParent[regionId] ?? const <NovelSceneMapNode>[])
+          _WorldMapEntry(
+            id: child.sceneId,
+            name: child.name,
+            imageUrl: child.imageUrl,
+            unlocked: !child.isLocked,
+            current: child.sceneId == rawCurrent.sceneId,
+            node: child,
+          ),
+      ];
+      children.sort((a, b) {
+        if (a.current != b.current) return a.current ? -1 : 1;
+        return a.name.compareTo(b.name);
+      });
+      entries.add(
         _WorldMapEntry(
-          id: node.sceneId,
+          id: regionId,
           name: node.name,
           imageUrl: node.imageUrl,
           unlocked: !node.isLocked,
+          current: regionId == currentRegion.sceneId,
           node: node,
+          children: children,
         ),
-    ];
+      );
+    }
+    entries.sort((a, b) {
+      if (a.current != b.current) return a.current ? -1 : 1;
+      return a.name.compareTo(b.name);
+    });
+    return entries;
   }
 
   Future<void> _onEntryTap(_WorldMapEntry entry) async {
@@ -778,7 +933,6 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
         final loading = !widget.developerPreview && controller.isSceneMapLoading;
 
         return Scaffold(
-          // 背景使用深空灰暗色调
           backgroundColor: const Color(0xFF1E2128),
           body: Material(
             color: const Color(0xFF1E2128),
@@ -786,7 +940,6 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
               child: Stack(
                 fit: StackFit.expand,
                 children: <Widget>[
-                  // 深蓝灰渐变比纯黑更接近参考图的“未知世界”氛围。
                   const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: RadialGradient(
@@ -801,12 +954,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                       ),
                     ),
                   ),
-                 
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    bottom: 0,
+                  Positioned.fill(
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final isDesktop = controller.desktopMode;
@@ -814,8 +962,12 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                           _lastDesktopMode = isDesktop;
                           _isCameraInitialized = false;
                         }
-                        
-                        final mapLayout = _layoutFor(entries.length, isDesktop);
+
+                        final mapLayout = _layoutFor(
+          entries.length,
+          isDesktop,
+          <int>[for (final entry in entries) entry.children.length],
+        );
                         final canvasWidth = mapLayout.size.width;
                         final canvasHeight = mapLayout.size.height;
 
@@ -831,18 +983,20 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                                   mapLayout.contentBounds.height;
                           final initialScale = math
                               .min(widthScale, heightScale)
-                              .clamp(isDesktop ? .55 : .48,
-                                  isDesktop ? 1.0 : .92)
+                              .clamp(
+                                isDesktop ? .55 : .48,
+                                isDesktop ? 1.0 : .92,
+                              )
                               .toDouble();
-                          
-                          final dx = (constraints.maxWidth - canvasWidth * initialScale) / 2;
-                          final dy = (constraints.maxHeight - canvasHeight * initialScale) / 2;
+                          final dx =
+                              (constraints.maxWidth - canvasWidth * initialScale) / 2;
+                          final dy =
+                              (constraints.maxHeight - canvasHeight * initialScale) / 2;
                           _transformController.value = Matrix4.identity()
                             ..translate(dx, dy)
                             ..scale(initialScale);
                         }
 
-                        // 随机散布背景星点和“未知领域”
                         final bgRandom = math.Random(_layoutSeed + 999);
                         final unknownAreas = List.generate(
                           (entries.length * 2).clamp(4, 12).toInt(),
@@ -864,7 +1018,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                           onDoubleTap: _handleDoubleTap,
                           child: InteractiveViewer(
                             transformationController: _transformController,
-                            constrained: false, 
+                            constrained: false,
                             clipBehavior: Clip.none,
                             minScale: 0.3,
                             maxScale: 2.5,
@@ -895,8 +1049,6 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                                         ),
                                       ),
                                     ),
-
-                                  // 绘制零星的“未知领域”文字
                                   for (final pos in unknownAreas)
                                     Positioned(
                                       left: pos.dx,
@@ -910,8 +1062,6 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                                         ),
                                       ),
                                     ),
-
-                                  // 统一分割得到的地块会共享边缘，只留一条自然暗缝。
                                   for (var index = 0;
                                       index < entries.length;
                                       index++)
@@ -925,6 +1075,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                                         moving: _moving,
                                         points: mapLayout.plates[index].points,
                                         onTap: () => _onEntryTap(entries[index]),
+                                        onNestedTap: (entry) => _onEntryTap(entry),
                                       ),
                                     ),
                                 ],
@@ -935,7 +1086,6 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                       },
                     ),
                   ),
-
                   Positioned(
                     top: 0,
                     left: 0,
@@ -947,7 +1097,6 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                           : () => Navigator.of(context).pop(),
                     ),
                   ),
-                  
                   if (loading)
                     Positioned(
                       top: 16,
@@ -1018,6 +1167,16 @@ class _WorldMapPageHeader extends StatelessWidget {
                           ),
                         ),
                       ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      '世界地图',
+                      style: TextStyle(
+                        color: Color(0xFFE9E4D5),
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.6,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1093,12 +1252,14 @@ class _IrregularScenePlate extends StatefulWidget {
     required this.moving,
     required this.points,
     required this.onTap,
+    required this.onNestedTap,
   });
 
   final _WorldMapEntry entry;
   final bool moving;
   final List<Offset> points;
   final VoidCallback onTap;
+  final ValueChanged<_WorldMapEntry> onNestedTap;
 
   @override
   State<_IrregularScenePlate> createState() => _IrregularScenePlateState();
@@ -1214,6 +1375,20 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                     ),
                   ),
 
+                  if (entry.children.isNotEmpty)
+                    Positioned.fill(
+                      child: ClipPath(
+                        clipper: _OrganicPlateClipper(widget.points),
+                        child: _WorldMapNestedTerrain(
+                          entries: entry.children,
+                          parentPoints: widget.points,
+                          moving: widget.moving,
+                          onTap: widget.onNestedTap,
+                          seed: entry.id.hashCode,
+                        ),
+                      ),
+                    ),
+
                   // 自然暗缝、轻投影和当前位置高亮。
                   Positioned.fill(
                     child: CustomPaint(
@@ -1285,6 +1460,377 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                       ),
                     ),
                   ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+bool _pointInsidePolygon(Offset point, List<Offset> polygon) {
+  var inside = false;
+  for (var i = 0, j = polygon.length - 1;
+      i < polygon.length;
+      j = i++) {
+    final a = polygon[i];
+    final b = polygon[j];
+    final crosses = ((a.dy > point.dy) != (b.dy > point.dy)) &&
+        (point.dx <
+            (b.dx - a.dx) * (point.dy - a.dy) / (b.dy - a.dy) + a.dx);
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+Offset _polygonCentroid(List<Offset> polygon) {
+  if (polygon.isEmpty) return Offset.zero;
+  var x = 0.0;
+  var y = 0.0;
+  for (final point in polygon) {
+    x += point.dx;
+    y += point.dy;
+  }
+  return Offset(x / polygon.length, y / polygon.length);
+}
+
+Rect _polygonBounds(List<Offset> polygon) {
+  if (polygon.isEmpty) return Rect.zero;
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  for (final point in polygon) {
+    minX = math.min(minX, point.dx);
+    minY = math.min(minY, point.dy);
+    maxX = math.max(maxX, point.dx);
+    maxY = math.max(maxY, point.dy);
+  }
+  return Rect.fromLTRB(minX, minY, maxX, maxY);
+}
+
+List<Offset> _buildChildSites(
+  List<Offset> parent,
+  int count,
+  int seed,
+) {
+  if (count <= 1) return <Offset>[_polygonCentroid(parent)];
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  for (final point in parent) {
+    minX = math.min(minX, point.dx);
+    minY = math.min(minY, point.dy);
+    maxX = math.max(maxX, point.dx);
+    maxY = math.max(maxY, point.dy);
+  }
+  final rng = math.Random(seed);
+  final columns = math.max(2, math.sqrt(count).ceil());
+  final rows = math.max(2, (count / columns).ceil());
+  final minDistance = math.min(maxX - minX, maxY - minY) /
+      math.max(5.0, math.sqrt(count) * 2.6);
+  final sites = <Offset>[];
+
+  bool addCandidate(Offset candidate, double gap) {
+    if (!_pointInsidePolygon(candidate, parent)) return false;
+    if (sites.any((site) => (site - candidate).distance < gap)) return false;
+    sites.add(candidate);
+    return true;
+  }
+
+  // 先从均匀网格取点，再逐步放宽最小距离。这样子场景增加时仍会
+  // 保持一组稳定、互不重合的站位，不会因为补点失败而重复使用中心点。
+  for (var relaxation = 0; relaxation < 7 && sites.length < count; relaxation++) {
+    final gap = minDistance * math.pow(.58, relaxation).toDouble();
+    for (var row = 0; row < rows && sites.length < count; row++) {
+      for (var column = 0; column < columns && sites.length < count; column++) {
+        final jitterX = (rng.nextDouble() - .5) / columns * .46;
+        final jitterY = (rng.nextDouble() - .5) / rows * .46;
+        addCandidate(
+          Offset(
+            minX + (column + .5 + jitterX) / columns * (maxX - minX),
+            minY + (row + .5 + jitterY) / rows * (maxY - minY),
+          ),
+          gap,
+        );
+      }
+    }
+    for (var attempt = 0; sites.length < count && attempt < 700; attempt++) {
+      addCandidate(
+        Offset(
+          minX + rng.nextDouble() * (maxX - minX),
+          minY + rng.nextDouble() * (maxY - minY),
+        ),
+        gap,
+      );
+    }
+  }
+
+  final center = _polygonCentroid(parent);
+  // 极窄或极不规则的父区域也必须返回 count 个站位。这里使用黄金角
+  // 螺旋补点，并只接受父区域内且与已有点不重合的位置。
+  var fallbackAttempt = 0;
+  while (sites.length < count) {
+    final angle = fallbackAttempt * 2.399963229728653;
+    final radius = math.min(maxX - minX, maxY - minY) *
+        (.03 + (fallbackAttempt % (count + 3)) / (count + 3) * .42);
+    final candidate = Offset(
+      center.dx + math.cos(angle) * radius,
+      center.dy + math.sin(angle) * radius,
+    );
+    if (_pointInsidePolygon(candidate, parent) &&
+        addCandidate(candidate, math.max(0.001, minDistance * .02))) {
+      fallbackAttempt = 0;
+    } else {
+      fallbackAttempt++;
+    }
+    // 这只会在 count 极端大、父区域极端小时触发；允许非常小的
+    // 间隔也比重复站位更安全，重复站位会让某个 cell 退化成整块父区。
+    if (fallbackAttempt > 2000) {
+      final epsilon = math.max(0.001, math.min(maxX - minX, maxY - minY) * 1e-5);
+      sites.add(Offset(center.dx + sites.length * epsilon, center.dy));
+      fallbackAttempt = 0;
+    }
+  }
+  return sites;
+}
+
+List<Offset> _convexHull(List<Offset> points) {
+  if (points.length <= 3) return List<Offset>.from(points);
+  final sorted = List<Offset>.from(points)
+    ..sort((a, b) => a.dx == b.dx
+        ? a.dy.compareTo(b.dy)
+        : a.dx.compareTo(b.dx));
+
+  double cross(Offset o, Offset a, Offset b) =>
+      (a.dx - o.dx) * (b.dy - o.dy) -
+      (a.dy - o.dy) * (b.dx - o.dx);
+
+  final lower = <Offset>[];
+  for (final point in sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower.last, point) <= 0) {
+      lower.removeLast();
+    }
+    lower.add(point);
+  }
+  final upper = <Offset>[];
+  for (final point in sorted.reversed) {
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper.last, point) <= 0) {
+      upper.removeLast();
+    }
+    upper.add(point);
+  }
+  lower.removeLast();
+  upper.removeLast();
+  return <Offset>[...lower, ...upper];
+}
+
+List<List<Offset>> _partitionParentTerrain(
+  List<Offset> parent,
+  int count,
+  int seed,
+) {
+  if (parent.length < 3 || count <= 1) {
+    return <List<Offset>>[List<Offset>.from(parent)];
+  }
+  final sites = _buildChildSites(parent, count, seed);
+  final cells = <List<Offset>>[];
+  // 对凹形父区域直接做多边形半平面裁切会丢掉凹口中的离散部分，
+  // 于是某些 cell 会退化，旧代码再把它回退成整块 parent，造成图中
+  // 那些多余的大黑色区域。先在父区域凸包内完成完整 Voronoi 分割，
+  // 最外层 ClipPath 再把凸包外部分裁掉，整个父区域因此始终被无缝覆盖。
+  final container = _convexHull(parent);
+  for (var index = 0; index < sites.length; index++) {
+    var cell = List<Offset>.from(container);
+    for (var other = 0; other < sites.length; other++) {
+      if (index == other) continue;
+      final delta = sites[index] - sites[other];
+      final distance = delta.distance;
+      if (distance < .0001) continue;
+      final normal = delta / distance;
+      final midpoint = Offset.lerp(sites[index], sites[other], .5)!;
+      cell = _clipPolygonByHalfPlane(cell, midpoint, normal);
+      if (cell.length < 3) break;
+    }
+    // 站位来自父区域，且容器是凸多边形；正常情况下每个 cell 至少
+    // 有三点。不要回退为整个 parent，否则会覆盖其它子区域。
+    if (cell.length >= 3) cells.add(cell);
+  }
+  return cells;
+}
+
+class _WorldMapNestedTerrain extends StatelessWidget {
+  const _WorldMapNestedTerrain({
+    required this.entries,
+    required this.parentPoints,
+    required this.moving,
+    required this.onTap,
+    required this.seed,
+  });
+
+  final List<_WorldMapEntry> entries;
+  final List<Offset> parentPoints;
+  final bool moving;
+  final ValueChanged<_WorldMapEntry> onTap;
+  final int seed;
+
+  @override
+  Widget build(BuildContext context) {
+    if (entries.isEmpty || parentPoints.length < 3) {
+      return const SizedBox.shrink();
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        var maxX = 0.0;
+        var maxY = 0.0;
+        for (final point in parentPoints) {
+          maxX = math.max(maxX, point.dx);
+          maxY = math.max(maxY, point.dy);
+        }
+        final scaleX = maxX <= 0 ? 1.0 : constraints.maxWidth / maxX;
+        final scaleY = maxY <= 0 ? 1.0 : constraints.maxHeight / maxY;
+        final scaledParent = <Offset>[
+          for (final point in parentPoints)
+            Offset(point.dx * scaleX, point.dy * scaleY),
+        ];
+        final cells = _partitionParentTerrain(
+          scaledParent,
+          entries.length,
+          seed,
+        );
+        return Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            for (var index = 0;
+                index < entries.length && index < cells.length;
+                index++)
+              _WorldMapNestedTerrainTile(
+                entry: entries[index],
+                moving: moving,
+                points: cells[index],
+                onTap: () => onTap(entries[index]),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _WorldMapNestedTerrainTile extends StatelessWidget {
+  const _WorldMapNestedTerrainTile({
+    required this.entry,
+    required this.moving,
+    required this.points,
+    required this.onTap,
+  });
+
+  final _WorldMapEntry entry;
+  final bool moving;
+  final List<Offset> points;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = !entry.unlocked || moving;
+    final center = _polygonCentroid(points);
+    final bounds = _polygonBounds(points);
+    final labelWidth = math.max(48.0, math.min(180.0, bounds.width - 10.0));
+    final labelHeight = math.min(42.0, math.max(24.0, bounds.height * .28));
+    return Positioned.fill(
+      child: MouseRegion(
+        cursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
+        child: GestureDetector(
+          // 让 ClipPath 决定命中的 cell；opaque 会让每个 tile 覆盖整个
+          // 父区域，结果所有点击都落到最后一个子场景上。
+          behavior: HitTestBehavior.deferToChild,
+          onTap: disabled ? null : onTap,
+          child: Opacity(
+            opacity: entry.unlocked ? 1 : .34,
+            child: ClipPath(
+              // 这里禁止曲线平滑。所有子区域是同一张 Voronoi 分割图，
+              // 直线边界才能和相邻区域逐点重合、完全填满父区域。
+              clipper: _OrganicPlateClipper(points, smooth: false),
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  ColoredBox(
+                    color: entry.current
+                        ? const Color(0xB7799B81)
+                        : const Color(0xB03A4844),
+                  ),
+                  if (entry.showsImage)
+                    Opacity(
+                      opacity: .62,
+                      child: _WorldSceneImage(source: entry.imageUrl),
+                    ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: <Color>[Colors.transparent, Color(0xD9000000)],
+                      ),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _OrganicPlateBorderPainter(
+                        points: points,
+                        current: entry.current,
+                        nested: true,
+                      ),
+                    ),
+                  ),
+                  // 每个 tile 仍然占据同一个父区域以保证边界完全相接，
+                  // 但文字必须按当前 cell 的质心定位；旧版所有文字都在
+                  // 父区域中心，很多时候落在别的 cell 外面而被裁掉。
+                  Positioned(
+                    left: (center.dx - labelWidth / 2)
+                        .clamp(bounds.left, math.max(bounds.left, bounds.right - labelWidth))
+                        .toDouble(),
+                    top: (center.dy - labelHeight / 2)
+                        .clamp(bounds.top, math.max(bounds.top, bounds.bottom - labelHeight))
+                        .toDouble(),
+                    width: labelWidth,
+                    height: labelHeight,
+                    child: IgnorePointer(
+                      child: Center(
+                        child: Text(
+                          entry.name.isEmpty ? '未命名场景' : entry.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: entry.current
+                                ? const Color(0xFFFFF4D4)
+                                : const Color(0xFFE6E6E0),
+                            fontSize: math.min(13.0, math.max(10.0, bounds.width / 13.0)),
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .35,
+                            shadows: const <Shadow>[
+                              Shadow(
+                                color: Colors.black87,
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (!entry.unlocked)
+                    const Center(
+                      child: Icon(
+                        Icons.lock_outline_rounded,
+                        size: 18,
+                        color: Color(0xBFFFFFFF),
+                      ),
+                    ),
                 ],
               ),
             ),

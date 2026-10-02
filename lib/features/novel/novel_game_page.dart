@@ -64,7 +64,17 @@ class _NovelGamePageState extends State<NovelGamePage>
     Duration(seconds: 1),
     Duration(seconds: 2),
     Duration(seconds: 4),
+    Duration(seconds: 8),
   ];
+
+  // 自动重连没有次数上限：超出列表后固定使用最后一档（8 秒）间隔。
+  static Duration _recoveryDelay(int attempt) =>
+      attempt < _sceneRecoveryBackoff.length
+          ? _sceneRecoveryBackoff[attempt]
+          : _sceneRecoveryBackoff.last;
+
+  Timer? _initRetryTimer;
+  int _initRetryAttempt = 0;
   static const String _displayModePreferenceKey =
       'novel_display_mode_preference';
   static const bool _showLegacyLocationHud = true;
@@ -244,6 +254,16 @@ class _NovelGamePageState extends State<NovelGamePage>
       unawaited(controller.bgm.stop());
       return;
     }
+    if (state == AppLifecycleState.resumed &&
+        !controller.isInitialized &&
+        !controller.isInitializing &&
+        !controller.insufficientBalance &&
+        controller.lastError.isNotEmpty) {
+      _initRetryTimer?.cancel();
+      _initRetryTimer = null;
+      unawaited(_retryInitializeNow());
+      return;
+    }
     if (state == AppLifecycleState.resumed && controller.isInitialized) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !controller.isInitialized) return;
@@ -312,19 +332,13 @@ class _NovelGamePageState extends State<NovelGamePage>
   bool get _sceneRecoveryActive => _sceneRecoveryOriginalError.isNotEmpty;
 
   String get _sceneRecoveryStatusMessage {
-    final total = _sceneRecoveryBackoff.length;
-    if (_sceneRecoveryExhausted) {
-      return '场景自动重连失败，请返回首页后重试';
-    }
     if (_sceneRecoveryInFlight) {
-      final attempt = _sceneRecoveryAttempt.clamp(1, total);
-      return '场景连接异常，正在自动恢复（$attempt/$total）…';
+      return '网络连接异常，正在重新连接（第 $_sceneRecoveryAttempt 次）…';
     }
     if (_sceneRecoveryTimer != null) {
-      final nextAttempt = (_sceneRecoveryAttempt + 1).clamp(1, total);
-      return '场景连接异常，将自动重连（$nextAttempt/$total）…';
+      return '网络连接异常，即将自动重连…';
     }
-    return '场景载入异常，正在自动恢复…';
+    return '正在重新连接…';
   }
 
   void _clearSceneRecoveryState({bool cancelTimer = true}) {
@@ -395,14 +409,8 @@ class _NovelGamePageState extends State<NovelGamePage>
       return;
     }
 
-    if (_sceneRecoveryAttempt >= _sceneRecoveryBackoff.length) {
-      setState(() => _sceneRecoveryExhausted = true);
-      return;
-    }
-
-    final delay = immediate
-        ? Duration.zero
-        : _sceneRecoveryBackoff[_sceneRecoveryAttempt];
+    final delay =
+        immediate ? Duration.zero : _recoveryDelay(_sceneRecoveryAttempt);
     _sceneRecoveryTimer = Timer(delay, () {
       _sceneRecoveryTimer = null;
       unawaited(_attemptSceneRecovery());
@@ -458,11 +466,6 @@ class _NovelGamePageState extends State<NovelGamePage>
       if (kDebugMode && thrownStack != null) {
         debugPrintStack(stackTrace: thrownStack);
       }
-    }
-
-    if (_sceneRecoveryAttempt >= _sceneRecoveryBackoff.length) {
-      setState(() => _sceneRecoveryExhausted = true);
-      return;
     }
 
     setState(() {
@@ -891,6 +894,7 @@ class _NovelGamePageState extends State<NovelGamePage>
     _sceneArrivalTimer?.cancel();
     _sceneBarkRefreshTimer?.cancel();
     _sceneRecoveryTimer?.cancel();
+    _initRetryTimer?.cancel();
     _inputFocusNode.removeListener(_onExplorationExitCheck);
     _inputController.removeListener(_onExplorationExitCheck);
     _inputController.dispose();
@@ -2036,6 +2040,37 @@ class _NovelGamePageState extends State<NovelGamePage>
     await NovelNarrationStylePreview.show(context);
   }
 
+  /// 初始化失败（断网/超时等）：不返回首页，按退避无限重试 controller.initialize()。
+  void _scheduleInitRetry() {
+    if (!mounted || _initRetryTimer != null) return;
+    final delay = _recoveryDelay(_initRetryAttempt);
+    _initRetryAttempt++;
+    _initRetryTimer = Timer(delay, () async {
+      _initRetryTimer = null;
+      if (!mounted) return;
+      await _retryInitializeNow();
+    });
+  }
+
+  Future<void> _retryInitializeNow() async {
+    if (!mounted || controller.isInitialized || controller.isInitializing) {
+      return;
+    }
+    controller.clearMessages();
+    await controller.initialize();
+    if (!mounted) return;
+    if (controller.isInitialized) {
+      _initRetryAttempt = 0;
+      _syncSceneArrival();
+      _syncSceneRecovery();
+      _scheduleSceneBarkRefresh(force: true);
+      unawaited(_syncActiveWeatherAudio(force: true));
+    } else {
+      setState(() {}); // 仍失败：触发 build，继续排下一次重试
+    }
+  }
+
+  // 仅用于余额不足这类“重试也没用”的初始化失败，保留原有返回首页行为。
   void _handleLoadFailure(VoidCallback openDrawer) {
     if (_loadFailureHandled) return;
     _loadFailureHandled = true;
@@ -2198,7 +2233,13 @@ class _NovelGamePageState extends State<NovelGamePage>
             if (controller.isInitialized) {
               _loadFailureHandled = false;
             } else if (loadFailed) {
-              _handleLoadFailure(openDrawer);
+              if (controller.insufficientBalance) {
+                _handleLoadFailure(openDrawer);
+              } else {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _scheduleInitRetry();
+                });
+              }
             }
 
             final rootMedia = MediaQuery.of(context);
@@ -2808,12 +2849,14 @@ class _NovelGamePageState extends State<NovelGamePage>
                         ),
                       ),
                     ),
-                  if (!loadFailed)
+                  if (!loadFailed || !controller.insufficientBalance)
                     NovelStatusBanner(
-                      message: hasRuntimeSceneError
-                          ? _sceneRecoveryStatusMessage
-                          : controller.infoMessage,
-                      isError: hasRuntimeSceneError,
+                      message: loadFailed
+                          ? '网络连接异常，正在自动重连…'
+                          : hasRuntimeSceneError
+                              ? _sceneRecoveryStatusMessage
+                              : controller.infoMessage,
+                      isError: loadFailed || hasRuntimeSceneError,
                       onDismiss: hasRuntimeSceneError
                           ? _dismissSceneRecoveryStatus
                           : controller.clearMessages,

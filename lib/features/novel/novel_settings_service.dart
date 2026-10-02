@@ -12,6 +12,8 @@ class NovelSettingsService extends ChangeNotifier {
   String artStyle = 'anime';
   bool weatherEffectsEnabled = true;
   bool typingSoundEnabled = true;
+  // 新增：3D视差效果，默认关闭
+  bool enable3DEffect = false; 
   // 文字播放速度与网络流速彻底解耦。0 表示整页立即显示。
   String textSpeedKey = 'standard';
 
@@ -52,6 +54,11 @@ class NovelSettingsService extends ChangeNotifier {
         await _prefs.getBool('novel-weather-effects-enabled') ?? true;
     typingSoundEnabled =
         await _prefs.getBool('novel-typing-sound-enabled') ?? true;
+    
+    // 读取 3D 效果状态，如果没有记录则回退到默认的 false
+    enable3DEffect = 
+        await _prefs.getBool('novel-enable-3d-effect') ?? false;
+
     textSpeedKey =
         await _prefs.getString('novel-text-speed') ?? 'standard';
     if (!textSpeedCpsValues.containsKey(textSpeedKey)) {
@@ -111,7 +118,6 @@ class NovelSettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
-
   Future<void> setWeatherEffectsEnabled(bool value) async {
     weatherEffectsEnabled = value;
     await _prefs.setBool('novel-weather-effects-enabled', value);
@@ -121,6 +127,13 @@ class NovelSettingsService extends ChangeNotifier {
   Future<void> setTypingSoundEnabled(bool value) async {
     typingSoundEnabled = value;
     await _prefs.setBool('novel-typing-sound-enabled', value);
+    notifyListeners();
+  }
+
+  // 新增：设置 3D 效果并持久化保存
+  Future<void> setEnable3DEffect(bool value) async {
+    enable3DEffect = value;
+    await _prefs.setBool('novel-enable-3d-effect', value);
     notifyListeners();
   }
 

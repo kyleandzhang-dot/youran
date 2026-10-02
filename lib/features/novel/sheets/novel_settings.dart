@@ -10,11 +10,11 @@ part of '../novel_sheets.dart';
 const Color _novelDrawerAccent = NovelPalette.accent;
 
 /// 右侧设置抽屉是否使用「手机紧凑横屏」样式。
-/// 现在统一返回 false：手机横屏与电脑模式 / 竖屏使用同一套标准样式
-/// （宽抽屉 + 单列 ListView，内容可滚动）。
-/// 如果以后想恢复横屏专用的窄侧栏 + 分页 Tab 样式，改回
-/// `NovelViewportMetrics.of(context).shortWide` 即可。
-bool _settingsCompactLandscape(BuildContext context) => false;
+/// 已经恢复动态检测：手机横屏与左侧游戏抽屉保持完全一致的触发逻辑。
+bool _settingsCompactLandscape(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  return size.width > size.height && size.height < 520;
+}
 
 Future<void> showNovelSettingsSheet(
   BuildContext context,
@@ -62,10 +62,6 @@ Future<void> showNovelSettingsSheet(
 }
 
 /// 设置抽屉的自适应外壳。
-///
-/// - 手机竖屏 / 常规窗口：较宽的标准右侧抽屉。
-/// - 手机紧凑横屏：切换成和游戏主抽屉接近的窄侧栏。
-/// - 抽屉保持在同一个 Dialog Route 中，因此旋转屏幕时不会消失或重新弹出。
 class _AdaptiveSettingsDrawerFrame extends StatelessWidget {
   const _AdaptiveSettingsDrawerFrame({required this.child});
 
@@ -113,7 +109,6 @@ class _AdaptiveSettingsDrawerFrame extends StatelessWidget {
               ),
             ],
           ),
-          // 背景铺满屏幕右侧和底部，只让内容避开刘海 / Home Indicator。
           child: SafeArea(
             left: false,
             child: child,
@@ -138,7 +133,8 @@ class _SettingsDrawerScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compactLandscape = _settingsCompactLandscape(context);
-    final buttonSize = compactLandscape ? 28.0 : 32.0;
+    // 放大按钮物理触控区尺寸，避免误触
+    final buttonSize = compactLandscape ? 36.0 : 40.0;
 
     return Column(
       children: <Widget>[
@@ -162,7 +158,7 @@ class _SettingsDrawerScaffold extends StatelessWidget {
                       height: buttonSize,
                       child: Icon(
                         Icons.arrow_back_ios_new_rounded,
-                        size: compactLandscape ? 11 : 13,
+                        size: compactLandscape ? 14 : 16,
                         color: AppColors.textOnDarkMuted,
                       ),
                     ),
@@ -175,7 +171,7 @@ class _SettingsDrawerScaffold extends StatelessWidget {
                   title,
                   style: TextStyle(
                     color: AppColors.textOnDark,
-                    fontSize: compactLandscape ? 14.5 : 16,
+                    fontSize: compactLandscape ? 15.5 : 16.5,
                     fontWeight: FontWeight.w700,
                     letterSpacing: .2,
                   ),
@@ -191,7 +187,7 @@ class _SettingsDrawerScaffold extends StatelessWidget {
                     height: buttonSize,
                     child: Icon(
                       Icons.close_rounded,
-                      size: compactLandscape ? 15 : 18,
+                      size: compactLandscape ? 18 : 20,
                       color: AppColors.textOnDarkMuted,
                     ),
                   ),
@@ -230,13 +226,15 @@ class _SettingsPanel extends StatefulWidget {
   State<_SettingsPanel> createState() => _SettingsPanelState();
 }
 
-enum _LandscapeSettingsSection { visual, text, engine, reading }
+enum _LandscapeSettingsSection { text, engine, visual, more }
 
 class _SettingsPanelState extends State<_SettingsPanel> {
   NovelGameController get controller => widget.controller;
   bool _showDeveloperTools = false;
   late bool _immersiveMode;
-  _LandscapeSettingsSection _landscapeSection = _LandscapeSettingsSection.visual;
+  
+  // 默认打开时显示「文字」设置面板
+  _LandscapeSettingsSection _landscapeSection = _LandscapeSettingsSection.text;
 
   @override
   void initState() {
@@ -258,7 +256,6 @@ class _SettingsPanelState extends State<_SettingsPanel> {
     return controller.currentNovelModel.split('/').last;
   }
 
-
   Widget _buildLandscapeSettings(NovelDeveloperPreviewActions? developerPreview) {
     return _SettingsDrawerScaffold(
       title: '偏好设置',
@@ -268,13 +265,13 @@ class _SettingsPanelState extends State<_SettingsPanel> {
             padding: const EdgeInsets.fromLTRB(10, 8, 10, 7),
             child: Row(
               children: <Widget>[
-                _landscapeTab('画面', Icons.palette_outlined, _LandscapeSettingsSection.visual),
-                const SizedBox(width: 5),
                 _landscapeTab('文字', Icons.text_fields_rounded, _LandscapeSettingsSection.text),
                 const SizedBox(width: 5),
                 _landscapeTab('声音', Icons.tune_rounded, _LandscapeSettingsSection.engine),
                 const SizedBox(width: 5),
-                _landscapeTab('阅读', Icons.auto_stories_outlined, _LandscapeSettingsSection.reading),
+                _landscapeTab('画面', Icons.palette_outlined, _LandscapeSettingsSection.visual),
+                const SizedBox(width: 5),
+                _landscapeTab('更多', Icons.more_horiz_rounded, _LandscapeSettingsSection.more),
               ],
             ),
           ),
@@ -308,7 +305,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
           onTap: () => setState(() => _landscapeSection = section),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
-            height: 40,
+            height: 44, // 增加高度防误触
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: selected ? Colors.white.withOpacity(.045) : Colors.transparent,
@@ -316,21 +313,22 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                 color: selected ? Colors.white.withOpacity(.28) : Colors.transparent,
                 width: .8,
               ),
+              borderRadius: BorderRadius.circular(6),
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
                 Icon(
                   icon,
-                  size: 13,
+                  size: 16,
                   color: selected ? Colors.white : AppColors.textOnDarkMuted,
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 Text(
                   label,
                   style: TextStyle(
                     color: selected ? Colors.white : AppColors.textOnDarkMuted,
-                    fontSize: 9.5,
+                    fontSize: 11, // 抬高字号底线
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -346,14 +344,14 @@ class _SettingsPanelState extends State<_SettingsPanel> {
     NovelDeveloperPreviewActions? developerPreview,
   ) {
     switch (_landscapeSection) {
-      case _LandscapeSettingsSection.visual:
-        return _buildLandscapeVisualSection();
       case _LandscapeSettingsSection.text:
         return _buildLandscapeTextSection();
       case _LandscapeSettingsSection.engine:
         return _buildLandscapeEngineSection();
-      case _LandscapeSettingsSection.reading:
-        return _buildLandscapeReadingSection(developerPreview);
+      case _LandscapeSettingsSection.visual:
+        return _buildLandscapeVisualSection();
+      case _LandscapeSettingsSection.more:
+        return _buildLandscapeMoreSection(developerPreview);
     }
   }
 
@@ -392,7 +390,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
               children: <Widget>[
                 Icon(
                   icon,
-                  size: 15,
+                  size: 16,
                   color: selected
                       ? AppColors.textOnDark
                       : AppColors.textOnDarkMuted.withOpacity(.64),
@@ -407,7 +405,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       color: selected
                           ? AppColors.textOnDark
                           : AppColors.textOnDarkMuted.withOpacity(.76),
-                      fontSize: 10.4,
+                      fontSize: 11.5,
                       fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                     ),
                   ),
@@ -418,7 +416,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       : (enabled
                           ? Icons.chevron_right_rounded
                           : Icons.lock_outline_rounded),
-                  size: 12,
+                  size: 14,
                   color: selected
                       ? Colors.white.withOpacity(.88)
                       : AppColors.textOnDarkMuted.withOpacity(.50),
@@ -498,7 +496,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           '动漫',
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: 12,
+                            fontSize: 13,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -520,7 +518,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           '当前',
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: 8.2,
+                            fontSize: 9.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -559,6 +557,26 @@ class _SettingsPanelState extends State<_SettingsPanel> {
             selected: false,
           ),
         ),
+        
+        // ==========================================
+        // ▼ 这里是新增的横屏 3D 效果开关 ▼
+        // ==========================================
+        const SizedBox(height: 12),
+        Divider(height: 1, color: Colors.white.withOpacity(.14)),
+        _CleanSettingsRow(
+          icon: Icons.view_in_ar_outlined,
+          title: '3D 效果',
+          subtitle: settings.enable3DEffect ? '已开启深度 3D 效果' : '已关闭',
+          trailing: Switch.adaptive(
+            value: settings.enable3DEffect,
+            activeColor: _novelDrawerAccent,
+            onChanged: (value) async {
+              await settings.setEnable3DEffect(value);
+              if (mounted) setState(() {});
+            },
+          ),
+        ),
+        // ==========================================
       ],
     );
   }
@@ -586,7 +604,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       '字体大小',
                       style: TextStyle(
                         color: AppColors.textOnDark,
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -595,7 +613,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       '${settings.fontSize.clamp(8.0, 20.0).round()}',
                       style: TextStyle(
                         color: AppColors.textOnDark.withOpacity(.88),
-                        fontSize: 9.8,
+                        fontSize: 11,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -604,7 +622,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
               ),
               Row(
                 children: <Widget>[
-                  const Text('A', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 9.5)),
+                  const Text('A', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: 11)),
                   Expanded(
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
@@ -624,7 +642,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       ),
                     ),
                   ),
-                  const Text('A', style: TextStyle(color: AppColors.textOnDark, fontSize: 15)),
+                  const Text('A', style: TextStyle(color: AppColors.textOnDark, fontSize: 16)),
                 ],
               ),
               Divider(height: 12, color: Colors.white.withOpacity(.14)),
@@ -646,7 +664,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                     '文字速度',
                     style: TextStyle(
                       color: AppColors.textOnDark,
-                      fontSize: 11,
+                      fontSize: 12,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -655,7 +673,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                     settings.textSpeedLabel,
                     style: TextStyle(
                       color: AppColors.textOnDark.withOpacity(.88),
-                      fontSize: 9.8,
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -695,8 +713,8 @@ class _SettingsPanelState extends State<_SettingsPanel> {
       children: <Widget>[
         const _CleanSettingsHeader(
           icon: Icons.tune_rounded,
-          title: '声音与引擎',
-          subtitle: '常用开关与生成模型',
+          title: '声音与特效',
+          subtitle: '背景音乐、打字音与环境天气',
         ),
         const SizedBox(height: 8),
         _CleanSettingsCard(
@@ -745,34 +763,6 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   },
                 ),
               ),
-              Divider(height: 1, color: Colors.white.withOpacity(.14)),
-              PopupMenuButton<String>(
-                tooltip: '选择模型',
-                color: const Color(0xFF191B1B),
-                onSelected: controller.isChangingModel ? null : (value) => controller.setNovelModel(value),
-                itemBuilder: (context) => controller.availableModels
-                    .map((model) => PopupMenuItem<String>(
-                          value: model.id,
-                          child: Text(
-                            model.name,
-                            style: const TextStyle(
-                              color: AppColors.textOnDark,
-                              fontSize: 10.5,
-                            ),
-                          ),
-                        ))
-                    .toList(),
-                child: _CleanSettingsRow(
-                  icon: Icons.hub_outlined,
-                  title: '生成引擎模型',
-                  subtitle: _modelLabel(),
-                  trailing: const Icon(
-                    Icons.chevron_right_rounded,
-                    color: AppColors.textOnDarkMuted,
-                    size: 15,
-                  ),
-                ),
-              ),
             ],
           ),
         ),
@@ -780,18 +770,43 @@ class _SettingsPanelState extends State<_SettingsPanel> {
     );
   }
 
-  Widget _buildLandscapeReadingSection(
+  Widget _buildLandscapeMoreSection(
     NovelDeveloperPreviewActions? developerPreview,
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        const _CleanSettingsHeader(
-          icon: Icons.auto_stories_outlined,
-          title: '阅读模式',
-          subtitle: '标准阅读或沉浸展开场景',
+        _CleanSettingsCard(
+          padding: EdgeInsets.zero,
+          child: PopupMenuButton<String>(
+            tooltip: '选择模型',
+            color: const Color(0xFF191B1B),
+            onSelected: controller.isChangingModel ? null : (value) => controller.setNovelModel(value),
+            itemBuilder: (context) => controller.availableModels
+                .map((model) => PopupMenuItem<String>(
+                      value: model.id,
+                      child: Text(
+                        model.name,
+                        style: const TextStyle(
+                          color: AppColors.textOnDark,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                    ))
+                .toList(),
+            child: _CleanSettingsRow(
+              icon: Icons.hub_outlined,
+              title: '生成模型',
+              subtitle: _modelLabel(),
+              trailing: const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.textOnDarkMuted,
+                size: 16,
+              ),
+            ),
+          ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         _ReadingModeChoice(
           label: '标准',
           caption: '竖屏 · 专注阅读',
@@ -821,19 +836,19 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                 padding: EdgeInsets.symmetric(vertical: 7),
                 child: Row(
                   children: <Widget>[
-                    Icon(Icons.science_outlined, size: 14, color: AppColors.textOnDarkMuted),
+                    Icon(Icons.science_outlined, size: 16, color: AppColors.textOnDarkMuted),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         '开发者测试',
                         style: TextStyle(
                           color: AppColors.textOnDark,
-                          fontSize: 10.5,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
-                    Icon(Icons.chevron_right_rounded, size: 15, color: AppColors.textOnDarkMuted),
+                    Icon(Icons.chevron_right_rounded, size: 16, color: AppColors.textOnDarkMuted),
                   ],
                 ),
               ),
@@ -867,9 +882,12 @@ class _SettingsPanelState extends State<_SettingsPanel> {
             }
           });
         }
+        // 横屏模式已启用：使用重构优化版 LandscapeUI
         if (compactLandscape) {
           return _buildLandscapeSettings(developerPreview);
         }
+        
+        // 竖屏/大尺寸保持标准自适应逻辑，同步抬高基础字号
         return _SettingsDrawerScaffold(
           title: '偏好设置',
           child: ListView(
@@ -925,6 +943,29 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                   ],
                 ),
               ),
+              
+              // ==========================================
+              // ▼ 这里是新增的竖屏 3D 效果开关 ▼
+              // ==========================================
+              SizedBox(height: compactLandscape ? 8 : 14),
+              _CleanSettingsCard(
+                padding: EdgeInsets.zero,
+                child: _CleanSettingsRow(
+                  icon: Icons.view_in_ar_outlined,
+                  title: '3D 效果',
+                  subtitle: settings.enable3DEffect ? '已开启深度 3D 效果' : '已关闭',
+                  trailing: Switch.adaptive(
+                    value: settings.enable3DEffect,
+                    activeColor: _novelDrawerAccent,
+                    onChanged: (value) async {
+                      await settings.setEnable3DEffect(value);
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                ),
+              ),
+              // ==========================================
+
               SizedBox(height: compactLandscape ? 12 : 24),
               const _CleanSettingsHeader(
                 icon: Icons.text_fields_rounded,
@@ -942,7 +983,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           '字体大小',
                           style: TextStyle(
                             color: AppColors.textOnDark,
-                            fontSize: compactLandscape ? 11 : 13,
+                            fontSize: compactLandscape ? 12 : 13,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -951,7 +992,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           '${settings.fontSize.clamp(8.0, 20.0).round()}',
                           style: TextStyle(
                             color: AppColors.textOnDark.withOpacity(.88),
-                            fontSize: compactLandscape ? 9.8 : 11.5,
+                            fontSize: compactLandscape ? 11 : 11.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -959,7 +1000,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                     ),
                     Row(
                       children: <Widget>[
-                        Text('A', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: compactLandscape ? 9.5 : 11)),
+                        Text('A', style: TextStyle(color: AppColors.textOnDarkMuted, fontSize: compactLandscape ? 11 : 11)),
                         Expanded(
                           child: SliderTheme(
                             data: SliderTheme.of(context).copyWith(
@@ -981,12 +1022,10 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                             ),
                           ),
                         ),
-                        Text('A', style: TextStyle(color: AppColors.textOnDark, fontSize: compactLandscape ? 15 : 18)),
+                        Text('A', style: TextStyle(color: AppColors.textOnDark, fontSize: compactLandscape ? 16 : 18)),
                       ],
                     ),
                     Divider(height: compactLandscape ? 12 : 18, color: Colors.white.withOpacity(.14)),
-                    // 四种字体属于同一级别的单选项，一行四等分展示，
-                    // 避免字体设置占两行把整个设置页纵向拉长。
                     Row(
                       children: <Widget>[
                         Expanded(
@@ -1032,7 +1071,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           '文字速度',
                           style: TextStyle(
                             color: AppColors.textOnDark,
-                            fontSize: compactLandscape ? 11 : 13,
+                            fontSize: compactLandscape ? 12 : 13,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -1041,7 +1080,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           settings.textSpeedLabel,
                           style: TextStyle(
                             color: AppColors.textOnDark.withOpacity(.88),
-                            fontSize: compactLandscape ? 9.8 : 11.5,
+                            fontSize: compactLandscape ? 11 : 11.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -1073,8 +1112,8 @@ class _SettingsPanelState extends State<_SettingsPanel> {
               SizedBox(height: compactLandscape ? 12 : 24),
               const _CleanSettingsHeader(
                 icon: Icons.tune_rounded,
-                title: '声音与引擎',
-                subtitle: '游戏过程中真正需要调整的选项',
+                title: '声音与特效',
+                subtitle: '背景音乐、打字音与环境天气',
               ),
               SizedBox(height: compactLandscape ? 6 : 10),
               _CleanSettingsCard(
@@ -1129,34 +1168,6 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                         },
                       ),
                     ),
-                    Divider(height: 1, color: Colors.white.withOpacity(.14)),
-                    PopupMenuButton<String>(
-                      tooltip: '选择模型',
-                      color: const Color(0xFF191B1B),
-                      onSelected: controller.isChangingModel ? null : (value) => controller.setNovelModel(value),
-                      itemBuilder: (context) => controller.availableModels
-                          .map((model) => PopupMenuItem<String>(
-                                value: model.id,
-                                child: Text(
-                                  model.name,
-                                  style: TextStyle(
-                                    color: AppColors.textOnDark,
-                                    fontSize: compactLandscape ? 10.5 : 12.5,
-                                  ),
-                                ),
-                              ))
-                          .toList(),
-                      child: _CleanSettingsRow(
-                        icon: Icons.hub_outlined,
-                        title: '生成引擎模型',
-                        subtitle: _modelLabel(),
-                        trailing: Icon(
-                          Icons.chevron_right_rounded,
-                          color: AppColors.textOnDarkMuted,
-                          size: compactLandscape ? 15 : 18,
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -1167,6 +1178,37 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                 subtitle: '标准专注阅读，沉浸展开场景',
               ),
               SizedBox(height: compactLandscape ? 6 : 10),
+              _CleanSettingsCard(
+                padding: EdgeInsets.zero,
+                child: PopupMenuButton<String>(
+                  tooltip: '选择模型',
+                  color: const Color(0xFF191B1B),
+                  onSelected: controller.isChangingModel ? null : (value) => controller.setNovelModel(value),
+                  itemBuilder: (context) => controller.availableModels
+                      .map((model) => PopupMenuItem<String>(
+                            value: model.id,
+                            child: Text(
+                              model.name,
+                              style: TextStyle(
+                                color: AppColors.textOnDark,
+                                fontSize: compactLandscape ? 12.5 : 12.5,
+                              ),
+                            ),
+                          ))
+                      .toList(),
+                  child: _CleanSettingsRow(
+                    icon: Icons.hub_outlined,
+                    title: '生成模型',
+                    subtitle: _modelLabel(),
+                    trailing: Icon(
+                      Icons.chevron_right_rounded,
+                      color: AppColors.textOnDarkMuted,
+                      size: compactLandscape ? 16 : 18,
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: compactLandscape ? 12 : 24),
               LayoutBuilder(
                 builder: (context, constraints) {
                   final stackChoices = constraints.maxWidth < 300;
@@ -1224,7 +1266,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                         children: <Widget>[
                           Icon(
                             Icons.science_outlined,
-                            size: compactLandscape ? 14 : 17,
+                            size: compactLandscape ? 15 : 17,
                             color: AppColors.textOnDarkMuted,
                           ),
                           SizedBox(width: compactLandscape ? 7 : 10),
@@ -1236,7 +1278,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                                   '开发者测试',
                                   style: TextStyle(
                                     color: AppColors.textOnDark,
-                                    fontSize: compactLandscape ? 10.5 : 12.5,
+                                    fontSize: compactLandscape ? 12.5 : 12.5,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
@@ -1245,7 +1287,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                                   '天气、时间与关键页面美术预览',
                                   style: TextStyle(
                                     color: AppColors.textOnDarkMuted,
-                                    fontSize: compactLandscape ? 8.5 : 10,
+                                    fontSize: compactLandscape ? 10.5 : 10,
                                   ),
                                 ),
                               ],
@@ -1254,7 +1296,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                           Icon(
                             Icons.chevron_right_rounded,
                             color: AppColors.textOnDarkMuted,
-                            size: compactLandscape ? 15 : 18,
+                            size: compactLandscape ? 16 : 18,
                           ),
                         ],
                       ),
@@ -1269,6 +1311,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
     );
   }
 }
+
 class _LandscapeSettingsViewport extends StatelessWidget {
   const _LandscapeSettingsViewport({
     super.key,
@@ -1381,7 +1424,7 @@ class _ArtStyleCard extends StatelessWidget {
                         color: disabled
                             ? Colors.white.withOpacity(.72)
                             : Colors.white,
-                        fontSize: compactLandscape ? 9.6 : 11.5,
+                        fontSize: compactLandscape ? 11 : 12,
                         fontWeight: FontWeight.w700,
                         shadows: const <Shadow>[
                           Shadow(color: Colors.black, blurRadius: 4),
@@ -1417,7 +1460,7 @@ class _ArtStyleCard extends StatelessWidget {
                               lockedLabel ?? '已锁定',
                               style: TextStyle(
                                 color: Colors.white.withOpacity(.80),
-                                fontSize: compactLandscape ? 7.8 : 9,
+                                fontSize: compactLandscape ? 9.5 : 10,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -1431,7 +1474,7 @@ class _ArtStyleCard extends StatelessWidget {
                       top: compactLandscape ? 4 : 7,
                       child: Icon(
                         Icons.check_rounded,
-                        size: compactLandscape ? 11 : 13,
+                        size: compactLandscape ? 12 : 13,
                         color: Colors.white.withOpacity(.92),
                       ),
                     ),
@@ -1477,7 +1520,7 @@ class _ReadingModeChoice extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
-          height: compact ? 48 : 56,
+          height: compact ? 52 : 58, // 放大横屏时的点击高度
           padding: EdgeInsets.symmetric(
             horizontal: compact ? 10 : 12,
             vertical: compact ? 7 : 8,
@@ -1514,7 +1557,7 @@ class _ReadingModeChoice extends StatelessWidget {
                         color: selected
                             ? AppColors.textOnDark
                             : AppColors.textOnDark.withOpacity(.72),
-                        fontSize: compact ? 11.2 : 12.8,
+                        fontSize: compact ? 12.5 : 13.5, // 字号放大至清晰可读
                         fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                         letterSpacing: .2,
                       ),
@@ -1528,7 +1571,7 @@ class _ReadingModeChoice extends StatelessWidget {
                         color: AppColors.textOnDarkMuted.withOpacity(
                           selected ? .78 : .52,
                         ),
-                        fontSize: compact ? 8.0 : 9.2,
+                        fontSize: compact ? 10.5 : 11.5,
                         height: 1.1,
                         fontWeight: FontWeight.w500,
                       ),
@@ -1540,7 +1583,7 @@ class _ReadingModeChoice extends StatelessWidget {
                 SizedBox(width: compact ? 5 : 7),
                 Icon(
                   Icons.check_rounded,
-                  size: compact ? 12 : 14,
+                  size: compact ? 14 : 14,
                   color: Colors.white.withOpacity(.82),
                 ),
               ],
@@ -1622,7 +1665,7 @@ class _CleanSettingsHeader extends StatelessWidget {
           padding: EdgeInsets.only(top: compactLandscape ? 0 : 1),
           child: Icon(
             icon,
-            size: compactLandscape ? 13.5 : 16,
+            size: compactLandscape ? 15 : 17,
             color: AppColors.textOnDarkMuted.withOpacity(.88),
           ),
         ),
@@ -1635,7 +1678,7 @@ class _CleanSettingsHeader extends StatelessWidget {
                 title,
                 style: TextStyle(
                   color: AppColors.textOnDark,
-                  fontSize: compactLandscape ? 11.5 : 13.5,
+                  fontSize: compactLandscape ? 12.5 : 14,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -1644,7 +1687,7 @@ class _CleanSettingsHeader extends StatelessWidget {
                 subtitle,
                 style: TextStyle(
                   color: AppColors.textOnDarkMuted.withOpacity(.86),
-                  fontSize: compactLandscape ? 9 : 10.5,
+                  fontSize: compactLandscape ? 10.5 : 11.5,
                   height: compactLandscape ? 1.25 : 1.35,
                 ),
               ),
@@ -1710,7 +1753,7 @@ class _CleanSettingChoice extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          height: compactLandscape ? 30 : 36,
+          height: compactLandscape ? 36 : 40,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: Colors.transparent,
@@ -1731,7 +1774,7 @@ class _CleanSettingChoice extends StatelessWidget {
                   ? AppColors.textOnDark
                   : AppColors.textOnDarkMuted,
               fontFamily: fontFamily,
-              fontSize: compactLandscape ? 9.8 : 11.3,
+              fontSize: compactLandscape ? 11 : 12, // 确保文字可清晰点按
               fontWeight:
                   selected ? FontWeight.w700 : FontWeight.w600,
             ),
@@ -1759,7 +1802,7 @@ class _CleanSettingsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final compactLandscape = _settingsCompactLandscape(context);
     return SizedBox(
-      height: compactLandscape ? 48 : 60,
+      height: compactLandscape ? 52 : 60, // 放大点击行高
       child: Padding(
         padding: EdgeInsets.fromLTRB(
           compactLandscape ? 9 : 13,
@@ -1771,7 +1814,7 @@ class _CleanSettingsRow extends StatelessWidget {
           children: <Widget>[
             Icon(
               icon,
-              size: compactLandscape ? 14 : 17,
+              size: compactLandscape ? 16 : 18,
               color: AppColors.textOnDarkMuted.withOpacity(.82),
             ),
             SizedBox(width: compactLandscape ? 8 : 13),
@@ -1784,7 +1827,7 @@ class _CleanSettingsRow extends StatelessWidget {
                     title,
                     style: TextStyle(
                       color: AppColors.textOnDark,
-                      fontSize: compactLandscape ? 10.5 : 12.5,
+                      fontSize: compactLandscape ? 12 : 13.5, // 统一抬高大标题
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -1795,7 +1838,7 @@ class _CleanSettingsRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: AppColors.textOnDarkMuted,
-                      fontSize: compactLandscape ? 8.8 : 10.5,
+                      fontSize: compactLandscape ? 10.5 : 11.5,
                       height: 1.2,
                     ),
                   ),
