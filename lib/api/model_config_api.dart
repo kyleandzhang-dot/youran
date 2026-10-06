@@ -4,9 +4,9 @@ class ModelOption {
   const ModelOption({
     required this.id,
     required this.name,
-    required this.speed,
-    required this.price,
-    required this.quality,
+    this.speed = 0,
+    this.price = 0,
+    this.quality = 0,
   });
 
   final String id;
@@ -38,14 +38,51 @@ class ModelOption {
   }
 }
 
+/// 后端下发的大模型平台预设（自带 Key 面板的平台列表，前端不再写死）。
+class ProviderPreset {
+  const ProviderPreset({
+    required this.id,
+    required this.label,
+    required this.baseUrl,
+    this.keyHint = '',
+    this.models = const <String>[],
+  });
+
+  final String id;
+  final String label;
+  final String baseUrl;
+  final String keyHint;
+  final List<String> models;
+
+  factory ProviderPreset.fromJson(Map<String, dynamic> json) {
+    final rawModels = json['models'];
+    final id = json['id']?.toString() ?? '';
+    final label = json['label']?.toString().trim() ?? '';
+    return ProviderPreset(
+      id: id,
+      label: label.isNotEmpty ? label : id,
+      baseUrl: json['base_url']?.toString().trim() ?? '',
+      keyHint: json['key_hint']?.toString() ?? '',
+      models: rawModels is List
+          ? rawModels
+              .map((item) => item.toString().trim())
+              .where((item) => item.isNotEmpty)
+              .toList()
+          : const <String>[],
+    );
+  }
+}
+
 class CustomApiConfig {
   const CustomApiConfig({
+    this.provider = '',
     this.apiKey = '',
     this.baseUrl = '',
     this.modelName = '',
   });
 
-  final String apiKey;
+  final String provider;
+  final String apiKey; // 后端返回的是脱敏值，例如 sk-****abcd
   final String baseUrl;
   final String modelName;
 }
@@ -56,12 +93,14 @@ class ModelConfigSnapshot {
     required this.enableOwnKey,
     required this.customApi,
     required this.models,
+    this.presets = const <ProviderPreset>[],
   });
 
   final Map<String, String> scenePreferences;
   final bool enableOwnKey;
   final CustomApiConfig customApi;
   final List<ModelOption> models;
+  final List<ProviderPreset> presets;
 }
 
 class ModelConfigApi {
@@ -109,15 +148,31 @@ class ModelConfigApi {
       }
     }
 
+    // 自带 Key 可选的平台与推荐模型（没有 base_url 的「自定义」项面板无法使用，过滤掉）
+    final presetsRaw = data['presets'];
+    final presets = <ProviderPreset>[];
+    if (presetsRaw is List) {
+      for (final item in presetsRaw) {
+        final map = _asMap(item);
+        if (map.isEmpty) continue;
+        final preset = ProviderPreset.fromJson(map);
+        if (preset.id.isNotEmpty && preset.baseUrl.isNotEmpty) {
+          presets.add(preset);
+        }
+      }
+    }
+
     return ModelConfigSnapshot(
       scenePreferences: scenePreferences,
       enableOwnKey: data['enable_own_key'] == true,
       customApi: CustomApiConfig(
+        provider: customRaw['provider']?.toString() ?? '',
         apiKey: customRaw['api_key']?.toString() ?? '',
         baseUrl: customRaw['base_url']?.toString() ?? '',
         modelName: customRaw['model_name']?.toString() ?? '',
       ),
       models: models,
+      presets: presets,
     );
   }
 
@@ -169,6 +224,7 @@ class ModelConfigApi {
     required String apiKey,
     required String baseUrl,
     required String modelName,
+    String? provider,
   }) async {
     await _client.post(
       '/model-config/api-keys',
@@ -176,8 +232,33 @@ class ModelConfigApi {
         'api_key': apiKey,
         'base_url': baseUrl,
         'model_name': modelName,
+        if (provider != null && provider.isNotEmpty) 'provider': provider,
       },
     );
+  }
+
+  /// 向平台实时拉取该 Key 可用的模型；失败或为空时返回空列表，调用方回落到 presets。
+  static Future<List<String>> listProviderModels({
+    required String apiKey,
+    required String baseUrl,
+  }) async {
+    final response = await _client.post(
+      '/model-config/list-models',
+      body: <String, dynamic>{
+        'api_key': apiKey,
+        'base_url': baseUrl,
+      },
+    );
+
+    final status = response['status']?.toString().toLowerCase().trim() ?? '';
+    if (status != 'success') return const <String>[];
+
+    final raw = _data(response)['models'];
+    if (raw is! List) return const <String>[];
+    return raw
+        .map((item) => item.toString().trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
   }
 
   static Future<void> deleteCustomApi() async {

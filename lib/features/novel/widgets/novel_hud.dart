@@ -498,6 +498,8 @@ class NovelLocationHud extends StatelessWidget {
   });
 
   final String title;
+
+  /// 兼容旧调用参数；地点栏只显示 title，不再绘制所属大区域副标题。
   final String subtitle;
 
   /// 兼容上一版热重载结构保留；当前不参与地点 HUD 绘制。
@@ -510,12 +512,12 @@ class NovelLocationHud extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (title.trim().isEmpty && subtitle.trim().isEmpty) {
+    final sceneTitle = title.trim();
+    if (sceneTitle.isEmpty) {
       return const SizedBox.shrink();
     }
 
     final compact = NovelViewportMetrics.of(context).compactChrome;
-    final hasSubtitle = subtitle.trim().isNotEmpty;
     final maxWidth = compact ? 286.0 : 372.0;
 
     final content = ConstrainedBox(
@@ -565,7 +567,7 @@ class NovelLocationHud extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    title,
+                    sceneTitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -577,21 +579,6 @@ class NovelLocationHud extends StatelessWidget {
                       letterSpacing: 1.10,
                     ),
                   ),
-                  if (hasSubtitle) ...<Widget>[
-                    const SizedBox(height: 3),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.61),
-                        fontSize: compact ? 8.2 : 8.7,
-                        height: 1,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 1.0,
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -603,7 +590,7 @@ class NovelLocationHud extends StatelessWidget {
     // 这里只展示场景名称，不再承担世界地图入口。
     // onTap / showMapGlyph 保留为兼容参数，避免旧调用处编译报错。
     return Semantics(
-      label: '当前位置$title',
+      label: '当前位置$sceneTitle',
       child: content,
     );
   }

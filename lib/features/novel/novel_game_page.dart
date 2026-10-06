@@ -2375,18 +2375,6 @@ class _NovelGamePageState extends State<NovelGamePage>
                         final sceneArrivalSubtitle =
                             _sceneArrivalPreviewSubtitle ??
                                 controller.locationSubtitle;
-                        final rawLocationSubtitle =
-                            controller.locationSubtitle.trim();
-                        final worldTimeLabel =
-                            controller.world.timeDescription.trim();
-                        final worldMapHudTitle = rawLocationSubtitle.isNotEmpty &&
-                                rawLocationSubtitle != worldTimeLabel
-                            ? rawLocationSubtitle.split(' · ').first
-                            : controller.locationTitle;
-                        final worldMapHudSubtitle =
-                            worldMapHudTitle != controller.locationTitle
-                                ? '当前位置 · ${controller.locationTitle}'
-                                : rawLocationSubtitle;
                         final sceneHudTransitionDuration = _sceneArrivalActive
                             ? const Duration(milliseconds: 180)
                             : const Duration(milliseconds: 620);
@@ -2491,8 +2479,7 @@ class _NovelGamePageState extends State<NovelGamePage>
                                       children: [
                                         if (_showLegacyLocationHud)
                                           NovelLocationHud(
-                                            title: worldMapHudTitle,
-                                            subtitle: worldMapHudSubtitle,
+                                            title: controller.locationHudTitle,
                                             loading: false,
                                             onTap: null,
                                           ),

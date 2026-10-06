@@ -121,6 +121,7 @@ class NovelStoryClock {
 class NovelWorldState {
   const NovelWorldState({
     this.location = '',
+    this.currentSceneId = '',
     this.weather = '',
     this.timeDescription = '',
     this.atmosphere = '',
@@ -130,6 +131,7 @@ class NovelWorldState {
   });
 
   final String location;
+  final String currentSceneId;
   final String weather;
   final String timeDescription;
   final String atmosphere;
@@ -141,6 +143,7 @@ class NovelWorldState {
     final custom = asJsonMap(json['custom_attributes']);
     return NovelWorldState(
       location: stringValue(json['current_location'] ?? json['location']),
+      currentSceneId: stringValue(json['current_scene_id'] ?? custom['current_scene_id']),
       weather: stringValue(json['weather']),
       timeDescription: stringValue(
         custom['time_desc'] ?? json['time_desc'] ?? json['world_time_str'],
@@ -158,6 +161,7 @@ class NovelWorldState {
 
   NovelWorldState copyWith({
     String? location,
+    String? currentSceneId,
     String? weather,
     String? timeDescription,
     String? atmosphere,
@@ -167,6 +171,9 @@ class NovelWorldState {
   }) {
     return NovelWorldState(
       location: location ?? this.location,
+      // 地点先更新、地图稍后刷新时，不能继续用上一个地点的 ID 取显示名。
+      currentSceneId: currentSceneId ??
+          (location != null && location != this.location ? '' : this.currentSceneId),
       weather: weather ?? this.weather,
       timeDescription: timeDescription ?? this.timeDescription,
       atmosphere: atmosphere ?? this.atmosphere,

@@ -1129,9 +1129,11 @@ class MineDialogs {
   }
 
   static Future<void> apiSettingsPending(BuildContext context) async {
-    final baseUrlController = TextEditingController();
-    final modelController = TextEditingController();
+    // 移除了 baseUrlController 和 modelController，只保留 Key 的输入
     final apiKeyController = TextEditingController();
+
+    // 平台与模型清单由后端（/model-config 的 presets）下发，前端不再写死
+    var presets = <ProviderPreset>[];
 
     ModelConfigSnapshot? config;
     var loading = true;
@@ -1141,8 +1143,23 @@ class MineDialogs {
     var saving = false;
     var successMode = false;
     String? errorText;
+    
+    // 主界面的模型切换相关
     var selectedModelId = '';
     var models = <ModelOption>[];
+
+    // 自定义 API 面板的平台和模型状态
+    String selectedProviderId = '';
+    String selectedProviderModel = '';
+    var fetchingModels = false;
+    var fetchedModels = <String>[]; // 向平台实时拉取到的模型（空 = 使用后端预设）
+
+    ProviderPreset? currentPreset() {
+      for (final item in presets) {
+        if (item.id == selectedProviderId) return item;
+      }
+      return null;
+    }
 
     String modelNameFor(String id) {
       if (id.trim().isEmpty) return '未配置';
@@ -1169,9 +1186,43 @@ class MineDialogs {
                 enableOwnKey = next.enableOwnKey;
                 selectedModelId = next.scenePreferences['novel'] ?? '';
                 models = next.models;
-                baseUrlController.text = next.customApi.baseUrl;
-                modelController.text = next.customApi.modelName;
                 apiKeyController.text = next.customApi.apiKey;
+                presets = next.presets;
+
+                // 优先用后端保存的 provider；旧数据没有 provider 时用 baseUrl 反推
+                String normalizeUrl(String url) =>
+                    url.trim().replaceAll(RegExp(r'/+$'), '');
+                final savedProvider = next.customApi.provider.trim();
+                final savedUrl = normalizeUrl(next.customApi.baseUrl);
+                ProviderPreset? matched;
+                for (final item in presets) {
+                  if (item.id == savedProvider) {
+                    matched = item;
+                    break;
+                  }
+                }
+                if (matched == null && savedUrl.isNotEmpty) {
+                  for (final item in presets) {
+                    if (normalizeUrl(item.baseUrl) == savedUrl) {
+                      matched = item;
+                      break;
+                    }
+                  }
+                }
+                matched ??= presets.isNotEmpty ? presets.first : null;
+                selectedProviderId = matched?.id ?? '';
+
+                // 优先保留用户已保存的模型，否则取该平台第一个推荐模型
+                final savedModel = next.customApi.modelName.trim();
+                if (savedModel.isNotEmpty) {
+                  selectedProviderModel = savedModel;
+                } else if (matched != null && matched.models.isNotEmpty) {
+                  selectedProviderModel = matched.models.first;
+                }
+                if (presets.isEmpty) {
+                  errorText = '平台列表加载失败，请稍后重试';
+                }
+
                 loading = false;
               });
             } on ApiException catch (e) {
@@ -1190,6 +1241,7 @@ class MineDialogs {
           });
         }
 
+        // 选择系统预设节点的逻辑（未开启自定义时）
         Future<void> chooseModel() async {
           if (enableOwnKey || models.isEmpty) return;
           final selected = await _pickModel(
@@ -1212,6 +1264,77 @@ class MineDialogs {
           } catch (_) {
             if (!dialogContext.mounted) return;
             setState(() => errorText = '保存异常');
+          }
+        }
+
+        // 自定义 API - 选择平台（列表来自后端）
+        Future<void> chooseProvider() async {
+          if (presets.isEmpty) return;
+          final providers = presets
+              .map((item) => ModelOption(id: item.id, name: item.label))
+              .toList();
+          final selected = await _pickModel(
+            dialogContext,
+            title: '选择大模型平台',
+            models: providers,
+            currentId: selectedProviderId,
+          );
+          if (selected != null && dialogContext.mounted) {
+            setState(() {
+              selectedProviderId = selected.id;
+              fetchedModels = <String>[];
+              // 切换平台后，默认选中该平台的第一个推荐模型
+              final preset = currentPreset();
+              selectedProviderModel =
+                  (preset != null && preset.models.isNotEmpty)
+                      ? preset.models.first
+                      : '';
+              errorText = null;
+            });
+          }
+        }
+
+        // 自定义 API - 选择具体模型
+        Future<void> chooseProviderModel() async {
+          final preset = currentPreset();
+          if (preset == null || fetchingModels) return;
+
+          // 已填 Key 时向平台实时拉取该 Key 可用的模型；失败则回落后端预设
+          final key = apiKeyController.text.trim();
+          if (fetchedModels.isEmpty && key.isNotEmpty) {
+            setState(() => fetchingModels = true);
+            var list = const <String>[];
+            try {
+              list = await ModelConfigApi.listProviderModels(
+                apiKey: key,
+                baseUrl: preset.baseUrl,
+              );
+            } catch (_) {}
+            if (!dialogContext.mounted) return;
+            setState(() {
+              fetchedModels = list;
+              fetchingModels = false;
+            });
+          }
+
+          final names = <String>[
+            ...(fetchedModels.isNotEmpty ? fetchedModels : preset.models),
+          ];
+          if (selectedProviderModel.isNotEmpty &&
+              !names.contains(selectedProviderModel)) {
+            names.insert(0, selectedProviderModel);
+          }
+          final selected = await _pickModel(
+            dialogContext,
+            title: '选择模型版本',
+            models: names.map((m) => ModelOption(id: m, name: m)).toList(),
+            currentId: selectedProviderModel,
+          );
+          if (selected != null && dialogContext.mounted) {
+            setState(() {
+              selectedProviderModel = selected.id;
+              errorText = null;
+            });
           }
         }
 
@@ -1247,11 +1370,22 @@ class MineDialogs {
         Future<void> saveCustomApi() async {
           if (!enableOwnKey || saving || successMode) return;
           final apiKey = apiKeyController.text.trim();
-          final baseUrl = baseUrlController.text.trim();
-          final modelName = modelController.text.trim();
+          
+          // URL 来自后端下发的平台预设，模型来自选择，用户只需要填 Key
+          final preset = currentPreset();
+          if (preset == null) {
+            setState(() => errorText = '平台列表未加载，请稍后重试');
+            return;
+          }
+          final baseUrl = preset.baseUrl;
+          final modelName = selectedProviderModel.trim();
 
-          if (apiKey.isEmpty || baseUrl.isEmpty || modelName.isEmpty) {
-            setState(() => errorText = '所有参数均需填写');
+          if (apiKey.isEmpty) {
+            setState(() => errorText = '请填写接口密钥 (API Key)');
+            return;
+          }
+          if (modelName.isEmpty) {
+            setState(() => errorText = '请选择模型');
             return;
           }
 
@@ -1261,6 +1395,7 @@ class MineDialogs {
           });
 
           try {
+            // 测试连接时传入匹配的完整参数
             final ok = await ModelConfigApi.testConnection(
               apiKey: apiKey,
               baseUrl: baseUrl,
@@ -1270,7 +1405,7 @@ class MineDialogs {
               if (!dialogContext.mounted) return;
               setState(() {
                 saving = false;
-                errorText = '节点验证未通过';
+                errorText = '节点验证未通过，请检查 Key 是否有效';
               });
               return;
             }
@@ -1278,6 +1413,7 @@ class MineDialogs {
               apiKey: apiKey,
               baseUrl: baseUrl,
               modelName: modelName,
+              provider: preset.id,
             );
             if (!dialogContext.mounted) return;
             setState(() {
@@ -1307,6 +1443,54 @@ class MineDialogs {
         const textSecondary = Color(0xFF70786F);
         const textMuted = Color(0xFFA3AAA2);
         const softBackground = Color(0xFFF4F6F2);
+
+        // 自定义的下来选择器 UI 组件
+        Widget buildSelector({
+          required String title,
+          required String value,
+          required VoidCallback onTap,
+        }) {
+          return Material(
+            color: softBackground,
+            borderRadius: BorderRadius.circular(8),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+                child: Row(
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: textSecondary,
+                        fontSize: 13.5,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        value,
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          color: textPrimary,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(
+                      LucideIcons.chevronRight,
+                      size: 16,
+                      color: textMuted,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
 
         if (loading) {
           return const SizedBox(
@@ -1414,7 +1598,7 @@ class MineDialogs {
                         ),
                         SizedBox(height: 3),
                         Text(
-                          '开启后使用你自己的接口配置',
+                          '使用你自己的 API Key',
                           style: TextStyle(
                             color: textSecondary,
                             fontSize: 11,
@@ -1426,15 +1610,11 @@ class MineDialogs {
                   Switch(
                     value: enableOwnKey,
                     onChanged: toggling ? null : toggleOwnKey,
-                    // 开启时的滑块颜色
                     activeColor: Colors.white,
-                    // 开启时与底部主按钮统一使用主题绿。
                     activeTrackColor: AppColors.accent,
-                    // 关闭时的滑块与滑轨颜色
                     inactiveThumbColor: Colors.white,
                     inactiveTrackColor: const Color(0xFFE2E6DF),
-                    // 隐藏原生的自带边框，让开关更极简扁平
-                    trackOutlineColor: WidgetStateProperty.all(Colors.transparent), 
+                    trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
                   ),
                 ],
               ),
@@ -1448,21 +1628,26 @@ class MineDialogs {
                       padding: const EdgeInsets.only(top: 12),
                       child: Column(
                         children: [
-                          _lightInput(
-                            controller: baseUrlController,
-                            hint: '接口地址',
-                            enabled: !saving && !successMode,
+                          buildSelector(
+                            title: '平台',
+                            value: currentPreset()?.label ?? '加载中...',
+                            onTap: (saving || successMode) ? () {} : chooseProvider,
                           ),
                           const SizedBox(height: 9),
-                          _lightInput(
-                            controller: modelController,
-                            hint: '模型名称',
-                            enabled: !saving && !successMode,
+                          buildSelector(
+                            title: '模型',
+                            value: fetchingModels
+                                ? '正在获取模型...'
+                                : (selectedProviderModel.isEmpty
+                                    ? '请选择'
+                                    : selectedProviderModel),
+                            onTap: (saving || successMode) ? () {} : chooseProviderModel,
                           ),
                           const SizedBox(height: 9),
                           _lightInput(
                             controller: apiKeyController,
-                            hint: '接口密钥',
+                            // 动态提示当前平台要求的 API Key 格式
+                            hint: currentPreset()?.keyHint ?? '',
                             enabled: !saving && !successMode,
                             obscureText: true,
                           ),
@@ -1490,8 +1675,7 @@ class MineDialogs {
       },
     );
 
-    baseUrlController.dispose();
-    modelController.dispose();
+    // 回收唯一保留的 Key 控制器
     apiKeyController.dispose();
   }
 
@@ -1611,24 +1795,35 @@ class MineDialogs {
               builder: (context, setState) {
                 final media = MediaQuery.of(context);
                 final keyboard = media.viewInsets.bottom;
+                
+                // 判断是否为横屏以及键盘是否弹出
+                final isLandscape = media.size.width > media.size.height;
+                final isKeyboardVisible = keyboard > 0;
 
                 return AnimatedPadding(
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOutCubic,
                   padding: EdgeInsets.fromLTRB(
                     18,
-                    20,
+                    (isLandscape && isKeyboardVisible) ? 8 : 20,
                     18,
-                    20 + keyboard,
+                    (isLandscape && isKeyboardVisible) ? keyboard + 8 : 20 + keyboard,
                   ),
-                  child: Center(
+                  // 横屏且键盘弹出时，改为顶部对齐，防止被强行顶出屏幕
+                  child: Align(
+                    alignment: (isLandscape && isKeyboardVisible) 
+                        ? Alignment.topCenter 
+                        : Alignment.center,
                     child: SingleChildScrollView(
                       keyboardDismissBehavior:
                           ScrollViewKeyboardDismissBehavior.onDrag,
                       child: ConstrainedBox(
                         constraints: BoxConstraints(
                           maxWidth: maxWidth,
-                          maxHeight: media.size.height * 0.82,
+                          // 横屏时放宽最大高度限制，让内部 ScrollView 充分发挥作用
+                          maxHeight: isLandscape 
+                              ? media.size.height * 0.95 
+                              : media.size.height * 0.82,
                         ),
                         child: Container(
                           width: media.size.width * 0.88,
@@ -1892,6 +2087,10 @@ class _RedeemDialogState extends State<_RedeemDialog> {
     final keyboard = media.viewInsets.bottom;
     final width = media.size.width;
 
+    // 新增：判断横屏和键盘状态
+    final isLandscape = media.size.width > media.size.height;
+    final isKeyboardVisible = keyboard > 0;
+
     return PopScope(
       canPop: !_loading,
       child: Material(
@@ -1900,18 +2099,29 @@ class _RedeemDialogState extends State<_RedeemDialog> {
           child: AnimatedPadding(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOutCubic,
+            // 动态 Padding：横屏且键盘弹出时减小顶部间距
             padding: EdgeInsets.fromLTRB(
               18,
-              20,
+              (isLandscape && isKeyboardVisible) ? 8 : 20,
               18,
-              20 + keyboard,
+              (isLandscape && isKeyboardVisible) ? keyboard + 8 : 20 + keyboard,
             ),
-            child: Center(
+            // 放弃 Center，改为动态 Align
+            child: Align(
+              alignment: (isLandscape && isKeyboardVisible) 
+                  ? Alignment.topCenter 
+                  : Alignment.center,
               child: SingleChildScrollView(
                 keyboardDismissBehavior:
                     ScrollViewKeyboardDismissBehavior.onDrag,
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
+                  // 横屏下加上 maxHeight 限制，确保超长时 ScrollView 能生效
+                  constraints: BoxConstraints(
+                    maxWidth: 420,
+                    maxHeight: isLandscape 
+                        ? media.size.height * 0.95 
+                        : double.infinity,
+                  ),
                   child: Container(
                     width: width * 0.90,
                     padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),

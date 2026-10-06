@@ -119,6 +119,125 @@ Map<String, dynamic> _sceneJsonMap(dynamic value) {
 
 String _sceneString(dynamic value) => value?.toString().trim() ?? '';
 
+/// 地点 HUD 使用骨架中的地点层名称；具体活动点和环境描写留在原始 location。
+/// 只匹配当前地点，不按标点猜层级，也不把剧本标题当成地点。
+String novelLocationHudTitle({
+  required String location,
+  required JsonMap worldSetting,
+  String currentSceneId = '',
+  String mapSceneId = '',
+  String currentSceneName = '',
+  List<NovelWorldMapRegion> worldRegions = const <NovelWorldMapRegion>[],
+}) {
+  final rawLocation = location.trim();
+  if (rawLocation.isEmpty) return '';
+
+  String atlasTitleFor(String sceneId) {
+    if (sceneId.isEmpty) return '';
+    final places = <NovelWorldMapPlace>[
+      for (final region in worldRegions)
+        for (final place in region.places)
+          if (place.runtimeSceneIds.contains(sceneId)) place,
+    ];
+    return places.length == 1 ? places.single.node.name.trim() : '';
+  }
+  final authoritativeAtlasTitle = atlasTitleFor(currentSceneId);
+  if (authoritativeAtlasTitle.isNotEmpty) return authoritativeAtlasTitle;
+
+  String identity(String value) =>
+      value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+
+  bool matches(dynamic value) {
+    final label = identity(_sceneString(value));
+    final current = identity(rawLocation);
+    if (label.isEmpty) return false;
+    if (current == label) return true;
+    // 已注册地点后可以附带一段环境描述；分隔符只用于匹配边界。
+    if (!current.startsWith(label)) return false;
+    final suffix = current.substring(label.length);
+    return RegExp(r'^[，,。；;]').hasMatch(suffix);
+  }
+
+  final skeleton = _sceneJsonMap(worldSetting['scene_skeleton']);
+  final entries = <JsonMap>[];
+  final majors = skeleton['major_regions'];
+  if (majors is List) {
+    for (final rawMajor in majors) {
+      final parents = _sceneJsonMap(rawMajor)['parent_scenes'];
+      if (parents is! List) continue;
+      for (final rawParent in parents) {
+        final parent = _sceneJsonMap(rawParent);
+        final children = parent['child_scenes'];
+        if (children is! List) continue;
+        for (final rawChild in children) {
+          final child = _sceneJsonMap(rawChild);
+          if (child.isEmpty) continue;
+          final parentName = _sceneString(parent['name']);
+          final localName = _sceneString(child['local_name']);
+          entries.add(<String, dynamic>{
+            ...child,
+            'hud_name': parentName.isNotEmpty
+                ? parentName
+                : (localName.isNotEmpty ? localName : _sceneString(child['name'])),
+          });
+        }
+      }
+    }
+  }
+  final dynamicScenes = skeleton['dynamic_scenes'];
+  if (dynamicScenes is List) {
+    for (final rawScene in dynamicScenes) {
+      final scene = _sceneJsonMap(rawScene);
+      if (scene.isEmpty) continue;
+      final parentName = _sceneString(scene['parent_scene_name']);
+      entries.add(<String, dynamic>{
+        ...scene,
+        'hud_name': parentName.isNotEmpty ? parentName : _sceneString(scene['name']),
+      });
+    }
+  }
+
+  // WorldState 的当前场景 ID 优先于名称，同名子场景仍能定位到各自父场景。
+  if (currentSceneId.isNotEmpty) {
+    final byId = entries.where(
+      (entry) => _sceneString(entry['scene_id']) == currentSceneId,
+    ).toList();
+    if (byId.length == 1 && _sceneString(byId.single['hud_name']).isNotEmpty) {
+      return _sceneString(byId.single['hud_name']);
+    }
+  }
+
+  final byName = entries.where(
+    (entry) => matches(entry['name']) || matches(entry['local_name']),
+  ).toList();
+  if (byName.length == 1 && _sceneString(byName.single['hud_name']).isNotEmpty) {
+    return _sceneString(byName.single['hud_name']);
+  }
+  if (byName.length > 1) return rawLocation;
+
+  final graph = _sceneJsonMap(worldSetting['scene_graph']);
+  final graphScenes = _sceneJsonMap(graph['scenes']);
+  final graphScene = _sceneJsonMap(graphScenes[mapSceneId]);
+  final aliases = graphScene['aliases'];
+  // 地图刷新可能晚于 world_state_update，旧地图 ID 必须有当前名称佐证。
+  final mapMatchesLocation = matches(currentSceneName) ||
+      matches(graphScene['name']) ||
+      (aliases is List && aliases.any(matches));
+  if (mapSceneId.isNotEmpty && mapMatchesLocation) {
+    final atlasTitle = atlasTitleFor(mapSceneId);
+    if (atlasTitle.isNotEmpty) return atlasTitle;
+    final byId = entries.where(
+      (entry) => _sceneString(entry['scene_id']) == mapSceneId,
+    ).toList();
+    if (byId.length == 1 && _sceneString(byId.single['hud_name']).isNotEmpty) {
+      return _sceneString(byId.single['hud_name']);
+    }
+  }
+
+  // 老存档或未登记动态地点没有可确认的层级，保留原名，不臆造父场景。
+  return rawLocation;
+}
+
 bool _sceneBool(dynamic value, {bool fallback = false}) {
   if (value is bool) return value;
   if (value is num) return value != 0;
@@ -286,6 +405,7 @@ class NovelSceneMapData {
     this.mobility = const NovelSceneMobility(),
     this.targets = const <NovelSceneMapNode>[],
     this.majorScenes = const <NovelSceneMapNode>[],
+    this.worldRegions = const <NovelWorldMapRegion>[],
   });
 
   final bool configured;
@@ -294,6 +414,7 @@ class NovelSceneMapData {
   final NovelSceneMobility mobility;
   final List<NovelSceneMapNode> targets;
   final List<NovelSceneMapNode> majorScenes;
+  final List<NovelWorldMapRegion> worldRegions;
 
   bool get hasCurrentScene =>
       currentSceneId.isNotEmpty || currentScene.name.isNotEmpty;
@@ -302,6 +423,8 @@ class NovelSceneMapData {
     final data = _sceneJsonMap(value);
     final rawTargets = data['targets'];
     final rawMajorScenes = data['major_scenes'];
+    final atlas = _sceneJsonMap(data['world_atlas']);
+    final rawRegions = atlas['regions'];
     return NovelSceneMapData(
       configured: _sceneBool(data['configured']),
       currentSceneId: _sceneString(data['current_scene_id']),
@@ -319,6 +442,62 @@ class NovelSceneMapData {
               .where((item) => item.sceneId.isNotEmpty || item.name.isNotEmpty)
               .toList(growable: false)
           : const <NovelSceneMapNode>[],
+      worldRegions: rawRegions is List
+          ? rawRegions.map(NovelWorldMapRegion.fromDynamic)
+              .where((region) => region.node.sceneId.isNotEmpty)
+              .toList(growable: false)
+          : const <NovelWorldMapRegion>[],
+    );
+  }
+}
+
+// Atlas IDs identify region/place labels; movement uses existing runtime nodes.
+class NovelWorldMapPlace {
+  const NovelWorldMapPlace({
+    required this.node,
+    this.current = false,
+    this.runtimeSceneIds = const <String>[],
+  });
+
+  final NovelSceneMapNode node;
+  final bool current;
+  final List<String> runtimeSceneIds;
+
+  factory NovelWorldMapPlace.fromDynamic(dynamic value) {
+    final data = _sceneJsonMap(value);
+    final ids = data['runtime_scene_ids'];
+    return NovelWorldMapPlace(
+      node: NovelSceneMapNode.fromDynamic(data),
+      current: _sceneBool(data['current']),
+      runtimeSceneIds: ids is List
+          ? ids.map(_sceneString).where((id) => id.isNotEmpty).toList(growable: false)
+          : const <String>[],
+    );
+  }
+}
+
+class NovelWorldMapRegion {
+  const NovelWorldMapRegion({
+    required this.node,
+    this.current = false,
+    this.places = const <NovelWorldMapPlace>[],
+  });
+
+  final NovelSceneMapNode node;
+  final bool current;
+  final List<NovelWorldMapPlace> places;
+
+  factory NovelWorldMapRegion.fromDynamic(dynamic value) {
+    final data = _sceneJsonMap(value);
+    final children = data['children'];
+    return NovelWorldMapRegion(
+      node: NovelSceneMapNode.fromDynamic(data),
+      current: _sceneBool(data['current']),
+      places: children is List
+          ? children.map(NovelWorldMapPlace.fromDynamic)
+              .where((place) => place.node.sceneId.isNotEmpty)
+              .toList(growable: false)
+          : const <NovelWorldMapPlace>[],
     );
   }
 }
@@ -1312,6 +1491,18 @@ class NovelGameController extends ChangeNotifier {
     return parts.sublist(0, parts.length - 1).join(' · ');
   }
 
+  /// 左上角专用显示名；探索页等旧消费者继续使用原来的地点字段。
+  String get locationHudTitle {
+    return novelLocationHudTitle(
+      location: world.location,
+      worldSetting: asJsonMap(scenario?.raw['world_setting']),
+      currentSceneId: world.currentSceneId,
+      mapSceneId: sceneMap.currentSceneId,
+      currentSceneName: sceneMap.currentScene.name,
+      worldRegions: sceneMap.worldRegions,
+    );
+  }
+
   /// 探索页只消费后端 scene-map 返回的当前场景资产，不自行创建场景。
   JsonMap get currentSceneAsset => sceneMap.currentScene.sceneAsset;
 
@@ -1748,6 +1939,8 @@ class NovelGameController extends ChangeNotifier {
 
     world = world.copyWith(
       location: stringValue(attributes['location'], world.location),
+      currentSceneId: attributes['current_scene_id'] == null
+          ? null : stringValue(attributes['current_scene_id']),
       weather: stringValue(attributes['weather'], world.weather),
       atmosphere: stringValue(attributes['atmosphere'], world.atmosphere),
       backgroundUrl: stringValue(
@@ -2243,7 +2436,8 @@ class NovelGameController extends ChangeNotifier {
       }
       surroundingsAvailability = Map<String, dynamic>.from(payload);
       debugPrint(
-        '[NovelSurroundings] scene=${stringValue(payload['scene_title'])} '
+        '[NovelSurroundings] scene=$locationHudTitle '
+        'rawScene=${stringValue(payload['scene_title'])} '
         'available=${boolValue(payload['available'])} '
         'canInvestigate=${boolValue(payload['can_investigate'])} '
         'status=${stringValue(payload['status'])} '
@@ -3166,6 +3360,8 @@ class NovelGameController extends ChangeNotifier {
     final previousMessageLocation = world.location;
     world = world.copyWith(
       location: stringValue(extra['location'], world.location),
+      currentSceneId: extra['current_scene_id'] == null
+          ? null : stringValue(extra['current_scene_id']),
       weather: stringValue(extra['weather'], world.weather),
       atmosphere: stringValue(extra['atmosphere'], world.atmosphere),
     );
@@ -4432,6 +4628,8 @@ class NovelGameController extends ChangeNotifier {
           world = world.copyWith(
             backgroundUrl: backgroundUrl,
             location: stringValue(data['location'], world.location),
+            currentSceneId: data['scene_id'] == null
+                ? null : stringValue(data['scene_id']),
           );
         }
         break;
@@ -4439,6 +4637,8 @@ class NovelGameController extends ChangeNotifier {
         final previousLocation = world.location;
         world = world.copyWith(
           location: stringValue(data['current_location'] ?? data['location'], world.location),
+          currentSceneId: data['current_scene_id'] == null
+              ? null : stringValue(data['current_scene_id']),
           weather: stringValue(data['weather'], world.weather),
           atmosphere: stringValue(data['atmosphere'], world.atmosphere),
         );

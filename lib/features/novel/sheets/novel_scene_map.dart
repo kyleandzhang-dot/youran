@@ -136,6 +136,7 @@ class _WorldMapEntry {
     this.current = false,
     this.node,
     this.children = const <_WorldMapEntry>[],
+    this.routes = const <NovelSceneMapNode>[],
   });
 
   final String id;
@@ -145,6 +146,7 @@ class _WorldMapEntry {
   final bool current;
   final NovelSceneMapNode? node;
   final List<_WorldMapEntry> children;
+  final List<NovelSceneMapNode> routes;
 
   bool get showsImage => imageUrl.trim().isNotEmpty;
 }
@@ -808,77 +810,37 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
       ];
     }
 
-    final rawCurrent = map.currentScene;
-    final knownMajorScenes = map.majorScenes.isNotEmpty
-        ? map.majorScenes
-        : map.targets.where((node) => node.isMajorScene).toList(growable: false);
-    final majorById = <String, NovelSceneMapNode>{
-      for (final node in knownMajorScenes)
-        if (node.isMajorScene && node.sceneId.trim().isNotEmpty)
-          node.sceneId.trim(): node,
-    };
-
-    final parentMajor = rawCurrent.parentSceneId.isEmpty
-        ? null
-        : majorById[rawCurrent.parentSceneId.trim()];
-    final currentRegion = rawCurrent.isMajorScene
-        ? rawCurrent
-        : (parentMajor ?? rawCurrent);
-    if (currentRegion.sceneId.trim().isNotEmpty) {
-      majorById[currentRegion.sceneId.trim()] = currentRegion;
-    }
-
-    final childrenByParent = <String, List<NovelSceneMapNode>>{};
-    for (final node in map.targets) {
-      final parentId = node.parentSceneId.trim();
-      if (node.isMajorScene || parentId.isEmpty) continue;
-      childrenByParent.putIfAbsent(parentId, () => <NovelSceneMapNode>[]).add(node);
-    }
-    if (!rawCurrent.isMajorScene && rawCurrent.sceneId.trim().isNotEmpty) {
-      final parentId = rawCurrent.parentSceneId.trim();
-      if (parentId.isNotEmpty &&
-          !(childrenByParent[parentId] ?? const <NovelSceneMapNode>[])
-              .any((node) => node.sceneId == rawCurrent.sceneId)) {
-        childrenByParent
-            .putIfAbsent(parentId, () => <NovelSceneMapNode>[])
-            .add(rawCurrent);
-      }
-    }
-
+    // Atlas region/place IDs describe the two visible levels. They are never
+    // navigation destinations; clicks must use existing one-hop runtime nodes.
     final entries = <_WorldMapEntry>[];
-    for (final node in majorById.values) {
-      final regionId = node.sceneId.trim();
-      final children = <_WorldMapEntry>[
-        for (final child in childrenByParent[regionId] ?? const <NovelSceneMapNode>[])
-          _WorldMapEntry(
-            id: child.sceneId,
-            name: child.name,
-            imageUrl: child.imageUrl,
-            unlocked: !child.isLocked,
-            current: child.sceneId == rawCurrent.sceneId,
-            node: child,
-          ),
-      ];
-      children.sort((a, b) {
-        if (a.current != b.current) return a.current ? -1 : 1;
-        return a.name.compareTo(b.name);
-      });
+    for (final region in map.worldRegions) {
+      final children = region.places.map((place) {
+        final routes = map.targets.where((target) =>
+            place.runtimeSceneIds.contains(target.sceneId) && !target.isLocked)
+            .toList(growable: false);
+        return _WorldMapEntry(
+          id: place.node.sceneId,
+          name: place.node.name,
+          imageUrl: place.node.imageUrl,
+          unlocked: place.current || routes.isNotEmpty,
+          current: place.current,
+          node: routes.length == 1 ? routes.single : null,
+          routes: routes,
+        );
+      }).toList(growable: false);
       entries.add(
         _WorldMapEntry(
-          id: regionId,
-          name: node.name,
-          imageUrl: node.imageUrl,
-          unlocked: !node.isLocked,
-          current: regionId == currentRegion.sceneId,
-          node: node,
+          id: region.node.sceneId,
+          name: region.node.name,
+          imageUrl: region.node.imageUrl,
+          unlocked: true, // Region boards remain visible even without a route.
+          current: region.current,
           children: children,
         ),
       );
     }
-    entries.sort((a, b) {
-      if (a.current != b.current) return a.current ? -1 : 1;
-      return a.name.compareTo(b.name);
-    });
+    // Keep authored order so discovering/moving between places does not reshuffle
+    // either the region plates or the nested Voronoi cells.
     return entries;
   }
 
@@ -896,7 +858,15 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
         );
       return;
     }
-    if (entry.current || entry.node == null) return;
+    if (entry.current) return;
+    if (entry.routes.length > 1) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('该地点有多个入口，请从场景出口选择路线'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+    if (entry.node == null) return;
 
     setState(() => _moving = true);
     final accepted = await controller.requestSceneMove(entry.node!);
@@ -957,6 +927,7 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                   Positioned.fill(
                     child: LayoutBuilder(
                       builder: (context, constraints) {
+                        if (entries.isEmpty) return const SizedBox.expand();
                         final isDesktop = controller.desktopMode;
                         if (_lastDesktopMode != isDesktop) {
                           _lastDesktopMode = isDesktop;
@@ -1097,6 +1068,13 @@ class _NovelWorldMapPageState extends State<_NovelWorldMapPage>
                           : () => Navigator.of(context).pop(),
                     ),
                   ),
+                  if (entries.isEmpty && !loading)
+                    const Center(
+                      child: Text(
+                        '暂无一级区域和二级地点数据',
+                        style: TextStyle(color: Color(0xFFB9C0D0)),
+                      ),
+                    ),
                   if (loading)
                     Positioned(
                       top: 16,
@@ -1487,13 +1465,27 @@ bool _pointInsidePolygon(Offset point, List<Offset> polygon) {
 
 Offset _polygonCentroid(List<Offset> polygon) {
   if (polygon.isEmpty) return Offset.zero;
-  var x = 0.0;
-  var y = 0.0;
-  for (final point in polygon) {
-    x += point.dx;
-    y += point.dy;
+  
+  double signedArea = 0.0;
+  double cx = 0.0;
+  double cy = 0.0;
+  
+  for (int i = 0; i < polygon.length; i++) {
+    final a = polygon[i];
+    final b = polygon[(i + 1) % polygon.length];
+    // 叉乘计算有向面积
+    final crossProduct = (a.dx * b.dy - b.dx * a.dy);
+    signedArea += crossProduct;
+    cx += (a.dx + b.dx) * crossProduct;
+    cy += (a.dy + b.dy) * crossProduct;
   }
-  return Offset(x / polygon.length, y / polygon.length);
+  
+  signedArea *= 0.5;
+  
+  // 兜底：如果面积为0或极其微小，退回顶点平均或第一个点
+  if (signedArea.abs() < 1e-6) return polygon.first;
+  
+  return Offset(cx / (6.0 * signedArea), cy / (6.0 * signedArea));
 }
 
 Rect _polygonBounds(List<Offset> polygon) {
