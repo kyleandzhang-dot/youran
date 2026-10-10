@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'package:image/image.dart' as img;
+import 'package:sentry_flutter/sentry_flutter.dart';
 
 /// Depth Anything V2 Small (ONNX) local inference service.
 ///
@@ -42,6 +43,15 @@ class DepthService {
 
   bool get isReady => _session != null;
 
+  /// 记录一条面包屑。原生层崩溃（Dart 抓不到）发生后，
+  /// Sentry 会把崩溃前最后的这些记录一起上报，用来判断崩在哪一步。
+  void _crumb(String message) {
+    debugPrint(message);
+    Sentry.addBreadcrumb(
+      Breadcrumb(message: message, category: 'depth'),
+    );
+  }
+
   /// Loads the ONNX model once. Safe to call repeatedly.
   Future<void> warmUp() {
     if (_session != null) return Future<void>.value();
@@ -55,15 +65,16 @@ class DepthService {
         return;
       }
 
+      final isIOS = defaultTargetPlatform == TargetPlatform.iOS;
+
       // Try each provider individually, in priority order, and skip any
-      // provider whose session creation throws instead of retrying with
-      // "no explicit providers" (which on iOS tends to auto-select CoreML
-      // again and hit the exact same crash). This guarantees we eventually
-      // land on CPU, which is always expected to work.
+      // provider whose session creation throws.
+      //
+      // iOS 上刻意跳过 CoreML：CoreML 在 fp16 模型上会在原生层直接崩溃，
+      // Dart 的 try/catch 抓不到，会导致整个 App 闪退。iOS 只用 XNNPACK / CPU。
       final available = await _runtime.getAvailableProviders();
       final preferredOrder = <OrtProvider>[
-        // Shipping mobile targets.
-        OrtProvider.CORE_ML,
+        if (!isIOS) OrtProvider.CORE_ML,
         OrtProvider.NNAPI,
         // Native desktop fallbacks are harmless even though desktop is not a
         // shipping target for this app.
@@ -75,12 +86,13 @@ class DepthService {
           .where(available.contains)
           .toList(growable: false);
 
-      debugPrint('[Depth] available providers: $available');
-      debugPrint('[Depth] candidate providers (in order): $providers');
+      _crumb('[Depth] available providers: $available');
+      _crumb('[Depth] candidate providers (in order): $providers');
 
       final errors = <String>[];
       for (final provider in providers) {
         try {
+          _crumb('[Depth] creating session with provider: $provider');
           _session = await _runtime.createSessionFromAsset(
             modelAsset,
             options: OrtSessionOptions(
@@ -89,25 +101,35 @@ class DepthService {
               interOpNumThreads: 1,
             ),
           );
-          debugPrint('[Depth] session ready using provider: $provider');
+          _crumb('[Depth] session ready using provider: $provider');
           return;
         } catch (error, stack) {
-          debugPrint('[Depth] provider $provider failed: $error');
+          _crumb('[Depth] provider $provider failed: $error');
           debugPrint('$stack');
           errors.add('$provider: $error');
+          Sentry.captureException(error, stackTrace: stack);
         }
+      }
+
+      // iOS 不走"不指定 provider"的兜底，因为插件可能自动再选回 CoreML。
+      if (isIOS) {
+        throw StateError(
+          'Depth session creation failed on iOS: ${errors.join(' | ')}',
+        );
       }
 
       // Last resort: let the plugin pick with no explicit providers at all,
       // in case getAvailableProviders() under-reported what's usable.
       try {
         _session = await _runtime.createSessionFromAsset(modelAsset);
-        debugPrint('[Depth] default session ready after all providers failed.');
+        _crumb('[Depth] default session ready after all providers failed.');
         return;
       } catch (error, stack) {
         errors.add('default: $error');
         Error.throwWithStackTrace(
-          StateError('Depth session creation failed for every provider: ${errors.join(' | ')}'),
+          StateError(
+            'Depth session creation failed for every provider: ${errors.join(' | ')}',
+          ),
           stack,
         );
       }
@@ -164,6 +186,7 @@ class DepthService {
       throw StateError('Depth Anything model failed to initialize.');
     }
 
+    _crumb('[Depth] decode start (${imageBytes.length} bytes)');
     final decoded = img.decodeImage(imageBytes);
     if (decoded == null) {
       throw const FormatException('Unsupported or damaged image data.');
@@ -172,6 +195,10 @@ class DepthService {
     final source = img.bakeOrientation(decoded);
 
     final inputSize = _calculateInputSize(source.width, source.height);
+    _crumb(
+      '[Depth] resize ${source.width}x${source.height} -> '
+      '${inputSize.width}x${inputSize.height}',
+    );
     final resized = img.copyResize(
       source,
       width: inputSize.width,
@@ -190,7 +217,9 @@ class DepthService {
 
     Map<String, OrtValue>? outputs;
     try {
+      _crumb('[Depth] run start ${inputSize.width}x${inputSize.height}');
       outputs = await session.run(<String, OrtValue>{inputName: inputValue});
+      _crumb('[Depth] run done');
 
       final output = outputs[outputName];
       if (output == null) {
@@ -213,6 +242,7 @@ class DepthService {
         dimensions.width,
         dimensions.height,
       );
+      _crumb('[Depth] postprocess done');
 
       return DepthResult(
         depthPng: preview,

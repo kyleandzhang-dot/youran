@@ -2,7 +2,7 @@ name: youran_ai
 description: "Youran AI interactive story platform."
 publish_to: 'none'
 
-version: 1.0.0+61
+version: 1.0.0+62
 
 environment:
   sdk: '>=3.10.0 <4.0.0'
@@ -40,6 +40,9 @@ dependencies:
   flutter_onnxruntime: ^1.8.4
   image: ^4.9.2
 
+  # Crash reporting (版本以 pub.dev 最新为准，运行 flutter pub upgrade sentry_flutter 可更新)
+  sentry_flutter: ^9.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -47,12 +50,27 @@ dev_dependencies:
   rename: ^3.1.0
   flutter_launcher_icons: ^0.13.1
 
+  # 上传 iOS 符号文件(dSYM)到 Sentry，让崩溃堆栈显示函数名而不是内存地址
+  sentry_dart_plugin: ^3.0.0
+
 flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/icon/icon.png"
   min_sdk_android: 21
   remove_alpha_ios: true
+
+# 符号文件上传配置。auth token 不要写在这里，
+# 在云构建里设置环境变量 SENTRY_AUTH_TOKEN。
+# 构建完成后运行：dart run sentry_dart_plugin
+sentry:
+  upload_debug_symbols: true
+  upload_source_maps: false
+  upload_sources: false
+  project: flutter
+  org: yoran
+  wait_for_processing: false
+  log_level: info
 
 flutter:
   uses-material-design: true

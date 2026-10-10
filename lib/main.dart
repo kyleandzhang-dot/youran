@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 
 import 'api/api_client.dart';
 import 'api/user_api.dart';
@@ -85,34 +86,64 @@ Future<void> _handleForcedLogout({
   );
 }
 
+/// Sentry DSN，打包时通过 --dart-define=SENTRY_DSN=xxx 传入。
+/// DSN 为空（本地调试没传）时，Sentry 不会上报任何东西。
+const String _sentryDsn = String.fromEnvironment(
+  'SENTRY_DSN',
+  defaultValue:
+      'https://fdd8a3e9936640707b73cdaeffa7b126@o4512229961695232.ingest.us.sentry.io/4512229968510976',
+);
+
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = _sentryDsn;
+      // 只要崩溃上报，不开性能追踪。
+      options.tracesSampleRate = 0;
+      // 记录 App 版本，方便区分是哪个构建崩溃（与 pubspec 的 version 对应）。
+      options.environment = const bool.fromEnvironment('dart.vm.product')
+          ? 'production'
+          : 'debug';
+      // 原生崩溃 / 卡死(ANR 对应的 app hang) 检测，默认开启，这里显式写出。
+      options.enableNativeCrashHandling = true;
+      options.enableAutoNativeBreadcrumbs = true;
+    },
+    appRunner: () async {
+      WidgetsFlutterBinding.ensureInitialized();
 
-  AuthRedirect.register(_handleForcedLogout);
+      AuthRedirect.register(_handleForcedLogout);
 
-  debugPrint('HTTP API：${ApiClient.baseUrl}');
-  debugPrint('WebSocket：${ApiClient.webSocketBaseUrl}');
+      debugPrint('HTTP API：${ApiClient.baseUrl}');
+      debugPrint('WebSocket：${ApiClient.webSocketBaseUrl}');
+      Sentry.addBreadcrumb(Breadcrumb(message: '[App] main started'));
 
-  runApp(const MyApp());
+      runApp(const MyApp());
 
-  // 首帧先正常显示，再在后台预热 Depth Anything V2。
-  // 不阻塞 App 启动；后续进入剧情或开发者 2.5D 预览时可直接复用 session。
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    unawaited(_warmUpDepthModel());
-  });
+      // 首帧先正常显示，再在后台预热 Depth Anything V2。
+      // 不阻塞 App 启动；后续进入剧情或开发者 2.5D 预览时可直接复用 session。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_warmUpDepthModel());
+      });
+    },
+  );
 }
 
 Future<void> _warmUpDepthModel() async {
   final watch = Stopwatch()..start();
+  Sentry.addBreadcrumb(Breadcrumb(message: '[Depth] warm-up start'));
   try {
     await DepthService.instance.warmUp();
     watch.stop();
+    Sentry.addBreadcrumb(Breadcrumb(
+      message: '[Depth] warm-up ready in ${watch.elapsedMilliseconds}ms',
+    ));
     debugPrint('[Depth] warm-up ready in ${watch.elapsedMilliseconds}ms');
   } catch (error, stackTrace) {
     watch.stop();
     // Depth 是增强效果，预热失败不能影响登录、首页或剧情主流程。
     debugPrint('[Depth] warm-up failed after ${watch.elapsedMilliseconds}ms: $error');
     debugPrintStack(stackTrace: stackTrace);
+    unawaited(Sentry.captureException(error, stackTrace: stackTrace));
   }
 }
 
@@ -132,6 +163,8 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
+      // 自动把页面跳转记录成面包屑，崩溃时能看到最后进入了哪个页面。
+      navigatorObservers: <NavigatorObserver>[SentryNavigatorObserver()],
       home: const _StartupGate(),
       onGenerateRoute: (RouteSettings settings) {
         return novelRuntime.onGenerateRoute(settings);
@@ -234,6 +267,11 @@ class _StartupGateState extends State<_StartupGate> {
     ApiClient.instance.setAccessToken(session.accessToken);
     ApiClient.instance.setUserId(session.userId);
 
+    // 给 Sentry 绑定用户 ID（只传 ID，不传用户名/token），方便对应具体用户的崩溃。
+    Sentry.configureScope((scope) {
+      scope.setUser(SentryUser(id: session.userId));
+    });
+
     setState(() {
       _loading = true;
       _status = '正在寻找上次的世界…';
@@ -243,6 +281,7 @@ class _StartupGateState extends State<_StartupGate> {
       '[Startup] session ready: userId=${ApiClient.instance.userId}, '
       'token=${ApiClient.instance.accessToken == null ? 'missing' : 'ready'}',
     );
+    Sentry.addBreadcrumb(Breadcrumb(message: '[Startup] session ready'));
 
     try {
       final home = await UserApi.getHomeData();
@@ -349,6 +388,8 @@ class _StartupRedirectState extends State<_StartupRedirect> {
       final route = mode == 'online'
           ? '/online/${launch.scenarioId}'
           : '/$routeMode/${launch.scenarioId}';
+
+      Sentry.addBreadcrumb(Breadcrumb(message: '[Startup] redirect to $route'));
 
       Navigator.of(context).pushReplacementNamed(
         route,
