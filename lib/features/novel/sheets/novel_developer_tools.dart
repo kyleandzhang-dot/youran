@@ -1050,8 +1050,17 @@ class _DeveloperToolsPanelState extends State<_DeveloperToolsPanel> {
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(
                   title: '自由探索',
-                  subtitle: '整屏背景 + 隐形移动格；测试 NPC、事件、敌人、出口与碰撞编辑',
-                  onTap: () => _openPreview(actions.previewExploration),
+                  subtitle: '整屏背景 + 隐形移动格；含场景 NPC 预览（路人游走 + 固定商人）',
+                  onTap: () async {
+                    // 只有从这里进入的探索页才显示 NPC；退出后立即关闭，
+                    // 正式入口不受影响。
+                    novelDevNpcPreviewEnabled.value = true;
+                    try {
+                      await _openPreview(actions.previewExploration);
+                    } finally {
+                      novelDevNpcPreviewEnabled.value = false;
+                    }
+                  },
                 ),
                 _DeveloperPreviewDivider(),
                 _DeveloperPreviewRow(

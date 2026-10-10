@@ -20,6 +20,105 @@ const double _sceneObjectInteractionDefaultRadius = .75;
 const double _sceneObjectInteractionMaxRadius = .9;
 const double _sceneLootPickupRadius = .65;
 
+/// 场景出口标记：画在可移动区域地面上的椭圆圈 + 地点名。
+/// 站进圈里才会出现右下角的「前往」按钮，点按钮才真正换场景。
+class _SceneNavMarker {
+  const _SceneNavMarker({required this.target, required this.position});
+
+  final NovelSceneMapNode target;
+  final Offset position;
+}
+
+/// 开发者开关：是否在探索场景里显示 NPC（路人游走 + 固定商人）。
+/// 在「开发者测试 → 场景 NPC」里打开，仅当前会话有效，不写存档。
+final ValueNotifier<bool> novelDevNpcPreviewEnabled = ValueNotifier<bool>(false);
+
+/// 场景 NPC：先复用主角的立绘与走路动画。
+/// - fixed = true：重要商人，固定在可移动区域最上沿，只做呼吸待机；
+/// - fixed = false：路人，在可移动区域中部随机游走。
+class _SceneNpc {
+  _SceneNpc({
+    required this.id,
+    required this.name,
+    required this.fixed,
+    required this.position,
+    this.facing = 'S',
+  });
+
+  final String id;
+  final String name;
+  final bool fixed;
+  Offset position;
+  String facing;
+  Offset? target;
+  // 路人专用：dir 为横穿方向（+1 向右 / -1 向左），pauseAtX 为路上随机停步点。
+  double dir = 1.0;
+  double? pauseAtX;
+  double pauseLeft = 0.0;
+  double walkPhase = 0.0;
+  double walkStrength = 0.0;
+  double idlePhase = 0.0;
+
+  // 气泡对白：line 为当前正在说的话；nextSpeakIn 是距离下一次开口的秒数。
+  String? line;
+  double lineAge = 0.0;
+  double lineLeft = 0.0;
+  double nextSpeakIn = 2.0 + math.Random().nextDouble() * 5.0;
+}
+
+/// NPC 对白提供函数（预留接入点）。
+/// 现在返回写死的台词；以后接真实数据时，只需要把
+/// [novelNpcLineProvider] 换成你自己的函数：
+///   - npcId / npcName：NPC 标识与名字（如 merchant_0 / 药店老板）；
+///   - isMerchant：true 为固定商人，false 为游走路人；
+///   - sceneId：当前场景 id（可按场景给不同台词）。
+/// 返回 null 表示这次不说话。
+typedef NovelNpcLineProvider = String? Function({
+  required String npcId,
+  required String npcName,
+  required bool isMerchant,
+  required String sceneId,
+});
+
+NovelNpcLineProvider novelNpcLineProvider = _defaultNpcLineProvider;
+
+String? _defaultNpcLineProvider({
+  required String npcId,
+  required String npcName,
+  required bool isMerchant,
+  required String sceneId,
+}) {
+  const byNpc = <String, List<String>>{
+    'merchant_0': <String>[
+      '走过路过，千万不要错过！',
+      '回气丹新到货，童叟无欺~',
+      '受伤了？来我这儿瞧瞧！',
+    ],
+    'merchant_1': <String>[
+      '新式战袍，量身定做！',
+      '这料子可是魔兽皮缝的，结实！',
+      '客官，试试这件？',
+    ],
+    'merchant_2': <String>[
+      '接任务啦——报酬丰厚！',
+      '黑岩城那边又挂新悬赏了。',
+      '想赚灵石？来看看榜单！',
+    ],
+  };
+  const gossip = <String>[
+    '听说前两天，萧家后院闹出了动静……',
+    '你听说了吗？云岚宗要来人了。',
+    '最近坊市的药价又涨了。',
+    '唉，今天的生意真难做。',
+    '那边新开的铺子，据说不错。',
+    '昨晚城外好像有魔兽在嚎……',
+    '别挡路啊，我赶着去坊市呢。',
+    '听说有人在山脉里捡到了宝贝。',
+  ];
+  final pool = isMerchant ? (byNpc[npcId] ?? const <String>['欢迎光临！']) : gossip;
+  return pool[math.Random().nextInt(pool.length)];
+}
+
 /// 正式自由探索页：
 /// - 直接读取 Controller 中由后端生成并登记到 scene-map 的当前场景；
 /// - 使用后端生成的 1 张 1536x864 完整横版场景图；
@@ -2349,7 +2448,7 @@ class _SceneAssetCanvas extends StatefulWidget {
 
 class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
   static const double _playerRadius = .28;
-  static const double _maxMoveSpeedPx = 180.0;
+  static const double _maxMoveSpeedPx = 165.0;
 
   // Camera state lives in projected world coordinates. Keeping it independent
   // from the player lets small movements stay inside the deadzone and lets
@@ -2405,6 +2504,262 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     _ensureIdleLoop();
     widget.joystickIntent?.addListener(_onExternalJoystickIntent);
     widget.joystickActive?.addListener(_onExternalJoystickActive);
+    novelDevNpcPreviewEnabled.addListener(_onNpcFlagChanged);
+    if (novelDevNpcPreviewEnabled.value) _startNpcs();
+  }
+
+  // ---------------------------------------------------------------------
+  // 场景 NPC（开发者开关控制）
+  // ---------------------------------------------------------------------
+  static const double _npcWalkSpeedPx = 62.0;
+  final List<_SceneNpc> _npcs = <_SceneNpc>[];
+  // 路人走出画面后，隔一段时间会有新的路人从两侧走进来，这里是各自的倒计时。
+  final List<double> _pendingWanderers = <double>[];
+  int _wandererSerial = 0;
+  static const double _npcEdgeMargin = 2.6; // 出入场点离网格边缘的格数（完全在画外）
+  static const List<String> _wandererNames = <String>[
+    '路人甲', '路人乙', '路人丙', '路人丁', '挑担的汉子', '抱孩子的妇人',
+    '少年', '老者', '佣兵', '药铺伙计',
+  ];
+  Timer? _npcTimer;
+  DateTime? _lastNpcAt;
+
+  void _onNpcFlagChanged() {
+    if (!mounted) return;
+    if (novelDevNpcPreviewEnabled.value) {
+      _startNpcs();
+      setState(() {});
+    } else {
+      _stopNpcs();
+      setState(() {});
+    }
+  }
+
+  void _stopNpcs() {
+    _npcTimer?.cancel();
+    _npcTimer = null;
+    _lastNpcAt = null;
+    _npcs.clear();
+    _pendingWanderers.clear();
+  }
+
+  void _startNpcs() {
+    _spawnNpcs();
+    _npcTimer?.cancel();
+    _lastNpcAt = DateTime.now();
+    _npcTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _npcTick());
+  }
+
+  Offset _randomWalkablePoint({
+    required double minX,
+    required double maxX,
+    required double minY,
+    required double maxY,
+  }) {
+    for (var i = 0; i < 24; i++) {
+      final p = Offset(
+        minX + (maxX - minX) * _sceneRandom.nextDouble(),
+        minY + (maxY - minY) * _sceneRandom.nextDouble(),
+      );
+      if (_canStand(p)) return p;
+    }
+    return _nearestWalkable(Offset((minX + maxX) / 2, (minY + maxY) / 2));
+  }
+
+  void _spawnNpcs() {
+    _npcs.clear();
+    _pendingWanderers.clear();
+    final w = _gridWidth.toDouble();
+
+    // 重要商人：固定在可移动区域最上沿，横向均匀排开。
+    const merchants = <String>['药店老板', '服装店老板', '赏金老板'];
+    for (var i = 0; i < merchants.length; i++) {
+      final desired = Offset(w * (i + 1) / (merchants.length + 1), .6);
+      _npcs.add(_SceneNpc(
+        id: 'merchant_$i',
+        name: merchants[i],
+        fixed: true,
+        position: _nearestWalkable(desired),
+      ));
+    }
+
+    // 初始路人：已经在街上，朝随机一侧横穿；之后会走出画面并由新路人接替。
+    for (var i = 0; i < 4; i++) {
+      _npcs.add(_makeWanderer(fromEdge: false));
+    }
+  }
+
+  /// 生成一个路人。fromEdge=true 时从左/右画外走进来；否则直接出现在街上。
+  _SceneNpc _makeWanderer({required bool fromEdge}) {
+    final w = _gridWidth.toDouble();
+    final h = _gridHeight.toDouble();
+    final serial = _wandererSerial++;
+    final dir = _sceneRandom.nextBool() ? 1.0 : -1.0;
+    final laneY = h * (.30 + _sceneRandom.nextDouble() * .55);
+
+    Offset start;
+    if (fromEdge) {
+      start = Offset(dir > 0 ? -_npcEdgeMargin : w + _npcEdgeMargin, laneY);
+    } else {
+      start = _randomWalkablePoint(
+        minX: 1.5,
+        maxX: w - 1.5,
+        minY: h * .30,
+        maxY: h * .85,
+      );
+    }
+
+    final npc = _SceneNpc(
+      id: 'wanderer_$serial',
+      name: _wandererNames[serial % _wandererNames.length],
+      fixed: false,
+      position: start,
+      facing: dir > 0 ? 'E' : 'W',
+    )..dir = dir;
+
+    // 60% 的路人会在街上随机停下一会儿（站住发呆 / 说话），再继续走。
+    if (_sceneRandom.nextDouble() < .6) {
+      final ahead = fromEdge
+          ? 2.5 + _sceneRandom.nextDouble() * (w - 5.0)
+          : (dir > 0
+              ? start.dx + 1.0 + _sceneRandom.nextDouble() * math.max(1.0, w - start.dx - 3.0)
+              : start.dx - 1.0 - _sceneRandom.nextDouble() * math.max(1.0, start.dx - 3.0));
+      npc.pauseAtX = ahead.clamp(2.0, w - 2.0).toDouble();
+    }
+    return npc;
+  }
+
+  bool _npcOnScreen(_SceneNpc npc) {
+    final w = _gridWidth.toDouble();
+    return npc.position.dx > 1.0 && npc.position.dx < w - 1.0;
+  }
+
+  void _tickNpcSpeech(_SceneNpc npc, double dt) {
+    if (npc.line != null) {
+      npc.lineAge += dt;
+      npc.lineLeft -= dt;
+      // 走出画面就不说了。
+      if (npc.lineLeft <= 0 || !_npcOnScreen(npc)) {
+        npc.line = null;
+        npc.nextSpeakIn = npc.fixed
+            ? 3.0 + _sceneRandom.nextDouble() * 5.0
+            : 6.0 + _sceneRandom.nextDouble() * 9.0;
+      }
+      return;
+    }
+    if (!_npcOnScreen(npc)) return;
+    npc.nextSpeakIn -= dt;
+    if (npc.nextSpeakIn > 0) return;
+    final text = novelNpcLineProvider(
+      npcId: npc.id,
+      npcName: npc.name,
+      isMerchant: npc.fixed,
+      sceneId: _sceneString(widget.assetPackage['scene_id']),
+    );
+    if (text == null || text.trim().isEmpty) {
+      npc.nextSpeakIn = 4.0;
+      return;
+    }
+    npc.line = text.trim();
+    npc.lineAge = 0.0;
+    npc.lineLeft = 2.6 + npc.line!.length * .16;
+  }
+
+  void _npcTick() {
+    if (!mounted) {
+      _npcTimer?.cancel();
+      return;
+    }
+    if (_npcs.isEmpty && _pendingWanderers.isEmpty) return;
+    final now = DateTime.now();
+    final last = _lastNpcAt ?? now;
+    _lastNpcAt = now;
+    final dt = math.min(.05, math.max(.001, now.difference(last).inMicroseconds / 1000000));
+    final metrics = _sceneMetrics();
+    final w = _gridWidth.toDouble();
+    final h = _gridHeight.toDouble();
+    final exited = <_SceneNpc>[];
+
+    for (final npc in _npcs) {
+      _tickNpcSpeech(npc, dt);
+      if (npc.fixed) {
+        npc.idlePhase = (npc.idlePhase + dt * 2.62) % (math.pi * 2);
+        npc.walkStrength = 0.0;
+        continue;
+      }
+
+      var targetStrength = 0.0;
+      if (npc.pauseLeft > 0) {
+        npc.pauseLeft -= dt;
+      } else {
+        // 到了停步点：停一会儿。
+        final stopX = npc.pauseAtX;
+        if (stopX != null &&
+            ((npc.dir > 0 && npc.position.dx >= stopX) ||
+                (npc.dir < 0 && npc.position.dx <= stopX))) {
+          npc.pauseAtX = null;
+          npc.pauseLeft = 1.5 + _sceneRandom.nextDouble() * 3.5;
+        } else {
+          // 沿逻辑 x 方向直线横穿；画内要避开障碍，画外（出入场段）不检测。
+          final stepLogical = npc.dir * _npcWalkSpeedPx * dt / metrics.tileWidth;
+          var cand = Offset(npc.position.dx + stepLogical, npc.position.dy);
+          final freePass = cand.dx < .3 || cand.dx > w - .3;
+          var blocked = false;
+          if (!freePass && !_canStand(cand)) {
+            // 被挡住：尝试往上/下错开一点继续走。
+            blocked = true;
+            for (final dy in const <double>[.4, -.4, .8, -.8, 1.2, -1.2]) {
+              final y = (npc.position.dy + dy).clamp(h * .26, h * .90).toDouble();
+              final alt = Offset(cand.dx, y);
+              if (_canStand(alt)) {
+                cand = alt;
+                blocked = false;
+                break;
+              }
+            }
+          }
+          if (blocked) {
+            npc.pauseLeft = .5 + _sceneRandom.nextDouble() * .6;
+          } else {
+            final from = metrics.project(npc.position.dx, npc.position.dy);
+            final to = metrics.project(cand.dx, cand.dy);
+            final actualPx = (to - from).distance;
+            npc.position = cand;
+            // 脚步频率比主角系数大一档：NPC 速度慢，但步子要迈得勤快。
+            npc.walkPhase = (npc.walkPhase + actualPx * .13) % (math.pi * 2);
+            targetStrength = .75;
+            npc.facing = npc.dir > 0 ? 'E' : 'W';
+          }
+        }
+      }
+
+      // 走出另一侧画外：移除，稍后会有新路人从两侧进来。
+      if ((npc.dir > 0 && npc.position.dx > w + _npcEdgeMargin + .5) ||
+          (npc.dir < 0 && npc.position.dx < -_npcEdgeMargin - .5)) {
+        exited.add(npc);
+        continue;
+      }
+
+      npc.walkStrength += (targetStrength - npc.walkStrength) *
+          (1.0 - math.exp(-12.0 * dt));
+      if (npc.walkStrength < .01 && targetStrength == 0.0) {
+        npc.walkStrength = 0.0;
+        npc.idlePhase = (npc.idlePhase + dt * 2.62) % (math.pi * 2);
+      }
+    }
+
+    for (final npc in exited) {
+      _npcs.remove(npc);
+      _pendingWanderers.add(2.0 + _sceneRandom.nextDouble() * 7.0);
+    }
+    for (var i = _pendingWanderers.length - 1; i >= 0; i--) {
+      _pendingWanderers[i] -= dt;
+      if (_pendingWanderers[i] <= 0) {
+        _pendingWanderers.removeAt(i);
+        _npcs.add(_makeWanderer(fromEdge: true));
+      }
+    }
+    setState(() {});
   }
 
   void _onExternalJoystickIntent() {
@@ -2425,11 +2780,14 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     if (_sceneString(oldWidget.assetPackage['scene_id']) !=
         _sceneString(widget.assetPackage['scene_id'])) {
       _resetPlayer();
+      if (novelDevNpcPreviewEnabled.value) _spawnNpcs();
     }
   }
 
   @override
   void dispose() {
+    novelDevNpcPreviewEnabled.removeListener(_onNpcFlagChanged);
+    _npcTimer?.cancel();
     widget.joystickIntent?.removeListener(_onExternalJoystickIntent);
     widget.joystickActive?.removeListener(_onExternalJoystickActive);
     _idleTimer?.cancel();
@@ -3015,7 +3373,92 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     ).clamp(.45, _sceneObjectInteractionMaxRadius).toDouble();
   }
 
+  // 出口布局规则：
+  //  1. 优先放左右两侧，每侧最多 2 个（1 个居中偏下，2 个上下错开）；
+  //  2. 数据里明确写了 left/right 的先按其所属一侧放；
+  //  3. 其余（top/bottom/未指定或超出 2 个的）先补满左右空位；
+  //  4. 还放不下的，沿可移动区域最底部均匀排开。
+  List<_SceneNavMarker> _navMarkers() {
+    final targets = widget.navigationTargets
+        .where((t) =>
+            t.isUnlocked && t.sceneId.isNotEmpty && t.triggerType == 'edge')
+        .toList(growable: false);
+    if (targets.isEmpty) return const <_SceneNavMarker>[];
+
+    final w = _gridWidth.toDouble();
+    final h = _gridHeight.toDouble();
+    final left = <NovelSceneMapNode>[];
+    final right = <NovelSceneMapNode>[];
+    final rest = <NovelSceneMapNode>[];
+    for (final t in targets) {
+      if (t.triggerSide == 'left' && left.length < 2) {
+        left.add(t);
+      } else if (t.triggerSide == 'right' && right.length < 2) {
+        right.add(t);
+      } else {
+        rest.add(t);
+      }
+    }
+    final bottom = <NovelSceneMapNode>[];
+    for (final t in rest) {
+      if (left.length < 2 || right.length < 2) {
+        (left.length <= right.length && left.length < 2 ? left : right).add(t);
+      } else {
+        bottom.add(t);
+      }
+    }
+
+    final markers = <_SceneNavMarker>[];
+    List<double> lanes(int n) => n == 1 ? <double>[.62] : <double>[.42, .80];
+    void addSide(List<NovelSceneMapNode> list, double x) {
+      final ys = lanes(list.length);
+      for (var i = 0; i < list.length; i++) {
+        markers.add(_SceneNavMarker(
+          target: list[i],
+          position: _nearestWalkable(Offset(x, h * ys[i])),
+        ));
+      }
+    }
+
+    addSide(left, 1.15);
+    addSide(right, w - 1.15);
+    for (var i = 0; i < bottom.length; i++) {
+      markers.add(_SceneNavMarker(
+        target: bottom[i],
+        position: _nearestWalkable(
+          Offset(w * (i + 1) / (bottom.length + 1), h - 2.2),
+        ),
+      ));
+    }
+    return markers;
+  }
+
+  /// 主角站进某个出口圈（屏幕空间椭圆）里就算“到达”。
+  _SceneNavMarker? _nearbyNavMarker() {
+    final markers = _navMarkers();
+    if (markers.isEmpty) return null;
+    final metrics = _sceneMetrics();
+    final rx = math.max(40.0, metrics.tileWidth * .95);
+    final ry = rx * .42;
+    final pp = metrics.project(_player.dx, _player.dy);
+    _SceneNavMarker? best;
+    var bestScore = double.infinity;
+    for (final m in markers) {
+      final mp = metrics.project(m.position.dx, m.position.dy);
+      final dx = (pp.dx - mp.dx) / rx;
+      final dy = (pp.dy - mp.dy) / ry;
+      final score = dx * dx + dy * dy;
+      if (score <= 1.0 && score < bestScore) {
+        best = m;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
   NovelSceneMapNode? _nearbyNavigationTarget() {
+    final markerHit = _nearbyNavMarker();
+    if (markerHit != null) return markerHit.target;
     final targets = widget.navigationTargets
         .where((target) => target.isUnlocked && target.sceneId.isNotEmpty)
         .toList(growable: false);
@@ -3054,36 +3497,6 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     }
     if (nearest != null) return nearest;
 
-    for (final side in const <String>['left', 'right', 'top', 'bottom']) {
-      final sideTargets = targets
-          .where((target) => target.triggerType == 'edge' && target.triggerSide == side)
-          .toList(growable: false);
-      if (sideTargets.isEmpty) continue;
-      final edgeDistance = switch (side) {
-        'left' => _player.dx,
-        'right' => _gridWidth - _player.dx,
-        'top' => _player.dy,
-        _ => _gridHeight - _player.dy,
-      };
-      if (edgeDistance > 1.0) continue;
-      final ratio = (side == 'left' || side == 'right')
-          ? (_player.dy / _gridHeight).clamp(0.0, 1.0)
-          : (_player.dx / _gridWidth).clamp(0.0, 1.0);
-      for (var index = 0; index < sideTargets.length; index++) {
-        final target = sideTargets[index];
-        final trigger = target.navigationTrigger;
-        final slot = _sceneInt(trigger['slot'], index)
-            .clamp(0, sideTargets.length - 1)
-            .toInt();
-        final minRatio = trigger.containsKey('min_ratio')
-            ? _sceneNum(trigger['min_ratio']).clamp(0.0, 1.0)
-            : slot / sideTargets.length;
-        final maxRatio = trigger.containsKey('max_ratio')
-            ? _sceneNum(trigger['max_ratio']).clamp(0.0, 1.0)
-            : (slot + 1) / sideTargets.length;
-        if (ratio >= minRatio && ratio <= maxRatio) return target;
-      }
-    }
     return null;
   }
 
@@ -3422,6 +3835,7 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
     final floorSpec = _sceneMap(widget.assetPackage['floor']);
     final nearbyBuilding = _nearbyBuilding();
     final nearbyTarget = _nearbyNavigationTarget();
+    final navMarkers = _navMarkers();
     final nearbyInteraction = _nearbySceneInteraction();
 
     // ==========================================
@@ -3524,6 +3938,9 @@ class _SceneAssetCanvasState extends State<_SceneAssetCanvas> {
                                 idlePhase: _idlePhase ?? 0.0,
                                 dustParticles: _dustParticles,
                                 nearbyBuilding: nearbyBuilding,
+                                npcs: _npcs,
+                                navMarkers: navMarkers,
+                                activeNavSceneId: nearbyTarget?.sceneId,
                               ),
                             ),
                           ),
@@ -3903,8 +4320,14 @@ class _SceneAssetPainter extends CustomPainter {
     required this.idlePhase,
     required this.dustParticles,
     this.nearbyBuilding,
+    this.npcs = const <_SceneNpc>[],
+    this.navMarkers = const <_SceneNavMarker>[],
+    this.activeNavSceneId,
   });
 
+  final List<_SceneNpc> npcs;
+  final List<_SceneNavMarker> navMarkers;
+  final String? activeNavSceneId;
   final int gridWidth;
   final int gridHeight;
   final List<JsonMap> objects;
@@ -3942,9 +4365,11 @@ class _SceneAssetPainter extends CustomPainter {
     }
     
     if (showFootprints) _drawFootprints(canvas);
+    _drawNavMarkers(canvas); // 出口圈贴在地面上，角色/NPC 画在它上面
     
     _drawDepthSortedEntities(canvas);
     _drawDustParticles(canvas); // 绘制步尘
+    _drawNpcBubbles(canvas);
     
     final highlighted = nearbyBuilding;
     if (highlighted != null) _drawBuildingHighlight(canvas, highlighted);
@@ -4707,7 +5132,6 @@ class _SceneAssetPainter extends CustomPainter {
     );
   }
 
-
   void _drawDepthSortedEntities(Canvas canvas) {
     final entries = <Map<String, dynamic>>[];
     for (final object in objects) {
@@ -4738,11 +5162,20 @@ class _SceneAssetPainter extends CustomPainter {
       'kind': 'player',
       'depth': metrics.project(player.dx, player.dy).dy,
     });
+    for (final npc in npcs) {
+      entries.add(<String, dynamic>{
+        'kind': 'npc',
+        'npc': npc,
+        'depth': metrics.project(npc.position.dx, npc.position.dy).dy,
+      });
+    }
     entries.sort((a, b) => _sceneNum(a['depth']).compareTo(_sceneNum(b['depth'])));
 
     for (final entry in entries) {
       if (entry['kind'] == 'player') {
         _drawPlayer(canvas);
+      } else if (entry['kind'] == 'npc') {
+        _drawNpc(canvas, entry['npc'] as _SceneNpc);
       } else {
         _drawObject(canvas, _sceneMap(entry['object']));
       }
@@ -4871,7 +5304,195 @@ class _SceneAssetPainter extends CustomPainter {
     }
   }
 
-  void _drawPlayer(Canvas canvas) {
+  void _drawPlayer(Canvas canvas) => _drawCharacter(
+        canvas,
+        player: player,
+        facing: facing,
+        walkPhase: walkPhase,
+        walkStrength: walkStrength,
+        idlePhase: idlePhase,
+      );
+
+  /// NPC 先完全复用主角的立绘与走路/待机动画，只是换了位置与状态。
+  void _drawNpc(Canvas canvas, _SceneNpc npc) {
+    _drawCharacter(
+      canvas,
+      player: npc.position,
+      facing: npc.facing,
+      walkPhase: npc.walkPhase,
+      walkStrength: npc.walkStrength,
+      idlePhase: npc.idlePhase,
+    );
+    if (npc.fixed) _drawNpcLabel(canvas, npc);
+  }
+
+  /// 商人头顶的名牌（路人不显示，避免画面杂乱）。
+  double _npcHeadY(_SceneNpc npc) {
+    final p = metrics.project(npc.position.dx, npc.position.dy, .03);
+    double headY;
+    if (playerImage == null) {
+      headY = p.dy - 60;
+    } else if (isFallbackPlayer) {
+      headY = p.dy - metrics.tileWidth * .9 - 6;
+    } else {
+      final sw = (playerImage.width as int).toDouble();
+      final sh = (playerImage.height as int).toDouble();
+      final scale = metrics.sideScroll ? 1.40 : 1.20;
+      final base = (metrics.groundWidth * .052 * scale)
+          .clamp(58.0, metrics.sideScroll ? 126.0 : 106.0)
+          .toDouble();
+      final drawWidth = base * 0.81;
+      headY = p.dy - drawWidth * sh / sw * .93;
+    }
+    return headY;
+  }
+
+  /// 白色气泡 + 向下的小尾巴，画在所有实体之上，避免被建筑/物件遮住。
+  void _drawNavMarkers(Canvas canvas) {
+    if (navMarkers.isEmpty) return;
+    final t = DateTime.now().millisecondsSinceEpoch / 1000.0;
+    final rx = math.max(40.0, metrics.tileWidth * .95);
+    final ry = rx * .42;
+    for (final m in navMarkers) {
+      final c = metrics.project(m.position.dx, m.position.dy);
+      final active = m.target.sceneId == activeNavSceneId;
+      final pulse = active ? (.5 + .5 * math.sin(t * 4.0)) : 0.0;
+      final rect = Rect.fromCenter(center: c, width: rx * 2, height: ry * 2);
+
+      canvas.drawOval(
+        rect,
+        Paint()
+          ..color = Color.fromRGBO(255, 255, 255, active ? .16 + .10 * pulse : .08),
+      );
+      canvas.drawOval(
+        rect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = active ? 1.8 : 1.2
+          ..color = Color.fromRGBO(255, 255, 255, active ? .70 + .25 * pulse : .42),
+      );
+      if (active) {
+        canvas.drawOval(
+          rect.inflate(3 + 5 * pulse),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.2
+            ..color = Color.fromRGBO(255, 255, 255, .30 * (1 - pulse)),
+        );
+      }
+
+      // 地点名：只有文字，贴在圈的上方。
+      final tp = TextPainter(
+        text: TextSpan(
+          text: m.target.name,
+          style: TextStyle(
+            color: Color.fromRGBO(255, 255, 255, active ? 1.0 : .82),
+            fontSize: 12,
+            fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+            letterSpacing: .6,
+            shadows: const <Shadow>[
+              Shadow(color: Color(0xCC000000), blurRadius: 3, offset: Offset(0, 1)),
+              Shadow(color: Color(0x99000000), blurRadius: 6),
+            ],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: rx * 2.6);
+      tp.paint(canvas, Offset(c.dx - tp.width / 2, c.dy - ry - 5 - tp.height));
+    }
+  }
+
+  void _drawNpcBubbles(Canvas canvas) {
+    for (final npc in npcs) {
+      final text = npc.line;
+      if (text == null) continue;
+      final fadeIn = (npc.lineAge / .18).clamp(0.0, 1.0).toDouble();
+      final fadeOut = (npc.lineLeft / .35).clamp(0.0, 1.0).toDouble();
+      final alpha = math.min(fadeIn, fadeOut);
+      if (alpha <= 0) continue;
+
+      final p = metrics.project(npc.position.dx, npc.position.dy, .03);
+      // 商人头顶有名牌，气泡再抬高一截。
+      final tailTipY = _npcHeadY(npc) - (npc.fixed ? 26.0 : 8.0) -
+          (1.0 - fadeIn) * 6.0;
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            color: Color.fromRGBO(34, 38, 43, alpha),
+            fontSize: 12,
+            height: 1.3,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 3,
+        ellipsis: '…',
+      )..layout(maxWidth: 136);
+
+      const padX = 10.0;
+      const padY = 7.0;
+      const tail = 7.0;
+      final bw = tp.width + padX * 2;
+      final bh = tp.height + padY * 2;
+      final body = RRect.fromRectAndRadius(
+        Rect.fromLTWH(p.dx - bw / 2, tailTipY - tail - bh, bw, bh),
+        const Radius.circular(10),
+      );
+      final tailPath = Path()
+        ..moveTo(p.dx - 5, body.bottom - .5)
+        ..lineTo(p.dx, tailTipY)
+        ..lineTo(p.dx + 5, body.bottom - .5)
+        ..close();
+
+      final shadow = Paint()
+        ..color = Color.fromRGBO(0, 0, 0, .22 * alpha)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
+      canvas.drawRRect(body.shift(const Offset(0, 1.5)), shadow);
+      final fill = Paint()..color = Color.fromRGBO(255, 255, 255, .97 * alpha);
+      canvas.drawRRect(body, fill);
+      canvas.drawPath(tailPath, fill);
+      tp.paint(canvas, Offset(body.left + padX, body.top + padY));
+    }
+  }
+
+  void _drawNpcLabel(Canvas canvas, _SceneNpc npc) {
+    final p = metrics.project(npc.position.dx, npc.position.dy, .03);
+    final headY = _npcHeadY(npc);
+
+    // 只有名字：无边框、无底色，靠描边阴影保证在任何背景上都看得清。
+    final tp = TextPainter(
+      text: TextSpan(
+        text: npc.name,
+        style: const TextStyle(
+          color: Color(0xFFF6F1E4),
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          letterSpacing: .8,
+          shadows: <Shadow>[
+            Shadow(color: Color(0xCC000000), blurRadius: 3, offset: Offset(0, 1)),
+            Shadow(color: Color(0x99000000), blurRadius: 6),
+          ],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(p.dx - tp.width / 2, headY - 6 - tp.height));
+  }
+
+  // 参数名故意与同名字段一致（会遮蔽字段），这样下面整段主角绘制代码
+  // 不用改，就能同时给主角和 NPC 复用。
+  void _drawCharacter(
+    Canvas canvas, {
+    required Offset player,
+    required String facing,
+    required double walkPhase,
+    required double walkStrength,
+    required double idlePhase,
+  }) {
     final p = metrics.project(player.dx, player.dy, .03);
     
     final cycle = math.sin(walkPhase);
@@ -4889,19 +5510,12 @@ class _SceneAssetPainter extends CustomPainter {
         ? (-bob / (2.2 * walkStrength)).clamp(0.0, 1.0).toDouble()
         : 0.0;
         
-    // 🌟 强化版阴影参数 🌟
-    // 起跳时影子缩小的幅度稍微加大一点，空间感更强
+    // 🌟 强化版阴影参数
     final shadowScale = 1.0 - lift * 0.25; 
-    
-    // 把基础透明度从 0.42 提高到 0.65，影子颜色更深更实
     final shadowAlpha = (0.65 - lift * 0.25).clamp(0.15, 0.75).toDouble();
-
-    // 把影子的宽度系数从 .92 增加到 1.25，适应立绘的长袍或张开的腿
-    final playerShadowWidth = (metrics.tileWidth * 1.25 * shadowScale).clamp(32.0, 64.0).toDouble();
-    // 影子高度稍微压扁一点，透视感更好
-    final playerShadowHeight = (metrics.tileHeight * .38 * shadowScale).clamp(8.0, 20.0).toDouble();
+    final playerShadowWidth = (metrics.tileWidth * 1.25 * shadowScale * 0.9).clamp(28.0, 58.0).toDouble();
+    final playerShadowHeight = (metrics.tileHeight * .38 * shadowScale * 0.9).clamp(7.0, 18.0).toDouble();
     
-    // 绘制脚底阴影（这里保持不变，它会使用上面修改过的新参数）
     canvas.drawOval(
       Rect.fromCenter(
         center: Offset(p.dx, p.dy + metrics.tileHeight * .07),
@@ -4916,26 +5530,21 @@ class _SceneAssetPainter extends CustomPainter {
     if (playerImage != null) {
       final sourceWidth = (playerImage.width as int).toDouble();
       final sourceHeight = (playerImage.height as int).toDouble();
-      
-      // 保持左右朝向翻转因子
       final faceSign = facing == 'W' ? -1.0 : 1.0;
 
       canvas.save();
-      
-      // 移动到脚底原点（包含顿挫起伏）
       canvas.translate(p.dx, p.dy + bob); 
 
       if (isMoving) {
-        // 2. 摇摆幅度收敛（不到2度），只保留轻微的肩膀晃动
-        final swayAngle = math.cos(walkPhase) * 0.02 * walkStrength;
+        final leanForward = 0.045 * walkStrength; 
+        final swayAngle = math.cos(walkPhase) * 0.02 * walkStrength + leanForward;
         canvas.rotate(swayAngle);
       }
 
-      // 翻转朝向
-      canvas.scale(faceSign, 1.0);
+      final squash = isMoving ? (bob * 0.012) : 0.0; 
+      canvas.scale(faceSign, 1.0 + squash);
 
       if (isFallbackPlayer) {
-        // ✨ 当使用默认头像时：保持小巧精致的圆形棋子形态
         final radius = metrics.tileWidth * 0.45; 
         final avatarCenter = Offset(
           0,
@@ -4968,13 +5577,13 @@ class _SceneAssetPainter extends CustomPainter {
             ..strokeWidth = 1.2,
         );
       } else {
-        // 🌟 真实立绘：先按场景自适应，再统一缩小 10%
         final playerDisplayScale = metrics.sideScroll ? 1.40 : 1.20;
         final baseDrawWidth = (metrics.groundWidth * .052 * playerDisplayScale)
             .clamp(58.0, metrics.sideScroll ? 126.0 : 106.0)
             .toDouble();
         
-        final drawWidth = baseDrawWidth * .90;
+        // 缩小 10%（原系数 0.90 改为 0.81）
+        final drawWidth = baseDrawWidth * 0.81;
         final drawHeight = drawWidth * sourceHeight / sourceWidth;
         final sourceRect = Rect.fromLTWH(0, 0, sourceWidth, sourceHeight);
         final destination = Rect.fromLTWH(
@@ -4986,7 +5595,6 @@ class _SceneAssetPainter extends CustomPainter {
         final imagePaint = Paint()..filterQuality = FilterQuality.high;
 
         if (!isMoving) {
-          // 站立闲置时的呼吸动画（下半身固定，上半身拉伸）
           final idleSplit = destination.top + destination.height * .56;
           final idleOverlap = destination.height * .04;
 
@@ -5028,35 +5636,54 @@ class _SceneAssetPainter extends CustomPainter {
           );
           canvas.restore();
         } else {
-          // 3. 恢复你喜欢的“物理抬脚”！
           final legTop = destination.top + destination.height * .70;
           final overlap = destination.height * .025;
           final centerX = destination.center.dx;
-          
+
           final phase01 = (math.sin(walkPhase) + 1.0) * .5;
-          final leftFootAlpha = .20 + .80 * phase01;
-          final rightFootAlpha = .20 + .80 * (1.0 - phase01);
+          final stridePhase = math.cos(walkPhase);
 
-          // 🌟 计算悬空脚的抬起高度（透明度越低，物理上抬得越高）
-          final leftLift = (1.0 - phase01) * 12.0 * walkStrength;
-          final rightLift = phase01 * 12.0 * walkStrength;
-
-          void drawFadingHalf(Rect bounds, double footAlpha, double liftY) {
+          void drawLeg(
+            double left,
+            double right,
+            double footAlpha,
+            double liftY,
+            double strideX,
+            double backness, // 新增：当前腿往后退的程度 (0.0 到 1.0)
+          ) {
+            final bounds = Rect.fromLTRB(
+              left,
+              legTop - overlap,
+              right,
+              destination.bottom,
+            );
             canvas.saveLayer(bounds, Paint());
             canvas.save();
             canvas.clipRect(bounds);
             
-            // 🌟 核心：给这半边腿加上真实的抬高位移
-            canvas.translate(0, -liftY);
+            // 🌟 加入景深透视和阴影：往后跨的腿会稍微缩小并变暗
+            final scale = 1.0 - backness * 0.05; 
+            final darken = backness * 0.35; 
             
-            canvas.drawImageRect(
-              playerImage,
-              sourceRect,
-              destination,
-              imagePaint,
-            );
+            final legCenterX = left + (right - left) / 2;
+            // 改变缩放中心，使形变从大腿根部开始
+            canvas.translate(legCenterX + strideX, legTop - liftY);
+            canvas.scale(scale, scale);
+            canvas.translate(-legCenterX, -legTop);
+
+            canvas.drawImageRect(playerImage, sourceRect, destination, imagePaint);
+            
+            // 为处于后方的腿绘制黑色遮罩（变暗）
+            if (darken > 0.01) {
+              canvas.drawRect(
+                destination, 
+                Paint()
+                  ..color = Colors.black.withOpacity(darken)
+                  ..blendMode = BlendMode.srcATop
+              );
+            }
             canvas.restore();
-            
+
             canvas.drawRect(
               bounds,
               Paint()
@@ -5067,59 +5694,65 @@ class _SceneAssetPainter extends CustomPainter {
                     Colors.white,
                     Color.fromRGBO(255, 255, 255, footAlpha),
                   ],
-                  stops: const <double>[0.0, 1.0],
                 ).createShader(bounds)
                 ..blendMode = BlendMode.dstIn,
             );
             canvas.restore();
           }
 
-          // 绘制左腿部分（传入左腿抬高值）
-          drawFadingHalf(
-            Rect.fromLTRB(
-              destination.left,
-              legTop - overlap,
-              centerX,
-              destination.bottom,
-            ),
-            leftFootAlpha,
-            leftLift,
+          // 计算左右两腿分别往后的程度
+          final leftBackness = math.max(0.0, -stridePhase);
+          final rightBackness = math.max(0.0, stridePhase);
+
+          drawLeg(
+            destination.left,
+            centerX,
+            .20 + .80 * phase01,
+            (1.0 - phase01) * 6.0 * walkStrength,
+            stridePhase * 5.0 * walkStrength,
+            leftBackness,
           );
-          
-          // 绘制右腿部分（传入右腿抬高值）
-          drawFadingHalf(
-            Rect.fromLTRB(
-              centerX,
-              legTop - overlap,
-              destination.right,
-              destination.bottom,
-            ),
-            rightFootAlpha,
-            rightLift,
+          drawLeg(
+            centerX,
+            destination.right,
+            .20 + .80 * (1.0 - phase01),
+            phase01 * 6.0 * walkStrength,
+            -stridePhase * 5.0 * walkStrength,
+            rightBackness,
           );
 
-          // 绘制上半身 70%（盖在双腿上方，消除拼接缝隙）
-          canvas.save();
-          canvas.clipRect(
-            Rect.fromLTRB(
-              destination.left - 2,
-              destination.top - 2,
-              destination.right + 2,
-              legTop + overlap,
-            ),
+          // 🌟 上半身羽化过渡：用渐变遮罩取代原本生硬的 clipRect
+          final upperBounds = Rect.fromLTRB(
+            destination.left - 2,
+            destination.top - 2,
+            destination.right + 2,
+            legTop + overlap + 6, // 稍微向下延伸以包覆渐变区域
           );
-          canvas.drawImageRect(
-            playerImage,
-            sourceRect,
-            destination,
-            imagePaint,
+          
+          canvas.saveLayer(upperBounds, Paint());
+          canvas.drawImageRect(playerImage, sourceRect, destination, imagePaint);
+          
+          final gradientHeight = upperBounds.height;
+          final solidStop = ((legTop - overlap) - upperBounds.top) / gradientHeight;
+          canvas.drawRect(
+            upperBounds,
+            Paint()
+              ..shader = LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                stops: [0.0, solidStop.clamp(0.0, 1.0), 1.0],
+                colors: const <Color>[
+                  Colors.white,
+                  Colors.white,
+                  Colors.transparent, // 底部渐隐，柔和地融入下方的双腿
+                ],
+              ).createShader(upperBounds)
+              ..blendMode = BlendMode.dstIn,
           );
           canvas.restore();
         }
       }
-      
       canvas.restore();
-      return;
     }
   }
 
@@ -5133,6 +5766,9 @@ class _SceneAssetPainter extends CustomPainter {
     if (dustParticles.isNotEmpty || oldDelegate.dustParticles.isNotEmpty) {
       return true;
     }
+    // NPC 列表同样是原地修改的，存在时每次 setState 都要重绘。
+    if (npcs.isNotEmpty || oldDelegate.npcs.isNotEmpty) return true;
+    if (navMarkers.isNotEmpty || oldDelegate.navMarkers.isNotEmpty) return true;
     return oldDelegate.player != player ||
         oldDelegate.facing != facing ||
         oldDelegate.walkPhase != walkPhase ||
