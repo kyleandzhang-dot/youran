@@ -3153,13 +3153,11 @@ class _NovelStoryboardStage extends StatefulWidget {
 
 class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
   final Set<String> _preloadedUrls = <String>{};
+  String _stageSessionKey = '';
 
   Set<String>? _preloadingUrlsStore;
   String? _displayedStoryboardUrlStore;
   String? _displayedStoryboardTurnIdStore;
-  String? _lastLocationKeyStore;
-  String? _lastWorldBackgroundUrlStore;
-  bool? _awaitingSceneBackgroundStore;
   int? _promoteTokenStore;
   String? _promotingUrlStore;
   Map<String, int>? _promoteFailureCountsStore;
@@ -3180,18 +3178,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
   set _displayedStoryboardTurnId(String value) =>
       _displayedStoryboardTurnIdStore = value;
 
-  String get _lastLocationKey => _lastLocationKeyStore?.trim() ?? '';
-  set _lastLocationKey(String value) => _lastLocationKeyStore = value;
-
-  String get _lastWorldBackgroundUrl =>
-      _lastWorldBackgroundUrlStore?.trim() ?? '';
-  set _lastWorldBackgroundUrl(String value) =>
-      _lastWorldBackgroundUrlStore = value;
-
-  bool get _awaitingSceneBackground => _awaitingSceneBackgroundStore ?? false;
-  set _awaitingSceneBackground(bool value) =>
-      _awaitingSceneBackgroundStore = value;
-
   int get _promoteToken => _promoteTokenStore ?? 0;
   set _promoteToken(int value) => _promoteTokenStore = value;
 
@@ -3200,23 +3186,10 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
 
   String get _sessionKey => widget.controller.sessionId.trim();
 
-  String _permanentSceneBackgroundUrl() {
-    final sceneUrl = widget.controller.currentSceneBackdropUrl.trim();
-    return sceneUrl.isNotEmpty
-        ? sceneUrl
-        : widget.controller.world.backgroundUrl.trim();
-  }
-
-  String _locationKey() => <String>[
-        widget.controller.locationTitle.trim(),
-        widget.controller.locationSubtitle.trim(),
-      ].join('\u0001');
-
   @override
   void initState() {
     super.initState();
-    _lastLocationKey = _locationKey();
-    _lastWorldBackgroundUrl = _permanentSceneBackgroundUrl();
+    _stageSessionKey = _sessionKey;
     _displayedStoryboardTurnId = widget.controller.currentStoryboardTurnId;
   }
 
@@ -3229,24 +3202,17 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
   @override
   void didUpdateWidget(covariant _NovelStoryboardStage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final oldSession = oldWidget.controller.sessionId.trim();
-    if (oldSession != _sessionKey) {
+    if (_stageSessionKey != _sessionKey) {
+      _stageSessionKey = _sessionKey;
       _promoteToken += 1;
+      _promotingUrl = '';
       _displayedStoryboardUrl = '';
       _displayedStoryboardTurnId = widget.controller.currentStoryboardTurnId;
-      _lastLocationKey = _locationKey();
-      _lastWorldBackgroundUrl = _permanentSceneBackgroundUrl();
-      _awaitingSceneBackground = false;
+      _preloadedUrls.clear();
+      _preloadingUrls.clear();
+      _promoteFailureCounts.clear();
     }
     _scheduleVisualSync();
-  }
-
-  ImageProvider _providerFor(String source) {
-    final value = source.trim();
-    if (value.startsWith('http://') || value.startsWith('https://')) {
-      return NetworkImage(value);
-    }
-    return AssetImage(value);
   }
 
   void _scheduleVisualSync() {
@@ -3258,13 +3224,12 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
 
   void _syncVisualState() {
     final controller = widget.controller;
+    // Keep the last successful CG while the next turn is written/generated.
+    // Floor updates belong to the exploration layer and never clear this stage.
     if (controller.isGenerating) {
-      if (_displayedStoryboardUrl.isNotEmpty || _promotingUrl.isNotEmpty) {
+      if (_promotingUrl.isNotEmpty) {
         _promoteToken += 1;
         _promotingUrl = '';
-      }
-      if (_displayedStoryboardUrl.isNotEmpty) {
-        setState(() => _displayedStoryboardUrl = '');
       }
       return;
     }
@@ -3273,33 +3238,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
       _promoteToken += 1;
       _promotingUrl = '';
       _displayedStoryboardTurnId = currentTurnId;
-      if (_displayedStoryboardUrl.isNotEmpty) {
-        setState(() => _displayedStoryboardUrl = '');
-      }
-    }
-    final nextLocation = _locationKey();
-    final nextWorldBackground = _permanentSceneBackgroundUrl();
-    final locationChanged = _lastLocationKey.isNotEmpty &&
-        nextLocation.isNotEmpty &&
-        nextLocation != _lastLocationKey;
-    if (locationChanged) {
-      _awaitingSceneBackground = true;
-    }
-    _lastLocationKey = nextLocation;
-
-    if (_awaitingSceneBackground &&
-        nextWorldBackground.isNotEmpty &&
-        nextWorldBackground != _lastWorldBackgroundUrl) {
-      _lastWorldBackgroundUrl = nextWorldBackground;
-      _awaitingSceneBackground = false;
-      if (_displayedStoryboardUrl.isNotEmpty) {
-        _releaseStoryboardAfterSceneBackground(nextWorldBackground, nextLocation);
-        return;
-      }
-    }
-
-    if (!_awaitingSceneBackground && nextWorldBackground.isNotEmpty) {
-      _lastWorldBackgroundUrl = nextWorldBackground;
     }
 
     final currentCandidate = controller.currentStoryboardDisplayCandidateUrl.trim();
@@ -3323,25 +3261,6 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     _schedulePreload();
   }
 
-  Future<void> _releaseStoryboardAfterSceneBackground(
-    String backgroundUrl,
-    String expectedLocation,
-  ) async {
-    final token = ++_promoteToken;
-    try {
-      await precacheImage(_providerFor(backgroundUrl), context);
-    } catch (_) {
-      return;
-    }
-    if (!mounted || token != _promoteToken || _locationKey() != expectedLocation) {
-      return;
-    }
-    setState(() {
-      _displayedStoryboardUrl = '';
-    });
-    _scheduleVisualSync();
-  }
-
   Future<void> _promoteStoryboard(String url) async {
     final clean = url.trim();
     if (clean.isEmpty ||
@@ -3352,8 +3271,15 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
 
     _promotingUrl = clean;
     final token = ++_promoteToken;
+    final expectedSession = _sessionKey;
+    final expectedTurn = widget.controller.currentStoryboardTurnId.trim();
+    final watch = Stopwatch()..start();
     try {
-      await precacheImage(NetworkImage(clean), context);
+      Object? loadError;
+      await precacheImage(NetworkImage(clean), context, onError: (error, stack) {
+        loadError = error;
+      });
+      if (loadError != null) throw loadError!;
     } catch (error) {
       if (_promotingUrl == clean) _promotingUrl = '';
       final attempt = (_promoteFailureCounts[clean] ?? 0) + 1;
@@ -3371,12 +3297,16 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
       }
       return;
     }
-    if (!mounted || token != _promoteToken) {
+    if (!mounted || token != _promoteToken ||
+        expectedSession != _sessionKey ||
+        expectedTurn != widget.controller.currentStoryboardTurnId.trim() ||
+        widget.controller.isGenerating) {
       if (_promotingUrl == clean) _promotingUrl = '';
       return;
     }
 
     if (_promotingUrl == clean) _promotingUrl = '';
+    debugPrint('[NovelImageTiming] storyboard promoted ms=${watch.elapsedMilliseconds}');
     _promoteFailureCounts.remove(clean);
     _preloadedUrls.add(clean);
     _preloadingUrls.remove(clean);
@@ -3402,11 +3332,13 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
             !_preloadingUrls.add(url)) {
           continue;
         }
-        precacheImage(NetworkImage(url), context).then((_) {
+        var failed = false;
+        precacheImage(NetworkImage(url), context, onError: (error, stack) {
+          failed = true;
+        }).then((_) {
           _preloadingUrls.remove(url);
+          if (!mounted || failed) return;
           _preloadedUrls.add(url);
-        }).catchError((_) {
-          _preloadingUrls.remove(url);
         });
       }
     });
@@ -3419,13 +3351,10 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     final hasMemoryPreview = previewBytes != null && previewBytes.isNotEmpty;
     final previewUrl = widget.backgroundPreviewUrl.trim();
     final displayedStoryboardUrl = _displayedStoryboardUrl;
-    final worldBackgroundUrl = _permanentSceneBackgroundUrl();
 
     final selectedUrl = previewUrl.isNotEmpty
         ? previewUrl
-        : displayedStoryboardUrl.isNotEmpty
-            ? displayedStoryboardUrl
-            : worldBackgroundUrl;
+        : displayedStoryboardUrl;
 
     final Widget visual = hasMemoryPreview || selectedUrl.isNotEmpty
         ? NovelWorldBackground(
@@ -3435,7 +3364,7 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
                 hasMemoryPreview ? widget.backgroundPreviewCacheKey : '',
             parallaxStrength: widget.parallaxStrength,
             fallbackAsset: widget.fallbackAsset,
-            storyboardMode: false,
+            storyboardMode: !hasMemoryPreview && previewUrl.isEmpty && displayedStoryboardUrl.isNotEmpty,
             characterPresent: false,
             isGenerating: controller.isGenerating,
             weatherEffect: widget.weatherEffect,

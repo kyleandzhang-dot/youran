@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 
 import '../../api/message_api.dart';
 import 'novel_backend.dart';
@@ -1073,9 +1074,67 @@ class NovelGameController extends ChangeNotifier {
     return const <String, dynamic>{};
   }
 
-  String _storyboardImageUrlFromSheet(JsonMap sheet) => stringValue(
-        sheet['image_url'] ?? sheet['imageUrl'] ?? sheet['url'],
-      ).trim();
+  // Session-only display aliases: persisted sheet URLs remain authoritative.
+  final Map<String, String> _storyboardDisplayAliases = {};
+  final Map<String, String> _storyboardWarmState = {};
+  final Map<String, VoidCallback> _storyboardWarmCleanup = {};
+
+  String _storyboardImageUrlFromSheet(JsonMap sheet) {
+    final url = stringValue(
+      sheet['image_url'] ?? sheet['imageUrl'] ?? sheet['url'],
+    ).trim();
+    return _storyboardDisplayAliases[url] ?? url;
+  }
+
+  void _warmStoryboardImage(String url) {
+    if (_disposed || !(url.startsWith('https://') || url.startsWith('http://')) ||
+        _storyboardWarmCleanup.containsKey(url)) return;
+    // Keep only a few live image streams; they pin decoded frames for fast reveal.
+    while (_storyboardWarmCleanup.length >= 8) {
+      final oldest = _storyboardWarmCleanup.keys.first;
+      _storyboardWarmCleanup.remove(oldest)?.call();
+      _storyboardWarmState.remove(oldest);
+      _storyboardDisplayAliases.removeWhere((key, value) => value == oldest);
+    }
+    final watch = Stopwatch()..start();
+    final stream = NetworkImage(url).resolve(ImageConfiguration.empty);
+    late ImageStreamListener listener;
+    Timer? timer;
+    bool finished = false;
+    void cleanup() {
+      finished = true;
+      timer?.cancel();
+      stream.removeListener(listener);
+    }
+    void fail() {
+      if (finished || _disposed) return;
+      finished = true;
+      _storyboardWarmState[url] = 'failed';
+      _storyboardWarmCleanup.remove(url)?.call();
+      _storyboardDisplayAliases.removeWhere((key, value) => value == url);
+      debugPrint('[NovelImageTiming] preload failed ms=${watch.elapsedMilliseconds} host=${Uri.tryParse(url)?.host}');
+      _notify(); // A failed preview releases its permanent-URL fallback.
+    }
+    listener = ImageStreamListener((info, synchronousCall) {
+      info.dispose();
+      if (finished || _disposed) return;
+      finished = true;
+      timer?.cancel();
+      _storyboardWarmState[url] = 'ready';
+      // If the permanent copy finishes first, use it immediately. A ready
+      // preview stays visible; changing storage URL need not replay the image.
+      final preview = _storyboardDisplayAliases[url];
+      if (preview != null && _storyboardWarmState[preview] != 'ready') {
+        _storyboardDisplayAliases.remove(url);
+      }
+      debugPrint('[NovelImageTiming] decoded ms=${watch.elapsedMilliseconds} host=${Uri.tryParse(url)?.host}');
+      _notify();
+    }, onError: (Object error, StackTrace? stack) => fail());
+    _storyboardWarmState[url] = 'loading';
+    _storyboardWarmCleanup[url] = cleanup;
+    timer = Timer(const Duration(seconds: 20), fail);
+    stream.addListener(listener);
+  }
 
   List<MapEntry<int, JsonMap>> _storyboardSheetEntries(JsonMap payload) {
     final byIndex = <int, JsonMap>{};
@@ -1438,9 +1497,42 @@ class NovelGameController extends ChangeNotifier {
         ...previousSheet,
         'sheet_index': singleSheetIndex,
         'image_url': singleImageUrl,
+        'preview': boolValue(incoming['preview']),
         if (incoming['storyboard'] != null)
           'storyboard': asJsonMap(incoming['storyboard']),
       };
+    }
+
+    // Alias only explicitly identified copies of the same live bundle/sheet.
+    // Different turns or regenerated bundles must never reuse an older frame.
+    final bundle = stringValue(incoming['bundle_id']).trim();
+    final sameBundle = bundle.isNotEmpty &&
+        bundle == stringValue(existing['bundle_id']).trim();
+    for (final entry in bySheet.entries) {
+      final url = stringValue(entry.value['image_url']).trim();
+      final oldSheet = _storyboardSheet(existing, entry.key);
+      final oldUrl = stringValue(oldSheet['image_url']).trim();
+      final preview = _storyboardDisplayAliases[oldUrl] ?? oldUrl;
+      if (sameBundle && url.isNotEmpty && url != oldUrl &&
+          (boolValue(oldSheet['preview']) ||
+              _storyboardDisplayAliases.containsKey(oldUrl)) &&
+          _storyboardWarmState[preview] != 'failed' &&
+          _storyboardWarmCleanup.containsKey(preview) &&
+          _storyboardWarmState[url] != 'ready') {
+        _storyboardDisplayAliases[url] = preview;
+      }
+      // Start downloading on receipt, without changing the reveal checkpoint.
+      _warmStoryboardImage(url);
+    }
+    while (_storyboardDisplayAliases.length > 48) {
+      _storyboardDisplayAliases.remove(_storyboardDisplayAliases.keys.first);
+    }
+    while (_storyboardWarmState.length > 48) {
+      final stale = _storyboardWarmState.keys.firstWhere(
+        (key) => !_storyboardWarmCleanup.containsKey(key),
+        orElse: () => _storyboardWarmState.keys.first,
+      );
+      _storyboardWarmState.remove(stale);
     }
 
     final sortedEntries = bySheet.entries.toList()
@@ -5654,6 +5746,12 @@ class NovelGameController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    for (final cleanup in _storyboardWarmCleanup.values) {
+      cleanup();
+    }
+    _storyboardWarmCleanup.clear();
+    _storyboardWarmState.clear();
+    _storyboardDisplayAliases.clear();
     _generationId += 1;
     _surroundingsAvailabilityPollTicket += 1;
     _diceTimer?.cancel();

@@ -1311,33 +1311,16 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       return;
     }
 
-    try {
-      await precacheImage(provider, context);
-    } catch (error) {
-      final isNetwork = nextValue.startsWith('http://') ||
-          nextValue.startsWith('https://');
-      if (!isNetwork) {
-        debugPrint(
-          '[NovelBG] preload failed; keep previous background. next=$nextValue error=$error',
-        );
-        return;
-      }
-
-      // 某些 CDN resize 变体可能短暂 404/超时，但 R2/CDN 原始地址本身是好的。
-      // 这种情况下直接用原图，不允许 errorBuilder 把已经正常的旧画面替换成黑底。
-      final originalProvider = NetworkImage(nextValue);
-      try {
-        await precacheImage(originalProvider, context);
-        provider = originalProvider;
-        useOriginalNetworkUrl = true;
-        debugPrint('[NovelBG] resized image failed; using original URL: $nextValue');
-      } catch (originalError) {
-        debugPrint(
-          '[NovelBG] both resized/original preload failed; keep previous background. next=$nextValue error=$originalError',
-        );
-        return;
-      }
+    final watch = Stopwatch()..start();
+    Object? loadError;
+    await precacheImage(provider, context, onError: (error, stack) {
+      loadError = error;
+    });
+    if (loadError != null) {
+      debugPrint('[NovelImageTiming] background preload failed ms=${watch.elapsedMilliseconds}');
+      return; // Keep the last good frame. Controller handles preview fallback.
     }
+    debugPrint('[NovelImageTiming] background ready ms=${watch.elapsedMilliseconds}');
 
     // token 不一致说明等待图片期间上游又切到了更新的一张，只认最新请求。
     if (!mounted || token != _loadToken) return;
@@ -1352,6 +1335,11 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       useOriginalNetworkUrl: useOriginalNetworkUrl,
     );
     _syncLegacyBackgroundMotion();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && token == _loadToken) {
+        debugPrint('[NovelImageTiming] displayed ms=${watch.elapsedMilliseconds}');
+      }
+    });
     unawaited(_prepareDepthForDisplayedImage());
   }
 
@@ -1733,7 +1721,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
   Widget _buildFlatImageLayer() {
     return AnimatedSwitcher(
-      duration: Duration(milliseconds: _lowPowerEffects ? 800 : 1500),
+      duration: Duration(milliseconds: widget.storyboardMode ? 200 : (_lowPowerEffects ? 800 : 1500)),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeOutCubic,
       transitionBuilder: (child, animation) {

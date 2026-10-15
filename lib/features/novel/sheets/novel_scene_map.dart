@@ -315,14 +315,19 @@ class _WarpWave {
 /// 位移场 D(p) = Σ 各波位移。每道波的 Lipschitz 常数 = amplitude * frequency，
 /// 总和必须 < 1，p -> p + D(p) 才是双射（不会折叠、不会让两块板互相穿过去）。
 /// 下面的参数总和约 0.70，留了足够余量。
-List<_WarpWave> _buildWarpWaves(math.Random rng, double tileWidth) {
+List<_WarpWave> _buildWarpWaves(
+  math.Random rng,
+  double tileWidth, {
+  List<List<double>>? customSpecs,
+}) {
   // [波长(占 tileWidth 的比例), 振幅(占 tileWidth 的比例)]
-  const specs = <List<double>>[
-    <double>[.75, .030], // 大起伏：决定整体"歪不歪"
-    <double>[.42, .013], // 中起伏：边缘的波浪感
-    <double>[.26, .005], // 小起伏：细碎的岩石感
-    <double>[.14, .003], // 微起伏：边界上的小锯齿
-  ];
+  final specs = customSpecs ??
+      const <List<double>>[
+        <double>[.75, .030], // 大起伏：决定整体"歪不歪"
+        <double>[.42, .013], // 中起伏：边缘的波浪感
+        <double>[.26, .005], // 小起伏：细碎的岩石感
+        <double>[.14, .003], // 微起伏：边界上的小锯齿
+      ];
   final waves = <_WarpWave>[];
   var lipschitz = 0.0;
   for (final spec in specs) {
@@ -548,11 +553,13 @@ class _OrganicPlateBorderPainter extends CustomPainter {
     required this.points,
     required this.current,
     this.nested = false,
+    this.emphasis = 0,
   });
 
   final List<Offset> points;
   final bool current;
   final bool nested;
+  final double emphasis; // 0~1：悬浮/按下时的选中强度（仅子块使用）
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -569,6 +576,27 @@ class _OrganicPlateBorderPainter extends CustomPainter {
           ..strokeJoin = StrokeJoin.miter
           ..color = Colors.white.withOpacity(current ? .92 : .72),
       );
+      if (emphasis > 0.01) {
+        // 选中：先画一圈柔和的白色光晕，再叠一道加粗的纯白描边。
+        // 描边只有朝内的一半在本块 ClipPath 里可见，所以画得比较粗。
+        canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 12 * emphasis
+            ..strokeJoin = StrokeJoin.round
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5)
+            ..color = Colors.white.withOpacity(.38 * emphasis),
+        );
+        canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.15 + 4.0 * emphasis
+            ..strokeJoin = StrokeJoin.round
+            ..color = Colors.white.withOpacity(.95),
+        );
+      }
       return;
     }
 
@@ -602,7 +630,8 @@ class _OrganicPlateBorderPainter extends CustomPainter {
   bool shouldRepaint(covariant _OrganicPlateBorderPainter oldDelegate) =>
       oldDelegate.points != points ||
       oldDelegate.current != current ||
-      oldDelegate.nested != nested;
+      oldDelegate.nested != nested ||
+      oldDelegate.emphasis != emphasis;
 
   @override
   bool hitTest(Offset position) =>
@@ -1301,7 +1330,8 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
             : SystemMouseCursors.click,
         child: GestureDetector(
           behavior: HitTestBehavior.deferToChild,
-          onTapDown: widget.moving || disabled
+          // 有子场景时，按压反馈交给子块自己的 Q 弹动画，父板块不再整体缩放。
+          onTapDown: widget.moving || disabled || entry.children.isNotEmpty
               ? null
               : (_) => setState(() => _isPressed = true),
           onTapUp: widget.moving || disabled
@@ -1330,8 +1360,14 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                         fit: StackFit.expand,
                         children: <Widget>[
                           const ColoredBox(color: Color(0xFF23252A)),
-                          _WorldSceneImage(source: entry.imageUrl),
-                          
+                          // 没有子场景的板块：不在当前位置就去色变灰
+                          !entry.current
+                              ? ColorFiltered(
+                                  colorFilter: _kGrayscaleColorFilter,
+                                  child: _WorldSceneImage(source: entry.imageUrl),
+                                )
+                              : _WorldSceneImage(source: entry.imageUrl),
+
                           // 底部黑灰色渐变遮罩，以便文字清晰可见
                           const DecoratedBox(
                             decoration: BoxDecoration(
@@ -1368,11 +1404,15 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                     ),
 
                   // 自然暗缝、轻投影和当前位置高亮。
+                  // 边框层在子地形上面，且 painter.hitTest 在整个板块内都返回 true，
+                  // 不加 IgnorePointer 会把鼠标/点击全拦住，子块收不到悬浮和点击。
                   Positioned.fill(
-                    child: CustomPaint(
-                      painter: _OrganicPlateBorderPainter(
-                        points: widget.points,
-                        current: entry.current,
+                    child: IgnorePointer(
+                      child: CustomPaint(
+                        painter: _OrganicPlateBorderPainter(
+                          points: widget.points,
+                          current: entry.current,
+                        ),
                       ),
                     ),
                   ),
@@ -1408,7 +1448,7 @@ class _IrregularScenePlateState extends State<_IrregularScenePlate>
                             style: TextStyle(
                               color: entry.current
                                   ? const Color(0xFFFFFFFF)
-                                  : const Color(0xFFE0E0E0),
+                                  : const Color(0x99C4C8CF),
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 1.5,
@@ -1634,7 +1674,27 @@ List<List<Offset>> _partitionParentTerrain(
   // 于是某些 cell 会退化，旧代码再把它回退成整块 parent，造成图中
   // 那些多余的大黑色区域。先在父区域凸包内完成完整 Voronoi 分割，
   // 最外层 ClipPath 再把凸包外部分裁掉，整个父区域因此始终被无缝覆盖。
-  final container = _convexHull(parent);
+  final hull = _convexHull(parent);
+  final hullBounds = _polygonBounds(hull);
+  final refLength = math.min(hullBounds.width, hullBounds.height);
+  // 位移场会把最外圈也扭动；先把容器向外放大一圈，扭完仍然盖得住父区域。
+  final hullCenter = _polygonCentroid(hull);
+  final container = <Offset>[
+    for (final p in hull) hullCenter + (p - hullCenter) * 1.18,
+  ];
+  // 所有子区域共用同一个位移场：共享边界上的点被位移到同一个位置，
+  // 所以边界变成自然的弯曲碎石边，同时依然严丝合缝、不会出现缝隙或重叠。
+  // Lipschitz 总和 ≈ 0.69 < 1，位移映射保持双射。
+  final warpWaves = _buildWarpWaves(
+    math.Random(seed ^ 0x5bd1e995),
+    refLength,
+    customSpecs: const <List<double>>[
+      <double>[.60, .030],
+      <double>[.32, .012],
+      <double>[.18, .004],
+    ],
+  );
+  final densifyStep = math.max(3.0, refLength * .035);
   for (var index = 0; index < sites.length; index++) {
     var cell = List<Offset>.from(container);
     for (var other = 0; other < sites.length; other++) {
@@ -1649,12 +1709,15 @@ List<List<Offset>> _partitionParentTerrain(
     }
     // 站位来自父区域，且容器是凸多边形；正常情况下每个 cell 至少
     // 有三点。不要回退为整个 parent，否则会覆盖其它子区域。
-    if (cell.length >= 3) cells.add(cell);
+    if (cell.length >= 3) {
+      cell = _densify(cell, densifyStep);
+      cells.add(<Offset>[for (final p in cell) _warpPoint(p, warpWaves)]);
+    }
   }
   return cells;
 }
 
-class _WorldMapNestedTerrain extends StatelessWidget {
+class _WorldMapNestedTerrain extends StatefulWidget {
   const _WorldMapNestedTerrain({
     required this.entries,
     required this.parentPoints,
@@ -1668,6 +1731,30 @@ class _WorldMapNestedTerrain extends StatelessWidget {
   final bool moving;
   final ValueChanged<_WorldMapEntry> onTap;
   final int seed;
+
+  @override
+  State<_WorldMapNestedTerrain> createState() => _WorldMapNestedTerrainState();
+}
+
+class _WorldMapNestedTerrainState extends State<_WorldMapNestedTerrain> {
+  int? _hovered;
+  int? _pressed;
+
+  List<_WorldMapEntry> get entries => widget.entries;
+  List<Offset> get parentPoints => widget.parentPoints;
+  bool get moving => widget.moving;
+  ValueChanged<_WorldMapEntry> get onTap => widget.onTap;
+  int get seed => widget.seed;
+
+  void _setHover(int index, bool value) {
+    final next = value ? index : (_hovered == index ? null : _hovered);
+    if (next != _hovered) setState(() => _hovered = next);
+  }
+
+  void _setPressed(int index, bool value) {
+    final next = value ? index : (_pressed == index ? null : _pressed);
+    if (next != _pressed) setState(() => _pressed = next);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1693,16 +1780,28 @@ class _WorldMapNestedTerrain extends StatelessWidget {
           entries.length,
           seed,
         );
+        final count = math.min(entries.length, cells.length);
+        // 被悬浮/按下的块放到最后绘制，放大时盖在邻居上面。
+        final order = <int>[
+          for (var i = 0; i < count; i++) i,
+        ]..sort((a, b) {
+            int rank(int i) => i == _pressed ? 2 : (i == _hovered ? 1 : 0);
+            final diff = rank(a) - rank(b);
+            return diff != 0 ? diff : a - b;
+          });
         return Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            for (var index = 0;
-                index < entries.length && index < cells.length;
-                index++)
+            for (final index in order)
               _WorldMapNestedTerrainTile(
+                key: ValueKey<String>(entries[index].id),
                 entry: entries[index],
                 moving: moving,
                 points: cells[index],
+                hovered: _hovered == index,
+                pressed: _pressed == index,
+                onHover: (v) => _setHover(index, v),
+                onPress: (v) => _setPressed(index, v),
                 onTap: () => onTap(entries[index]),
               ),
           ],
@@ -1714,66 +1813,128 @@ class _WorldMapNestedTerrain extends StatelessWidget {
 
 class _WorldMapNestedTerrainTile extends StatelessWidget {
   const _WorldMapNestedTerrainTile({
+    super.key,
     required this.entry,
     required this.moving,
     required this.points,
     required this.onTap,
+    required this.hovered,
+    required this.pressed,
+    required this.onHover,
+    required this.onPress,
   });
 
   final _WorldMapEntry entry;
   final bool moving;
   final List<Offset> points;
   final VoidCallback onTap;
+  final bool hovered;
+  final bool pressed;
+  final ValueChanged<bool> onHover;
+  final ValueChanged<bool> onPress;
 
   @override
   Widget build(BuildContext context) {
-    final disabled = !entry.unlocked || moving;
+    // 选中效果（悬浮/按下）对所有子块生效，包括未解锁的；
+    // 只有"能否点击移动"才受锁定限制（onTap / 手型光标）。
+    final disabled = !entry.unlocked || moving; // 仅用于点击与光标
     final center = _polygonCentroid(points);
     final bounds = _polygonBounds(points);
     final labelWidth = math.max(48.0, math.min(180.0, bounds.width - 10.0));
     final labelHeight = math.min(42.0, math.max(24.0, bounds.height * .28));
+    // 选中强调度：悬浮 .8，按下 1.0（不再缩放，只加深白色描边 + 提亮）。
+    final emphasis = moving ? 0.0 : (pressed ? 1.0 : (hovered ? .8 : 0.0));
     return Positioned.fill(
-      child: MouseRegion(
-        cursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
-        child: GestureDetector(
+      child: GestureDetector(
           // 让 ClipPath 决定命中的 cell；opaque 会让每个 tile 覆盖整个
           // 父区域，结果所有点击都落到最后一个子场景上。
           behavior: HitTestBehavior.deferToChild,
+          onTapDown: moving ? null : (_) => onPress(true),
+          onTapUp: (_) => onPress(false),
+          onTapCancel: () => onPress(false),
           onTap: disabled ? null : onTap,
           child: Opacity(
-            opacity: entry.unlocked ? 1 : .34,
+            // 不再对整块降透明度（会把选中描边一起压暗），
+            // 未解锁的暗化只作用在底图层，见下方。
+            opacity: 1,
             child: ClipPath(
               // 这里禁止曲线平滑。所有子区域是同一张 Voronoi 分割图，
               // 直线边界才能和相邻区域逐点重合、完全填满父区域。
               clipper: _OrganicPlateClipper(points, smooth: false),
-              child: Stack(
+              // MouseRegion 自身对整个矩形都命中（hitTestSelf 恒为 true），
+              // 放在 ClipPath 外面会让最上层的 tile 抢走所有悬浮事件。
+              // 必须放进 ClipPath 里面，这样只有该 cell 的多边形内才算悬浮。
+              child: MouseRegion(
+                cursor: disabled
+                    ? SystemMouseCursors.basic
+                    : SystemMouseCursors.click,
+                onEnter: moving ? null : (_) => onHover(true),
+                onExit: (_) => onHover(false),
+                child: Stack(
                 fit: StackFit.expand,
                 children: <Widget>[
-                  ColoredBox(
-                    color: entry.current
-                        ? const Color(0xB7799B81)
-                        : const Color(0xB03A4844),
-                  ),
-                  if (entry.showsImage)
-                    Opacity(
-                      opacity: .62,
-                      child: _WorldSceneImage(source: entry.imageUrl),
+                  Opacity(
+                    opacity: entry.unlocked ? 1 : .34,
+                    // 只有"当前所在"保持彩色，其余整体去色变灰。
+                    child: ColorFiltered(
+                      colorFilter: entry.current
+                          ? _kNoColorFilter
+                          : _kGrayscaleColorFilter,
+                      child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        ColoredBox(
+                          // 当前所在：半透明彩色，透出父板块的彩色背景图。
+                          // 其余：不透明灰色，盖住底下父板块的彩色图，否则会透色。
+                          color: entry.current
+                              ? const Color(0xB7799B81)
+                              : const Color(0xFF454A52),
+                        ),
+                        if (entry.showsImage)
+                          Opacity(
+                            opacity: .62,
+                            child: _WorldSceneImage(source: entry.imageUrl),
+                          ),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: <Color>[
+                                Colors.transparent,
+                                Color(0xD9000000),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: <Color>[Colors.transparent, Color(0xD9000000)],
+                    ),
+                  ),
+                  // 选中时整块轻微提亮
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        curve: Curves.easeOut,
+                        color: Colors.white.withOpacity(emphasis * .16),
                       ),
                     ),
                   ),
                   Positioned.fill(
-                    child: CustomPaint(
-                      painter: _OrganicPlateBorderPainter(
-                        points: points,
-                        current: entry.current,
-                        nested: true,
+                    child: IgnorePointer(
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween<double>(end: emphasis),
+                        duration: const Duration(milliseconds: 160),
+                        curve: Curves.easeOut,
+                        builder: (context, e, _) => CustomPaint(
+                          painter: _OrganicPlateBorderPainter(
+                            points: points,
+                            current: entry.current,
+                            nested: true,
+                            emphasis: e,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -1797,9 +1958,10 @@ class _WorldMapNestedTerrainTile extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.center,
                           style: TextStyle(
+                            // 当前所在：亮暖色；其余：浅灰且偏淡
                             color: entry.current
                                 ? const Color(0xFFFFF4D4)
-                                : const Color(0xFFE6E6E0),
+                                : const Color(0x99B8BCC4),
                             fontSize: math.min(13.0, math.max(10.0, bounds.width / 13.0)),
                             fontWeight: FontWeight.w700,
                             letterSpacing: .35,
@@ -1825,13 +1987,24 @@ class _WorldMapNestedTerrainTile extends StatelessWidget {
                     ),
                 ],
               ),
+              ), // MouseRegion
             ),
           ),
         ),
-      ),
     );
   }
 }
+
+const ColorFilter _kNoColorFilter =
+    ColorFilter.mode(Colors.transparent, BlendMode.dst);
+
+/// 去色（亮度灰度）滤镜：用于"不在当前位置"的地块。
+const ColorFilter _kGrayscaleColorFilter = ColorFilter.matrix(<double>[
+  .2126, .7152, .0722, 0, 0,
+  .2126, .7152, .0722, 0, 0,
+  .2126, .7152, .0722, 0, 0,
+  0, 0, 0, 1, 0,
+]);
 
 class _WorldSceneImage extends StatelessWidget {
   const _WorldSceneImage({required this.source});
