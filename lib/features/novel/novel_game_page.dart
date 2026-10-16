@@ -13,6 +13,7 @@ import '../../api/user_api.dart';
 import 'novel_ending_page.dart';
 import 'novel_backend.dart';
 import 'novel_game_controller.dart';
+import 'novel_image_provider.dart';
 import 'novel_display_mode.dart';
 import 'http_novel_backend.dart';
 import 'novel_models.dart';
@@ -3275,11 +3276,31 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
     final expectedTurn = widget.controller.currentStoryboardTurnId.trim();
     final watch = Stopwatch()..start();
     try {
-      Object? loadError;
-      await precacheImage(NetworkImage(clean), context, onError: (error, stack) {
-        loadError = error;
-      });
-      if (loadError != null) throw loadError!;
+      // 有小图就只等小图：小图到了立即上屏，完整图在后台继续下载，
+      // NovelWorldBackground 会在完整图解码后无缝替换。
+      var thumbReady = false;
+      final thumb = NovelImageProvider.thumb(clean);
+      if (thumb != null) {
+        Object? thumbError;
+        await precacheImage(thumb, context, onError: (error, stack) {
+          thumbError = error;
+        });
+        thumbReady = thumbError == null;
+      }
+      if (!mounted) {
+        if (_promotingUrl == clean) _promotingUrl = '';
+        return;
+      }
+      final full = NovelImageProvider.network(clean);
+      if (thumbReady) {
+        unawaited(precacheImage(full, context, onError: (error, stack) {}));
+      } else {
+        Object? loadError;
+        await precacheImage(full, context, onError: (error, stack) {
+          loadError = error;
+        });
+        if (loadError != null) throw loadError!;
+      }
     } catch (error) {
       if (_promotingUrl == clean) _promotingUrl = '';
       final attempt = (_promoteFailureCounts[clean] ?? 0) + 1;
@@ -3332,8 +3353,12 @@ class _NovelStoryboardStageState extends State<_NovelStoryboardStage> {
             !_preloadingUrls.add(url)) {
           continue;
         }
+        final thumb = NovelImageProvider.thumb(url);
+        if (thumb != null) {
+          unawaited(precacheImage(thumb, context, onError: (error, stack) {}));
+        }
         var failed = false;
-        precacheImage(NetworkImage(url), context, onError: (error, stack) {
+        precacheImage(NovelImageProvider.network(url), context, onError: (error, stack) {
           failed = true;
         }).then((_) {
           _preloadingUrls.remove(url);

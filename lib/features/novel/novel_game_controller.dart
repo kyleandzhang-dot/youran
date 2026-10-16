@@ -6,6 +6,7 @@ import 'package:flutter/painting.dart';
 import '../../api/message_api.dart';
 import 'novel_backend.dart';
 import 'novel_bgm_service.dart';
+import 'novel_image_provider.dart';
 import 'novel_models.dart';
 import 'novel_settings_service.dart';
 import 'novel_socket_service.dart';
@@ -1097,7 +1098,20 @@ class NovelGameController extends ChangeNotifier {
       _storyboardDisplayAliases.removeWhere((key, value) => value == oldest);
     }
     final watch = Stopwatch()..start();
-    final stream = NetworkImage(url).resolve(ImageConfiguration.empty);
+    // 小图（如有）先热身：体积小，几乎立刻进缓存，供页面首帧使用。
+    final thumbProvider = NovelImageProvider.thumb(url);
+    if (thumbProvider != null) {
+      final thumbStream = thumbProvider.resolve(ImageConfiguration.empty);
+      late ImageStreamListener thumbListener;
+      thumbListener = ImageStreamListener((info, _) {
+        info.dispose();
+        thumbStream.removeListener(thumbListener);
+      }, onError: (Object _, StackTrace? __) {
+        thumbStream.removeListener(thumbListener);
+      });
+      thumbStream.addListener(thumbListener);
+    }
+    final stream = NovelImageProvider.network(url).resolve(ImageConfiguration.empty);
     late ImageStreamListener listener;
     Timer? timer;
     bool finished = false;

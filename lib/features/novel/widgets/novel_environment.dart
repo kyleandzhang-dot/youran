@@ -830,6 +830,9 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
   // CDN resize 变体偶发失败时，当前成功画面可锁定为原始 URL。
   // 只有下一张图片确认解码成功后才会更新这组 displayed 状态。
   bool _displayedUseOriginalNetworkUrl = false;
+  // true = 屏幕上目前只是小图（完整图还在下载/解码）。_displayedUrl 仍是完整图 URL，
+  // 所以 AnimatedSwitcher 的 key 不变，小图 -> 大图是原地无缝升级，不会再播一次淡入。
+  bool _displayedThumbOnly = false;
   int _loadToken = 0;
 
   // 2.5D 资源。人物立绘不进入这条链路，只有世界背景参与 Depth + Shader。
@@ -940,6 +943,11 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     _displayedUrl = requestedSource;
     _displayedMemoryBytes = widget.memoryBytes;
     _restoreStickyRemoteIfNeeded(requestedSource);
+    final shownAtStart = _displayedUrl.trim();
+    if (_isRemoteSource(shownAtStart) &&
+        NovelImageProvider.thumb(shownAtStart) != null) {
+      _displayedThumbOnly = true; // 首帧先用小图，完整图后台升级
+    }
 
     if (_depthParallaxSupported) {
       WidgetsBinding.instance.pointerRouter.addGlobalRoute(
@@ -953,7 +961,17 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     // context / ImageConfiguration 在首帧后才稳定；此时再从已经显示的
     // ImageProvider 取像素并交给 Depth Anything。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_prepareDepthForDisplayedImage());
+      if (!mounted) return;
+      if (_displayedThumbOnly) {
+        unawaited(_upgradeThumbToFull(
+          _displayedUrl.trim(),
+          _displayedMemoryBytes,
+          ++_loadToken,
+          Stopwatch()..start(),
+        ));
+      } else {
+        unawaited(_prepareDepthForDisplayedImage());
+      }
     });
   }
 
@@ -1254,8 +1272,12 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     String value, {
     Uint8List? memoryBytes,
     bool useOriginalNetworkUrl = false,
+    bool thumb = false,
   }) {
     if (value.isEmpty) return null;
+    if (thumb) {
+      return _isRemoteSource(value) ? NovelImageProvider.thumb(value) : null;
+    }
     if (value.startsWith('memory:')) {
       final bytes = memoryBytes;
       if (bytes == null || bytes.isEmpty) return null;
@@ -1270,7 +1292,8 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     }
     
     if (value.startsWith('http://') || value.startsWith('https://')) {
-      return NetworkImage(value); 
+      // 统一入口：解码限制在 maxDecodeEdge，且各处 ImageCache key 一致。
+      return NovelImageProvider.network(value);
     }
     return AssetImage(value);
   }
@@ -1299,8 +1322,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       return;
     }
 
-    var useOriginalNetworkUrl = false;
-    var provider = _providerFor(
+    final provider = _providerFor(
       nextValue,
       memoryBytes: memoryBytes,
     );
@@ -1312,6 +1334,58 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     }
 
     final watch = Stopwatch()..start();
+
+    // 阶段 1（可选）：有小图规则、且完整图还没进缓存时，先把小图顶上去。
+    // 完整图已缓存就直接跳过，避免"先糊后清"的多余闪烁。
+    final thumbProvider = _providerFor(nextValue, thumb: true);
+    if (thumbProvider != null && !await _isFullImageCached(provider)) {
+      if (!mounted || token != _loadToken) return;
+      // 完整图同时开始下载，不等小图。
+      unawaited(precacheImage(provider, context, onError: (_, __) {}));
+      Object? thumbError;
+      await precacheImage(thumbProvider, context, onError: (error, stack) {
+        thumbError = error;
+      });
+      if (!mounted || token != _loadToken) return;
+      if (thumbError == null) {
+        setState(() {
+          _displayedUrl = nextValue;
+          _displayedMemoryBytes = memoryBytes;
+          _displayedUseOriginalNetworkUrl = false;
+          _displayedThumbOnly = true;
+        });
+        _syncLegacyBackgroundMotion();
+        debugPrint(
+          '[NovelImageTiming] background thumb shown ms=${watch.elapsedMilliseconds}',
+        );
+      }
+    }
+
+    // 阶段 2：完整图解码完成后替换（无小图时就是原来的单段流程）。
+    await _upgradeThumbToFull(nextValue, memoryBytes, token, watch);
+  }
+
+  Future<bool> _isFullImageCached(ImageProvider provider) async {
+    try {
+      final key = await provider.obtainKey(createLocalImageConfiguration(context));
+      final status = PaintingBinding.instance.imageCache.statusForKey(key);
+      return status.keepAlive || status.live;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 完整图解码成功后才上屏；失败则保持当前画面（小图或上一张好图）。
+  Future<void> _upgradeThumbToFull(
+    String value,
+    Uint8List? memoryBytes,
+    int token,
+    Stopwatch watch,
+  ) async {
+    if (!mounted) return;
+    final provider = _providerFor(value, memoryBytes: memoryBytes);
+    if (provider == null) return;
+
     Object? loadError;
     await precacheImage(provider, context, onError: (error, stack) {
       loadError = error;
@@ -1326,13 +1400,14 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     if (!mounted || token != _loadToken) return;
 
     setState(() {
-      _displayedUrl = nextValue;
+      _displayedUrl = value;
       _displayedMemoryBytes = memoryBytes;
-      _displayedUseOriginalNetworkUrl = useOriginalNetworkUrl;
+      _displayedUseOriginalNetworkUrl = false;
+      _displayedThumbOnly = false;
     });
     _rememberSuccessfulRemote(
-      nextValue,
-      useOriginalNetworkUrl: useOriginalNetworkUrl,
+      value,
+      useOriginalNetworkUrl: false,
     );
     _syncLegacyBackgroundMotion();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1355,10 +1430,8 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
         stream.removeListener(listener);
         final ownedImage = info.image.clone();
         try {
-          final byteData = await info.image.toByteData(
-            format: ImageByteFormat.png,
-          );
-          final bytes = byteData?.buffer.asUint8List();
+          // Depth 模型输入只有几百像素，没必要把整张大图编码成 PNG。
+          final bytes = await _encodeDepthInput(info.image);
           if (bytes == null || bytes.isEmpty) {
             ownedImage.dispose();
             if (!completer.isCompleted) completer.complete(null);
@@ -1397,6 +1470,39 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
     );
   }
 
+  /// 深度推理输入的长边上限。若 DepthService 内部需要更大输入，调大这个值。
+  static const int _depthInputMaxEdge = 768;
+
+  Future<Uint8List?> _encodeDepthInput(ui.Image source) async {
+    final w = source.width;
+    final h = source.height;
+    final scale = math.min(1.0, _depthInputMaxEdge / math.max(w, h));
+    if (scale >= 1.0) {
+      final data = await source.toByteData(format: ImageByteFormat.png);
+      return data?.buffer.asUint8List();
+    }
+    final tw = math.max(1, (w * scale).round());
+    final th = math.max(1, (h * scale).round());
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawImageRect(
+      source,
+      Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+      Rect.fromLTWH(0, 0, tw.toDouble(), th.toDouble()),
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+    final picture = recorder.endRecording();
+    ui.Image? small;
+    try {
+      small = await picture.toImage(tw, th);
+      final data = await small.toByteData(format: ImageByteFormat.png);
+      return data?.buffer.asUint8List();
+    } finally {
+      small?.dispose();
+      picture.dispose();
+    }
+  }
+
   Future<ui.Image> _decodeUiImage(Uint8List bytes) async {
     final codec = await ui.instantiateImageCodec(bytes);
     try {
@@ -1418,6 +1524,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
 
   Future<void> _prepareDepthForDisplayedImage() async {
     if (!_depthParallaxSupported || !mounted) return;
+    if (_displayedThumbOnly) return; // 小图阶段不跑深度，完整图就绪后再跑
 
     if (widget.storyboardMode) {
       // A storyboard is already a composed cinematic frame. Depth-based motion can
@@ -1694,6 +1801,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       value,
       memoryBytes: _displayedMemoryBytes,
       useOriginalNetworkUrl: _displayedUseOriginalNetworkUrl,
+      thumb: _displayedThumbOnly,
     );
     if (provider == null) return _stickyRemoteImageOrFallback(exclude: value);
     return Image(
@@ -1702,7 +1810,7 @@ class _NovelWorldBackgroundState extends State<NovelWorldBackground>
       gaplessPlayback: true,
       filterQuality: FilterQuality.medium,
       frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-        if (frame != null && _isRemoteSource(value)) {
+        if (frame != null && _isRemoteSource(value) && !_displayedThumbOnly) {
           _rememberSuccessfulRemote(
             value,
             useOriginalNetworkUrl: _displayedUseOriginalNetworkUrl,

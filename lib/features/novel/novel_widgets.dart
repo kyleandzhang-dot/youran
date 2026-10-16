@@ -15,6 +15,7 @@ import 'novel_game_controller.dart';
 import 'novel_display_mode.dart';
 import 'novel_socket_service.dart';
 import 'novel_models.dart';
+import 'novel_image_provider.dart';
 
 import '../../app_shared.dart';
 import '../../services/depth_service.dart';
