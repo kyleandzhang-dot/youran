@@ -412,6 +412,7 @@ class NovelSentence {
     this.storySourceStartSegment = -1,
     this.storySourceEndSegment = -1,
     this.speakerInfo = const <String, dynamic>{},
+    this.sourceItemIndices = const <int>[],
   });
 
   final String text;
@@ -436,6 +437,10 @@ class NovelSentence {
   final int storySourceStartSegment;
   final int storySourceEndSegment;
   final JsonMap speakerInfo;
+  /// 本阅读句由后端 sentence_items 的哪些条目合并/拆分而来（下标 = 后端 sentence_items 下标）。
+  /// 仅由 NovelTextParser 在 sentenceItems 路径下填写，朗读(TTS)据此让后端按条目取音频；
+  /// 空数组表示无法对应（例如流式中的纯文本回退），此时不提供朗读。
+  final List<int> sourceItemIndices;
 
   bool get isNarration {
     final kind = type.toLowerCase().trim();
@@ -516,6 +521,7 @@ class NovelSentence {
     int? storySourceStartSegment,
     int? storySourceEndSegment,
     JsonMap? speakerInfo,
+    List<int>? sourceItemIndices,
   }) {
     return NovelSentence(
       text: text ?? this.text,
@@ -538,6 +544,7 @@ class NovelSentence {
       storySourceEndSegment:
           storySourceEndSegment ?? this.storySourceEndSegment,
       speakerInfo: speakerInfo ?? this.speakerInfo,
+      sourceItemIndices: sourceItemIndices ?? this.sourceItemIndices,
     );
   }
 }

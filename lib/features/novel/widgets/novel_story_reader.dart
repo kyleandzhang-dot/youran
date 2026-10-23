@@ -478,6 +478,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   bool _swipeTransitioning = false;
   bool _animationsDisabled = false;
   int _lastTextSpeedCps = -1;
+  bool _lastTtsEnabled = false;
   double _measuredInputBarHeight = 0;
   late final AnimationController _swipeController;
 
@@ -490,6 +491,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     widget.textController.addListener(_handleInputTextChanged);
     _lastTextSpeedCps = widget.controller.settings.textSpeedCps;
     widget.controller.settings.addListener(_handleRevealSettingsChanged);
+    _lastTtsEnabled = widget.controller.tts.enabled;
+    widget.controller.tts.addListener(_handleTtsModeChanged);
     _swipeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -506,6 +509,11 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   @override
   void didUpdateWidget(covariant NovelDialogPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller.tts != widget.controller.tts) {
+      oldWidget.controller.tts.removeListener(_handleTtsModeChanged);
+      _lastTtsEnabled = widget.controller.tts.enabled;
+      widget.controller.tts.addListener(_handleTtsModeChanged);
+    }
     if (oldWidget.controller.settings != widget.controller.settings) {
       oldWidget.controller.settings.removeListener(_handleRevealSettingsChanged);
       _lastTextSpeedCps = widget.controller.settings.textSpeedCps;
@@ -559,6 +567,25 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     if (animationsChanged || pagingChanged) {
       _syncReveal(force: animationsChanged);
     }
+  }
+
+  void _handleTtsModeChanged() {
+    if (!mounted) return;
+    final enabled = controller.tts.enabled;
+    if (enabled) {
+      // 朗读模式下由真实音频 item 驱动字幕；停止原有逐字动画和打字音。
+      _revealTimer?.cancel();
+      _revealTimer = null;
+      _revealing = false;
+      _typingSoundForReveal = false;
+      controller.setReaderRevealing(false, notify: false);
+      if (!_lastTtsEnabled) unawaited(controller.bgm.stopTypingSound());
+    } else if (_lastTtsEnabled) {
+      // 只在退出朗读模式时恢复普通阅读的逐字显示。
+      _syncReveal(force: true);
+    }
+    _lastTtsEnabled = enabled;
+    setState(() {});
   }
 
   void _handleInputTextChanged() {
@@ -831,6 +858,16 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   }
 
   void _syncReveal({bool force = false}) {
+    if (controller.tts.enabled) {
+      _revealTimer?.cancel();
+      _revealTimer = null;
+      _revealing = false;
+      _typingSoundForReveal = false;
+      _displayTextNotifier.value = '';
+      controller.setReaderRevealing(false, notify: false);
+      unawaited(controller.bgm.stopTypingSound());
+      return;
+    }
     final sentence = controller.currentSentence;
     final messageKey = _currentAssistantMessageKey;
 
@@ -981,6 +1018,12 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
   void _scheduleReveal({String afterCharacter = ''}) {
     _revealTimer?.cancel();
     _revealTimer = null;
+    if (controller.tts.enabled) {
+      _revealing = false;
+      _typingSoundForReveal = false;
+      unawaited(controller.bgm.stopTypingSound());
+      return;
+    }
 
     if (!widget.active) {
       _revealing = false;
@@ -1376,6 +1419,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
     controller.setReaderRevealing(false, notify: false);
     widget.textController.removeListener(_handleInputTextChanged);
     widget.controller.settings.removeListener(_handleRevealSettingsChanged);
+    widget.controller.tts.removeListener(_handleTtsModeChanged);
     _swipeController.dispose();
     _displayTextNotifier.dispose();
     super.dispose();
@@ -1383,9 +1427,25 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
   @override
   Widget build(BuildContext context) {
+    final movieReading = controller.tts.enabled;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) controller.setReaderRevealing(widget.active && _revealing);
+      if (mounted) {
+        controller.setReaderRevealing(
+          !movieReading && widget.active && _revealing,
+        );
+      }
     });
+    final ttsMessage = controller.lastAssistantMessage;
+    final ttsItemIndex = controller.tts.currentItemIndex;
+    final activeTtsItem = ttsMessage != null &&
+            ttsItemIndex != null &&
+            ttsItemIndex >= 0 &&
+            ttsItemIndex < ttsMessage.sentenceItems.length
+        ? ttsMessage.sentenceItems[ttsItemIndex]
+        : null;
+    final ttsSubtitle = activeTtsItem == null
+        ? ''
+        : _sanitizeNovelStreamingText(activeTtsItem.readerText).trim();
     final sentence = controller.currentSentence;
     final controllerSpeaker = controller.currentSpeakerName.trim();
     final sentenceSpeaker = sentence?.speakerName.trim() ?? '';
@@ -1622,10 +1682,14 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
 
         return GestureDetector(
           behavior: HitTestBehavior.deferToChild,
-          onHorizontalDragStart: _handleHorizontalDragStart,
-          onHorizontalDragUpdate: _handleHorizontalDragUpdate,
-          onHorizontalDragEnd: _handleHorizontalDragEnd,
-          onHorizontalDragCancel: _handleHorizontalDragCancel,
+          onHorizontalDragStart:
+              movieReading ? null : _handleHorizontalDragStart,
+          onHorizontalDragUpdate:
+              movieReading ? null : _handleHorizontalDragUpdate,
+          onHorizontalDragEnd:
+              movieReading ? null : _handleHorizontalDragEnd,
+          onHorizontalDragCancel:
+              movieReading ? null : _handleHorizontalDragCancel,
           child: SizedBox(
             width: double.infinity,
             height: availableHeight,
@@ -1638,7 +1702,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                 top: readerTapTop,
                 bottom: readerTapBottom,
                 child: IgnorePointer(
-                  ignoring: widget.isExploring,
+                  ignoring: widget.isExploring || movieReading,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: _handleStageTap,
@@ -1667,7 +1731,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   ),
                 ),
 
-              if (mixedNarrationPageActive)
+              if (mixedNarrationPageActive && !movieReading)
                 Positioned(
                   left: 0,
                   right: narrationRightSafeWidth,
@@ -1709,7 +1773,9 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   ),
                 ),
 
-              if (!isMixedSentence && mode == _NovelLineMode.narration)
+              if (!movieReading &&
+                  !isMixedSentence &&
+                  mode == _NovelLineMode.narration)
                 if (canShowChoices)
                   Positioned(
                     left: 0,
@@ -1809,7 +1875,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                       ),
                     ),
                   ),
-              if (dialoguePageActive)
+              if (dialoguePageActive && !movieReading)
                 Positioned(
                   left: 0,
                   right: dialogueRightSafeWidth,
@@ -1896,7 +1962,10 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     },
                   ),
                 ),
-              if (canShowChoices && !controller.isGenerating && !_revealing)
+              if (!movieReading &&
+                  canShowChoices &&
+                  !controller.isGenerating &&
+                  !_revealing)
                 Positioned(
                   left: 0,
                   right: 0,
@@ -1921,7 +1990,7 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     screen.width,
                   ),
                 ),
-              if (surroundingsActionVisible)
+              if (surroundingsActionVisible && !movieReading)
                 Positioned(
                   left: compact ? 8.0 : 14.0,
                   top: math.max(
@@ -1942,11 +2011,12 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     ),
                   ),
                 ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: composerBottom,
-                child: _NovelDialogFooter(
+              if (!movieReading)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: composerBottom,
+                  child: _NovelDialogFooter(
                   controller: controller,
                   choicesAvailable: canShowChoices,
                   inputEnabled: inputEnabled,
@@ -1968,7 +2038,8 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                   isExploring: widget.isExploring,
                 ),
               ),
-              if (_showSwipeHint &&
+              if (!movieReading &&
+                  _showSwipeHint &&
                   !canShowChoices &&
                   !controller.isGenerating &&
                   !_revealing &&
@@ -1985,20 +2056,111 @@ class _NovelDialogPanelState extends State<NovelDialogPanel>
                     ),
                   ),
                 ),
-              Positioned(
-                left: compact ? 18 : 34,
-                right: compact ? 18 : 34,
-                bottom: footerBottom + navigationHeight + (compact ? 6 : 8),
-                child: AnimatedOpacity(
-                  opacity: widget.isExploring ? 0.0 : 1.0,
-                  duration: const Duration(milliseconds: 180),
-                  child: _StoryProgressLocator(
+              if (!movieReading)
+                Positioned(
+                  left: compact ? 18 : 34,
+                  right: compact ? 18 : 34,
+                  bottom: footerBottom + navigationHeight + (compact ? 6 : 8),
+                  child: AnimatedOpacity(
+                    opacity: widget.isExploring ? 0.0 : 1.0,
+                    duration: const Duration(milliseconds: 180),
+                    child: _StoryProgressLocator(
                     currentIndex: readerPageIndex,
                     totalCount: readerPageTotal,
                     isBrowsingHistory: browsingStory,
                   ),
                 ),
               ),
+              // 朗读按钮：放在顶部 HUD 保留区的正下方、左边缘，避开底部输入栏和正文卡片。
+              Positioned(
+                left: compact ? 14 : 28,
+                top: readerTapTop + 8,
+                child: AnimatedOpacity(
+                  opacity: widget.isExploring ? 0.0 : 1.0,
+                  duration: const Duration(milliseconds: 180),
+                  child: IgnorePointer(
+                    ignoring: widget.isExploring,
+                    child: _NovelTtsControls(controller: controller),
+                  ),
+                ),
+              ),
+              if (movieReading)
+                Positioned(
+                  left: compact ? 16 : 30,
+                  right: compact ? 16 : 30,
+                  bottom: math.max(
+                    compact ? 20.0 : 30.0,
+                    MediaQuery.paddingOf(context).bottom +
+                        (compact ? 16.0 : 24.0),
+                  ).toDouble(),
+                  child: IgnorePointer(
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: math.min(
+                            constraints.maxWidth,
+                            compact ? 760.0 : 1120.0,
+                          ),
+                        ),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 260),
+                          switchInCurve: Curves.easeOutCubic,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: (child, animation) =>
+                              FadeTransition(
+                            opacity: animation,
+                            child: SlideTransition(
+                              position: Tween<Offset>(
+                                begin: const Offset(0, .06),
+                                end: Offset.zero,
+                              ).animate(animation),
+                              child: child,
+                            ),
+                          ),
+                          child: Container(
+                            key: ValueKey<String>(
+                              'tts-subtitle-${ttsItemIndex ?? -1}-$ttsSubtitle',
+                            ),
+                            width: double.infinity,
+                            padding: EdgeInsets.symmetric(
+                              horizontal: compact ? 18 : 34,
+                              vertical: compact ? 12 : 18,
+                            ),
+                            child: Text(
+                              ttsSubtitle.isEmpty
+                                  ? (controller.tts.loading
+                                      ? '正在准备朗读…'
+                                      : '正在等待下一句…')
+                                  : ttsSubtitle,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                // 与普通阅读旁白一致：字号和字体完全跟随设置，不使用独立 clamp。
+                                color: const Color(0xE6F3F4F6),
+                                fontFamily: controller.settings.fontFamily,
+                                fontSize: controller.settings.fontSize + .4,
+                                fontWeight: FontWeight.w400,
+                                height: shortWide ? 1.56 : (compact ? 1.62 : 1.68),
+                                letterSpacing: .22,
+                                shadows: const <Shadow>[
+                                  Shadow(
+                                    color: Color(0x8A000000),
+                                    blurRadius: 5,
+                                    offset: Offset(0, 1),
+                                  ),
+                                  Shadow(
+                                    color: Color(0x4D000000),
+                                    blurRadius: 14,
+                                    offset: Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -3107,5 +3269,76 @@ class _SpeechBubblePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _SpeechBubblePainter oldDelegate) {
     return oldDelegate.isHost != isHost || oldDelegate.bubbleColor != bubbleColor;
+  }
+}
+
+/// 阅读模式开关：第一次点击从当前页开始自动朗读；再次点击关闭阅读并停止后续播放。
+/// 不提供暂停/继续按钮，避免把阅读模式误做成普通播放器。
+class _NovelTtsControls extends StatelessWidget {
+  const _NovelTtsControls({required this.controller});
+
+  final NovelGameController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final tts = controller.tts;
+    return AnimatedBuilder(
+      animation: tts,
+      builder: (context, _) {
+        final enabled = tts.enabled;
+        return _TtsCircleButton(
+          tooltip: enabled ? '关闭阅读' : '开启阅读',
+          icon: enabled ? Icons.close_rounded : Icons.headphones_rounded,
+          // 保留关闭图标，即使正在等待语音生成，也可以再次点击立即退出阅读模式。
+          onTap: controller.toggleTts,
+        );
+      },
+    );
+  }
+}
+
+class _TtsCircleButton extends StatelessWidget {
+  const _TtsCircleButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onTap,
+    this.loading = false,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.black.withOpacity(.36),
+            border: Border.all(color: Colors.white.withOpacity(.18)),
+          ),
+          child: Center(
+            child: loading
+                ? const SizedBox(
+                    width: 15,
+                    height: 15,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      color: Colors.white70,
+                    ),
+                  )
+                : Icon(icon, size: 19, color: Colors.white.withOpacity(.92)),
+          ),
+        ),
+      ),
+    );
   }
 }

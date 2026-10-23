@@ -11,6 +11,7 @@ import 'novel_models.dart';
 import 'novel_settings_service.dart';
 import 'novel_socket_service.dart';
 import 'novel_text_parser.dart';
+import 'novel_tts_controller.dart';
 
 RegExp _buildNovelReadableCharacterPattern() {
   try {
@@ -574,6 +575,11 @@ class NovelGameController extends ChangeNotifier {
   final NovelBgmService bgm;
   final NovelSettingsService settings;
   final NovelTextParser parser;
+
+  /// 剧情朗读（沉浸听书）。第一次访问时才创建，播放器在第一次出声时才初始化。
+  late final NovelTtsController tts = NovelTtsController(backend: backend)
+    ..onPageFinished = _handleTtsPageFinished;
+  bool _ttsReady = false;
   final NovelSceneMapLoader? sceneMapLoader;
   final NovelSceneMoveIntentCreator? sceneMoveIntentCreator;
   final NovelNavigationStreamSender? navigationStreamSender;
@@ -5754,7 +5760,56 @@ class NovelGameController extends ChangeNotifier {
   }
 
   void _notify() {
-    if (!_disposed) notifyListeners();
+    if (_disposed) return;
+    notifyListeners();
+    _syncTts();
+  }
+
+  // ── 剧情朗读 ────────────────────────────────────────────────────────────
+  // 页面标识 = 消息 id + 当前阅读句 + 对应的后端条目下标；标识不变时 syncPage 什么都不做，
+  // 所以放在 _notify 里（流式期间 20fps 调用）也只是一次字符串比较。
+  void _syncTts() {
+    if (!_ttsReady || !tts.enabled) return;
+    tts.syncPage(
+      messageId: int.tryParse(currentStoryboardTurnId),
+      sentenceIndex: currentSentenceIndex,
+      itemIndices: currentSentence?.sourceItemIndices ?? const <int>[],
+      generating: isGenerating,
+    );
+  }
+
+  void _handleTtsPageFinished() {
+    debugPrint(
+      '[novel tts] advance callback sentence=$currentSentenceIndex '
+      'items=${currentSentence?.sourceItemIndices ?? const <int>[]} '
+      'hasNext=$hasNext enabled=${_ttsReady && tts.enabled}',
+    );
+    // 只有阅读模式仍然开启时，完成回调才有权推进剧情。
+    // 关闭阅读会让 NovelTtsController 的 run token 失效；这里再做一次保护，
+    // 避免迟到的完成事件意外翻页。
+    if (_disposed || !_ttsReady || !tts.enabled) return;
+
+    // 每个阅读页只由语音完成回调推进一次；没有下一句时停在末页，
+    // 不重新播放当前页，也不回到第一页循环。
+    if (hasNext || pendingFateRevert) {
+      goNext();
+    }
+  }
+
+  /// 开启 / 关闭阅读模式。开启后从当前页开始朗读，完成后自动进入下一句。
+  /// 再次点击会使当前播放任务失效并立即停止后续自动翻页。
+  void toggleTts() {
+    if (_disposed) return;
+    _ttsReady = true;
+    tts.setEnabled(!tts.enabled);
+    _syncTts();
+  }
+
+  /// 朗读出错后点击同一个阅读开关关闭再开启即可重新尝试当前页。
+  void retryTts() {
+    if (!_ttsReady || _disposed || !tts.enabled) return;
+    tts.retry();
+    _syncTts();
   }
 
   @override
@@ -5781,6 +5836,7 @@ class NovelGameController extends ChangeNotifier {
     unawaited(backend.close());
     unawaited(socket.dispose());
     unawaited(bgm.dispose());
+    if (_ttsReady) tts.dispose();
     settings.removeListener(_onSettingsChanged);
     settings.dispose();
     super.dispose();

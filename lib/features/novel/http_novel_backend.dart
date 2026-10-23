@@ -45,6 +45,8 @@ class NovelEndpointConfig {
     this.novelCompanionSkillRename = '/novel/companions/skills/rename',
     this.novelCharacterHistory = '/chat/novel-character/history',
     this.novelCharacterStream = '/chat/novel-character/stream',
+    this.novelTtsStart = '/novel/tts/start',
+    this.novelTtsManifest = '/novel/tts/manifest',
     this.journey = '/scenario/{scenarioId}/journey',
     this.updateScenario = '/scenario/{scenarioId}/update',
     this.modelConfig = '/model-config/',
@@ -94,6 +96,8 @@ class NovelEndpointConfig {
   final String novelCompanionSkillRename;
   final String novelCharacterHistory;
   final String novelCharacterStream;
+  final String novelTtsStart;
+  final String novelTtsManifest;
   final String journey;
   final String updateScenario;
   final String modelConfig;
@@ -858,6 +862,31 @@ class HttpNovelBackend implements NovelBackend, NovelDeveloperContentBackend {
         'message_id': messageId,
       },
     );
+  }
+
+  @override
+  Future<JsonMap> startNovelTts({
+    required int messageId,
+    int startIndex = 0,
+  }) async {
+    final response = await _send(
+      'POST',
+      endpoints.novelTtsStart,
+      body: <String, dynamic>{
+        'message_id': messageId,
+        'start_index': startIndex,
+      },
+    );
+    return asJsonMap(_dataOf(response));
+  }
+
+  @override
+  Future<JsonMap> fetchNovelTtsManifest(int messageId) async {
+    final response = await _get(
+      endpoints.novelTtsManifest,
+      query: <String, String>{'message_id': '$messageId'},
+    );
+    return asJsonMap(_dataOf(response));
   }
 
   @override

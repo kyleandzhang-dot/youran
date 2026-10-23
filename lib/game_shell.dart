@@ -417,8 +417,6 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
   Future<void> _onGameSelected(int index) async {
     if (index < 0 || index >= _games.length || _scenarioSwitchInFlight) return;
 
-    // Shell 仍认为已登录时，不允许因为 ApiClient 瞬时为空就把用户送去登录。
-    // 先尝试接回刚才路由交接的身份。
     if (_isLoggedIn) {
       _restoreRouteAuthHandoffIfNeeded();
     }
@@ -439,17 +437,31 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     _captureRouteAuthHandoff();
     final scenario = _games[index];
 
+    if (scenario.mode.trim().toLowerCase() == 'cinema') {
+      try {
+        setState(() { _selectedGameIndex = index; _scenarioSelectionCommitted = true; });
+        await _closeDrawerIfNeeded(force: true);
+        if (!mounted) return;
+        
+        await Navigator.of(context, rootNavigator: true).pushReplacementNamed(
+          '/cinema/${scenario.id}/play',
+        );
+      } catch (error) {
+        debugPrint('GameShell cinema route failed: $error');
+        if (mounted) AppNotice.error(context, '进入电影作品失败，请稍后重试');
+      } finally {
+        if (mounted) _scenarioSwitchInFlight = false;
+      }
+      return;
+    }
+
     try {
       final result = await UserApi.setActiveScenario(scenario.id.toString());
       if (!mounted) return;
 
-      // 后端已确认新世界可进入，此时立刻退休旧 Novel 私有 WS。
-      // 不能等旧页面 dispose：原生横竖屏切换会让旧页面短暂收到 resumed，
-      // 若旧 WS 与新 WS 重叠，服务端的 4001/kicked 会被误判成账号过期。
       await NovelSocketService.retireActiveForRouteReplacement();
       if (!mounted) return;
 
-      // 后端确认世界切换成功后，再确认一次身份仍在。
       _restoreRouteAuthHandoffIfNeeded();
 
       setState(() {
@@ -486,6 +498,8 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     switch (mode.trim().toLowerCase()) {
       case 'novel':
         return 'novel';
+      case 'cinema':
+        return 'cinema';
       case 'group':
         return 'group';
       case 'rpg':
@@ -502,7 +516,6 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       return;
     }
 
-    // pushReplacement 会销毁旧 Shell 并创建新 Shell；先留下短期身份交接。
     _restoreRouteAuthHandoffIfNeeded();
     _captureRouteAuthHandoff();
 
@@ -531,8 +544,6 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     final targetId = scenarioId.trim();
     if (targetId.isEmpty) return;
 
-    // resetScenario 会清空当前运行时会话/剧情数据，因此不能继续留在旧游戏页。
-    // 先重新同步一次世界列表，确保仍能拿到这个 scenario 的最新信息。
     await _syncWorldListUntil(
       scenarioId: targetId,
       shouldExist: true,
@@ -550,9 +561,6 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       return;
     }
 
-    // 直接复用正常“进入世界”的完整流程：
-    // setActiveScenario -> 获取新的 sessionId -> pushReplacement 到对应游戏页。
-    // 这里必须主动调用，不能依赖用户再次点击当前世界；Drawer 对当前世界重选会直接 return。
     await _onGameSelected(targetIndex);
   }
 
@@ -561,10 +569,20 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
     final scenario = _games[index];
     final scenarioId = scenario.id.toString();
+
+    final isCinema = scenario.mode.trim().toLowerCase() == 'cinema' ||
+        scenario.category.trim().toLowerCase() == 'cinema';
+    if (isCinema) {
+      await Navigator.of(context, rootNavigator: true).pushNamed(
+        '/cinema/$scenarioId/edit',
+      );
+      if (!mounted) return;
+      await _loadHomeData(focusScenarioId: widget.activeScenarioId);
+      return;
+    }
+
     var deleted = false;
 
-    // 编辑页目前用 true 表示“数据生命周期发生变化”。
-    // 删除通过 onDeleted 单独标记；其余 true 即为重置剧情。
     final isDataChanged = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => ScenarioEditPage(
@@ -578,7 +596,6 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    // 判断：编辑的这个剧本，是不是我们现在正在玩的剧本？
     final isCurrentWorld = widget.activeScenarioId?.toString() == scenarioId;
 
     if (deleted) {
@@ -588,7 +605,6 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       );
       if (!mounted) return;
 
-      // 如果删除的是当前世界，退出当前剧本，回到空 Shell。
       if (isCurrentWorld) {
         Navigator.of(context, rootNavigator: true).pushReplacement<void, void>(
           MaterialPageRoute<void>(
@@ -602,17 +618,11 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
       return;
     }
 
-    // 如果重置的是当前正在玩的世界，旧 session / 剧情状态已经失效。
-    // 必须立即重新执行一次“进入世界”，让后端创建/返回新的 session，
-    // 否则旧游戏页会继续读取被清空的运行时数据，最终表现为空白页面。
     if (isDataChanged == true && isCurrentWorld) {
       await _reenterScenarioAfterReset(scenarioId);
       return;
     }
 
-    // 重置的不是当前世界，或只是普通退出编辑页：仅刷新世界列表即可。
-    // 这里必须继续聚焦当前正在玩的世界，不能把刚刚重置的其他剧本
-    // 写进 selectedGameIndex，否则会造成“重置 A，却把当前世界切到 A”的错觉。
     await _loadHomeData(
       focusScenarioId: widget.activeScenarioId,
     );
@@ -649,6 +659,12 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     );
 
     if (!mounted || taskId == null || pollingStarted) return;
+    if (taskId.startsWith('cinema:')) {
+      final workId = taskId.substring('cinema:'.length);
+      await Navigator.of(context, rootNavigator: true).pushNamed('/cinema/$workId/edit');
+      await _loadHomeData();
+      return;
+    }
     unawaited(_startPollingCreation(taskId));
   }
 

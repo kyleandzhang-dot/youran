@@ -162,6 +162,20 @@ abstract class NovelBackend {
 
   Future<void> cancelNovelCharacterChatStream() async {}
 
+  /// 剧情朗读：让后端后台按句序批量合成整条 AI 消息的语音，并立即返回清单快照。
+  /// 已经在合成时后端幂等返回当前进度。消息必须已经落库（流式结束之后）。
+  Future<JsonMap> startNovelTts({
+    required int messageId,
+    int startIndex = 0,
+  }) {
+    throw const NovelBackendException('当前后端不支持剧情朗读');
+  }
+
+  /// 读取朗读清单：items[{index,status(ready/pending/skip/failed),url?,type,speaker}]。
+  Future<JsonMap> fetchNovelTtsManifest(int messageId) {
+    throw const NovelBackendException('当前后端不支持剧情朗读');
+  }
+
   Future<JsonMap> fetchJourney(String scenarioId);
 
   Future<void> updateScenario(String scenarioId, JsonMap payload);

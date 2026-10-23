@@ -64,7 +64,7 @@ class CreateWorldDialog extends StatefulWidget {
 
 class _CreateWorldDialogState extends State<CreateWorldDialog>
     with TickerProviderStateMixin {
-  static const String _selectedMode = 'novel';
+  String _selectedMode = 'novel';
   static const String _qualityMode = 'standard';
 
   static const Color _background = Color(0xFFFCFDFB);
@@ -135,6 +135,21 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
     });
 
     try {
+      if (_selectedMode == 'cinema') {
+        final title = idea.split('\n').first.trim();
+        final response = await ApiClient.instance.post(
+          '/cinema/works',
+          body: <String, dynamic>{
+            'title': title.isEmpty ? '未命名电影作品' : title,
+            'description': idea,
+          },
+        );
+        final raw = response['data'] is Map ? response['data'] : response;
+        final workId = raw is Map ? raw['id']?.toString() : null;
+        if (workId == null || workId.isEmpty) throw ApiException('电影作品创建成功，但没有返回作品ID');
+        if (mounted) Navigator.of(context).pop('cinema:$workId');
+        return;
+      }
       if (ApiClient.instance.userId == null ||
           ApiClient.instance.userId!.trim().isEmpty) {
         throw ApiException('当前登录状态缺少用户ID，请重新登录');
@@ -326,6 +341,8 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
       children: [
         _buildHeader(),
         const SizedBox(height: 18),
+        _buildModeSelection(),
+        const SizedBox(height: 12),
         _buildInputArea(),
         if (_requestError != null) ...[
           const SizedBox(height: 10),
@@ -393,14 +410,84 @@ class _CreateWorldDialogState extends State<CreateWorldDialog>
     );
   }
 
+  Widget _buildModeSelection() {
+    return Row(
+      children: [
+        _buildModeCard(
+          mode: 'novel',
+          title: '互动世界',
+          subtitle: '自由对话与探索',
+          icon: Icons.explore_outlined,
+        ),
+        const SizedBox(width: 10),
+        _buildModeCard(
+          mode: 'cinema',
+          title: '电影模式',
+          subtitle: '沉浸式剧本演绎',
+          icon: Icons.movie_creation_outlined,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModeCard({
+    required String mode,
+    required String title,
+    required String subtitle,
+    required IconData icon,
+  }) {
+    final isSelected = _selectedMode == mode;
+    final disabled = _isLoading || _handoffActive;
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: disabled ? null : () => setState(() => _selectedMode = mode),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            color: isSelected ? _textPrimary : _fieldBackground,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                icon,
+                size: 22,
+                color: isSelected ? _themeGreen : _textSecondary,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : _textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: isSelected ? Colors.white.withOpacity(0.7) : _textMuted,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInputArea() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 13, 14, 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
       decoration: BoxDecoration(
-        color: _showError
-            ? const Color(0xFFFFF6F5)
-            : _fieldBackground,
-        borderRadius: BorderRadius.circular(8),
+        color: _showError ? const Color(0xFFFFF6F5) : _fieldBackground,
+        borderRadius: BorderRadius.circular(10),
         border: _showError
             ? Border.all(color: const Color(0xFFE9A6A1), width: 1)
             : null,

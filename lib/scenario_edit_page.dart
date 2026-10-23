@@ -5,24 +5,29 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:crop_your_image/crop_your_image.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
+import 'package:just_audio/just_audio.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'app_shared.dart';
 import 'api/api_client.dart';
 import 'api/scenario_editor_api.dart';
+import 'app_shared.dart';
 
-const Color _editorInk = Color(0xFF171B22);
-const Color _editorInkSoft = Color(0xFF242A33);
+const Color _editorInk = Color(0xFF151921);
+const Color _editorInkSoft = Color(0xFF1F2530);
+const Color _editorSurface = Color(0xFF1D222B);
+const Color _editorFieldBg = Color(0xFF11141A);
 const Color _editorAccent = Color(0xFF76B900);
 const Color _editorText = Color(0xFFFFFFFF);
-const Color _editorTextSoft = Color(0xFFE0E0E0);
-const Color _editorMuted = Color(0x80FFFFFF);
-const Color _editorLine = Color(0x15FFFFFF);
+const Color _editorTextSoft = Color(0xFFE2E8F0);
+const Color _editorMuted = Color(0x88FFFFFF);
+const Color _editorLine = Color(0x14FFFFFF);
+
+const BorderRadius _editorRadius = BorderRadius.all(Radius.circular(6));
+const BorderRadius _editorRadiusLg = BorderRadius.all(Radius.circular(8));
 
 enum ScenarioEditorSection {
   overview,
@@ -66,6 +71,28 @@ typedef ScenarioMediaPicker = Future<ScenarioMediaUploadResult?> Function(
   ScenarioMediaTarget target,
 );
 
+/// Connect this callback to the application's actual TTS synthesis/playback service.
+/// The editor deliberately does not invent a TTS endpoint or provider-specific voice IDs.
+typedef ScenarioVoicePreview = Future<void> Function(
+  ScenarioVoicePreviewRequest request,
+);
+
+class ScenarioVoicePreviewRequest {
+  const ScenarioVoicePreviewRequest({
+    required this.characterName,
+    required this.voice,
+    required this.speed,
+    required this.pitch,
+    required this.text,
+  });
+
+  final String characterName;
+  final String voice;
+  final double speed;
+  final double pitch;
+  final String text;
+}
+
 class ScenarioEditPage extends StatefulWidget {
   const ScenarioEditPage({
     super.key,
@@ -74,6 +101,7 @@ class ScenarioEditPage extends StatefulWidget {
     this.onPublish,
     this.onDeleted,
     this.onPickMedia,
+    this.onPreviewVoice,
   });
 
   final String scenarioId;
@@ -81,6 +109,7 @@ class ScenarioEditPage extends StatefulWidget {
   final VoidCallback? onPublish;
   final VoidCallback? onDeleted;
   final ScenarioMediaPicker? onPickMedia;
+  final ScenarioVoicePreview? onPreviewVoice;
 
   @override
   State<ScenarioEditPage> createState() => _ScenarioEditPageState();
@@ -131,7 +160,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   void initState() {
     super.initState();
     _api = widget.api ?? ScenarioEditorApi();
-    _bgmPreviewCompleteSubscription = _bgmPreviewPlayer.processingStateStream.listen((state) {
+    _bgmPreviewCompleteSubscription =
+        _bgmPreviewPlayer.processingStateStream.listen((state) {
       if (state != ProcessingState.completed || !mounted) return;
       setState(() {
         _previewBgmIndex = null;
@@ -168,20 +198,18 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   List<Map<String, dynamic>> get _plotPoints {
     final value = _worldSetting['key_plot_points'];
     if (value is! List) return <Map<String, dynamic>>[];
-    return value
-        .map<Map<String, dynamic>>((item) {
-          if (item is Map<String, dynamic>) return item;
-          if (item is Map) {
-            return item.map((key, value) => MapEntry(key.toString(), value));
-          }
-          return <String, dynamic>{
-            'arc': '探索',
-            'goal': item?.toString() ?? '',
-            'state': item?.toString() ?? '',
-            'pacing': 'normal',
-          };
-        })
-        .toList();
+    return value.map<Map<String, dynamic>>((item) {
+      if (item is Map<String, dynamic>) return item;
+      if (item is Map) {
+        return item.map((key, value) => MapEntry(key.toString(), value));
+      }
+      return <String, dynamic>{
+        'arc': '探索',
+        'goal': item?.toString() ?? '',
+        'state': item?.toString() ?? '',
+        'pacing': 'normal',
+      };
+    }).toList();
   }
 
   List<Map<String, dynamic>> get _loreEntries {
@@ -195,6 +223,10 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       return <String, dynamic>{};
     }).toList();
   }
+
+  int get _configuredBgmCount => _bgmList
+      .where((item) => (item['url']?.toString().trim().isNotEmpty ?? false))
+      .length;
 
   Future<void> _load() async {
     setState(() {
@@ -230,7 +262,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       _worldSetting['main_story_arc'] =
           _worldSetting['main_story_arc'] ?? topMainStory ?? '';
 
-      final rawPoints = _worldSetting['key_plot_points'] ?? data['key_plot_points'];
+      final rawPoints =
+          _worldSetting['key_plot_points'] ?? data['key_plot_points'];
       final normalizedPoints = <Map<String, dynamic>>[];
       if (rawPoints is List) {
         for (final point in rawPoints) {
@@ -247,7 +280,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       _mainStoryController.text =
           _worldSetting['main_story_arc']?.toString() ?? '';
 
-      final sourceCharacters = data['characters_detailed'] ?? data['characters'];
+      final sourceCharacters =
+          data['characters_detailed'] ?? data['characters'];
       _characters = <Map<String, dynamic>>[];
       if (sourceCharacters is List) {
         for (final raw in sourceCharacters) {
@@ -300,6 +334,23 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     };
 
     final initialConfig = _parseMap(source['initial_config']);
+    final customAttributes = _parseMap(source['custom_attributes']);
+
+    if ((jsonData['voice']?.toString().trim().isEmpty ?? true)) {
+      jsonData['voice'] = customAttributes['voice'] ?? source['voice'] ?? '';
+    }
+    if ((jsonData['voice_name']?.toString().trim().isEmpty ?? true)) {
+      jsonData['voice_name'] =
+          customAttributes['voice_name'] ?? source['voice_name'] ?? '';
+    }
+    if ((jsonData['trial_url']?.toString().trim().isEmpty ?? true)) {
+      jsonData['trial_url'] =
+          customAttributes['trial_url'] ?? source['trial_url'] ?? '';
+    }
+    jsonData['voice_speed'] ??=
+        customAttributes['voice_speed'] ?? source['voice_speed'] ?? 1.0;
+    jsonData['voice_pitch'] ??=
+        customAttributes['voice_pitch'] ?? source['voice_pitch'] ?? 1.1;
 
     return <String, dynamic>{
       'id': source['id'] ?? DateTime.now().microsecondsSinceEpoch,
@@ -307,11 +358,23 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       'role': source['role']?.toString() ?? 'npc',
       'avatar': (source['avatar_url'] ?? source['avatar'])?.toString() ?? '',
       'avatar_seed': source['avatar_seed']?.toString() ?? '',
-      'portrait': (source['portrait_url'] ?? source['portrait'])?.toString() ?? '',
+      'portrait':
+          (source['portrait_url'] ?? source['portrait'])?.toString() ?? '',
       'greeting': source['greeting']?.toString() ?? '',
       'persona': persona,
       'initial_config': initialConfig,
       'json_data': jsonData,
+      'custom_attributes': customAttributes,
+      'voice':
+          jsonData['voice'] ?? customAttributes['voice'] ?? source['voice'] ?? '',
+      'voice_speed': jsonData['voice_speed'] ??
+          customAttributes['voice_speed'] ??
+          source['voice_speed'] ??
+          1.0,
+      'voice_pitch': jsonData['voice_pitch'] ??
+          customAttributes['voice_pitch'] ??
+          source['voice_pitch'] ??
+          1.1,
     };
   }
 
@@ -345,8 +408,10 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       _bgm('daily_fast', '日常', '欢快', '快节奏', 'normal', 'high', normal['high']),
       _bgm('combat_slow', '冲突', '对峙', '慢节奏', 'combat', 'low', combat['low']),
       _bgm('combat_fast', '冲突', '高潮', '快节奏', 'combat', 'high', combat['high']),
-      _bgm('emotion_slow', '情感', '忧伤', '慢节奏', 'emotional', 'low', emotional['low']),
-      _bgm('emotion_fast', '情感', '爆发', '快节奏', 'emotional', 'high', emotional['high']),
+      _bgm('emotion_slow', '情感', '忧伤', '慢节奏', 'emotional', 'low',
+          emotional['low']),
+      _bgm('emotion_fast', '情感', '爆发', '快节奏', 'emotional', 'high',
+          emotional['high']),
     ];
   }
 
@@ -387,10 +452,27 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     setState(() => _section = section);
   }
 
+  Future<void> _handleBackNavigation() async {
+    if (!_dirty || _saving) {
+      if (mounted) Navigator.of(context).maybePop();
+      return;
+    }
+    final discard = await _confirm(
+      title: '放弃未保存的修改？',
+      description: '当前页面有尚未保存的设定修改，直接退出将丢失本次更改。',
+      confirmText: '放弃并退出',
+      danger: true,
+    );
+    if (discard && mounted) {
+      setState(() => _dirty = false);
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _save() async {
     if (_saving) return;
     if (_titleController.text.trim().isEmpty) {
-      _showSnack('标题不能为空', error: true);
+      _showSnack('世界标题不能为空', error: true);
       return;
     }
 
@@ -465,6 +547,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   Map<String, dynamic> _characterPayload(Map<String, dynamic> c) {
     final jsonData = _parseMap(c['json_data']);
     final persona = <String, dynamic>{..._parseMap(c['persona']), ...jsonData};
+    final customAttributes = _parseMap(c['custom_attributes']);
     return <String, dynamic>{
       'id': c['id'],
       'name': c['name']?.toString() ?? '',
@@ -475,9 +558,16 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       'greeting': c['greeting']?.toString() ?? '',
       'persona': persona,
       'initial_config': _parseMap(c['initial_config']),
-      'voice': jsonData['voice'],
-      'voice_speed': jsonData['voice_speed'] ?? 1.0,
-      'voice_pitch': jsonData['voice_pitch'] ?? 1.1,
+      'voice':
+          jsonData['voice'] ?? customAttributes['voice'] ?? c['voice'] ?? '',
+      'voice_speed': jsonData['voice_speed'] ??
+          customAttributes['voice_speed'] ??
+          c['voice_speed'] ??
+          1.0,
+      'voice_pitch': jsonData['voice_pitch'] ??
+          customAttributes['voice_pitch'] ??
+          c['voice_pitch'] ??
+          1.1,
     };
   }
 
@@ -494,19 +584,26 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message, style: TextStyle(color: error ? _danger : _editorAccent)),
+        content: Text(
+          message,
+          style: TextStyle(
+            color: error ? _danger : _editorAccent,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         behavior: SnackBarBehavior.floating,
         backgroundColor: _editorInkSoft,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
-          side: const BorderSide(color: _editorLine),
+        shape: const RoundedRectangleBorder(
+          borderRadius: _editorRadius,
+          side: BorderSide(color: _editorLine),
         ),
         duration: const Duration(seconds: 2),
       ),
     );
   }
 
-  ScenarioMediaPicker get _mediaPicker => widget.onPickMedia ?? _pickMediaInternally;
+  ScenarioMediaPicker get _mediaPicker =>
+      widget.onPickMedia ?? _pickMediaInternally;
 
   Future<ScenarioMediaUploadResult?> _pickMediaInternally(
     BuildContext pickerContext,
@@ -764,11 +861,18 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         return AlertDialog(
           backgroundColor: _editorInkSoft,
           surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-            side: const BorderSide(color: _editorLine),
+          shape: const RoundedRectangleBorder(
+            borderRadius: _editorRadiusLg,
+            side: BorderSide(color: _editorLine),
           ),
-          title: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          title: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: _editorText,
+            ),
+          ),
           content: TextField(
             controller: controller,
             autofocus: true,
@@ -780,11 +884,20 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted)),
+              child: const Text(
+                '取消',
+                style: TextStyle(color: AppColors.textOnDarkMuted),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, controller.text),
-              child: const Text('完成', style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
+              child: const Text(
+                '完成',
+                style: TextStyle(
+                  color: AppColors.accent,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
           ],
         );
@@ -870,6 +983,16 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         'avatar_seed': '',
         'portrait': '',
         'greeting': '',
+        'voice': '',
+        'voice_speed': 1.0,
+        'voice_pitch': 1.1,
+        'custom_attributes': <String, dynamic>{
+          'voice': '',
+          'voice_name': '',
+          'trial_url': '',
+          'voice_speed': 1.0,
+          'voice_pitch': 1.1,
+        },
         'persona': <String, dynamic>{},
         'initial_config': <String, dynamic>{
           'affection': 0,
@@ -888,6 +1011,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           'speech_style': <String>[],
           'secret': '',
           'examples': '',
+          'voice': '',
+          'voice_name': '',
+          'trial_url': '',
+          'voice_speed': 1.0,
+          'voice_pitch': 1.1,
         },
       });
     });
@@ -897,6 +1025,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Future<void> _editCharacter(int realIndex) async {
     if (realIndex < 0 || realIndex >= _characters.length) return;
+    final canDelete = _characters[realIndex]['role']?.toString() != 'companion';
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
@@ -906,18 +1035,32 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         character: _deepCopyMap(_characters[realIndex]),
         onPickMedia: _mediaPicker,
         characterIndex: realIndex,
+        canDelete: canDelete,
       ),
     );
     if (result == null || !mounted) return;
+    if (result['__deleted'] == true) {
+      await _confirmRemoveCharacter(realIndex);
+      return;
+    }
     setState(() => _characters[realIndex] = result);
     _markDirty();
   }
 
-  void _removeCharacter(int realIndex) {
+  Future<void> _confirmRemoveCharacter(int realIndex) async {
+    if (realIndex < 0 || realIndex >= _characters.length) return;
     if (_characters[realIndex]['role']?.toString() == 'companion') {
       _showSnack('系统角色无法删除', error: true);
       return;
     }
+    final name = _characters[realIndex]['name']?.toString().trim() ?? '';
+    final ok = await _confirm(
+      title: '删除角色',
+      description: '确定要删除角色「${name.isEmpty ? '未命名' : name}」吗？',
+      confirmText: '确认删除',
+      danger: true,
+    );
+    if (!ok || !mounted) return;
     setState(() => _characters.removeAt(realIndex));
     _markDirty();
   }
@@ -960,6 +1103,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   }
 
   Future<void> _showMoreMenu() async {
+    final displayId = _id.isEmpty ? widget.scenarioId : _id;
     final action = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -970,7 +1114,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
             decoration: BoxDecoration(
               color: _editorInkSoft,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: _editorRadiusLg,
               border: Border.all(color: _editorLine),
             ),
             child: Column(
@@ -988,16 +1132,25 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 _menuRow(
                   icon: Icons.restart_alt_rounded,
                   title: '重置剧情',
-                  subtitle: '清空对话记录，重新开始',
+                  subtitle: '清空对话记录，重新开始体验',
                   onTap: () => Navigator.pop(sheetContext, 'reset'),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 _menuRow(
                   icon: Icons.delete_outline_rounded,
                   title: '删除剧本',
-                  subtitle: '永久删除该剧本及所有数据',
+                  subtitle: '永久删除该剧本及所有设定数据',
                   danger: true,
                   onTap: () => Navigator.pop(sheetContext, 'delete'),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'WORLD ID · $displayId',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.28),
+                    fontSize: 10.5,
+                    fontFamily: 'Courier',
+                  ),
                 ),
               ],
             ),
@@ -1019,12 +1172,15 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.zero,
+      borderRadius: _editorRadius,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.02),
-          border: Border.all(color: _editorLine),
+          color: Colors.white.withOpacity(0.03),
+          borderRadius: _editorRadius,
+          border: Border.all(
+            color: danger ? _danger.withOpacity(0.22) : _editorLine,
+          ),
         ),
         child: Row(
           children: [
@@ -1043,11 +1199,20 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Text(subtitle, style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 11.5)),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: AppColors.textOnDarkMuted,
+                      fontSize: 11.5,
+                    ),
+                  ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.textOnDarkMuted),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.textOnDarkMuted,
+            ),
           ],
         ),
       ),
@@ -1065,20 +1230,42 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: _editorInkSoft,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: const BorderSide(color: _editorLine),
+        shape: const RoundedRectangleBorder(
+          borderRadius: _editorRadiusLg,
+          side: BorderSide(color: _editorLine),
         ),
-        title: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        content: Text(description, style: const TextStyle(color: AppColors.textOnDarkMuted, height: 1.5)),
+        title: Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: _editorText,
+          ),
+        ),
+        content: Text(
+          description,
+          style: const TextStyle(
+            color: AppColors.textOnDarkMuted,
+            height: 1.5,
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted)),
+            child: const Text(
+              '取消',
+              style: TextStyle(color: AppColors.textOnDarkMuted),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(confirmText, style: TextStyle(color: danger ? _danger : AppColors.accent, fontWeight: FontWeight.w700)),
+            child: Text(
+              confirmText,
+              style: TextStyle(
+                color: danger ? _danger : AppColors.accent,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ],
       ),
@@ -1134,111 +1321,176 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     }
   }
 
+  Widget _buildSaveActionButton({bool compact = false}) {
+    final active = _dirty || _saving;
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: compact ? 6 : 9),
+      child: Material(
+        color: active ? _editorAccent : Colors.white.withOpacity(0.06),
+        borderRadius: _editorRadius,
+        child: InkWell(
+          onTap: (!_dirty || _saving) ? null : _save,
+          borderRadius: _editorRadius,
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 11 : 14,
+              vertical: compact ? 4 : 6,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_saving)
+                  const SizedBox(
+                    width: 13,
+                    height: 13,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.8,
+                      color: Color(0xFF0C0C0C),
+                    ),
+                  )
+                else
+                  Icon(
+                    active ? Icons.check_rounded : Icons.check_rounded,
+                    size: compact ? 14 : 15,
+                    color: active
+                        ? const Color(0xFF0C0C0C)
+                        : Colors.white.withOpacity(0.38),
+                  ),
+                const SizedBox(width: 5),
+                Text(
+                  _saving
+                      ? '保存中'
+                      : _dirty
+                          ? '保存'
+                          : '已保存',
+                  style: TextStyle(
+                    color: active
+                        ? const Color(0xFF0C0C0C)
+                        : Colors.white.withOpacity(0.38),
+                    fontSize: compact ? 11.8 : 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final landscape = media.size.width > media.size.height;
-    final phoneLandscape = landscape &&
-        media.size.height <= 560 &&
-        media.size.width <= 1100;
+    final phoneLandscape =
+        landscape && media.size.height <= 560 && media.size.width <= 1100;
     final sidebarWidth = landscape
         ? phoneLandscape
-            ? (media.size.width * .21).clamp(148.0, 184.0).toDouble()
-            : (media.size.width * .20).clamp(220.0, 270.0).toDouble()
+            ? (media.size.width * .22).clamp(156.0, 196.0).toDouble()
+            : (media.size.width * .21).clamp(228.0, 276.0).toDouble()
         : 0.0;
 
-    return Theme(
-      data: Theme.of(context).copyWith(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: _pageBg,
-        colorScheme: Theme.of(context).colorScheme.copyWith(
-              primary: _editorAccent,
-              surface: _pageBg,
-            ),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: InputBorder.none,
-          isDense: true,
-        ),
-      ),
-      child: Scaffold(
-        backgroundColor: _pageBg,
-        resizeToAvoidBottomInset: true,
-        body: DecoratedBox(
-          decoration: const BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(0, -.18),
-              radius: 1.05,
-              colors: <Color>[
-                Color(0xFF303641),
-                Color(0xFF242A33),
-                Color(0xFF171B22),
-              ],
-              stops: <double>[0, .52, 1],
-            ),
+    return PopScope(
+      canPop: !_dirty && !_saving,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _handleBackNavigation();
+      },
+      child: Theme(
+        data: Theme.of(context).copyWith(
+          brightness: Brightness.dark,
+          scaffoldBackgroundColor: _pageBg,
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+                primary: _editorAccent,
+                surface: _pageBg,
+              ),
+          inputDecorationTheme: const InputDecorationTheme(
+            border: InputBorder.none,
+            isDense: true,
           ),
-          child: _loading
-              ? _buildLoading()
-              : _error != null
-                  ? _buildError()
-                  : Stack(
-                    children: [
-                      if (landscape)
-                        _buildLandscapeEditor(
-                          sidebarWidth,
-                          phoneLandscape: phoneLandscape,
-                        )
-                      else
-                        CustomScrollView(
-                          physics: const BouncingScrollPhysics(),
-                          slivers: [
-                            _buildAppBar(),
-                            SliverToBoxAdapter(
-                              child: Center(
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 760),
-                                  child: _buildHero(),
+        ),
+        child: Scaffold(
+          backgroundColor: _pageBg,
+          resizeToAvoidBottomInset: true,
+          body: DecoratedBox(
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0, -.25),
+                radius: 1.15,
+                colors: <Color>[
+                  Color(0xFF282F3C),
+                  Color(0xFF1D222C),
+                  Color(0xFF151921),
+                ],
+                stops: <double>[0, .52, 1],
+              ),
+            ),
+            child: _loading
+                ? _buildLoading()
+                : _error != null
+                    ? _buildError()
+                    : Stack(
+                        children: [
+                          if (landscape)
+                            _buildLandscapeEditor(
+                              sidebarWidth,
+                              phoneLandscape: phoneLandscape,
+                            )
+                          else
+                            CustomScrollView(
+                              physics: const BouncingScrollPhysics(),
+                              slivers: [
+                                _buildAppBar(),
+                                SliverToBoxAdapter(
+                                  child: Center(
+                                    child: ConstrainedBox(
+                                      constraints:
+                                          const BoxConstraints(maxWidth: 820),
+                                      child: _buildHero(),
+                                    ),
+                                  ),
                                 ),
-                              ),
+                                SliverToBoxAdapter(
+                                  child: Center(
+                                    child: ConstrainedBox(
+                                      constraints:
+                                          const BoxConstraints(maxWidth: 820),
+                                      child: _buildSectionTabs(),
+                                    ),
+                                  ),
+                                ),
+                                SliverPadding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                      16, 16, 16, 42),
+                                  sliver: SliverToBoxAdapter(
+                                    child: Align(
+                                      alignment: Alignment.topCenter,
+                                      child: ConstrainedBox(
+                                        constraints:
+                                            const BoxConstraints(maxWidth: 820),
+                                        child: _buildCurrentSection(),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                            SliverToBoxAdapter(child: _buildSectionTabs()),
-                            SliverPadding(
-                              padding: EdgeInsets.fromLTRB(20, 16, 20, _dirty ? 120 : 28),
-                              sliver: SliverToBoxAdapter(
-                                child: Align(
-                                  alignment: Alignment.topCenter,
-                                  child: ConstrainedBox(
-                                    constraints: const BoxConstraints(maxWidth: 960),
-                                    child: _buildCurrentSection(),
+                          if (_actionLoading)
+                            Positioned.fill(
+                              child: ColoredBox(
+                                color: Colors.black.withOpacity(0.55),
+                                child: const Center(
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: AppColors.accent,
                                   ),
                                 ),
                               ),
                             ),
-                          ],
-                        ),
-                      _buildBottomBar(
-                        // Landscape editor content is inside SafeArea, so the
-                        // bottom action bar must use the same horizontal insets.
-                        leftInset: landscape
-                            ? media.padding.left + sidebarWidth + 1
-                            : 0,
-                        rightInset: landscape ? media.padding.right : 0,
-                        compact: landscape,
-                        phoneLandscape: phoneLandscape,
+                        ],
                       ),
-                      if (_actionLoading)
-                        Positioned.fill(
-                          child: ColoredBox(
-                            color: Colors.black.withOpacity(0.5),
-                            child: const Center(
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                color: AppColors.accent,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+          ),
         ),
       ),
     );
@@ -1261,25 +1513,22 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                   width: sidebarWidth,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: _editorInkSoft.withOpacity(.22),
-                      border: Border(
-                        right: BorderSide(
-                          color: _editorLine,
-                          width: 1,
-                        ),
+                      color: _editorInkSoft.withOpacity(.32),
+                      border: const Border(
+                        right: BorderSide(color: _editorLine, width: 1),
                       ),
                     ),
                     child: ListView(
                       physics: const BouncingScrollPhysics(),
                       padding: EdgeInsets.fromLTRB(
+                        phoneLandscape ? 10 : 14,
                         phoneLandscape ? 8 : 12,
-                        phoneLandscape ? 6 : 10,
-                        phoneLandscape ? 8 : 12,
-                        _dirty ? (phoneLandscape ? 62 : 82) : 14,
+                        phoneLandscape ? 10 : 14,
+                        20,
                       ),
                       children: [
                         _buildLandscapeHero(compact: phoneLandscape),
-                        SizedBox(height: phoneLandscape ? 8 : 14),
+                        SizedBox(height: phoneLandscape ? 10 : 16),
                         _buildVerticalSectionTabs(compact: phoneLandscape),
                       ],
                     ),
@@ -1289,24 +1538,24 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final horizontalPadding = phoneLandscape
-                          ? 10.0
+                          ? 12.0
                           : constraints.maxWidth >= 1100
-                          ? 20.0
-                          : constraints.maxWidth >= 720
-                              ? 16.0
-                              : 12.0;
+                              ? 24.0
+                              : constraints.maxWidth >= 720
+                                  ? 18.0
+                                  : 14.0;
                       return SingleChildScrollView(
                         physics: const BouncingScrollPhysics(),
                         padding: EdgeInsets.fromLTRB(
                           horizontalPadding,
-                          phoneLandscape ? 8 : 12,
+                          phoneLandscape ? 10 : 16,
                           horizontalPadding,
-                          _dirty ? (phoneLandscape ? 62 : 84) : 16,
+                          28,
                         ),
                         child: Align(
                           alignment: Alignment.topCenter,
                           child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 1280),
+                            constraints: const BoxConstraints(maxWidth: 1180),
                             child: _buildCurrentSection(),
                           ),
                         ),
@@ -1324,205 +1573,219 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Widget _buildLandscapeTopBar({required bool compact}) {
     return SizedBox(
-      height: compact ? 42 : 52,
+      height: compact ? 44 : 52,
       child: DecoratedBox(
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: _editorLine)),
+        decoration: BoxDecoration(
+          color: _editorInkSoft.withOpacity(0.65),
+          border: const Border(bottom: BorderSide(color: _editorLine)),
         ),
         child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 8),
-        child: Row(
-          children: [
-            IconButton(
-              tooltip: '返回',
-              visualDensity: VisualDensity.compact,
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: const Icon(
-                Icons.arrow_back_ios_new_rounded,
-                size: 18,
-                color: _editorTextSoft,
-              ),
-            ),
-            const SizedBox(width: 4),
-            const Text(
-              '编辑世界',
-              style: TextStyle(
-                color: _editorText,
-                fontSize: 14.5,
-                fontWeight: FontWeight.w800,
-                letterSpacing: .8,
-              ),
-            ),
-            if (_dirty) ...[
-              const SizedBox(width: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: _editorAccent.withOpacity(.10),
-                  border: Border.all(color: _editorAccent.withOpacity(.24)),
+          padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 12),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: '返回',
+                visualDensity: VisualDensity.compact,
+                onPressed: _handleBackNavigation,
+                icon: const Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  size: 18,
+                  color: _editorTextSoft,
                 ),
-                child: const Text(
-                  '未保存',
+              ),
+              const SizedBox(width: 4),
+              const Text(
+                '编辑世界',
+                style: TextStyle(
+                  color: _editorText,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .6,
+                ),
+              ),
+              if (_dirty) ...[
+                const SizedBox(width: 10),
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: _editorAccent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 5),
+                const Text(
+                  '未保存修改',
                   style: TextStyle(
                     color: _editorAccent,
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
                   ),
+                ),
+              ],
+              const Spacer(),
+              _buildSaveActionButton(compact: true),
+              const SizedBox(width: 6),
+              IconButton(
+                tooltip: '更多操作',
+                visualDensity: VisualDensity.compact,
+                onPressed: _showMoreMenu,
+                icon: const Icon(
+                  Icons.more_horiz_rounded,
+                  color: _editorTextSoft,
                 ),
               ),
             ],
-            const Spacer(),
-            IconButton(
-              tooltip: '更多',
-              visualDensity: VisualDensity.compact,
-              onPressed: _showMoreMenu,
-              icon: const Icon(
-                Icons.more_horiz_rounded,
-                color: _editorTextSoft,
-              ),
-            ),
-          ],
-        ),
+          ),
         ),
       ),
     );
   }
 
   Widget _buildLandscapeHero({required bool compact}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            GestureDetector(
-              onTap: _editCover,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    width: compact ? 52 : 68,
-                    height: compact ? 52 : 68,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.04),
-                      border: Border.all(color: _editorLine),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: _coverUrl.isEmpty
-                        ? const Icon(
-                            Icons.landscape_outlined,
-                            size: 22,
-                            color: AppColors.textOnDarkMuted,
-                          )
-                        : Image.network(
-                            CdnUtil.resize(_coverUrl, width: 180),
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const Icon(
-                              Icons.broken_image_outlined,
-                              color: AppColors.textOnDarkMuted,
-                            ),
-                          ),
+    return Container(
+      padding: EdgeInsets.all(compact ? 8 : 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.025),
+        borderRadius: _editorRadius,
+        border: Border.all(color: _editorLine),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          GestureDetector(
+            onTap: _editCover,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: compact ? 48 : 60,
+                  height: compact ? 48 : 60,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.04),
+                    borderRadius: _editorRadius,
+                    border: Border.all(color: _editorLine),
                   ),
-                  Positioned(
-                    right: -4,
-                    bottom: -4,
-                    child: Container(
-                      width: compact ? 21 : 24,
-                      height: compact ? 21 : 24,
-                      decoration: BoxDecoration(
-                        color: _editorAccent,
-                        border: Border.all(color: _pageBg, width: 3),
-                      ),
-                      child: _uploadingCover
-                          ? const Padding(
-                              padding: EdgeInsets.all(5),
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.4,
-                                color: Color(0xFF0C0C0C),
-                              ),
-                            )
-                          : const Icon(
-                              LucideIcons.camera,
-                              size: 12,
+                  clipBehavior: Clip.antiAlias,
+                  child: _coverUrl.isEmpty
+                      ? const Icon(
+                          Icons.landscape_outlined,
+                          size: 22,
+                          color: AppColors.textOnDarkMuted,
+                        )
+                      : Image.network(
+                          CdnUtil.resize(_coverUrl, width: 180),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Icon(
+                            Icons.broken_image_outlined,
+                            color: AppColors.textOnDarkMuted,
+                          ),
+                        ),
+                ),
+                Positioned(
+                  right: -3,
+                  bottom: -3,
+                  child: Container(
+                    width: compact ? 20 : 22,
+                    height: compact ? 20 : 22,
+                    decoration: BoxDecoration(
+                      color: _editorAccent,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: _pageBg, width: 2),
+                    ),
+                    child: _uploadingCover
+                        ? const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.4,
                               color: Color(0xFF0C0C0C),
                             ),
-                    ),
+                          )
+                        : const Icon(
+                            LucideIcons.camera,
+                            size: 11,
+                            color: Color(0xFF0C0C0C),
+                          ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            SizedBox(width: compact ? 9 : 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _editorAccent.withOpacity(0.1),
-                      border: Border.all(color: _editorAccent.withOpacity(.18)),
-                    ),
-                    child: Text(
-                      _modeLabel(_mode),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: _editorAccent,
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+          ),
+          SizedBox(width: compact ? 9 : 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _modeLabel(_mode),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _editorAccent.withOpacity(0.9),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
                   ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: _titleController,
-                    onChanged: (_) => _markDirty(),
-                    maxLines: 2,
-                    style: TextStyle(
-                      color: AppColors.textOnDark,
-                      fontSize: compact ? 13.5 : 15.5,
-                      height: 1.12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    decoration: const InputDecoration(
-                      hintText: '世界名称',
-                      hintStyle: TextStyle(color: AppColors.textOnDarkMuted),
-                      contentPadding: EdgeInsets.zero,
-                    ),
+                ),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: _titleController,
+                  onChanged: (_) => _markDirty(),
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: AppColors.textOnDark,
+                    fontSize: compact ? 13 : 14.5,
+                    fontWeight: FontWeight.w700,
                   ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        if (!compact) ...[
-          const SizedBox(height: 8),
-          Text(
-            'ID  ${_id.isEmpty ? widget.scenarioId : _id}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: _editorMuted,
-              fontSize: 9.8,
-              fontFamily: 'Courier',
+                  decoration: const InputDecoration(
+                    hintText: '输入世界名称…',
+                    hintStyle: TextStyle(color: AppColors.textOnDarkMuted),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
-      ],
+      ),
     );
   }
 
-  Widget _buildVerticalSectionTabs({required bool compact}) {
-    final tabs = <(ScenarioEditorSection, String, IconData)>[
-      (ScenarioEditorSection.overview, '基础', Icons.tune_rounded),
-      (ScenarioEditorSection.characters, '角色', Icons.people_alt_outlined),
-      (ScenarioEditorSection.story, '剧情', Icons.route_rounded),
-      (ScenarioEditorSection.bgm, 'BGM', Icons.graphic_eq_rounded),
-      (ScenarioEditorSection.lorebook, '知识库', Icons.menu_book_outlined),
+  List<(ScenarioEditorSection, String, IconData, String?)> get _tabDefinitions {
+    final charCount = _visibleCharacters.length;
+    final plotCount = _plotPoints.length;
+    final bgmCount = _configuredBgmCount;
+    final loreCount = _loreEntries.length;
+    return <(ScenarioEditorSection, String, IconData, String?)>[
+      (ScenarioEditorSection.overview, '基础', Icons.tune_rounded, null),
+      (
+        ScenarioEditorSection.characters,
+        '角色',
+        Icons.people_alt_outlined,
+        charCount > 0 ? '$charCount' : null
+      ),
+      (
+        ScenarioEditorSection.story,
+        '剧情',
+        Icons.route_rounded,
+        plotCount > 0 ? '$plotCount' : null
+      ),
+      (
+        ScenarioEditorSection.bgm,
+        'BGM',
+        Icons.graphic_eq_rounded,
+        bgmCount > 0 ? '$bgmCount/6' : null
+      ),
+      (
+        ScenarioEditorSection.lorebook,
+        '知识库',
+        Icons.menu_book_outlined,
+        loreCount > 0 ? '$loreCount' : null
+      ),
     ];
+  }
+
+  Widget _buildVerticalSectionTabs({required bool compact}) {
+    final tabs = _tabDefinitions;
 
     return Column(
       children: [
@@ -1530,26 +1793,24 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.zero,
+              borderRadius: _editorRadius,
               onTap: () => _setSection(item.$1),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 width: double.infinity,
                 padding: EdgeInsets.symmetric(
-                  horizontal: compact ? 8 : 10,
-                  vertical: compact ? 7 : 10,
+                  horizontal: compact ? 9 : 12,
+                  vertical: compact ? 8 : 11,
                 ),
                 decoration: BoxDecoration(
                   color: _section == item.$1
-                      ? _editorAccent.withOpacity(.10)
+                      ? _editorAccent.withOpacity(.13)
                       : Colors.transparent,
-                  border: Border(
-                    left: BorderSide(
-                      color: _section == item.$1
-                          ? _editorAccent
-                          : Colors.transparent,
-                      width: 2,
-                    ),
+                  borderRadius: _editorRadius,
+                  border: Border.all(
+                    color: _section == item.$1
+                        ? _editorAccent.withOpacity(.3)
+                        : Colors.transparent,
                   ),
                 ),
                 child: Row(
@@ -1557,30 +1818,51 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     Icon(
                       item.$3,
                       size: compact ? 15 : 17,
-                      color: _section == item.$1
-                          ? _editorAccent
-                          : _editorMuted,
+                      color:
+                          _section == item.$1 ? _editorAccent : _editorMuted,
                     ),
-                    SizedBox(width: compact ? 8 : 11),
-                    Text(
-                      item.$2,
-                      style: TextStyle(
-                        color: _section == item.$1
-                            ? _editorText
-                            : _editorMuted,
-                        fontSize: compact ? 11.5 : 12.5,
-                        fontWeight: _section == item.$1
-                            ? FontWeight.w700
-                            : FontWeight.w500,
+                    SizedBox(width: compact ? 8 : 10),
+                    Expanded(
+                      child: Text(
+                        item.$2,
+                        style: TextStyle(
+                          color: _section == item.$1
+                              ? _editorText
+                              : _editorMuted,
+                          fontSize: compact ? 12 : 13,
+                          fontWeight: _section == item.$1
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
                       ),
                     ),
-                    const Spacer(),
+                    if (item.$4 != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _section == item.$1
+                              ? _editorAccent.withOpacity(0.2)
+                              : Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: Text(
+                          item.$4!,
+                          style: TextStyle(
+                            color: _section == item.$1
+                                ? _editorAccent
+                                : _editorMuted,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
             ),
           ),
-          SizedBox(height: compact ? 1 : 3),
+          SizedBox(height: compact ? 3 : 5),
         ],
       ],
     );
@@ -1600,12 +1882,20 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.cloud_off_rounded, size: 48, color: AppColors.textOnDarkMuted),
+              const Icon(
+                Icons.cloud_off_rounded,
+                size: 48,
+                color: AppColors.textOnDarkMuted,
+              ),
               const SizedBox(height: 16),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.textOnDarkMuted, height: 1.5, fontSize: 14),
+                style: const TextStyle(
+                  color: AppColors.textOnDarkMuted,
+                  height: 1.5,
+                  fontSize: 14,
+                ),
               ),
               const SizedBox(height: 24),
               TextButton.icon(
@@ -1626,194 +1916,299 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       pinned: true,
       elevation: 0,
       scrolledUnderElevation: 0,
-      backgroundColor: _editorInkSoft.withOpacity(0.94),
+      backgroundColor: _editorInk.withOpacity(0.92),
       surfaceTintColor: Colors.transparent,
       leading: IconButton(
-        onPressed: () => Navigator.of(context).maybePop(),
-        icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19, color: _editorTextSoft),
+        onPressed: _handleBackNavigation,
+        icon: const Icon(
+          Icons.arrow_back_ios_new_rounded,
+          size: 19,
+          color: _editorTextSoft,
+        ),
       ),
-      centerTitle: true,
-      title: Column(
+      centerTitle: false,
+      titleSpacing: 0,
+      title: Row(
         children: [
           const Text(
             '编辑世界',
-            style: TextStyle(color: _editorText, fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: .8),
-          ),
-          if (_dirty)
-            const Text(
-              '有未保存修改',
-              style: TextStyle(color: _editorAccent, fontSize: 9.5, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: _editorText,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              letterSpacing: .5,
             ),
+          ),
+          if (_dirty) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: _editorAccent.withOpacity(0.14),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                '未保存',
+                style: TextStyle(
+                  color: _editorAccent,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
       actions: [
+        _buildSaveActionButton(),
+        const SizedBox(width: 4),
         IconButton(
+          tooltip: '更多',
           onPressed: _showMoreMenu,
           icon: const Icon(Icons.more_horiz_rounded, color: _editorTextSoft),
         ),
-        const SizedBox(width: 4),
+        const SizedBox(width: 6),
       ],
     );
   }
 
   Widget _buildHero() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 22),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          GestureDetector(
-            onTap: _editCover,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  width: 96,
-                  height: 96,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.04),
-                    border: Border.all(color: _editorLine),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: _coverUrl.isEmpty
-                      ? const Icon(Icons.landscape_outlined, size: 30, color: AppColors.textOnDarkMuted)
-                      : Image.network(
-                          CdnUtil.resize(_coverUrl, width: 300),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const Icon(
-                            Icons.broken_image_outlined,
-                            color: AppColors.textOnDarkMuted,
-                          ),
-                        ),
-                ),
-                Positioned(
-                  right: -6,
-                  bottom: -6,
-                  child: Container(
-                    width: 32,
-                    height: 32,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _editorSurface.withOpacity(0.65),
+          borderRadius: _editorRadiusLg,
+          border: Border.all(color: _editorLine),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: _editCover,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 84,
+                    height: 84,
                     decoration: BoxDecoration(
-                      color: _editorAccent,
-                      border: Border.all(color: _pageBg, width: 3),
+                      color: _editorFieldBg,
+                      borderRadius: _editorRadius,
+                      border: Border.all(color: _editorLine),
                     ),
-                    child: _uploadingCover
-                        ? const Padding(
-                            padding: EdgeInsets.all(6),
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.5,
+                    clipBehavior: Clip.antiAlias,
+                    child: _coverUrl.isEmpty
+                        ? const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.add_photo_alternate_outlined,
+                                size: 26,
+                                color: AppColors.textOnDarkMuted,
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                '上传封面',
+                                style: TextStyle(
+                                  color: AppColors.textOnDarkMuted,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Image.network(
+                            CdnUtil.resize(_coverUrl, width: 300),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const Icon(
+                              Icons.broken_image_outlined,
+                              color: AppColors.textOnDarkMuted,
+                            ),
+                          ),
+                  ),
+                  Positioned(
+                    right: -4,
+                    bottom: -4,
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: _editorAccent,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: _pageBg, width: 2.5),
+                      ),
+                      child: _uploadingCover
+                          ? const Padding(
+                              padding: EdgeInsets.all(5),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: Color(0xFF0C0C0C),
+                              ),
+                            )
+                          : const Icon(
+                              LucideIcons.camera,
+                              size: 13,
                               color: Color(0xFF0C0C0C),
                             ),
-                          )
-                        : const Icon(LucideIcons.camera, size: 14, color: Color(0xFF0C0C0C)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _editorAccent.withOpacity(0.1),
-                    border: Border.all(color: _editorAccent.withOpacity(.18)),
-                  ),
-                  child: Text(
-                    _modeLabel(_mode),
-                    style: const TextStyle(
-                      color: _editorAccent,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _titleController,
-                  onChanged: (_) => _markDirty(),
-                  style: const TextStyle(
-                    color: AppColors.textOnDark,
-                    fontSize: 22,
-                    height: 1.2,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  decoration: const InputDecoration(
-                    hintText: '给世界起个名字',
-                    hintStyle: TextStyle(color: AppColors.textOnDarkMuted),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'ID  ${_id.isEmpty ? widget.scenarioId : _id}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textOnDarkMuted,
-                    fontSize: 11,
-                    fontFamily: 'Courier',
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          _modeLabel(_mode),
+                          style: const TextStyle(
+                            color: _editorTextSoft,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '点击名称可直接修改',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.32),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _editorFieldBg,
+                      borderRadius: _editorRadius,
+                      border: Border.all(color: _editorLine),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _titleController,
+                            onChanged: (_) => _markDirty(),
+                            style: const TextStyle(
+                              color: AppColors.textOnDark,
+                              fontSize: 17,
+                              height: 1.25,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            decoration: const InputDecoration(
+                              hintText: '给世界起个响亮的名字…',
+                              hintStyle:
+                                  TextStyle(color: AppColors.textOnDarkMuted),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(
+                          LucideIcons.pencil,
+                          size: 14,
+                          color: Colors.white.withOpacity(0.35),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildSectionTabs() {
-    final tabs = <(ScenarioEditorSection, String, IconData)>[
-      (ScenarioEditorSection.overview, '基础', Icons.tune_rounded),
-      (ScenarioEditorSection.characters, '角色', Icons.people_alt_outlined),
-      (ScenarioEditorSection.story, '剧情', Icons.route_rounded),
-      (ScenarioEditorSection.bgm, 'BGM', Icons.graphic_eq_rounded),
-      (ScenarioEditorSection.lorebook, '知识库', Icons.menu_book_outlined),
-    ];
+    final tabs = _tabDefinitions;
 
     return SizedBox(
-      height: 46,
+      height: 42,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
         itemCount: tabs.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final item = tabs[index];
           final selected = _section == item.$1;
           return Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.zero,
+              borderRadius: _editorRadius,
               onTap: () => _setSection(item.$1),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: selected ? _editorAccent.withOpacity(0.10) : Colors.transparent,
-                  border: Border(
-                    bottom: BorderSide(
-                      color: selected ? _editorAccent : Colors.transparent,
-                      width: 2,
-                    ),
+                  color: selected
+                      ? _editorAccent.withOpacity(0.14)
+                      : _editorSurface.withOpacity(0.5),
+                  borderRadius: _editorRadius,
+                  border: Border.all(
+                    color: selected
+                        ? _editorAccent.withOpacity(0.55)
+                        : _editorLine,
                   ),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(item.$3, size: 16, color: selected ? _editorAccent : _editorMuted),
+                    Icon(
+                      item.$3,
+                      size: 15,
+                      color: selected ? _editorAccent : _editorMuted,
+                    ),
                     const SizedBox(width: 6),
                     Text(
                       item.$2,
                       style: TextStyle(
-                        color: selected ? _editorAccent : _editorMuted,
+                        color: selected ? _editorText : _editorMuted,
                         fontSize: 13,
-                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
                       ),
                     ),
+                    if (item.$4 != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? _editorAccent.withOpacity(0.22)
+                              : Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: Text(
+                          item.$4!,
+                          style: TextStyle(
+                            color: selected ? _editorAccent : _editorMuted,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1849,22 +2244,23 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             GestureDetector(
               onTap: () => _editTag(i),
               child: Container(
-                padding: const EdgeInsets.fromLTRB(11, 7, 7, 7),
+                padding: const EdgeInsets.fromLTRB(11, 6, 7, 6),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.04),
+                  color: _editorFieldBg,
+                  borderRadius: _editorRadius,
                   border: Border.all(color: _editorLine),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      _tagLabel(_tags[i]),
+                      '# ${_tagLabel(_tags[i])}',
                       style: const TextStyle(
                         color: AppColors.textOnDark,
-                        fontSize: 11.8,
+                        fontSize: 12,
                       ),
                     ),
-                    const SizedBox(width: 7),
+                    const SizedBox(width: 6),
                     GestureDetector(
                       onTap: () => _removeTag(i),
                       child: const Icon(
@@ -1879,12 +2275,13 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
             ),
           InkWell(
             onTap: _addTag,
-            borderRadius: BorderRadius.zero,
+            borderRadius: _editorRadius,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: _editorAccent.withOpacity(0.08),
-                border: Border.all(color: _editorAccent.withOpacity(.18)),
+                color: _editorAccent.withOpacity(0.1),
+                borderRadius: _editorRadius,
+                border: Border.all(color: _editorAccent.withOpacity(.24)),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1895,7 +2292,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                     '新增标签',
                     style: TextStyle(
                       color: AppColors.accent,
-                      fontSize: 11.8,
+                      fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1911,7 +2308,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _fieldLabel('世界设定'),
+          _fieldLabel('世界观与背景设定', subtitle: '交代时代背景、世界规则与主要冲突'),
           const SizedBox(height: 8),
           _editorTextField(
             controller: _descriptionController,
@@ -1927,74 +2324,166 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _fieldLabel('开场白'),
+          _fieldLabel('开场白', subtitle: '玩家进入世界后看到的第一段话'),
           const SizedBox(height: 8),
           _editorTextField(
             controller: _openingController,
-            hint: '玩家进入剧本后看到的第一段话…',
-            minLines: wide ? 7 : 4,
-            maxLines: wide ? 14 : 8,
+            hint: '用极具代入感的场景描写或角色台词开启故事…',
+            minLines: wide ? 7 : 5,
+            maxLines: wide ? 14 : 10,
           ),
         ],
       );
     }
 
-    return _sectionCard(
-      title: '基础信息',
-      subtitle: '优先展示玩家第一眼会看到的内容',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _fieldLabel('标签'),
-          const SizedBox(height: 9),
-          buildTagEditor(),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 600;
-              if (!wide) {
-                return Column(
-                  children: [
-                    buildWorldField(wide: false),
-                    const SizedBox(height: 18),
-                    buildOpeningField(wide: false),
-                  ],
-                );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: buildWorldField(wide: true)),
-                  const SizedBox(width: 12),
-                  Expanded(child: buildOpeningField(wide: true)),
-                ],
-              );
-            },
+    final hasAdvancedConfig =
+        _systemPromptController.text.trim().isNotEmpty ||
+            _cotController.text.trim().isNotEmpty ||
+            _responseStyleController.text.trim().isNotEmpty;
+
+    return Column(
+      children: [
+        _sectionCard(
+          title: '基础设定',
+          subtitle: '决定玩家第一眼看到的世界面貌与开篇体验',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _fieldLabel('主题标签'),
+              const SizedBox(height: 8),
+              buildTagEditor(),
+              const SizedBox(height: 18),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final wide = constraints.maxWidth >= 600;
+                  if (!wide) {
+                    return Column(
+                      children: [
+                        buildWorldField(wide: false),
+                        const SizedBox(height: 18),
+                        buildOpeningField(wide: false),
+                      ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: buildWorldField(wide: true)),
+                      const SizedBox(width: 14),
+                      Expanded(child: buildOpeningField(wide: true)),
+                    ],
+                  );
+                },
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          decoration: BoxDecoration(
+            color: _editorSurface.withOpacity(0.65),
+            borderRadius: _editorRadiusLg,
+            border: Border.all(color: _editorLine),
+          ),
+          child: ExpansionTile(
+            initiallyExpanded: hasAdvancedConfig,
+            tilePadding:
+                const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+            childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+            shape: const RoundedRectangleBorder(borderRadius: _editorRadiusLg),
+            collapsedShape:
+                const RoundedRectangleBorder(borderRadius: _editorRadiusLg),
+            iconColor: _editorAccent,
+            collapsedIconColor: _editorMuted,
+            title: Row(
+              children: [
+                const Icon(
+                  LucideIcons.sparkles,
+                  size: 16,
+                  color: _editorAccent,
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  '高级 AI 设定（选填）',
+                  style: TextStyle(
+                    color: _editorText,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (hasAdvancedConfig) ...[
+                  const SizedBox(width: 8),
+                  _tinyBadge('已配置'),
+                ],
+              ],
+            ),
+            subtitle: const Text(
+              '自定义底层系统指令、思维链（CoT）推理规则与回复文风要求',
+              style: TextStyle(color: _editorMuted, fontSize: 11.5),
+            ),
+            children: [
+              const Divider(height: 16, color: _editorLine),
+              _fieldLabel('系统指令 (System Prompt)',
+                  subtitle: '约束 AI 扮演规则与全局行为准则'),
+              const SizedBox(height: 8),
+              _editorTextField(
+                controller: _systemPromptController,
+                hint: '例如：你是一个擅长冷硬派科幻叙事的 DM，严格遵守世界物理法则…',
+                minLines: 3,
+                maxLines: 8,
+              ),
+              const SizedBox(height: 14),
+              _fieldLabel('回复文风 (Response Style)',
+                  subtitle: '控制叙事口吻、描写颗粒度与台词风格'),
+              const SizedBox(height: 8),
+              _editorTextField(
+                controller: _responseStyleController,
+                hint: '例如：多用环境烘托心理，对话简练克制，避免使用现代网络流行语…',
+                minLines: 2,
+                maxLines: 6,
+              ),
+              const SizedBox(height: 14),
+              _fieldLabel('思维链指令 (CoT Instruction)',
+                  subtitle: '引导 AI 在正式输出前先进行逻辑推演'),
+              const SizedBox(height: 8),
+              _editorTextField(
+                controller: _cotController,
+                hint: '例如：每次回复前先检查角色当前好感度与所处场景是否合理…',
+                minLines: 2,
+                maxLines: 6,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildCharactersSection() {
     final characters = _visibleCharacters;
     return _sectionCard(
-      title: '角色',
-      subtitle: '身份、性格、关系与形象一屏快速查看',
-      trailing: TextButton.icon(
+      title: '登场角色',
+      subtitle: '点击卡片编辑角色立绘、人设与专属配音',
+      trailing: FilledButton.tonalIcon(
         onPressed: _addCharacter,
         icon: const Icon(Icons.add_rounded, size: 16),
-        label: const Text('新增'),
-        style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+        label: const Text('新增角色'),
+        style: FilledButton.styleFrom(
+          backgroundColor: _editorAccent.withOpacity(0.14),
+          foregroundColor: AppColors.accent,
+          shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+        ),
       ),
       child: characters.isEmpty
-          ? _emptyState('还没有角色', '添加第一个 NPC 或主角档案')
+          ? _emptyState('还没有登场角色', '点击右上角「新增角色」创建第一个 NPC 或主角档案')
           : LayoutBuilder(
               builder: (context, constraints) {
                 final width = constraints.maxWidth;
                 final columns = width >= 1040
                     ? 3
-                    : width >= 520
+                    : width >= 540
                         ? 2
                         : 1;
                 const gap = 10.0;
@@ -2030,9 +2519,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final initialConfig = _parseMap(character['initial_config']);
     final role = character['role']?.toString() ?? 'npc';
     final identity = jsonData['identity']?.toString().trim() ?? '';
-    final relationship = initialConfig['relationship_status']?.toString().trim() ?? '';
+    final relationship =
+        initialConfig['relationship_status']?.toString().trim() ?? '';
     final gender = jsonData['gender']?.toString().trim() ?? '';
     final age = jsonData['age']?.toString().trim() ?? '';
+    final voiceName = jsonData['voice_name']?.toString().trim() ?? '';
     final rawTraits = jsonData['personality'];
     final traits = rawTraits is List
         ? rawTraits
@@ -2045,116 +2536,121 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       if (relationship.isNotEmpty) relationship,
       if (gender.isNotEmpty && gender != '未知') gender,
       if (age.isNotEmpty) '$age岁',
+      if (voiceName.isNotEmpty) '🎙 $voiceName',
       ...traits,
     ];
-    final avatarSize = compact ? 46.0 : 52.0;
+    final avatarSize = compact ? 48.0 : 54.0;
 
-    return InkWell(
-      onTap: () => _editCharacter(realIndex),
-      borderRadius: BorderRadius.zero,
-      child: Container(
-        padding: EdgeInsets.all(compact ? 10 : 12),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.025),
-          border: Border.all(color: _editorLine),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Container(
-              width: avatarSize,
-              height: avatarSize,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.04),
-                border: Border.all(color: _editorLine),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: avatar.isEmpty
-                  ? const Icon(
-                      Icons.person_outline_rounded,
-                      color: AppColors.textOnDarkMuted,
-                    )
-                  : Image.network(
-                      CdnUtil.resize(avatar, width: 120),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const Icon(
+    return Material(
+      color: _editorFieldBg,
+      borderRadius: _editorRadius,
+      child: InkWell(
+        onTap: () => _editCharacter(realIndex),
+        borderRadius: _editorRadius,
+        child: Container(
+          padding: EdgeInsets.all(compact ? 11 : 13),
+          decoration: BoxDecoration(
+            borderRadius: _editorRadius,
+            border: Border.all(color: _editorLine),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: avatarSize,
+                height: avatarSize,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: _editorRadius,
+                  border: Border.all(color: _editorLine),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: avatar.isEmpty
+                    ? const Icon(
                         Icons.person_outline_rounded,
                         color: AppColors.textOnDarkMuted,
-                      ),
-                    ),
-            ),
-            SizedBox(width: compact ? 11 : 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          character['name']?.toString().trim().isNotEmpty == true
-                              ? character['name'].toString()
-                              : '未命名',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: AppColors.textOnDark,
-                            fontSize: compact ? 13.2 : 14,
-                            fontWeight: FontWeight.w700,
-                          ),
+                      )
+                    : Image.network(
+                        CdnUtil.resize(avatar, width: 120),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const Icon(
+                          Icons.person_outline_rounded,
+                          color: AppColors.textOnDarkMuted,
                         ),
                       ),
-                      const SizedBox(width: 7),
-                      _tinyBadge(role == 'player' ? '主角' : 'NPC'),
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    identity.isNotEmpty ? identity : '尚未设置身份',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: identity.isNotEmpty
-                          ? AppColors.textOnDarkMuted
-                          : AppColors.textOnDarkMuted.withOpacity(.65),
-                      fontSize: compact ? 11.3 : 12,
+              ),
+              SizedBox(width: compact ? 11 : 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            character['name']?.toString().trim().isNotEmpty ==
+                                    true
+                                ? character['name'].toString()
+                                : '未命名角色',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: AppColors.textOnDark,
+                              fontSize: compact ? 13.5 : 14.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        _tinyBadge(role == 'player' ? '主角' : 'NPC'),
+                      ],
                     ),
-                  ),
-                  if (meta.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 5),
                     Text(
-                      meta.join('  ·  '),
+                      identity.isNotEmpty ? identity : '点击补充角色身份与外貌背景…',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: AppColors.textOnDarkMuted.withOpacity(.82),
-                        fontSize: compact ? 10.3 : 10.8,
+                        color: identity.isNotEmpty
+                            ? AppColors.textOnDarkMuted
+                            : AppColors.textOnDarkMuted.withOpacity(.55),
+                        fontSize: compact ? 11.5 : 12,
                       ),
                     ),
+                    if (meta.isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        meta.join('  ·  '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppColors.textOnDarkMuted.withOpacity(.82),
+                          fontSize: compact ? 10.5 : 11,
+                        ),
+                      ),
+                    ],
                   ],
-                ],
-              ),
-            ),
-            SizedBox(width: compact ? 4 : 8),
-            InkWell(
-              onTap: () => _removeCharacter(realIndex),
-              borderRadius: BorderRadius.circular(8),
-              child: const Padding(
-                padding: EdgeInsets.all(6),
-                child: Icon(
-                  Icons.close_rounded,
-                  size: 16,
-                  color: AppColors.textOnDarkMuted,
                 ),
               ),
-            ),
-            const Icon(
-              Icons.chevron_right_rounded,
-              color: AppColors.textOnDarkMuted,
-              size: 18,
-            ),
-          ],
+              SizedBox(width: compact ? 4 : 8),
+              IconButton(
+                tooltip: '删除角色',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _confirmRemoveCharacter(realIndex),
+                icon: Icon(
+                  Icons.delete_outline_rounded,
+                  size: 17,
+                  color: Colors.white.withOpacity(0.35),
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.textOnDarkMuted,
+                size: 18,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2165,7 +2661,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       return _sectionCard(
         title: '剧情流程',
         subtitle: '该模块主要用于互动小说模式',
-        child: _emptyState('当前不是互动小说模式', '你仍可以切换模式后使用完整剧情节点'),
+        child: _emptyState('当前不是互动小说模式', '仅在互动小说模式下需要配置分幕剧情节点'),
       );
     }
 
@@ -2177,7 +2673,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         subtitle: '从开篇到结局的整体走向',
         child: _editorTextField(
           controller: _mainStoryController,
-          hint: '用几段话说明主线目标、关键变化和结局方向…',
+          hint: '用几段话说明主线目标、关键转折和结局方向…',
           minLines: wide ? 12 : 5,
           maxLines: wide ? 24 : 12,
         ),
@@ -2187,21 +2683,27 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     Widget buildPlotPoints() {
       return _sectionCard(
         title: '关键剧情节点',
-        subtitle: 'AI 按顺序推进 · 共 ${points.length} 个节点',
-        trailing: TextButton.icon(
+        subtitle: 'AI 将按顺序推进 · 共 ${points.length} 个节点',
+        trailing: FilledButton.tonalIcon(
           onPressed: _addPlotPoint,
           icon: const Icon(Icons.add_rounded, size: 16),
-          label: const Text('新增'),
-          style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+          label: const Text('新增节点'),
+          style: FilledButton.styleFrom(
+            backgroundColor: _editorAccent.withOpacity(0.14),
+            foregroundColor: AppColors.accent,
+            shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            textStyle:
+                const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+          ),
         ),
         child: points.isEmpty
-            ? _emptyState('暂无剧情节点', '添加后可以明确每一幕的目标、困境和推进条件')
+            ? _emptyState('暂无剧情节点', '添加节点后可明确每一幕的目标、困境和完成信号')
             : Column(
                 children: [
                   for (var i = 0; i < points.length; i++) ...[
                     _plotPointCard(i, points[i]),
-                    if (i != points.length - 1)
-                      const SizedBox(height: 9),
+                    if (i != points.length - 1) const SizedBox(height: 10),
                   ],
                 ],
               ),
@@ -2215,20 +2717,19 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           return Column(
             children: [
               buildMainStory(false),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               buildPlotPoints(),
             ],
           );
         }
 
-        final outlineWidth = (constraints.maxWidth * .36)
-            .clamp(240.0, 380.0)
-            .toDouble();
+        final outlineWidth =
+            (constraints.maxWidth * .36).clamp(240.0, 380.0).toDouble();
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SizedBox(width: outlineWidth, child: buildMainStory(true)),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(child: buildPlotPoints()),
           ],
         );
@@ -2270,25 +2771,25 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     ];
 
     return ExpansionTile(
-      tilePadding: const EdgeInsets.fromLTRB(12, 2, 8, 2),
-      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
-      collapsedShape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: const BorderSide(color: _editorLine),
+      tilePadding: const EdgeInsets.fromLTRB(12, 4, 8, 4),
+      childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
+      collapsedShape: const RoundedRectangleBorder(
+        borderRadius: _editorRadius,
+        side: BorderSide(color: _editorLine),
       ),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(color: _editorAccent.withOpacity(.32)),
+        borderRadius: _editorRadius,
+        side: BorderSide(color: _editorAccent.withOpacity(.4)),
       ),
-      backgroundColor: Colors.white.withOpacity(0.028),
-      collapsedBackgroundColor: Colors.white.withOpacity(0.022),
+      backgroundColor: _editorFieldBg,
+      collapsedBackgroundColor: _editorFieldBg,
       leading: Container(
-        width: 30,
-        height: 30,
+        width: 28,
+        height: 28,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: _editorAccent.withOpacity(0.12),
-          border: Border.all(color: _editorAccent.withOpacity(.2)),
+          color: _editorAccent.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(5),
         ),
         child: Text(
           '${index + 1}',
@@ -2310,7 +2811,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: AppColors.textOnDark,
-                fontSize: 13.2,
+                fontSize: 13.5,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -2318,7 +2819,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
           const SizedBox(width: 4),
           InkWell(
             onTap: () => _removePlotPoint(index),
-            borderRadius: BorderRadius.circular(7),
+            borderRadius: _editorRadius,
             child: const Padding(
               padding: EdgeInsets.all(5),
               child: Icon(
@@ -2334,19 +2835,20 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         padding: const EdgeInsets.only(top: 5),
         child: Text(
           summary.isEmpty
-              ? '$paceLabel · 展开补充地点、困境和完成条件'
+              ? '$paceLabel · 点击展开补充地点、困境和完成条件'
               : '$paceLabel · ${summary.first}'
                   '${summary.length > 1 ? '\n${summary[1]}' : ''}',
           maxLines: summary.isEmpty ? 1 : 2,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: AppColors.textOnDarkMuted.withOpacity(.88),
-            fontSize: 10.8,
+            fontSize: 11,
             height: 1.35,
           ),
         ),
       ),
       children: [
+        const Divider(height: 16, color: _editorLine),
         Row(
           children: [
             Expanded(
@@ -2391,15 +2893,21 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         ),
         _inlineInitialField(
           label: '玩家的核心困境',
-          value: (point['player_facing_problem'] ?? point['tension'])?.toString() ?? '',
+          value:
+              (point['player_facing_problem'] ?? point['tension'])?.toString() ??
+                  '',
           hint: '玩家为什么会继续推进这一节？',
-          onChanged: (value) => _updatePlotPoint(index, 'player_facing_problem', value),
+          onChanged: (value) =>
+              _updatePlotPoint(index, 'player_facing_problem', value),
         ),
         _inlineInitialField(
           label: '完成信号',
-          value: (point['completion_condition'] ?? point['exit'])?.toString() ?? '',
+          value:
+              (point['completion_condition'] ?? point['exit'])?.toString() ??
+                  '',
           hint: '故事演到什么程度就推进下一节？',
-          onChanged: (value) => _updatePlotPoint(index, 'completion_condition', value),
+          onChanged: (value) =>
+              _updatePlotPoint(index, 'completion_condition', value),
         ),
         _inlineInitialField(
           label: '结尾悬念',
@@ -2413,33 +2921,38 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Widget _buildBgmSection() {
     final groups = <String, List<int>>{
-      '日常': <int>[],
-      '冲突': <int>[],
-      '情感': <int>[],
+      '日常氛围': <int>[],
+      '冲突战斗': <int>[],
+      '情感共鸣': <int>[],
     };
     for (var i = 0; i < _bgmList.length; i++) {
-      groups[_bgmList[i]['category']]?.add(i);
+      final cat = _bgmList[i]['category']?.toString() ?? '';
+      if (cat == '日常') groups['日常氛围']?.add(i);
+      if (cat == '冲突') groups['冲突战斗']?.add(i);
+      if (cat == '情感') groups['情感共鸣']?.add(i);
     }
 
     return _sectionCard(
       title: '情景 BGM',
-      subtitle: '每种情绪准备慢/快两档，剧情可以自动切换',
+      subtitle: '每种情绪配备慢/快两档音乐，AI 会根据剧情紧张度自动切换',
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (final group in groups.entries) ...[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                group.key,
-                style: const TextStyle(color: AppColors.textOnDark, fontSize: 14, fontWeight: FontWeight.w600),
+            Text(
+              group.key,
+              style: const TextStyle(
+                color: _editorTextSoft,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             for (final index in group.value) ...[
               _bgmRow(index),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
             ],
-            if (group.key != groups.keys.last) const SizedBox(height: 16),
+            if (group.key != groups.keys.last) const SizedBox(height: 12),
           ],
         ],
       ),
@@ -2453,28 +2966,35 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final isPreviewing = _previewBgmIndex == index && _previewBgmPlaying;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
-        border: Border.all(color: _editorLine),
+        color: _editorFieldBg,
+        borderRadius: _editorRadius,
+        border: Border.all(
+          color: isPreviewing ? _editorAccent.withOpacity(0.45) : _editorLine,
+        ),
       ),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 38,
+            height: 38,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: _editorAccent.withOpacity(0.1),
-              border: Border.all(color: _editorAccent.withOpacity(.18)),
+              color: url.isNotEmpty
+                  ? _editorAccent.withOpacity(0.12)
+                  : Colors.white.withOpacity(0.04),
+              borderRadius: _editorRadius,
             ),
             child: Icon(
               uploading ? LucideIcons.loaderCircle : LucideIcons.music2,
-              size: 18,
-              color: AppColors.accent,
+              size: 17,
+              color: url.isNotEmpty
+                  ? AppColors.accent
+                  : AppColors.textOnDarkMuted,
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2489,63 +3009,59 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Text(
-                      '${item['pace']}',
-                      style: const TextStyle(
-                        color: AppColors.textOnDarkMuted,
-                        fontSize: 11,
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${item['pace']}',
+                        style: const TextStyle(
+                          color: AppColors.textOnDarkMuted,
+                          fontSize: 10.5,
+                        ),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 5),
                 Text(
                   uploading
                       ? '正在上传音频…'
                       : isPreviewing
-                          ? '正在试听…'
+                          ? '正在试听播放…'
                           : url.isEmpty
-                              ? '未配置'
-                              : '已配置 · 点击播放试听',
+                              ? '未配置音频'
+                              : '已配置音频 · 可点击右侧试听',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: uploading || url.isNotEmpty ? AppColors.accent : AppColors.textOnDarkMuted,
+                    color: uploading || url.isNotEmpty
+                        ? AppColors.accent
+                        : AppColors.textOnDarkMuted,
                     fontSize: 11.5,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          if (url.isNotEmpty && !uploading)
-            InkWell(
-              onTap: () => _toggleBgmPreview(index),
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                width: 36,
-                height: 36,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: isPreviewing ? _editorAccent.withOpacity(0.12) : Colors.transparent,
-                  border: Border.all(
-                    color: isPreviewing
-                        ? _editorAccent.withOpacity(.22)
-                        : Colors.transparent,
-                  ),
-                ),
-                child: Icon(
-                  isPreviewing ? LucideIcons.pause : LucideIcons.play,
-                  size: 16,
-                  color: isPreviewing ? AppColors.accent : AppColors.textOnDark,
-                ),
+          const SizedBox(width: 8),
+          if (url.isNotEmpty && !uploading) ...[
+            IconButton(
+              tooltip: isPreviewing ? '暂停' : '试听',
+              onPressed: () => _toggleBgmPreview(index),
+              icon: Icon(
+                isPreviewing ? LucideIcons.pause : LucideIcons.play,
+                size: 16,
+                color: isPreviewing ? AppColors.accent : AppColors.textOnDark,
               ),
             ),
-          if (url.isNotEmpty && !uploading) const SizedBox(width: 6),
-          if (url.isNotEmpty && !uploading)
-            InkWell(
-              onTap: () async {
+            IconButton(
+              tooltip: '清除音频',
+              onPressed: () async {
                 await _stopBgmPreviewIfNeeded(index);
                 if (!mounted) return;
                 setState(() {
@@ -2555,20 +3071,27 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 });
                 _markDirty();
               },
-              child: const Padding(
-                padding: EdgeInsets.all(8),
-                child: Icon(LucideIcons.x, size: 16, color: AppColors.textOnDarkMuted),
+              icon: const Icon(
+                LucideIcons.trash2,
+                size: 15,
+                color: AppColors.textOnDarkMuted,
               ),
             ),
+          ],
           InkWell(
             onTap: uploading ? null : () => _editBgmMedia(index),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: _editorRadius,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                color: uploading ? Colors.white.withOpacity(0.04) : _editorAccent.withOpacity(0.1),
+                color: uploading
+                    ? Colors.white.withOpacity(0.04)
+                    : _editorAccent.withOpacity(0.12),
+                borderRadius: _editorRadius,
                 border: Border.all(
-                  color: uploading ? _editorLine : _editorAccent.withOpacity(.22),
+                  color: uploading
+                      ? _editorLine
+                      : _editorAccent.withOpacity(.28),
                 ),
               ),
               child: Row(
@@ -2576,8 +3099,8 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                 children: [
                   if (uploading)
                     const SizedBox(
-                      width: 14,
-                      height: 14,
+                      width: 13,
+                      height: 13,
                       child: CircularProgressIndicator(
                         strokeWidth: 1.5,
                         color: AppColors.accent,
@@ -2586,7 +3109,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                   else
                     Icon(
                       url.isEmpty ? LucideIcons.upload : LucideIcons.refreshCw,
-                      size: 14,
+                      size: 13,
                       color: AppColors.accent,
                     ),
                   const SizedBox(width: 6),
@@ -2614,16 +3137,22 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
   Widget _buildLorebookSection() {
     final entries = _loreEntries;
     return _sectionCard(
-      title: '世界知识库',
-      subtitle: '${entries.length} 条设定 · 关键词命中后注入给 AI',
-      trailing: TextButton.icon(
+      title: '世界知识库 (Lorebook)',
+      subtitle: '当对话中提及触发词时，自动将对应设定注入给 AI',
+      trailing: FilledButton.tonalIcon(
         onPressed: _addLoreEntry,
         icon: const Icon(Icons.add_rounded, size: 16),
-        label: const Text('新增'),
-        style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+        label: const Text('新增词条'),
+        style: FilledButton.styleFrom(
+          backgroundColor: _editorAccent.withOpacity(0.14),
+          foregroundColor: AppColors.accent,
+          shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+        ),
       ),
       child: entries.isEmpty
-          ? _emptyState('暂无知识条目', '把地名、组织、规则、物品等设定做成关键词词条')
+          ? _emptyState('暂无知识库词条', '将专有名词、组织势力、法则或道具做成词条，节省常驻上下文')
           : Column(
               children: [
                 for (var i = 0; i < entries.length; i++) ...[
@@ -2637,131 +3166,88 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Widget _loreEntryCard(int index, Map<String, dynamic> entry) {
     final keys = entry['keys'];
-    final firstKey = keys is List && keys.isNotEmpty ? keys.first?.toString() ?? '' : '';
+    final firstKey =
+        keys is List && keys.isNotEmpty ? keys.first?.toString() ?? '' : '';
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
+        color: Colors.white.withOpacity(0.025),
+        borderRadius: _editorRadius,
         border: Border.all(color: _editorLine),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.key_rounded, size: 16, color: AppColors.accent),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _editorAccent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.key_rounded, size: 13, color: AppColors.accent),
+                    SizedBox(width: 4),
+                    Text(
+                      '触发词',
+                      style: TextStyle(
+                        color: AppColors.accent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: TextFormField(
                   initialValue: firstKey,
                   onChanged: (value) => _updateLoreEntry(index, 'key', value),
-                  style: const TextStyle(color: AppColors.textOnDark, fontSize: 14, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    color: AppColors.textOnDark,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
                   decoration: const InputDecoration(
-                    hintText: '触发关键词，例如：圣剑',
-                    hintStyle: TextStyle(color: AppColors.textOnDarkMuted),
+                    hintText: '输入触发关键词，例如：圣剑 / 黑塔组织',
+                    hintStyle: TextStyle(
+                      color: AppColors.textOnDarkMuted,
+                      fontWeight: FontWeight.w400,
+                    ),
                   ),
                 ),
               ),
               IconButton(
+                tooltip: '删除词条',
+                visualDensity: VisualDensity.compact,
                 onPressed: () => _removeLoreEntry(index),
-                icon: const Icon(Icons.close_rounded, size: 18, color: AppColors.textOnDarkMuted),
+                icon: const Icon(
+                  Icons.close_rounded,
+                  size: 18,
+                  color: AppColors.textOnDarkMuted,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           TextFormField(
             initialValue: entry['content']?.toString() ?? '',
             onChanged: (value) => _updateLoreEntry(index, 'content', value),
             minLines: 3,
             maxLines: 8,
-            style: const TextStyle(color: AppColors.textOnDark, fontSize: 13, height: 1.5),
-            decoration: const InputDecoration(
-              hintText: '当检测到关键词时，向 AI 注入的背景描述…',
-              hintStyle: TextStyle(color: AppColors.textOnDarkMuted),
+            style: const TextStyle(
+              color: AppColors.textOnDark,
+              fontSize: 13,
+              height: 1.55,
             ),
+            decoration: _inputDecoration('当检测到该关键词时，向 AI 补充的详细背景设定…'),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildBottomBar({
-    double leftInset = 0,
-    double rightInset = 0,
-    bool compact = false,
-    bool phoneLandscape = false,
-  }) {
-    // 只有发生未保存修改时才显示底部保存栏；保存成功后自动隐藏。
-    if (!_dirty && !_saving) return const SizedBox.shrink();
-
-    return Positioned(
-      left: leftInset,
-      right: rightInset,
-      bottom: 0,
-      child: Container(
-        padding: EdgeInsets.fromLTRB(
-          phoneLandscape ? 10 : (compact ? 16 : 20),
-          phoneLandscape ? 6 : (compact ? 8 : 12),
-          phoneLandscape ? 10 : (compact ? 16 : 20),
-          (phoneLandscape ? 6 : (compact ? 8 : 16)) +
-              MediaQuery.paddingOf(context).bottom,
-        ),
-        decoration: BoxDecoration(
-          color: _editorInkSoft.withOpacity(0.96),
-          border: compact
-              ? Border(
-                  top: BorderSide(
-                    color: Colors.white.withOpacity(.045),
-                    width: 1,
-                  ),
-                )
-              : null,
-        ),
-        child: Align(
-          alignment: Alignment.centerRight,
-          child: SizedBox(
-            width: phoneLandscape ? 174 : double.infinity,
-            child: Material(
-              color: _editorAccent,
-              borderRadius: BorderRadius.zero,
-              child: InkWell(
-                onTap: _saving ? null : _save,
-                borderRadius: BorderRadius.zero,
-                child: Container(
-              height: phoneLandscape ? 36 : (compact ? 42 : 52),
-              alignment: Alignment.center,
-              child: _saving
-                  ? SizedBox(
-                      width: compact ? 18 : 20,
-                      height: compact ? 18 : 20,
-                      child: const CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Color(0xFF0C0C0C),
-                      ),
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.save_outlined,
-                          size: compact ? 16 : 18,
-                          color: const Color(0xFF0C0C0C),
-                        ),
-                        SizedBox(width: compact ? 7 : 8),
-                        Text(
-                          '保存修改',
-                          style: TextStyle(
-                            fontSize: compact ? 13.2 : 14.5,
-                            fontWeight: FontWeight.w700,
-                            color: const Color(0xFF0C0C0C),
-                          ),
-                        ),
-                      ],
-                    ),
-                ),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -2777,17 +3263,27 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final phoneLandscape = dense && size.height <= 560 && size.width <= 1100;
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(phoneLandscape ? 12 : (dense ? 16 : 20)),
+      padding: EdgeInsets.all(phoneLandscape ? 14 : (dense ? 16 : 18)),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.026),
+        color: _editorSurface.withOpacity(0.65),
+        borderRadius: _editorRadiusLg,
         border: Border.all(color: _editorLine),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              Container(
+                width: 3.5,
+                height: 16,
+                margin: const EdgeInsets.only(right: 9),
+                decoration: BoxDecoration(
+                  color: _editorAccent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2800,12 +3296,12 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    SizedBox(height: dense ? 4 : 6),
+                    const SizedBox(height: 3),
                     Text(
                       subtitle,
                       style: TextStyle(
                         color: _editorMuted,
-                        fontSize: dense ? 11.2 : 12,
+                        fontSize: dense ? 11.2 : 11.8,
                         height: 1.35,
                       ),
                     ),
@@ -2815,7 +3311,7 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
               if (trailing != null) trailing,
             ],
           ),
-          SizedBox(height: phoneLandscape ? 10 : (dense ? 14 : 18)),
+          SizedBox(height: phoneLandscape ? 12 : (dense ? 14 : 16)),
           child,
         ],
       ),
@@ -2833,7 +3329,11 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       minLines: minLines,
       maxLines: maxLines,
       onChanged: (_) => _markDirty(),
-      style: const TextStyle(color: AppColors.textOnDark, fontSize: 13.5, height: 1.6),
+      style: const TextStyle(
+        color: AppColors.textOnDark,
+        fontSize: 13.5,
+        height: 1.6,
+      ),
       decoration: _inputDecoration(hint),
     );
   }
@@ -2848,18 +3348,22 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     final size = MediaQuery.sizeOf(context);
     final dense = size.width > size.height;
     return Padding(
-      padding: EdgeInsets.only(top: dense ? 12 : 16),
+      padding: EdgeInsets.only(top: dense ? 12 : 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _fieldLabel(label),
-          SizedBox(height: dense ? 7 : 10),
+          SizedBox(height: dense ? 6 : 8),
           TextFormField(
             initialValue: value,
             onChanged: onChanged,
             minLines: minLines,
             maxLines: 5,
-            style: const TextStyle(color: AppColors.textOnDark, fontSize: 13.5, height: 1.5),
+            style: const TextStyle(
+              color: AppColors.textOnDark,
+              fontSize: 13.5,
+              height: 1.5,
+            ),
             decoration: _inputDecoration(hint),
           ),
         ],
@@ -2879,18 +3383,28 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _fieldLabel(label),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           value: safeValue,
           dropdownColor: _editorInkSoft,
           isExpanded: true,
           decoration: _inputDecoration(''),
-          icon: const Icon(Icons.expand_more_rounded, size: 18, color: AppColors.textOnDarkMuted),
+          icon: const Icon(
+            Icons.expand_more_rounded,
+            size: 18,
+            color: AppColors.textOnDarkMuted,
+          ),
           items: [
             for (var i = 0; i < items.length; i++)
               DropdownMenuItem<String>(
                 value: items[i],
-                child: Text(labels[i], style: const TextStyle(fontSize: 13, color: AppColors.textOnDark)),
+                child: Text(
+                  labels[i],
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textOnDark,
+                  ),
+                ),
               ),
           ],
           onChanged: (next) {
@@ -2901,14 +3415,32 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     );
   }
 
-  Widget _fieldLabel(String text) {
-    return Text(
-      text,
-      style: const TextStyle(
-        color: AppColors.textOnDark,
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-      ),
+  Widget _fieldLabel(String text, {String? subtitle}) {
+    return Row(
+      children: [
+        Text(
+          text,
+          style: const TextStyle(
+            color: _editorTextSoft,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.35),
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -2918,25 +3450,25 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
     return InputDecoration(
       hintText: hint,
       hintStyle: TextStyle(
-        color: AppColors.textOnDarkMuted,
+        color: Colors.white.withOpacity(0.3),
         fontWeight: FontWeight.w400,
         fontSize: dense ? 12.3 : 13,
       ),
       filled: true,
-      fillColor: Colors.white.withOpacity(0.035),
+      fillColor: _editorFieldBg,
       contentPadding: EdgeInsets.symmetric(
-        horizontal: dense ? 13 : 16,
-        vertical: dense ? 12 : 16,
+        horizontal: dense ? 13 : 15,
+        vertical: dense ? 11 : 14,
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: const BorderSide(color: _editorLine),
+      enabledBorder: const OutlineInputBorder(
+        borderRadius: _editorRadius,
+        borderSide: BorderSide(color: _editorLine),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: _editorRadius,
         borderSide: BorderSide(
-          color: _editorAccent.withOpacity(0.7),
-          width: 1,
+          color: _editorAccent.withOpacity(0.75),
+          width: 1.2,
         ),
       ),
     );
@@ -2952,16 +3484,36 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
         vertical: dense ? 24 : 36,
       ),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
+        color: _editorFieldBg,
+        borderRadius: _editorRadius,
         border: Border.all(color: _editorLine),
       ),
       child: Column(
         children: [
-          const Icon(Icons.layers_outlined, color: AppColors.textOnDarkMuted, size: 32),
-          const SizedBox(height: 16),
-          Text(title, style: const TextStyle(color: AppColors.textOnDark, fontSize: 14, fontWeight: FontWeight.w600)),
+          const Icon(
+            Icons.layers_outlined,
+            color: AppColors.textOnDarkMuted,
+            size: 32,
+          ),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            style: const TextStyle(
+              color: AppColors.textOnDark,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           const SizedBox(height: 6),
-          Text(subtitle, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 12, height: 1.5)),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.textOnDarkMuted,
+              fontSize: 12,
+              height: 1.5,
+            ),
+          ),
         ],
       ),
     );
@@ -2969,25 +3521,37 @@ class _ScenarioEditPageState extends State<ScenarioEditPage> {
 
   Widget _tinyBadge(String text) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
-        color: _editorAccent.withOpacity(0.1),
-        border: Border.all(color: _editorAccent.withOpacity(.18)),
+        color: _editorAccent.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: _editorAccent.withOpacity(.22)),
       ),
-      child: Text(text, style: const TextStyle(color: AppColors.accent, fontSize: 10, fontWeight: FontWeight.w600)),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: AppColors.accent,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 
   Widget _arcBadge(String arc) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.06),
-        border: Border.all(color: _editorLine),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
         _arcLabel(arc),
-        style: const TextStyle(color: AppColors.textOnDarkMuted, fontSize: 11, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+          color: AppColors.textOnDarkMuted,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -3061,9 +3625,9 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
       ),
       backgroundColor: _editorInkSoft,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: _editorLine),
+      shape: const RoundedRectangleBorder(
+        borderRadius: _editorRadiusLg,
+        side: BorderSide(color: _editorLine),
       ),
       child: SizedBox(
         width: dialogWidth,
@@ -3193,7 +3757,8 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
           ),
         ),
         IconButton(
-          visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
+          visualDensity:
+              compact ? VisualDensity.compact : VisualDensity.standard,
           onPressed: _cropping ? null : () => Navigator.of(context).pop(),
           icon: Icon(
             Icons.close_rounded,
@@ -3207,7 +3772,7 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
 
   Widget _buildCropSurface() {
     return ClipRRect(
-      borderRadius: BorderRadius.zero,
+      borderRadius: _editorRadius,
       child: ColoredBox(
         color: Colors.black,
         child: Crop(
@@ -3222,7 +3787,7 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
           ),
           baseColor: Colors.black,
           maskColor: Colors.black.withOpacity(0.56),
-          radius: 2,
+          radius: 4,
           filterQuality: FilterQuality.medium,
           progressIndicator: const Center(
             child: CircularProgressIndicator(
@@ -3259,11 +3824,9 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.textOnDarkMuted,
               side: BorderSide.none,
-              backgroundColor: Colors.white.withOpacity(0.04),
-              minimumSize: Size.fromHeight(compact ? 42 : 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.zero,
-              ),
+              backgroundColor: Colors.white.withOpacity(0.05),
+              minimumSize: Size.fromHeight(compact ? 42 : 48),
+              shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
             ),
             child: Text(
               '取消',
@@ -3271,17 +3834,15 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
             ),
           ),
         ),
-        SizedBox(width: compact ? 10 : 16),
+        SizedBox(width: compact ? 10 : 14),
         Expanded(
           child: FilledButton(
             onPressed: _cropping ? null : _confirmCrop,
             style: FilledButton.styleFrom(
               backgroundColor: _editorAccent,
               foregroundColor: const Color(0xFF0B0B0B),
-              minimumSize: Size.fromHeight(compact ? 42 : 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.zero,
-              ),
+              minimumSize: Size.fromHeight(compact ? 42 : 48),
+              shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
             ),
             child: _cropping
                 ? SizedBox(
@@ -3304,7 +3865,6 @@ class _SquareCoverCropDialogState extends State<_SquareCoverCropDialog> {
       ],
     );
   }
-
 }
 
 class _CharacterEditorSheet extends StatefulWidget {
@@ -3312,33 +3872,37 @@ class _CharacterEditorSheet extends StatefulWidget {
     required this.character,
     required this.characterIndex,
     this.onPickMedia,
+    this.canDelete = true,
   });
 
   final Map<String, dynamic> character;
   final int characterIndex;
   final ScenarioMediaPicker? onPickMedia;
+  final bool canDelete;
 
   @override
   State<_CharacterEditorSheet> createState() => _CharacterEditorSheetState();
 }
 
 class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
-  static const Color _bg = _editorInk;
-
   late final Map<String, dynamic> _character;
   late final TextEditingController _name;
   late final TextEditingController _identity;
   late final TextEditingController _age;
   late final TextEditingController _appearance;
   late final TextEditingController _background;
-  late final TextEditingController _secret;
-  late final TextEditingController _examples;
-  late final TextEditingController _greeting;
   late final TextEditingController _avatarUrl;
   late final TextEditingController _portraitUrl;
-  late final TextEditingController _affection;
-  late final TextEditingController _stress;
   late final TextEditingController _relationship;
+  late String _voiceValue;
+  late String _voiceNameValue;
+  late String _trialUrlValue;
+  late double _voiceSpeed;
+  late double _voicePitch;
+  final AudioPlayer _voiceTrialPlayer = AudioPlayer();
+  StreamSubscription<PlayerState>? _voiceTrialStateSubscription;
+  String _currentVoiceTrialUrl = '';
+  bool _previewingVoice = false;
   bool _uploadingAvatar = false;
   bool _uploadingPortrait = false;
 
@@ -3368,6 +3932,27 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     return map;
   }
 
+  Map<String, dynamic> _parseCharacterMap(dynamic value) {
+    if (value is Map<String, dynamic>) return <String, dynamic>{...value};
+    if (value is Map) {
+      return value.map((key, value) => MapEntry(key.toString(), value));
+    }
+    if (value is String && value.trim().startsWith('{')) {
+      try {
+        final decoded = jsonDecode(value);
+        if (decoded is Map) {
+          return decoded.map((key, value) => MapEntry(key.toString(), value));
+        }
+      } catch (_) {}
+    }
+    return <String, dynamic>{};
+  }
+
+  double _parseVoiceNumber(dynamic value, double fallback) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3375,20 +3960,65 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     final jsonData = _jsonData;
     final initialConfig = _initialConfig;
     _name = TextEditingController(text: _character['name']?.toString() ?? '');
-    _identity = TextEditingController(text: jsonData['identity']?.toString() ?? '');
+    _identity =
+        TextEditingController(text: jsonData['identity']?.toString() ?? '');
     _age = TextEditingController(text: jsonData['age']?.toString() ?? '');
-    _appearance = TextEditingController(text: jsonData['appearance']?.toString() ?? '');
-    _background = TextEditingController(text: jsonData['background']?.toString() ?? '');
-    _secret = TextEditingController(text: jsonData['secret']?.toString() ?? '');
-    _examples = TextEditingController(text: jsonData['examples']?.toString() ?? '');
-    _greeting = TextEditingController(text: _character['greeting']?.toString() ?? '');
-    _avatarUrl = TextEditingController(text: _character['avatar']?.toString() ?? '');
-    _portraitUrl = TextEditingController(text: _character['portrait']?.toString() ?? '');
-    _affection = TextEditingController(text: (initialConfig['affection'] ?? 0).toString());
-    _stress = TextEditingController(text: (initialConfig['stress'] ?? 0).toString());
+    _appearance =
+        TextEditingController(text: jsonData['appearance']?.toString() ?? '');
+    _background =
+        TextEditingController(text: jsonData['background']?.toString() ?? '');
+    _avatarUrl =
+        TextEditingController(text: _character['avatar']?.toString() ?? '');
+    _portraitUrl =
+        TextEditingController(text: _character['portrait']?.toString() ?? '');
     _relationship = TextEditingController(
       text: initialConfig['relationship_status']?.toString() ?? '陌生',
     );
+    final customAttributes =
+        _parseCharacterMap(_character['custom_attributes']);
+    _voiceValue = (jsonData['voice'] ??
+            customAttributes['voice'] ??
+            _character['voice'] ??
+            '')
+        .toString()
+        .trim();
+    _voiceNameValue = (jsonData['voice_name'] ??
+            customAttributes['voice_name'] ??
+            _character['voice_name'] ??
+            '')
+        .toString()
+        .trim();
+    _trialUrlValue = (jsonData['trial_url'] ??
+            customAttributes['trial_url'] ??
+            _character['trial_url'] ??
+            '')
+        .toString()
+        .trim();
+    _voiceSpeed = _parseVoiceNumber(
+      jsonData['voice_speed'] ??
+          customAttributes['voice_speed'] ??
+          _character['voice_speed'],
+      1.0,
+    ).clamp(0.5, 2.0).toDouble();
+    _voicePitch = _parseVoiceNumber(
+      jsonData['voice_pitch'] ??
+          customAttributes['voice_pitch'] ??
+          _character['voice_pitch'],
+      1.1,
+    ).clamp(0.5, 2.0).toDouble();
+
+    _voiceTrialStateSubscription =
+        _voiceTrialPlayer.playerStateStream.listen((state) {
+      if (!mounted) return;
+      if (state.processingState == ProcessingState.completed) {
+        setState(() {
+          _previewingVoice = false;
+          _currentVoiceTrialUrl = '';
+        });
+      } else if (_previewingVoice != state.playing) {
+        setState(() => _previewingVoice = state.playing);
+      }
+    });
   }
 
   @override
@@ -3399,17 +4029,14 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       _age,
       _appearance,
       _background,
-      _secret,
-      _examples,
-      _greeting,
       _avatarUrl,
       _portraitUrl,
-      _affection,
-      _stress,
       _relationship,
     ]) {
       controller.dispose();
     }
+    _voiceTrialStateSubscription?.cancel();
+    _voiceTrialPlayer.dispose();
     super.dispose();
   }
 
@@ -3432,8 +4059,12 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     setState(() {
       if (kind == ScenarioMediaKind.avatar) _uploadingAvatar = false;
       if (kind == ScenarioMediaKind.portrait) _uploadingPortrait = false;
-      if (result != null && kind == ScenarioMediaKind.avatar) _avatarUrl.text = result.url;
-      if (result != null && kind == ScenarioMediaKind.portrait) _portraitUrl.text = result.url;
+      if (result != null && kind == ScenarioMediaKind.avatar) {
+        _avatarUrl.text = result.url;
+      }
+      if (result != null && kind == ScenarioMediaKind.portrait) {
+        _portraitUrl.text = result.url;
+      }
     });
   }
 
@@ -3444,12 +4075,13 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     jsonData['age'] = _age.text;
     jsonData['appearance'] = _appearance.text;
     jsonData['background'] = _background.text;
-    jsonData['secret'] = _secret.text;
-    jsonData['examples'] = _examples.text;
+    jsonData['voice'] = _voiceValue.trim();
+    jsonData['voice_name'] = _voiceNameValue.trim();
+    jsonData['trial_url'] = _trialUrlValue.trim();
+    jsonData['voice_speed'] = _voiceSpeed;
+    jsonData['voice_pitch'] = _voicePitch;
 
     final initialConfig = _initialConfig;
-    initialConfig['affection'] = num.tryParse(_affection.text) ?? 0;
-    initialConfig['stress'] = num.tryParse(_stress.text) ?? 0;
     initialConfig['relationship_status'] = _relationship.text.trim().isEmpty
         ? '陌生'
         : _relationship.text.trim();
@@ -3457,10 +4089,19 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     _character['name'] = _name.text.trim();
     _character['avatar'] = _avatarUrl.text.trim();
     _character['portrait'] = _portraitUrl.text.trim();
-    _character['greeting'] = _greeting.text;
     _character['persona'] = <String, dynamic>{...jsonData};
     _character['json_data'] = jsonData;
     _character['initial_config'] = initialConfig;
+    _character['voice'] = _voiceValue.trim();
+    _character['voice_speed'] = _voiceSpeed;
+    _character['voice_pitch'] = _voicePitch;
+    final customAttributes = _parseCharacterMap(_character['custom_attributes'])
+      ..['voice'] = _voiceValue.trim()
+      ..['voice_name'] = _voiceNameValue.trim()
+      ..['trial_url'] = _trialUrlValue.trim()
+      ..['voice_speed'] = _voiceSpeed
+      ..['voice_pitch'] = _voicePitch;
+    _character['custom_attributes'] = customAttributes;
 
     Navigator.pop(context, _character);
   }
@@ -3470,9 +4111,11 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     final media = MediaQuery.of(context);
     final bottomInset = media.viewInsets.bottom;
     final size = media.size;
-    final availableHeight = math.max(320.0, size.height - bottomInset).toDouble();
+    final availableHeight =
+        math.max(320.0, size.height - bottomInset).toDouble();
     final landscape = size.width > size.height;
-    final phoneLandscape = landscape && size.height <= 560 && size.width <= 1100;
+    final phoneLandscape =
+        landscape && size.height <= 560 && size.width <= 1100;
     final portrait = _portraitUrl.text.trim();
     final avatar = _avatarUrl.text.trim();
     final isPlayer = _character['role']?.toString() == 'player';
@@ -3483,13 +4126,14 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       child: Container(
         height: landscape ? availableHeight : availableHeight * 0.94,
         decoration: const BoxDecoration(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
           gradient: RadialGradient(
             center: Alignment(0, -.18),
             radius: 1.05,
             colors: <Color>[
-              Color(0xFF303641),
-              Color(0xFF242A33),
-              Color(0xFF171B22),
+              Color(0xFF282F3C),
+              Color(0xFF1D222C),
+              Color(0xFF151921),
             ],
             stops: <double>[0, .52, 1],
           ),
@@ -3500,10 +4144,10 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             Container(
               height: phoneLandscape ? 44 : (landscape ? 50 : 56),
               padding: EdgeInsets.symmetric(
-                horizontal: phoneLandscape ? 6 : (landscape ? 10 : 16),
+                horizontal: phoneLandscape ? 6 : (landscape ? 10 : 14),
               ),
               decoration: const BoxDecoration(
-                color: Color(0x66242A33),
+                color: Color(0x661F2530),
                 border: Border(bottom: BorderSide(color: _editorLine)),
               ),
               child: Row(
@@ -3514,7 +4158,8 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       '取消',
                       style: TextStyle(
                         color: AppColors.textOnDarkMuted,
-                        fontSize: phoneLandscape ? 12.5 : (landscape ? 13.5 : 15),
+                        fontSize:
+                            phoneLandscape ? 12.5 : (landscape ? 13.5 : 14.5),
                       ),
                     ),
                   ),
@@ -3524,12 +4169,26 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: AppColors.textOnDark,
-                        fontSize: phoneLandscape ? 13.5 : (landscape ? 14.5 : 16),
+                        fontSize:
+                            phoneLandscape ? 13.5 : (landscape ? 14.5 : 16),
                         fontWeight: FontWeight.w800,
-                        letterSpacing: .7,
+                        letterSpacing: .6,
                       ),
                     ),
                   ),
+                  if (widget.canDelete)
+                    IconButton(
+                      tooltip: '删除该角色',
+                      onPressed: () => Navigator.pop(
+                        context,
+                        <String, dynamic>{'__deleted': true},
+                      ),
+                      icon: const Icon(
+                        Icons.delete_outline_rounded,
+                        size: 20,
+                        color: Color(0xFFE0554A),
+                      ),
+                    ),
                   TextButton(
                     onPressed: _save,
                     child: Text(
@@ -3537,7 +4196,8 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       style: TextStyle(
                         color: AppColors.accent,
                         fontWeight: FontWeight.w700,
-                        fontSize: phoneLandscape ? 12.5 : (landscape ? 13.5 : 15),
+                        fontSize:
+                            phoneLandscape ? 12.5 : (landscape ? 13.5 : 14.5),
                       ),
                     ),
                   ),
@@ -3553,12 +4213,12 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                     )
                   : ListView(
                       physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 48),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 48),
                       children: [
                         _buildPortraitEditor(portrait),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
                         _buildIdentityEditor(avatar),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
                         _buildCharacterSettingsEditor(),
                       ],
                     ),
@@ -3586,17 +4246,17 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
               width: leftWidth,
               child: Padding(
                 padding: EdgeInsets.fromLTRB(
-                  phoneLandscape ? 7 : 10,
-                  phoneLandscape ? 7 : 10,
+                  phoneLandscape ? 8 : 12,
+                  phoneLandscape ? 8 : 12,
                   phoneLandscape ? 6 : 8,
-                  phoneLandscape ? 7 : 10,
+                  phoneLandscape ? 8 : 12,
                 ),
                 child: Column(
                   children: [
                     Expanded(
                       child: _buildPortraitEditor(portrait, fill: true),
                     ),
-                    SizedBox(height: phoneLandscape ? 6 : 8),
+                    SizedBox(height: phoneLandscape ? 6 : 10),
                     _buildIdentityEditor(avatar, compact: true),
                   ],
                 ),
@@ -3611,10 +4271,10 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
                 padding: EdgeInsets.fromLTRB(
-                  phoneLandscape ? 8 : 10,
-                  phoneLandscape ? 7 : 10,
-                  phoneLandscape ? 10 : 12,
-                  phoneLandscape ? 12 : 20,
+                  phoneLandscape ? 8 : 12,
+                  phoneLandscape ? 8 : 12,
+                  phoneLandscape ? 10 : 14,
+                  phoneLandscape ? 14 : 24,
                 ),
                 child: _buildCharacterSettingsEditor(compact: true),
               ),
@@ -3628,7 +4288,8 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
   Widget _buildPortraitEditor(String portrait, {bool fill = false}) {
     final surface = Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
+        color: _editorFieldBg,
+        borderRadius: _editorRadiusLg,
         border: Border.all(color: _editorLine),
       ),
       clipBehavior: Clip.antiAlias,
@@ -3645,12 +4306,12 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                           size: 40,
                           color: AppColors.textOnDarkMuted,
                         ),
-                        SizedBox(height: 12),
+                        SizedBox(height: 10),
                         Text(
-                          '角色立绘',
+                          '角色全身立绘',
                           style: TextStyle(
                             color: AppColors.textOnDarkMuted,
-                            fontSize: 14,
+                            fontSize: 13.5,
                           ),
                         ),
                       ],
@@ -3659,8 +4320,6 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                 : Stack(
                     fit: StackFit.expand,
                     children: [
-                      // 背景保持铺满，避免 contain 模式产生突兀的空白；
-                      // 前景立绘则完整显示，不再裁掉角色头部、脚部或身体两侧。
                       ImageFiltered(
                         imageFilter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                         child: Transform.scale(
@@ -3730,7 +4389,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     );
 
     if (fill) return surface;
-    return AspectRatio(aspectRatio: 4 / 6, child: surface);
+    return AspectRatio(aspectRatio: 4 / 5.4, child: surface);
   }
 
   Widget _buildIdentityEditor(String avatar, {bool compact = false}) {
@@ -3744,59 +4403,84 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                 : widget.onPickMedia != null
                     ? () => _pick(ScenarioMediaKind.avatar)
                     : () => _showUrlEditor(_avatarUrl, '头像地址'),
-            child: Container(
-              width: compact ? 58 : 72,
-              height: compact ? 58 : 72,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.04),
-                border: Border.all(color: _editorLine),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  avatar.isEmpty
-                      ? Icon(
-                          Icons.person_outline_rounded,
-                          size: compact ? 24 : 28,
-                          color: AppColors.textOnDarkMuted,
-                        )
-                      : Image.network(
-                          CdnUtil.resize(avatar, width: 150),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const Icon(
-                            Icons.person_outline_rounded,
-                            color: AppColors.textOnDarkMuted,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: compact ? 58 : 72,
+                  height: compact ? 58 : 72,
+                  decoration: BoxDecoration(
+                    color: _editorFieldBg,
+                    borderRadius: _editorRadius,
+                    border: Border.all(color: _editorLine),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      avatar.isEmpty
+                          ? Icon(
+                              Icons.person_outline_rounded,
+                              size: compact ? 24 : 28,
+                              color: AppColors.textOnDarkMuted,
+                            )
+                          : Image.network(
+                              CdnUtil.resize(avatar, width: 150),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.person_outline_rounded,
+                                color: AppColors.textOnDarkMuted,
+                              ),
+                            ),
+                      if (_uploadingAvatar)
+                        const ColoredBox(
+                          color: Colors.black54,
+                          child: Center(
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.accent,
+                              ),
+                            ),
                           ),
                         ),
-                  if (_uploadingAvatar)
-                    const ColoredBox(
-                      color: Colors.black54,
-                      child: Center(
-                        child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.accent,
-                          ),
-                        ),
-                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  right: -4,
+                  bottom: -4,
+                  child: Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: _editorAccent,
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(color: _editorInk, width: 2),
                     ),
-                ],
-              ),
+                    child: const Icon(
+                      LucideIcons.camera,
+                      size: 11,
+                      color: Color(0xFF0C0C0C),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           SizedBox(width: compact ? 12 : 16),
           Expanded(
             child: Column(
               children: [
-                _field(_name, '姓名', compact: compact),
+                _field(_name, '角色姓名', compact: compact, label: '姓名'),
                 SizedBox(height: compact ? 8 : 10),
                 _field(
                   _identity,
-                  '身份，例如：赛博黑客',
+                  '例如：赛博黑客 / 帝国骑士',
                   compact: compact,
+                  label: '身份定位',
                 ),
               ],
             ),
@@ -3841,8 +4525,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                         ),
                       )
                       .toList(),
-                  onChanged: (value) =>
-                      _jsonData['gender'] = value ?? '未知',
+                  onChanged: (value) => _jsonData['gender'] = value ?? '未知',
                 ),
               ),
               const SizedBox(width: 10),
@@ -3859,131 +4542,339 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
           SizedBox(height: compact ? 10 : 12),
           _field(
             _relationship,
-            '例如：陌生 / 同伴 / 恋人',
+            '例如：陌生 / 青梅竹马 / 宿敌',
             compact: compact,
-            label: '初始关系',
-          ),
-          SizedBox(height: compact ? 10 : 12),
-          Row(
-            children: [
-              Expanded(
-                child: _field(
-                  _affection,
-                  '0',
-                  compact: compact,
-                  label: '初始好感',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                    signed: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _field(
-                  _stress,
-                  '0',
-                  compact: compact,
-                  label: '初始压力',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                    signed: true,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: compact ? 10 : 12),
-          _field(
-            _greeting,
-            '角色第一次出场时说什么？',
-            minLines: 2,
-            compact: compact,
-            label: '开场台词',
+            label: '与玩家的初始关系',
           ),
           SizedBox(height: compact ? 10 : 12),
           _field(
             _appearance,
-            '外貌特征',
+            '外貌、穿搭与标志性细节…',
             minLines: compact ? 2 : 3,
             compact: compact,
-            label: '外貌',
+            label: '外貌特征',
           ),
           SizedBox(height: compact ? 10 : 12),
           _field(
             _background,
-            '背景 / 人设',
+            '过往经历、核心动机与性格反差…',
             minLines: compact ? 3 : 4,
             compact: compact,
-            label: '背景 / 人设',
+            label: '背景与人设',
           ),
         ],
       );
     }
 
-    Widget buildTraitsAndVoice() {
+    Widget buildTraits() {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _listTagsEditor('性格标签', 'personality', compact: compact),
           SizedBox(height: compact ? 12 : 16),
-          _listTagsEditor('喜欢', 'likes', compact: compact),
+          _listTagsEditor('喜好事物', 'likes', compact: compact),
           SizedBox(height: compact ? 12 : 16),
-          _listTagsEditor('讨厌', 'dislikes', compact: compact),
-          SizedBox(height: compact ? 12 : 16),
-          _listTagsEditor('说话风格', 'speech_style', compact: compact),
-          SizedBox(height: compact ? 12 : 16),
-          _field(
-            _secret,
-            '秘密 / 隐藏信息',
-            minLines: compact ? 2 : 3,
-            compact: compact,
-            label: '秘密 / 隐藏信息',
-          ),
-          SizedBox(height: compact ? 10 : 12),
-          _field(
-            _examples,
-            '对话示例',
-            minLines: compact ? 3 : 4,
-            compact: compact,
-            label: '对话示例',
-          ),
+          _listTagsEditor('厌恶事物', 'dislikes', compact: compact),
         ],
       );
     }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _card(
+          compact: compact,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _SheetTitle('角色设定', compact: compact),
+              SizedBox(height: compact ? 12 : 16),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  if (compact && constraints.maxWidth >= 520) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: buildBasics()),
+                        const SizedBox(width: 14),
+                        Expanded(child: buildTraits()),
+                      ],
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      buildBasics(),
+                      SizedBox(height: compact ? 14 : 18),
+                      buildTraits(),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: compact ? 12 : 14),
+        _buildVoiceSettingsEditor(compact: compact),
+      ],
+    );
+  }
+
+  Widget _buildVoiceSettingsEditor({bool compact = false}) {
+    final selectedName = _voiceNameValue.trim().isNotEmpty
+        ? _voiceNameValue.trim()
+        : (_voiceValue.trim().isNotEmpty ? _voiceValue.trim() : '尚未选择音色');
+    final hasTrial = _trialUrlValue.trim().isNotEmpty;
 
     return _card(
       compact: compact,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SheetTitle('角色设定', compact: compact),
-          SizedBox(height: compact ? 12 : 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              if (compact && constraints.maxWidth >= 520) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: buildBasics()),
-                    const SizedBox(width: 12),
-                    Expanded(child: buildTraitsAndVoice()),
-                  ],
-                );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  buildBasics(),
-                  SizedBox(height: compact ? 14 : 18),
-                  buildTraitsAndVoice(),
+          _SheetTitle('声音配置 (TTS)', compact: compact),
+          SizedBox(height: compact ? 6 : 8),
+          Text(
+            '为角色挑选专属音色，支持按性别与语种筛选并试听样本。',
+            style: TextStyle(
+              color: AppColors.textOnDarkMuted,
+              fontSize: compact ? 11 : 12,
+              height: 1.45,
+            ),
+          ),
+          SizedBox(height: compact ? 10 : 14),
+          Container(
+            padding: EdgeInsets.all(compact ? 10 : 12),
+            decoration: BoxDecoration(
+              color: _editorFieldBg,
+              borderRadius: _editorRadius,
+              border: Border.all(color: _editorLine),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: compact ? 36 : 40,
+                  height: compact ? 36 : 40,
+                  decoration: BoxDecoration(
+                    color: _editorAccent.withOpacity(.12),
+                    borderRadius: _editorRadius,
+                  ),
+                  child: Icon(
+                    Icons.record_voice_over_outlined,
+                    color: AppColors.accent,
+                    size: compact ? 18 : 20,
+                  ),
+                ),
+                SizedBox(width: compact ? 10 : 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        selectedName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppColors.textOnDark,
+                          fontSize: compact ? 12.5 : 13.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      SizedBox(height: compact ? 2 : 4),
+                      Text(
+                        _voiceValue.trim().isEmpty
+                            ? '点击右侧按钮挑选音色'
+                            : 'ID: ${_voiceValue.trim()}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppColors.textOnDarkMuted,
+                          fontSize: compact ? 10 : 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (hasTrial) ...[
+                  IconButton(
+                    tooltip: _previewingVoice ? '暂停试听' : '试听音色',
+                    onPressed: _previewVoice,
+                    icon: Icon(
+                      _previewingVoice
+                          ? Icons.pause_circle_filled_rounded
+                          : Icons.play_circle_outline_rounded,
+                      color: AppColors.accent,
+                      size: 24,
+                    ),
+                  ),
                 ],
-              );
-            },
+                OutlinedButton.icon(
+                  onPressed: _openVoicePicker,
+                  icon: const Icon(Icons.tune_rounded, size: 15),
+                  label: Text(
+                    '选择音色',
+                    style: TextStyle(fontSize: compact ? 11 : 12),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accent,
+                    side: BorderSide(color: AppColors.accent.withOpacity(.45)),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: compact ? 10 : 12,
+                      vertical: compact ? 8 : 10,
+                    ),
+                    shape: const RoundedRectangleBorder(
+                        borderRadius: _editorRadius),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: compact ? 10 : 14),
+          _voiceSlider(
+            label: '语速',
+            value: _voiceSpeed,
+            suffix: '×',
+            compact: compact,
+            onChanged: (value) => setState(() => _voiceSpeed = value),
+          ),
+          SizedBox(height: compact ? 4 : 6),
+          _voiceSlider(
+            label: '音调',
+            value: _voicePitch,
+            suffix: '×',
+            compact: compact,
+            onChanged: (value) => setState(() => _voicePitch = value),
           ),
         ],
       ),
     );
+  }
+
+  Widget _voiceSlider({
+    required String label,
+    required double value,
+    required String suffix,
+    required bool compact,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Row(
+      children: [
+        SizedBox(
+          width: compact ? 36 : 42,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: AppColors.textOnDark,
+              fontSize: compact ? 11.5 : 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Slider(
+            value: value.clamp(0.5, 2.0).toDouble(),
+            min: 0.5,
+            max: 2.0,
+            divisions: 30,
+            activeColor: AppColors.accent,
+            inactiveColor: Colors.white.withOpacity(.12),
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(
+          width: compact ? 42 : 48,
+          child: Text(
+            '${value.toStringAsFixed(2)}$suffix',
+            textAlign: TextAlign.end,
+            style: TextStyle(
+              color: AppColors.textOnDarkMuted,
+              fontSize: compact ? 11 : 12,
+              fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openVoicePicker() async {
+    final selected = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _VoicePickerSheet(
+        selectedVoiceName: _voiceNameValue,
+        selectedVoiceId: _voiceValue,
+      ),
+    );
+    if (selected == null || !mounted) return;
+
+    final actualVoiceId =
+        (selected['id'] ?? selected['voice_id'] ?? selected['voice'] ?? '')
+            .toString()
+            .trim();
+    final voiceName = (selected['name'] ?? selected['voice_name'] ?? '')
+        .toString()
+        .trim();
+    final trialUrl = (selected['trial_url'] ?? '').toString().trim();
+
+    setState(() {
+      _voiceNameValue = voiceName;
+      _trialUrlValue = trialUrl;
+      if (actualVoiceId.isNotEmpty) _voiceValue = actualVoiceId;
+      _jsonData['voice_name'] = _voiceNameValue;
+      _jsonData['trial_url'] = _trialUrlValue;
+      _jsonData['voice'] = _voiceValue;
+    });
+  }
+
+  Future<void> _previewVoice() async {
+    final url = _trialUrlValue.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('该角色暂未配置音色试听样本，请先选择音色。'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    try {
+      if (_currentVoiceTrialUrl == url && _voiceTrialPlayer.playing) {
+        await _voiceTrialPlayer.pause();
+        return;
+      }
+
+      if (_currentVoiceTrialUrl != url ||
+          _voiceTrialPlayer.processingState == ProcessingState.idle ||
+          _voiceTrialPlayer.processingState == ProcessingState.completed) {
+        await _voiceTrialPlayer.stop();
+        await _voiceTrialPlayer.setUrl(url);
+        _currentVoiceTrialUrl = url;
+      }
+
+      if (mounted) setState(() => _previewingVoice = true);
+      unawaited(_voiceTrialPlayer.play().catchError((Object error) {
+        if (!mounted) return;
+        setState(() => _previewingVoice = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('音色试听失败：$error'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _previewingVoice = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('音色试听失败：$error'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   String get _genderValue {
@@ -3994,30 +4885,56 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     return '未知';
   }
 
-  Future<void> _showUrlEditor(TextEditingController controller, String title) async {
+  Future<void> _showUrlEditor(
+      TextEditingController controller, String title) async {
     final temp = TextEditingController(text: controller.text);
     final value = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: _editorInkSoft,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: const BorderSide(color: _editorLine),
+        shape: const RoundedRectangleBorder(
+          borderRadius: _editorRadiusLg,
+          side: BorderSide(color: _editorLine),
         ),
-        title: Text(title, style: const TextStyle(color: AppColors.textOnDark, fontWeight: FontWeight.w600, fontSize: 16)),
-        content: TextField(controller: temp, style: const TextStyle(color: AppColors.textOnDark), decoration: _decoration('输入 URL')),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: AppColors.textOnDark,
+            fontWeight: FontWeight.w600,
+            fontSize: 16,
+          ),
+        ),
+        content: TextField(
+          controller: temp,
+          style: const TextStyle(color: AppColors.textOnDark),
+          decoration: _decoration('输入图片 URL'),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted))),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text(
+              '取消',
+              style: TextStyle(color: AppColors.textOnDarkMuted),
+            ),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, temp.text),
-            child: const Text('完成', style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
+            child: const Text(
+              '完成',
+              style: TextStyle(
+                color: AppColors.accent,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ],
       ),
     );
     temp.dispose();
-    if (value != null && mounted) setState(() => controller.text = value.trim());
+    if (value != null && mounted) {
+      setState(() => controller.text = value.trim());
+    }
   }
 
   Widget _mediaButton({
@@ -4026,11 +4943,11 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
     bool loading = false,
   }) {
     return Material(
-      color: Colors.black.withOpacity(0.6),
-      borderRadius: BorderRadius.zero,
+      color: Colors.black.withOpacity(0.68),
+      borderRadius: _editorRadius,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.zero,
+        borderRadius: _editorRadius,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
@@ -4038,15 +4955,19 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
             children: [
               if (loading)
                 const SizedBox(
-                  width: 16,
-                  height: 16,
+                  width: 15,
+                  height: 15,
                   child: CircularProgressIndicator(
                     strokeWidth: 1.7,
                     color: AppColors.accent,
                   ),
                 )
               else
-                const Icon(Icons.photo_camera_outlined, size: 16, color: AppColors.textOnDark),
+                const Icon(
+                  Icons.photo_camera_outlined,
+                  size: 15,
+                  color: AppColors.textOnDark,
+                ),
               const SizedBox(width: 6),
               Text(
                 label,
@@ -4065,9 +4986,10 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
 
   Widget _card({required Widget child, bool compact = false}) {
     return Container(
-      padding: EdgeInsets.all(compact ? 14 : 20),
+      padding: EdgeInsets.all(compact ? 14 : 18),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.024),
+        color: _editorSurface.withOpacity(0.7),
+        borderRadius: _editorRadiusLg,
         border: Border.all(color: _editorLine),
       ),
       child: child,
@@ -4089,7 +5011,7 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       keyboardType: keyboardType,
       style: TextStyle(
         color: AppColors.textOnDark,
-        fontSize: compact ? 12.4 : 13.5,
+        fontSize: compact ? 12.5 : 13.5,
         height: compact ? 1.4 : 1.5,
       ),
       decoration: _decoration(
@@ -4110,48 +5032,52 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
       labelText: label,
       floatingLabelBehavior: label == null
           ? FloatingLabelBehavior.never
-          : FloatingLabelBehavior.auto,
+          : FloatingLabelBehavior.always,
       labelStyle: TextStyle(
         color: AppColors.textOnDarkMuted,
-        fontSize: compact ? 11.3 : 12,
+        fontSize: compact ? 11.5 : 12,
       ),
-      floatingLabelStyle: const TextStyle(color: AppColors.accent),
+      floatingLabelStyle: const TextStyle(
+        color: AppColors.accent,
+        fontWeight: FontWeight.w600,
+      ),
       hintStyle: TextStyle(
-        color: AppColors.textOnDarkMuted,
+        color: Colors.white.withOpacity(0.28),
         fontSize: compact ? 12 : 13,
       ),
       filled: true,
-      fillColor: Colors.white.withOpacity(0.03),
+      fillColor: _editorFieldBg,
       contentPadding: EdgeInsets.symmetric(
-        horizontal: compact ? 12 : 16,
-        vertical: compact ? 11 : 16,
+        horizontal: compact ? 12 : 14,
+        vertical: compact ? 11 : 14,
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: const BorderSide(color: _editorLine),
+      enabledBorder: const OutlineInputBorder(
+        borderRadius: _editorRadius,
+        borderSide: BorderSide(color: _editorLine),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: BorderSide(color: _editorAccent.withOpacity(0.7)),
+        borderRadius: _editorRadius,
+        borderSide: BorderSide(color: _editorAccent.withOpacity(0.75)),
       ),
     );
   }
 
   Widget _listTagsEditor(String label, String field, {bool compact = false}) {
     final raw = _jsonData[field];
-    final values = raw is List ? raw.map((e) => e.toString()).toList() : <String>[];
+    final values =
+        raw is List ? raw.map((e) => e.toString()).toList() : <String>[];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
           style: TextStyle(
-            color: AppColors.textOnDarkMuted,
-            fontSize: compact ? 11.2 : 12,
+            color: _editorTextSoft,
+            fontSize: compact ? 11.5 : 12.5,
             fontWeight: FontWeight.w600,
           ),
         ),
-        SizedBox(height: compact ? 8 : 10),
+        SizedBox(height: compact ? 8 : 9),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -4161,11 +5087,12 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                 padding: EdgeInsets.fromLTRB(
                   compact ? 9 : 10,
                   compact ? 5 : 6,
-                  compact ? 5 : 6,
+                  compact ? 6 : 7,
                   compact ? 5 : 6,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.04),
+                  color: _editorFieldBg,
+                  borderRadius: _editorRadius,
                   border: Border.all(color: _editorLine),
                 ),
                 child: Row(
@@ -4175,21 +5102,26 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                       values[i],
                       style: TextStyle(
                         color: AppColors.textOnDark,
-                        fontSize: compact ? 11.2 : 12,
+                        fontSize: compact ? 11.5 : 12,
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     GestureDetector(
                       onTap: () {
                         values.removeAt(i);
                         setState(() => _jsonData[field] = values);
                       },
-                      child: const Icon(Icons.close_rounded, size: 14, color: AppColors.textOnDarkMuted),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 14,
+                        color: AppColors.textOnDarkMuted,
+                      ),
                     ),
                   ],
                 ),
               ),
-            GestureDetector(
+            InkWell(
+              borderRadius: _editorRadius,
               onTap: () async {
                 final controller = TextEditingController();
                 final value = await showDialog<String>(
@@ -4197,17 +5129,43 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
                   builder: (dialogContext) => AlertDialog(
                     backgroundColor: _editorInkSoft,
                     surfaceTintColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      side: const BorderSide(color: _editorLine),
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: _editorRadiusLg,
+                      side: BorderSide(color: _editorLine),
                     ),
-                    title: Text('添加$label', style: const TextStyle(color: AppColors.textOnDark, fontWeight: FontWeight.w600, fontSize: 16)),
-                    content: TextField(controller: controller, autofocus: true, style: const TextStyle(color: AppColors.textOnDark), decoration: _decoration('输入内容')),
+                    title: Text(
+                      '添加$label',
+                      style: const TextStyle(
+                        color: AppColors.textOnDark,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      ),
+                    ),
+                    content: TextField(
+                      controller: controller,
+                      autofocus: true,
+                      onSubmitted: (v) => Navigator.pop(dialogContext, v),
+                      style: const TextStyle(color: AppColors.textOnDark),
+                      decoration: _decoration('输入内容后回车或点添加'),
+                    ),
                     actions: [
-                      TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消', style: TextStyle(color: AppColors.textOnDarkMuted))),
                       TextButton(
-                        onPressed: () => Navigator.pop(dialogContext, controller.text),
-                        child: const Text('添加', style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: const Text(
+                          '取消',
+                          style: TextStyle(color: AppColors.textOnDarkMuted),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () =>
+                            Navigator.pop(dialogContext, controller.text),
+                        child: const Text(
+                          '添加',
+                          style: TextStyle(
+                            color: AppColors.accent,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -4222,11 +5180,12 @@ class _CharacterEditorSheetState extends State<_CharacterEditorSheet> {
               child: Container(
                 padding: EdgeInsets.symmetric(
                   horizontal: compact ? 10 : 12,
-                  vertical: compact ? 7 : 8,
+                  vertical: compact ? 5 : 6,
                 ),
                 decoration: BoxDecoration(
                   color: _editorAccent.withOpacity(0.1),
-                  border: Border.all(color: _editorAccent.withOpacity(.2)),
+                  borderRadius: _editorRadius,
+                  border: Border.all(color: _editorAccent.withOpacity(.24)),
                 ),
                 child: Text(
                   '+ 添加',
@@ -4252,12 +5211,599 @@ class _SheetTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: TextStyle(
-        color: AppColors.textOnDark,
-        fontSize: compact ? 13.5 : 15,
-        fontWeight: FontWeight.w700,
+    return Row(
+      children: [
+        Container(
+          width: 3,
+          height: 14,
+          margin: const EdgeInsets.only(right: 8),
+          decoration: BoxDecoration(
+            color: _editorAccent,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        Text(
+          text,
+          style: TextStyle(
+            color: AppColors.textOnDark,
+            fontSize: compact ? 14 : 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Mirrors Vue's CharacterEditModal.vue voice drawer:
+/// GET /tts/voices, filter by gender/language, and preview each voice's trial_url.
+class _VoicePickerSheet extends StatefulWidget {
+  const _VoicePickerSheet({
+    required this.selectedVoiceName,
+    required this.selectedVoiceId,
+  });
+
+  final String selectedVoiceName;
+  final String selectedVoiceId;
+
+  @override
+  State<_VoicePickerSheet> createState() => _VoicePickerSheetState();
+}
+
+class _VoicePickerSheetState extends State<_VoicePickerSheet> {
+  final AudioPlayer _player = AudioPlayer();
+  StreamSubscription<PlayerState>? _playerStateSubscription;
+
+  List<Map<String, dynamic>> _voices = <Map<String, dynamic>>[];
+  bool _loading = true;
+  String? _error;
+  String _filterGender = '全部';
+  String _filterLanguage = '全部';
+  String _playingUrl = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _playerStateSubscription = _player.playerStateStream.listen((state) {
+      if (!mounted) return;
+      if (state.processingState == ProcessingState.completed) {
+        setState(() => _playingUrl = '');
+      }
+    });
+    _loadVoices();
+  }
+
+  @override
+  void dispose() {
+    _playerStateSubscription?.cancel();
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadVoices() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final response = await ApiClient.instance.get('/tts/voices');
+      final rawList = _extractVoiceList(response);
+      if (rawList == null) {
+        throw Exception('音色接口未返回 voices 列表');
+      }
+
+      final voices =
+          rawList.whereType<Map>().map<Map<String, dynamic>>((item) {
+        return item.map((key, value) => MapEntry(key.toString(), value));
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _voices = voices;
+        _loading = false;
+        _error = voices.isEmpty ? '当前没有可用音色' : null;
+        if (!_languages.contains(_filterLanguage)) {
+          _filterLanguage = '全部';
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '获取音色列表失败：$error';
+      });
+    }
+  }
+
+  List<dynamic>? _extractVoiceList(dynamic response) {
+    if (response is List) return response;
+    if (response is! Map) return null;
+
+    final root = response;
+    final rootVoices = root['voices'];
+    if (rootVoices is List) return rootVoices;
+
+    final data = root['data'];
+    if (data is List) return data;
+    if (data is Map) {
+      final voices = data['voices'];
+      if (voices is List) return voices;
+
+      final nestedData = data['data'];
+      if (nestedData is List) return nestedData;
+      if (nestedData is Map && nestedData['voices'] is List) {
+        return nestedData['voices'] as List;
+      }
+    }
+
+    return null;
+  }
+
+  String _stringField(Map<String, dynamic> voice, String key) {
+    return voice[key]?.toString().trim() ?? '';
+  }
+
+  String _voiceId(Map<String, dynamic> voice) {
+    return _stringField(voice, 'id').isNotEmpty
+        ? _stringField(voice, 'id')
+        : (_stringField(voice, 'voice_id').isNotEmpty
+            ? _stringField(voice, 'voice_id')
+            : _stringField(voice, 'voice'));
+  }
+
+  List<String> get _languages {
+    final values = _voices
+        .map((voice) => _stringField(voice, 'language'))
+        .where((language) => language.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return <String>['全部', ...values];
+  }
+
+  List<Map<String, dynamic>> get _filteredVoices {
+    return _voices.where((voice) {
+      final gender = _stringField(voice, 'gender');
+      final language = _stringField(voice, 'language');
+      final genderMatches = _filterGender == '全部' || gender == _filterGender;
+      final languageMatches =
+          _filterLanguage == '全部' || language == _filterLanguage;
+      return genderMatches && languageMatches;
+    }).toList();
+  }
+
+  bool _isSelected(Map<String, dynamic> voice) {
+    final name = _stringField(voice, 'name');
+    final id = _voiceId(voice);
+    return (widget.selectedVoiceName.isNotEmpty &&
+            name == widget.selectedVoiceName) ||
+        (widget.selectedVoiceId.isNotEmpty && id == widget.selectedVoiceId);
+  }
+
+  Future<void> _toggleTrial(Map<String, dynamic> voice) async {
+    final url = _stringField(voice, 'trial_url');
+    if (url.isEmpty) {
+      _showMessage('该音色暂无试听音频');
+      return;
+    }
+
+    try {
+      if (_playingUrl == url && _player.playing) {
+        await _player.pause();
+        return;
+      }
+
+      if (_playingUrl != url ||
+          _player.processingState == ProcessingState.idle ||
+          _player.processingState == ProcessingState.completed) {
+        await _player.stop();
+        await _player.setUrl(url);
+        _playingUrl = url;
+      }
+
+      if (mounted) setState(() {});
+      unawaited(_player.play().catchError((Object error) {
+        if (!mounted) return;
+        setState(() => _playingUrl = '');
+        _showMessage('试听失败：$error');
+      }));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _playingUrl = '');
+      _showMessage('试听失败：$error');
+    }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Widget _filterChip(String label, bool selected, VoidCallback onTap) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      backgroundColor: _editorFieldBg,
+      selectedColor: AppColors.accent.withOpacity(.18),
+      labelStyle: TextStyle(
+        color: selected ? AppColors.accent : AppColors.textOnDarkMuted,
+        fontSize: 11.5,
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+      ),
+      side: BorderSide(
+        color: selected ? AppColors.accent.withOpacity(.45) : _editorLine,
+      ),
+      shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final height = (media.size.height * .84).clamp(360.0, 760.0).toDouble();
+    final languages = _languages;
+
+    return Container(
+      height: height,
+      decoration: const BoxDecoration(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+        gradient: RadialGradient(
+          center: Alignment(0, -.18),
+          radius: 1.05,
+          colors: <Color>[
+            Color(0xFF282F3C),
+            Color(0xFF1D222C),
+            Color(0xFF151921),
+          ],
+          stops: <double>[0, .52, 1],
+        ),
+        border: Border(top: BorderSide(color: _editorLine)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 12, 12),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.record_voice_over_outlined,
+                    color: AppColors.accent,
+                    size: 21,
+                  ),
+                  const SizedBox(width: 9),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '选择角色音色',
+                          style: TextStyle(
+                            color: AppColors.textOnDark,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          '点击条目即可选用，或点右侧播放按钮先试听样本',
+                          style: TextStyle(
+                            color: AppColors.textOnDarkMuted,
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: AppColors.textOnDarkMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: _editorLine),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Row(
+                children: [
+                  const Text(
+                    '性别',
+                    style: TextStyle(
+                      color: AppColors.textOnDarkMuted,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  for (final gender in const <String>['全部', '男', '女']) ...[
+                    _filterChip(
+                      gender,
+                      _filterGender == gender,
+                      () => setState(() => _filterGender = gender),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  const SizedBox(width: 10),
+                  const Text(
+                    '语种',
+                    style: TextStyle(
+                      color: AppColors.textOnDarkMuted,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Container(
+                      height: 34,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: _editorFieldBg,
+                        borderRadius: _editorRadius,
+                        border: Border.all(color: _editorLine),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: languages.contains(_filterLanguage)
+                              ? _filterLanguage
+                              : '全部',
+                          isExpanded: true,
+                          dropdownColor: _editorInkSoft,
+                          icon: const Icon(
+                            Icons.expand_more_rounded,
+                            color: AppColors.textOnDarkMuted,
+                            size: 18,
+                          ),
+                          style: const TextStyle(
+                            color: AppColors.textOnDark,
+                            fontSize: 12,
+                          ),
+                          items: languages.map((language) {
+                            return DropdownMenuItem<String>(
+                              value: language,
+                              child: Text(language),
+                            );
+                          }).toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _filterLanguage = value);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: _editorLine),
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(
+                            color: AppColors.accent,
+                            strokeWidth: 2,
+                          ),
+                          SizedBox(height: 12),
+                          Text(
+                            '正在获取音色列表…',
+                            style: TextStyle(
+                              color: AppColors.textOnDarkMuted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _error != null
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.cloud_off_outlined,
+                                  color: AppColors.textOnDarkMuted,
+                                  size: 30,
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  _error!,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: AppColors.textOnDarkMuted,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                OutlinedButton.icon(
+                                  onPressed: _loadVoices,
+                                  icon: const Icon(Icons.refresh_rounded,
+                                      size: 16),
+                                  label: const Text('重新加载'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.accent,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : _filteredVoices.isEmpty
+                          ? const Center(
+                              child: Text(
+                                '没有找到符合筛选条件的音色',
+                                style: TextStyle(
+                                  color: AppColors.textOnDarkMuted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              padding:
+                                  const EdgeInsets.fromLTRB(14, 12, 14, 24),
+                              itemCount: _filteredVoices.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final voice = _filteredVoices[index];
+                                final name = _stringField(voice, 'name');
+                                final id = _voiceId(voice);
+                                final language =
+                                    _stringField(voice, 'language');
+                                final gender = _stringField(voice, 'gender');
+                                final trialUrl =
+                                    _stringField(voice, 'trial_url');
+                                final selected = _isSelected(voice);
+                                final playing = trialUrl.isNotEmpty &&
+                                    _playingUrl == trialUrl &&
+                                    _player.playing;
+
+                                return Material(
+                                  color: selected
+                                      ? AppColors.accent.withOpacity(.11)
+                                      : _editorFieldBg,
+                                  borderRadius: _editorRadius,
+                                  child: InkWell(
+                                    borderRadius: _editorRadius,
+                                    onTap: () => Navigator.pop(context, voice),
+                                    child: Container(
+                                      padding: const EdgeInsets.fromLTRB(
+                                          12, 11, 8, 11),
+                                      decoration: BoxDecoration(
+                                        borderRadius: _editorRadius,
+                                        border: Border.all(
+                                          color: selected
+                                              ? AppColors.accent.withOpacity(.6)
+                                              : _editorLine,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 36,
+                                            height: 36,
+                                            decoration: BoxDecoration(
+                                              color: selected
+                                                  ? AppColors.accent
+                                                      .withOpacity(.18)
+                                                  : Colors.white
+                                                      .withOpacity(.04),
+                                              borderRadius: _editorRadius,
+                                            ),
+                                            child: Icon(
+                                              selected
+                                                  ? Icons.check_rounded
+                                                  : Icons.graphic_eq_rounded,
+                                              color: selected
+                                                  ? AppColors.accent
+                                                  : AppColors.textOnDarkMuted,
+                                              size: 19,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  name.isEmpty ? id : name,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    color: AppColors.textOnDark,
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 5),
+                                                Wrap(
+                                                  spacing: 6,
+                                                  runSpacing: 4,
+                                                  children: [
+                                                    if (language.isNotEmpty)
+                                                      _voiceMetaTag(language),
+                                                    if (gender.isNotEmpty)
+                                                      _voiceMetaTag(gender),
+                                                  ],
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip:
+                                                playing ? '暂停试听' : '试听音色',
+                                            onPressed: trialUrl.isEmpty
+                                                ? null
+                                                : () => _toggleTrial(voice),
+                                            icon: Icon(
+                                              playing
+                                                  ? Icons
+                                                      .pause_circle_filled_rounded
+                                                  : Icons
+                                                      .play_circle_outline_rounded,
+                                              color: trialUrl.isEmpty
+                                                  ? AppColors.textOnDarkMuted
+                                                      .withOpacity(.35)
+                                                  : AppColors.accent,
+                                              size: 26,
+                                            ),
+                                          ),
+                                          const Icon(
+                                            Icons.chevron_right_rounded,
+                                            color: AppColors.textOnDarkMuted,
+                                            size: 18,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _voiceMetaTag(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.05),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: AppColors.textOnDarkMuted,
+          fontSize: 10,
+        ),
       ),
     );
   }

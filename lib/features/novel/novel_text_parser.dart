@@ -189,7 +189,8 @@ class NovelTextParser {
     List<NovelSentence> input,
   ) {
     final result = <NovelSentence>[];
-    for (final item in input) {
+    for (var itemIndex = 0; itemIndex < input.length; itemIndex++) {
+      final item = input[itemIndex];
       final maxChars = item.isNarration
           ? maxNarrationCharsPerPage
           : maxDialogueCharsPerPage;
@@ -199,6 +200,7 @@ class NovelTextParser {
         result.add(
           item.copyWith(
             text: pieces[i],
+            sourceItemIndices: <int>[itemIndex],
             // 预加载提示只需要附在最后一页，避免同一句分页时重复触发。
             preloadPortrait: i == pieces.length - 1 && item.preloadPortrait,
             nextSpeakerName:
@@ -240,6 +242,10 @@ class NovelTextParser {
           mergeNarrationMaxChars) {
         pending = pending!.copyWith(
           text: '${pending!.text}\n\n${item.text}',
+          sourceItemIndices: _unionSourceItems(
+            pending!.sourceItemIndices,
+            item.sourceItemIndices,
+          ),
           preloadPortrait: item.preloadPortrait || pending!.preloadPortrait,
           nextSpeakerName: item.nextSpeakerName.isNotEmpty
               ? item.nextSpeakerName
@@ -287,6 +293,13 @@ class NovelTextParser {
 
   int _readerCharCount(NovelSentence item) => item.readerText.runes.length;
 
+  /// 合并两个阅读句时，合并它们各自对应的后端 sentence_items 下标（去重、升序）。
+  List<int> _unionSourceItems(List<int> a, List<int> b) {
+    if (a.isEmpty) return b;
+    if (b.isEmpty) return a;
+    return (<int>{...a, ...b}.toList()..sort());
+  }
+
   NovelSentence _combineSameSpeaker(
     NovelSentence first,
     NovelSentence second,
@@ -296,6 +309,10 @@ class NovelTextParser {
           .where((value) => value.isNotEmpty)
           .join('\n\n'),
       trailingNarration: second.trailingNarration,
+      sourceItemIndices: _unionSourceItems(
+        first.sourceItemIndices,
+        second.sourceItemIndices,
+      ),
       hasSpeech: first.hasSpeech || second.hasSpeech,
       preloadPortrait: first.preloadPortrait || second.preloadPortrait,
       nextSpeakerName: second.nextSpeakerName.isNotEmpty
@@ -321,7 +338,13 @@ class NovelTextParser {
       narration.readerText.trim(),
       dialogue.leadingNarration.trim(),
     ].where((value) => value.isNotEmpty).join('\n\n');
-    return dialogue.copyWith(leadingNarration: leading);
+    return dialogue.copyWith(
+      leadingNarration: leading,
+      sourceItemIndices: _unionSourceItems(
+        narration.sourceItemIndices,
+        dialogue.sourceItemIndices,
+      ),
+    );
   }
 
   NovelSentence _attachTrailingNarration(
@@ -334,6 +357,10 @@ class NovelTextParser {
     ].where((value) => value.isNotEmpty).join('\n\n');
     return dialogue.copyWith(
       trailingNarration: trailing,
+      sourceItemIndices: _unionSourceItems(
+        dialogue.sourceItemIndices,
+        narration.sourceItemIndices,
+      ),
       preloadPortrait: dialogue.preloadPortrait || narration.preloadPortrait,
       nextSpeakerName: narration.nextSpeakerName.isNotEmpty
           ? narration.nextSpeakerName
