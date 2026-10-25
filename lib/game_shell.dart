@@ -26,7 +26,7 @@ typedef GameShellBodyBuilder = Widget Function(
 
 /// 全局游戏壳：负责 Drawer、用户资料、世界列表、创建/编辑/分享世界与世界切换。
 ///
-/// 它不是“首页”。真正的游戏页面（Novel / RPG / Chat）作为 [builder] 的内容显示。
+/// 它不是“首页”。真正的游戏页面（Novel / Cinema / RPG / Chat）作为 [builder] 的内容显示。
 /// 切换世界使用 pushReplacementNamed，始终只保留当前世界这一层游戏路由。
 class GameShell extends StatefulWidget {
   const GameShell({
@@ -37,6 +37,7 @@ class GameShell extends StatefulWidget {
     this.autoOpenDrawer = false,
     this.backgroundColor = const Color(0xFF090A09),
     this.resizeToAvoidBottomInset = true,
+    this.onDrawerChanged,
   });
 
   final GameShellBodyBuilder builder;
@@ -45,6 +46,7 @@ class GameShell extends StatefulWidget {
   final bool autoOpenDrawer;
   final Color backgroundColor;
   final bool resizeToAvoidBottomInset;
+  final ValueChanged<bool>? onDrawerChanged;
 
   /// 强制登出时清掉跨路由的短期身份交接，避免旧 token 被新 Shell 接回。
   static void clearAuthHandoff() => _GameShellState._clearHandoffStatics();
@@ -437,14 +439,17 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
     _captureRouteAuthHandoff();
     final scenario = _games[index];
 
-    if (scenario.mode.trim().toLowerCase() == 'cinema') {
+    if (scenario.mode.trim().toLowerCase() == 'cinema' ||
+        scenario.category.trim().toLowerCase() == 'cinema') {
       try {
+        await NovelSocketService.retireActiveForRouteReplacement();
+        if (!mounted) return;
         setState(() { _selectedGameIndex = index; _scenarioSelectionCommitted = true; });
         await _closeDrawerIfNeeded(force: true);
         if (!mounted) return;
         
         await Navigator.of(context, rootNavigator: true).pushReplacementNamed(
-          '/cinema/${scenario.id}/play',
+          '/cinema/${scenario.id}',
         );
       } catch (error) {
         debugPrint('GameShell cinema route failed: $error');
@@ -1162,6 +1167,7 @@ class _GameShellState extends State<GameShell> with WidgetsBindingObserver {
         backgroundColor: widget.backgroundColor,
         drawerScrimColor: Colors.black.withOpacity(.78),
         drawer: buildDrawer(GameDrawerPresentation.drawer),
+        onDrawerChanged: widget.onDrawerChanged,
         body: pageBody,
       ),
     );

@@ -9,8 +9,7 @@ import 'api/api_client.dart';
 import 'api/user_api.dart';
 import 'features/novel/novel.dart';
 import 'game_shell.dart';
-import 'features/cinema/cinema_editor_page.dart';
-import 'features/cinema/cinema_player_page.dart';
+import 'features/cinema/cinema_route.dart';
 import 'services/session_manager.dart';
 import 'services/depth_service.dart';
 import 'services/auth_redirect.dart';
@@ -169,22 +168,7 @@ class MyApp extends StatelessWidget {
       navigatorObservers: <NavigatorObserver>[SentryNavigatorObserver()],
       home: const _StartupGate(),
       onGenerateRoute: (RouteSettings settings) {
-        final name = settings.name ?? '';
-        final uri = Uri.tryParse(name);
-        final segments = uri?.pathSegments ?? const <String>[];
-        if (segments.length >= 3 && segments.first == 'cinema') {
-          final workId = int.tryParse(segments[1]);
-          if (workId != null && segments[2] == 'edit') {
-            return MaterialPageRoute<void>(settings: settings, builder: (_) => CinemaEditorPage(workId: workId));
-          }
-          if (workId != null && segments[2] == 'play') {
-            final chapterId = int.tryParse(uri?.queryParameters['chapter_id'] ?? '');
-            if (chapterId != null) {
-              return MaterialPageRoute<void>(settings: settings, builder: (_) => CinemaPlayerPage(workId: workId, chapterId: chapterId));
-            }
-          }
-        }
-        return novelRuntime.onGenerateRoute(settings);
+        return cinemaRoute(settings) ?? novelRuntime.onGenerateRoute(settings);
       },
     );
   }

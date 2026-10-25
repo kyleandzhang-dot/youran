@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'dart:ui';
 import '../../app_shared.dart';
 import 'cinema_api.dart';
+import 'cinema_shot_stage.dart';
 
+// 完全保留原版颜色常量
 const Color _editorInk = Color(0xFF151921);
 const Color _editorInkSoft = Color(0xFF1F2530);
 const Color _editorSurface = Color(0xFF1D222B);
@@ -17,8 +20,18 @@ const Color _danger = Color(0xFFE0554A);
 const BorderRadius _editorRadius = BorderRadius.all(Radius.circular(6));
 const BorderRadius _editorRadiusLg = BorderRadius.all(Radius.circular(8));
 
+String _imageContentType(String filename) {
+  final lower = filename.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+  return 'image/jpeg';
+}
+
 enum _CinemaEditorTab {
   script,
+  storyboard,
   cast,
   settings,
 }
@@ -56,7 +69,6 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
 
   int? _selectedChapter;
   _CinemaEditorTab _tab = _CinemaEditorTab.script;
-  bool _showStoryboard = false;
 
   bool _loading = true;
   bool _saving = false;
@@ -257,6 +269,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     });
   }
 
+  // 统一的全局保存逻辑
   Future<void> _saveAll() async {
     if (_saving) return;
     setState(() => _saving = true);
@@ -314,6 +327,11 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     _roleLook.text = initial['appearance_prompt']?.toString() ?? '';
     _roleAliases.text = (initial['aliases'] is List) ? (initial['aliases'] as List).join(', ') : '';
 
+    var generating = false;
+    var gender = CinemaApi.normalizeGender(initial['gender']);
+    var uploading = false;
+    var portraitError = '';
+
     final action = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -324,19 +342,171 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
           builder: (context, setModalState) {
             final bottomInset = MediaQuery.of(context).viewInsets.bottom;
             final portraitPreview = _rolePortrait.text.trim();
+            final busy = generating || uploading;
+
+            Future<void> pickAndUpload() async {
+              if (busy) return;
+              final picked = await FilePicker.pickFiles(
+                type: FileType.image,
+                allowMultiple: false,
+                withData: true,
+              );
+              final file = picked?.files.single;
+              if (file == null || file.bytes == null) return;
+              if (file.size > 12 * 1024 * 1024) {
+                setModalState(() => portraitError = '图片请控制在 12MB 以内');
+                return;
+              }
+              setModalState(() {
+                uploading = true;
+                portraitError = '';
+              });
+              try {
+                final url = await _api.uploadCharacterImage(
+                  bytes: file.bytes!,
+                  filename: file.name.isEmpty ? 'portrait.jpg' : file.name,
+                  contentType: _imageContentType(file.name),
+                );
+                if (!sheetContext.mounted) return;
+                setModalState(() {
+                  _rolePortrait.text = url;
+                  uploading = false;
+                });
+              } catch (e) {
+                if (!sheetContext.mounted) return;
+                setModalState(() {
+                  uploading = false;
+                  portraitError = '上传立绘失败：$e';
+                });
+              }
+            }
+
+            Future<void> generatePortrait() async {
+              if (busy) return;
+              if (_roleName.text.trim().isEmpty) {
+                setModalState(() => portraitError = '请先填写角色名称');
+                return;
+              }
+              setModalState(() {
+                generating = true;
+                portraitError = '';
+              });
+              try {
+                final worldContext = <String>[
+                  if (_title.text.trim().isNotEmpty) '《${_title.text.trim()}》',
+                  if (_description.text.trim().isNotEmpty) _description.text.trim(),
+                ].join(' ');
+                final url = await _api.generateCharacterPortrait(
+                  name: _roleName.text.trim(),
+                  gender: gender,
+                  appearancePrompt: _roleLook.text.trim(),
+                  worldContext: worldContext,
+                  style: 'anime',
+                );
+                if (!sheetContext.mounted) return;
+                setModalState(() {
+                  _rolePortrait.text = url;
+                  generating = false;
+                });
+              } catch (e) {
+                if (!sheetContext.mounted) return;
+                setModalState(() {
+                  generating = false;
+                  portraitError = '生成立绘失败：$e';
+                });
+              }
+            }
+
+            Widget sectionLabel(String text) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    text,
+                    style: const TextStyle(color: _editorMuted, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 0.4),
+                  ),
+                );
+
+            Widget spinner() => const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 1.8, color: _editorAccent),
+                );
+
+            final portraitBox = InkWell(
+              onTap: busy ? null : pickAndUpload,
+              borderRadius: _editorRadiusLg,
+              child: Container(
+                width: 200,
+                decoration: BoxDecoration(
+                  color: _editorFieldBg,
+                  borderRadius: _editorRadiusLg,
+                  border: Border.all(color: _editorLine),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: AspectRatio(
+                  aspectRatio: 3 / 4,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (portraitPreview.isEmpty)
+                        const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.add_photo_alternate_outlined, color: _editorMuted, size: 36),
+                            SizedBox(height: 8),
+                            Text('点击上传立绘', style: TextStyle(color: _editorMuted, fontSize: 12)),
+                          ],
+                        )
+                      else
+                        // contain：立绘完整显示，不裁切
+                        Image.network(
+                          portraitPreview,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(Icons.broken_image_outlined, color: _editorMuted, size: 32),
+                          ),
+                        ),
+                      if (busy)
+                        ColoredBox(
+                          color: Colors.black.withOpacity(0.55),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(strokeWidth: 2.2, color: _editorAccent),
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  generating ? 'AI 生成中，约需几十秒…' : '上传中…',
+                                  style: const TextStyle(color: _editorText, fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+
             return AnimatedPadding(
               duration: const Duration(milliseconds: 180),
               padding: EdgeInsets.only(bottom: bottomInset),
               child: Container(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.92),
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
                 decoration: const BoxDecoration(
                   color: _editorInkSoft,
                   borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
                 ),
-                child: SingleChildScrollView(child: Column(
+                child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // ── 固定头部 ──
                     Row(
                       children: [
                         Container(
@@ -366,76 +536,121 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 80,
-                          height: 104,
-                          decoration: BoxDecoration(
-                            color: _editorFieldBg,
-                            borderRadius: _editorRadius,
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: portraitPreview.isEmpty
-                              ? const Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                    // ── 可滚动内容 ──
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.only(top: 8, bottom: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // 立绘：大图 + 操作按钮
+                            Center(child: portraitBox),
+                            const SizedBox(height: 12),
+                            Center(
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 360),
+                                child: Row(
                                   children: [
-                                    Icon(Icons.person_outline_rounded, color: _editorMuted, size: 28),
-                                    SizedBox(height: 6),
-                                    Text('立绘预览', style: TextStyle(color: _editorMuted, fontSize: 10)),
+                                    Expanded(
+                                      child: FilledButton.icon(
+                                        onPressed: busy ? null : generatePortrait,
+                                        icon: generating ? spinner() : const Icon(Icons.auto_awesome_rounded, size: 16),
+                                        label: Text(generating ? '生成中…' : 'AI 生成', style: const TextStyle(fontWeight: FontWeight.w800)),
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: _editorAccent,
+                                          foregroundColor: const Color(0xFF151921),
+                                          disabledBackgroundColor: Colors.white.withOpacity(0.06),
+                                          disabledForegroundColor: _editorMuted,
+                                          minimumSize: const Size.fromHeight(40),
+                                          shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        onPressed: busy ? null : pickAndUpload,
+                                        icon: uploading ? spinner() : const Icon(Icons.upload_rounded, size: 16),
+                                        label: Text(uploading ? '上传中…' : '本地上传', style: const TextStyle(fontWeight: FontWeight.w700)),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: _editorText,
+                                          disabledForegroundColor: _editorMuted,
+                                          side: const BorderSide(color: _editorLine),
+                                          minimumSize: const Size.fromHeight(40),
+                                          shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+                                        ),
+                                      ),
+                                    ),
                                   ],
-                                )
-                              : Image.network(
-                                  portraitPreview,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: _editorMuted),
                                 ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              TextField(
-                                controller: _roleName,
-                                autofocus: !isEdit,
-                                style: const TextStyle(color: _editorText, fontSize: 14),
-                                decoration: _inputDecoration('例如：旁白 / 林默', label: '角色名称 *'),
                               ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: _roleVoice,
-                                style: const TextStyle(color: _editorText, fontSize: 14),
-                                decoration: _inputDecoration('输入 TTS Voice ID', label: '声音 ID (Voice ID)'),
+                            ),
+                            if (portraitError.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                portraitError,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: _danger, fontSize: 11.5, height: 1.4),
                               ),
                             ],
-                          ),
+                            const SizedBox(height: 20),
+
+                            // 基本信息
+                            sectionLabel('基本信息'),
+                            TextField(
+                              controller: _roleName,
+                              autofocus: !isEdit,
+                              style: const TextStyle(color: _editorText, fontSize: 14),
+                              decoration: _inputDecoration('例如：旁白 / 林默', label: '角色名称 *'),
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _roleVoice,
+                              style: const TextStyle(color: _editorText, fontSize: 14),
+                              decoration: _inputDecoration('输入 TTS Voice ID', label: '声音 ID (Voice ID)'),
+                            ),
+                            const SizedBox(height: 20),
+
+                            sectionLabel('性别'),
+                            DropdownButtonFormField<String>(
+                              initialValue: gender,
+                              dropdownColor: _editorInkSoft,
+                              style: const TextStyle(color: _editorText, fontSize: 14),
+                              decoration: _inputDecoration('', label: '角色性别'),
+                              items: const [
+                                DropdownMenuItem(value: 'male', child: Text('男')),
+                                DropdownMenuItem(value: 'female', child: Text('女')),
+                                DropdownMenuItem(value: 'other', child: Text('其他')),
+                                DropdownMenuItem(value: 'unknown', child: Text('未知')),
+                              ],
+                              onChanged: busy ? null : (value) => setModalState(() => gender = value ?? 'unknown'),
+                            ),
+                            const SizedBox(height: 20),
+                            // 外貌
+                            sectionLabel('外貌（AI 生成立绘时参考）'),
+                            TextField(
+                              controller: _roleLook,
+                              enabled: !generating,
+                              minLines: 2,
+                              maxLines: 4,
+                              style: const TextStyle(color: _editorText, fontSize: 14),
+                              decoration: _inputDecoration('年龄段、发型发色、服装、显著特征…', label: '外貌描述'),
+                            ),
+                            const SizedBox(height: 20),
+
+                            // 别名
+                            sectionLabel('别名'),
+                            TextField(
+                              controller: _roleAliases,
+                              style: const TextStyle(color: _editorText, fontSize: 14),
+                              decoration: _inputDecoration('用逗号分隔，例如：小默, 默哥', label: '解析时用来认出同一个人'),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _rolePortrait,
-                      onChanged: (_) => setModalState(() {}),
-                      style: const TextStyle(color: _editorText, fontSize: 14),
-                      decoration: _inputDecoration('https://...', label: '角色立绘 URL'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _roleAliases,
-                      style: const TextStyle(color: _editorText, fontSize: 14),
-                      decoration: _inputDecoration('用逗号分隔，例如：小默, 默哥', label: '别名（解析时用来认出同一个人）'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _roleLook,
-                      minLines: 2,
-                      maxLines: 4,
-                      style: const TextStyle(color: _editorText, fontSize: 14),
-                      decoration: _inputDecoration('英文外貌：年龄段、发型发色、服装、显著特征…', label: '外貌提示词（生图用）'),
-                    ),
-                    const SizedBox(height: 24),
+                    // ── 固定底部 ──
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         Expanded(
@@ -451,10 +666,12 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: FilledButton(
-                            onPressed: () {
-                              if (_roleName.text.trim().isEmpty) return;
-                              Navigator.pop(sheetContext, 'save');
-                            },
+                            onPressed: busy
+                                ? null
+                                : () {
+                                    if (_roleName.text.trim().isEmpty) return;
+                                    Navigator.pop(sheetContext, 'save');
+                                  },
                             style: FilledButton.styleFrom(
                               backgroundColor: _editorAccent,
                               foregroundColor: const Color(0xFF151921),
@@ -467,7 +684,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
                       ],
                     ),
                   ],
-                )),
+                ),
               ),
             );
           },
@@ -492,6 +709,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
       final body = <String, dynamic>{
         'name': _roleName.text.trim(),
         'portrait_url': _rolePortrait.text.trim(),
+        'gender': gender,
         'voice_id': _roleVoice.text.trim(),
         'appearance_prompt': _roleLook.text.trim(),
         'aliases': _roleAliases.text
@@ -513,14 +731,6 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
       } catch (e) {
         _showSnack('保存失败：$e', error: true);
       }
-    }
-  }
-
-  void _playCinema() {
-    if (_chapters.isEmpty) return;
-    final playChapterId = _selectedChapter ?? int.tryParse((_chapters.first['id'] ?? '').toString());
-    if (playChapterId != null) {
-      Navigator.pushNamed(context, '/cinema/${widget.workId}/play?chapter_id=$playChapterId');
     }
   }
 
@@ -631,22 +841,6 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
               ],
             ),
           ),
-          if (_chapters.isNotEmpty) ...[
-            OutlinedButton.icon(
-              onPressed: _playCinema,
-              icon: const Icon(Icons.play_arrow_rounded, size: 17),
-              label: const Text('放映'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _editorAccent,
-                side: BorderSide(color: _editorAccent.withOpacity(0.45)),
-                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-                minimumSize: const Size(0, 34),
-                shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
-                textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
           FilledButton.icon(
             onPressed: (!activeSave || _saving) ? null : _saveAll,
             icon: _saving 
@@ -671,6 +865,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
   Widget _buildHeroAndTabs() {
     final tabs = [
       (_CinemaEditorTab.script, '章节剧本', Icons.movie_creation_outlined),
+      (_CinemaEditorTab.storyboard, '分镜解析', Icons.auto_awesome_motion_outlined),
       (_CinemaEditorTab.cast, '演员角色', Icons.people_alt_outlined),
       (_CinemaEditorTab.settings, '作品设定', Icons.tune_rounded),
     ];
@@ -691,6 +886,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
               ),
             ),
           ),
+          // 移除了这里的“新章节”按钮，统一移动到了左侧目录的固定底部
         ],
       ),
     );
@@ -702,6 +898,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
       borderRadius: _editorRadius,
       onTap: () {
         setState(() => _tab = item.$1);
+        if (item.$1 == _CinemaEditorTab.storyboard) _loadItems();
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
@@ -732,6 +929,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
   Widget _buildActiveTabBody() {
     switch (_tab) {
       case _CinemaEditorTab.script: return _buildScriptWorkspace();
+      case _CinemaEditorTab.storyboard: return _buildStoryboardWorkspace();
       case _CinemaEditorTab.cast: return _buildCastWorkspace();
       case _CinemaEditorTab.settings: return _buildSettingsWorkspace();
     }
@@ -751,7 +949,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
         }
         return Column(
           children: [
-            _buildMobileChapterHeader(),
+            _buildCompactChapterStrip(),
             Expanded(child: Padding(padding: const EdgeInsets.all(14), child: _buildChapterEditorSurface())),
           ],
         );
@@ -789,6 +987,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
               },
             ),
           ),
+          // 统一底部边距为 16（与右侧内容框的 Padding 对齐），并加高按钮
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
             child: FilledButton.icon(
@@ -798,7 +997,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
               style: FilledButton.styleFrom(
                 backgroundColor: _editorAccent,
                 foregroundColor: const Color(0xFF151921),
-                minimumSize: const Size.fromHeight(48),
+                minimumSize: const Size.fromHeight(48), // 加高按钮解决“太矮”的问题
                 shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
               ),
             ),
@@ -808,226 +1007,60 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     );
   }
 
-  Widget _buildMobileChapterHeader() {
-    String currentTitle = '未命名章节';
-    if (_selectedChapter != null) {
-      final match = _chapters.where((c) => int.tryParse(c['id'].toString()) == _selectedChapter);
-      if (match.isNotEmpty && (match.first['title']?.toString().isNotEmpty ?? false)) {
-        currentTitle = match.first['title']!;
-      }
-    } else if (_chapterDirty) {
-      currentTitle = _chapterTitle.text.isNotEmpty ? _chapterTitle.text : '新章节';
-    }
-
-    return InkWell(
-      onTap: _showMobileChapterSheet,
-      child: Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: _editorLine)),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.menu_book_rounded, size: 16, color: _editorMuted),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                currentTitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: _editorText, fontSize: 14, fontWeight: FontWeight.w700),
-              ),
-            ),
-            const Icon(Icons.unfold_more_rounded, size: 18, color: _editorMuted),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showMobileChapterSheet() async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (sheetContext) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.6,
-          maxChildSize: 0.9,
-          minChildSize: 0.4,
-          builder: (_, controller) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: _editorInkSoft,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-              ),
-              child: Column(
-                children: [
-                  const SizedBox(height: 12),
-                  Container(width: 40, height: 4, decoration: BoxDecoration(color: _editorMuted, borderRadius: BorderRadius.circular(2))),
-                  const SizedBox(height: 16),
-                  const Text('选择章节', style: TextStyle(color: _editorText, fontSize: 16, fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: controller,
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 80),
-                      itemCount: _chapters.length,
-                      itemBuilder: (context, i) {
-                        final c = _chapters[i];
-                        final id = int.tryParse(c['id'].toString());
-                        final selected = _selectedChapter == id;
-                        final title = c['title']?.toString().trim() ?? '';
-                        
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: InkWell(
-                            borderRadius: _editorRadius,
-                            onTap: () {
-                              Navigator.pop(sheetContext);
-                              _select(c);
-                            },
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: selected ? _editorAccent.withOpacity(0.12) : Colors.transparent,
-                                borderRadius: _editorRadius,
-                                border: Border(left: BorderSide(color: selected ? _editorAccent : Colors.transparent, width: 3)),
-                              ),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '${i + 1}. ${title.isEmpty ? '未命名' : title}',
-                                    maxLines: 1,
-                                    style: TextStyle(
-                                      color: selected ? _editorAccent : _editorTextSoft, 
-                                      fontSize: 14, 
-                                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    c['source_text']?.toString() ?? '', 
-                                    maxLines: 1, 
-                                    overflow: TextOverflow.ellipsis, 
-                                    style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        Navigator.pop(sheetContext);
-                        _startNewChapter();
-                      },
-                      icon: const Icon(Icons.add_rounded, size: 18),
-                      label: const Text('新建章节', style: TextStyle(fontWeight: FontWeight.w700)),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _editorAccent,
-                        foregroundColor: const Color(0xFF151921),
-                        minimumSize: const Size.fromHeight(48),
-                        shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
-                      ),
-                    ),
-                  ),
-                ],
+  Widget _buildCompactChapterStrip() {
+    return Container(
+      height: 46,
+      alignment: Alignment.centerLeft,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        itemCount: _chapters.length + 1,
+        itemBuilder: (_, i) {
+          if (i == _chapters.length) {
+            // 移动端横向列表的末尾也改为纯色新建按钮
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: ActionChip(
+                label: const Text('✦ 新建章节', style: TextStyle(color: Color(0xFF151921), fontSize: 11.5, fontWeight: FontWeight.w700)),
+                backgroundColor: _editorAccent,
+                onPressed: _startNewChapter,
+                side: BorderSide.none,
+                shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+                visualDensity: VisualDensity.compact,
               ),
             );
-          },
-        );
-      },
+          }
+          
+          final c = _chapters[i];
+          final id = int.tryParse(c['id'].toString());
+          final selected = _selectedChapter == id;
+          final title = c['title']?.toString().trim() ?? '';
+          
+          return Padding(
+            padding: const EdgeInsets.only(right: 8, top: 7, bottom: 7),
+            child: ChoiceChip(
+              label: Text('${i + 1}. ${title.isEmpty ? '未命名' : title}'),
+              selected: selected,
+              onSelected: (_) => _select(c),
+              backgroundColor: _editorFieldBg,
+              selectedColor: _editorAccent.withOpacity(0.18),
+              labelStyle: TextStyle(
+                color: selected ? _editorAccent : _editorTextSoft,
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+              side: BorderSide.none,
+              shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
+              visualDensity: VisualDensity.compact,
+            ),
+          );
+        },
+      ),
     );
   }
 
   Widget _buildChapterEditorSurface() {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          height: 40,
-          margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: _editorFieldBg,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: _buildSegmentButton(
-                  title: '剧本正文', 
-                  icon: Icons.edit_document,
-                  selected: !_showStoryboard, 
-                  onTap: () => setState(() => _showStoryboard = false),
-                ),
-              ),
-              Expanded(
-                child: _buildSegmentButton(
-                  title: '分镜解析', 
-                  icon: Icons.auto_awesome_motion,
-                  selected: _showStoryboard, 
-                  onTap: () {
-                    setState(() => _showStoryboard = true);
-                    if (_items.isEmpty && _selectedChapter != null) _loadItems();
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 200),
-            child: _showStoryboard ? _buildStoryboardSubView() : _buildScriptSubView(),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSegmentButton({required String title, required IconData icon, required bool selected, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? _editorSurface : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          boxShadow: selected ? [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 4, offset: const Offset(0, 2))] : [],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 14, color: selected ? _editorAccent : _editorMuted),
-            const SizedBox(width: 6),
-            Text(
-              title,
-              style: TextStyle(
-                color: selected ? _editorText : _editorMuted,
-                fontSize: 13,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildScriptSubView() {
-    return Column(
-      key: const ValueKey('script'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         TextField(
@@ -1046,26 +1079,6 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
             textAlignVertical: TextAlignVertical.top,
             style: const TextStyle(color: _editorText, fontSize: 13.8, height: 1.65),
             decoration: _inputDecoration('在此输入章节剧本正文、角色对话或小说原文…\n\n提示：先在「演员角色」Tab 中配置好登场人物立绘与声音 ID，放映时即可自动匹配角色演出。', label: '章节剧本正文'),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStoryboardSubView() {
-    return Column(
-      key: const ValueKey('storyboard'),
-      children: [
-        _buildAnalyzeBar(),
-        const SizedBox(height: 8),
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: _editorFieldBg.withOpacity(0.5),
-              borderRadius: _editorRadius,
-              border: Border.all(color: _editorLine),
-            ),
-            child: _buildItemList(),
           ),
         ),
       ],
@@ -1103,15 +1116,20 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
               tileColor: _editorFieldBg,
               shape: RoundedRectangleBorder(borderRadius: _editorRadius),
               leading: Container(
-                width: 46,
-                height: 46,
+                width: 42,
+                height: 56,
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.04),
                   borderRadius: _editorRadius,
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: e.value['portrait_url']?.isNotEmpty == true 
-                    ? Image.network(e.value['portrait_url'], fit: BoxFit.cover)
+                child: e.value['portrait_url']?.isNotEmpty == true
+                    ? Image.network(
+                        e.value['portrait_url'],
+                        fit: BoxFit.cover,
+                        alignment: Alignment.topCenter,
+                        errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: _editorMuted),
+                      )
                     : const Icon(Icons.person_outline_rounded, color: _editorMuted),
               ),
               title: Text(e.value['name'] ?? '未命名', style: const TextStyle(color: _editorText, fontSize: 14, fontWeight: FontWeight.w700)),
@@ -1142,6 +1160,8 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
       ],
     );
   }
+
+  // ───────────────────────── 分镜解析 ─────────────────────────
 
   List<Map<String, dynamic>> _parseList(dynamic raw) {
     return (raw as List? ?? <dynamic>[])
@@ -1174,6 +1194,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     return '';
   }
 
+  // 只更新状态字段，不动 source_text（编辑区的正文以本地为准）
   void _patchChapterMeta(dynamic raw) {
     if (raw is! Map) return;
     final id = raw['id']?.toString();
@@ -1236,7 +1257,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
       try {
         data = await _api.getChapter(id);
       } catch (_) {
-        continue;
+        continue; // 网络抖动，继续轮询
       }
       final status = data['processing_status']?.toString() ?? '';
       if (!mounted) return;
@@ -1252,7 +1273,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
       }
       if (id == _selectedChapter) await _loadItems();
       try {
-        await _reloadCharacters();
+        await _reloadCharacters(); // 解析会往角色库里新增角色
       } catch (_) {}
       return;
     }
@@ -1273,17 +1294,26 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     });
   }
 
-  Future<void> _openItemSheet(Map<String, dynamic> item) async {
+  Future<void> _openItemSheet(Map<String, dynamic> item, {required bool shot}) async {
+    // shot=true：编辑整个镜头（提示词/镜头），item 必须是镜头首句；shot=false：编辑单句（文字/说话人）
     final itemId = int.tryParse(item['id']?.toString() ?? '');
     if (itemId == null) return;
     final promptCtl = TextEditingController(text: item['scene_prompt']?.toString() ?? '');
+    final textCtl = TextEditingController(text: item['text']?.toString() ?? '');
     final originalPrompt = promptCtl.text.trim();
+    final originalText = textCtl.text.trim();
     int? speakerId = int.tryParse(item['speaker_character_id']?.toString() ?? '');
     final originalSpeaker = speakerId;
-    String? shot = item['shot_scale']?.toString();
-    if (shot != null && !_shotScales.contains(shot)) shot = null;
-    final originalShot = shot;
-    final index = (int.tryParse(item['item_index']?.toString() ?? '') ?? 0) + 1;
+    String? scale = item['shot_scale']?.toString();
+    if (scale != null && !_shotScales.contains(scale)) scale = null;
+    final originalScale = scale;
+    final metadata = item['metadata'];
+    var cameraMove = CinemaCameraMotion.normalize(item['camera_move'] ??
+        (metadata is Map ? metadata['camera_move'] : null));
+    final originalCameraMove = cameraMove;
+    final title = shot
+        ? '编辑镜头 ${((int.tryParse(item['shot_id']?.toString() ?? '') ?? 0) + 1)}'
+        : '编辑第 ${(int.tryParse(item['item_index']?.toString() ?? '') ?? 0) + 1} 句';
 
     final save = await showModalBottomSheet<bool>(
       context: context,
@@ -1294,6 +1324,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
         return StatefulBuilder(
           builder: (context, setModalState) {
             final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+            final roleList = _roles.where((r) => int.tryParse(r['id']?.toString() ?? '') != null).toList();
             return AnimatedPadding(
               duration: const Duration(milliseconds: 180),
               padding: EdgeInsets.only(bottom: bottomInset),
@@ -1311,10 +1342,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
                       Row(
                         children: [
                           Expanded(
-                            child: Text(
-                              '第 $index 句 · 编辑分镜',
-                              style: const TextStyle(color: _editorText, fontSize: 16, fontWeight: FontWeight.w800),
-                            ),
+                            child: Text(title, style: const TextStyle(color: _editorText, fontSize: 16, fontWeight: FontWeight.w800)),
                           ),
                           IconButton(
                             onPressed: () => Navigator.pop(sheetContext, false),
@@ -1323,72 +1351,84 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      Text(
-                        item['text']?.toString() ?? '',
-                        style: const TextStyle(color: _editorTextSoft, fontSize: 13.5, height: 1.5),
-                      ),
-                      const SizedBox(height: 16),
-                      DropdownButtonFormField<int?>(
-                        value: speakerId,
-                        dropdownColor: _editorInkSoft,
-                        style: const TextStyle(color: _editorText, fontSize: 14),
-                        decoration: _inputDecoration('', label: '说话人'),
-                        items: <DropdownMenuItem<int?>>[
-                          const DropdownMenuItem<int?>(value: null, child: Text('旁白 / 未指定')),
-                          ..._roles
-                              .where((r) => int.tryParse(r['id']?.toString() ?? '') != null)
-                              .map((r) => DropdownMenuItem<int?>(
-                                    value: int.parse(r['id'].toString()),
-                                    child: Text(r['name']?.toString() ?? '未命名'),
-                                  )),
-                        ],
-                        onChanged: (v) => setModalState(() => speakerId = v),
-                      ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String?>(
-                        value: shot,
-                        dropdownColor: _editorInkSoft,
-                        style: const TextStyle(color: _editorText, fontSize: 14),
-                        decoration: _inputDecoration('', label: '镜头'),
-                        items: <DropdownMenuItem<String?>>[
-                          const DropdownMenuItem<String?>(value: null, child: Text('未指定')),
-                          ..._shotScales.map((e) => DropdownMenuItem<String?>(value: e, child: Text(e))),
-                        ],
-                        onChanged: (v) => setModalState(() => shot = v),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: promptCtl,
-                        minLines: 3,
-                        maxLines: 8,
-                        style: const TextStyle(color: _editorText, fontSize: 13.5, height: 1.5),
-                        decoration: _inputDecoration('英文画面描述；点下面的角色可插入引用', label: '分镜提示词'),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: _roles
-                            .where((r) => int.tryParse(r['id']?.toString() ?? '') != null)
-                            .map((r) => ActionChip(
-                                  label: Text('@${r['name']}', style: const TextStyle(color: _editorAccent, fontSize: 12)),
-                                  backgroundColor: _editorAccent.withOpacity(0.12),
-                                  side: BorderSide.none,
-                                  visualDensity: VisualDensity.compact,
-                                  onPressed: () {
-                                    final token = '{{char:${r['id']}}}';
-                                    final text = promptCtl.text;
-                                    final sel = promptCtl.selection;
-                                    final start = sel.isValid ? sel.start : text.length;
-                                    final end = sel.isValid ? sel.end : text.length;
-                                    promptCtl.value = TextEditingValue(
-                                      text: text.replaceRange(start, end, token),
-                                      selection: TextSelection.collapsed(offset: start + token.length),
-                                    );
-                                  },
-                                ))
-                            .toList(),
-                      ),
+                      if (shot) ...[
+                        DropdownButtonFormField<String>(
+                          initialValue: cameraMove,
+                          dropdownColor: _editorInkSoft,
+                          style: const TextStyle(color: _editorText, fontSize: 14),
+                          decoration: _inputDecoration('', label: '运镜效果'),
+                          items: CinemaCameraMotion.labels.entries.map((entry) =>
+                              DropdownMenuItem(value: entry.key, child: Text(entry.value))).toList(),
+                          onChanged: (value) => setModalState(() => cameraMove = value ?? 'static'),
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String?>(
+                          value: scale,
+                          dropdownColor: _editorInkSoft,
+                          style: const TextStyle(color: _editorText, fontSize: 14),
+                          decoration: _inputDecoration('', label: '镜头'),
+                          items: <DropdownMenuItem<String?>>[
+                            const DropdownMenuItem<String?>(value: null, child: Text('未指定')),
+                            ..._shotScales.map((e) => DropdownMenuItem<String?>(value: e, child: Text(e))),
+                          ],
+                          onChanged: (v) => setModalState(() => scale = v),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: promptCtl,
+                          minLines: 3,
+                          maxLines: 8,
+                          style: const TextStyle(color: _editorText, fontSize: 13.5, height: 1.5),
+                          decoration: _inputDecoration('英文画面描述；点下面的角色可插入引用', label: '镜头画面提示词'),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: roleList
+                              .map((r) => ActionChip(
+                                    label: Text('@${r['name']}', style: const TextStyle(color: _editorAccent, fontSize: 12)),
+                                    backgroundColor: _editorAccent.withOpacity(0.12),
+                                    side: BorderSide.none,
+                                    visualDensity: VisualDensity.compact,
+                                    onPressed: () {
+                                      final token = '{{char:${r['id']}}}';
+                                      final text = promptCtl.text;
+                                      final sel = promptCtl.selection;
+                                      final start = sel.isValid ? sel.start : text.length;
+                                      final end = sel.isValid ? sel.end : text.length;
+                                      promptCtl.value = TextEditingValue(
+                                        text: text.replaceRange(start, end, token),
+                                        selection: TextSelection.collapsed(offset: start + token.length),
+                                      );
+                                    },
+                                  ))
+                              .toList(),
+                        ),
+                      ] else ...[
+                        TextField(
+                          controller: textCtl,
+                          minLines: 2,
+                          maxLines: 8,
+                          style: const TextStyle(color: _editorText, fontSize: 14, height: 1.5),
+                          decoration: _inputDecoration('解说词或台词', label: '文字'),
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<int?>(
+                          value: speakerId,
+                          dropdownColor: _editorInkSoft,
+                          style: const TextStyle(color: _editorText, fontSize: 14),
+                          decoration: _inputDecoration('', label: '说话人'),
+                          items: <DropdownMenuItem<int?>>[
+                            const DropdownMenuItem<int?>(value: null, child: Text('旁白 / 未指定')),
+                            ...roleList.map((r) => DropdownMenuItem<int?>(
+                                  value: int.parse(r['id'].toString()),
+                                  child: Text(r['name']?.toString() ?? '未命名'),
+                                )),
+                          ],
+                          onChanged: (v) => setModalState(() => speakerId = v),
+                        ),
+                      ],
                       const SizedBox(height: 20),
                       FilledButton(
                         onPressed: () => Navigator.pop(sheetContext, true),
@@ -1398,7 +1438,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
                           minimumSize: const Size.fromHeight(48),
                           shape: const RoundedRectangleBorder(borderRadius: _editorRadius),
                         ),
-                        child: const Text('保存分镜', style: TextStyle(fontWeight: FontWeight.w700)),
+                        child: const Text('保存', style: TextStyle(fontWeight: FontWeight.w700)),
                       ),
                     ],
                   ),
@@ -1412,17 +1452,32 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
 
     if (save != true || !mounted) return;
     final body = <String, dynamic>{};
-    if (promptCtl.text.trim() != originalPrompt) body['scene_prompt'] = promptCtl.text.trim();
-    if (speakerId != originalSpeaker) body['speaker_character_id'] = speakerId;
-    if (shot != originalShot) body['shot_scale'] = shot;
+    if (shot) {
+      if (promptCtl.text.trim() != originalPrompt) body['scene_prompt'] = promptCtl.text.trim();
+      if (scale != originalScale) body['shot_scale'] = scale;
+      if (cameraMove != originalCameraMove) body['camera_move'] = cameraMove;
+    } else {
+      if (textCtl.text.trim() != originalText) body['text'] = textCtl.text.trim();
+      if (speakerId != originalSpeaker) body['speaker_character_id'] = speakerId;
+    }
     if (body.isEmpty) return;
     try {
       await _api.updateItem(itemId, body);
       await _loadItems();
-      _showSnack('分镜已更新');
+      _showSnack('已更新');
     } catch (e) {
       _showSnack('保存失败：$e', error: true);
     }
+  }
+
+  Widget _buildStoryboardWorkspace() {
+    return Column(
+      children: [
+        _buildCompactChapterStrip(),
+        _buildAnalyzeBar(),
+        Expanded(child: _buildItemList()),
+      ],
+    );
   }
 
   Widget _buildAnalyzeBar() {
@@ -1442,7 +1497,8 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     } else if (status == 'pending') {
       label = '正文已修改，分镜待更新';
     } else if (analyzed) {
-      label = '已解析 ${_items.length} 句';
+      final shotCount = _items.where((e) => e['shot_start'] == true).length;
+      label = shotCount > 0 ? '已解析 $shotCount 个镜头 · ${_items.length} 句' : '已解析 ${_items.length} 句';
       color = _editorAccent;
     } else {
       label = '仅基础分句（未做分镜）';
@@ -1490,9 +1546,26 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     );
   }
 
+  // 把连续的句子按 shot_id 归组；没有 shot_id 的旧数据每句单独成组
+  List<List<Map<String, dynamic>>> _groupShots() {
+    final groups = <List<Map<String, dynamic>>>[];
+    String? lastKey;
+    for (final it in _items) {
+      final sid = it['shot_id']?.toString();
+      final key = sid ?? 'solo-${it['id']}';
+      if (key == lastKey && groups.isNotEmpty) {
+        groups.last.add(it);
+      } else {
+        groups.add(<Map<String, dynamic>>[it]);
+        lastKey = key;
+      }
+    }
+    return groups;
+  }
+
   Widget _buildItemList() {
     if (_selectedChapter == null) {
-      return const Center(child: Text('先保存一章正文，再进行解析', style: TextStyle(color: _editorMuted, fontSize: 13)));
+      return const Center(child: Text('先在「章节剧本」里写好并保存一章', style: TextStyle(color: _editorMuted, fontSize: 13)));
     }
     if (_itemsLoading && _items.isEmpty) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2, color: _editorAccent));
@@ -1502,83 +1575,111 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
         child: Padding(
           padding: EdgeInsets.all(32),
           child: Text(
-            '本章尚未解析分镜。\n点击上方「解析本章」，系统将自动切分句子并生成分镜提示词。',
+            '这一章还没有解析。点「解析本章」，系统会理解剧情、改编成解说脚本，并按镜头划分、生成每个镜头的画面提示词。',
             textAlign: TextAlign.center,
             style: TextStyle(color: _editorMuted, fontSize: 13, height: 1.6),
           ),
         ),
       );
     }
+    final groups = _groupShots();
     return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: _items.length,
-      itemBuilder: (_, i) => _buildItemCard(_items[i], i),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      itemCount: groups.length,
+      itemBuilder: (_, i) => _buildShotCard(groups[i], i),
     );
   }
 
-  Widget _buildItemCard(Map<String, dynamic> item, int i) {
-    final isDialogue = item['item_type'] == 'dialogue';
-    final speaker = (item['speaker']?.toString() ?? '').trim();
-    final prompt = item['scene_prompt']?.toString() ?? '';
-    final shot = item['shot_scale']?.toString() ?? '';
-    final edited = item['edited'] == true;
+  Widget _buildShotCard(List<Map<String, dynamic>> lines, int index) {
+    final start = lines.firstWhere((e) => e['shot_start'] == true, orElse: () => lines.first);
+    final prompt = start['scene_prompt']?.toString() ?? '';
+    final scale = start['shot_scale']?.toString() ?? '';
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: InkWell(
-        borderRadius: _editorRadius,
-        onTap: () => _openItemSheet(item),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: _editorFieldBg, borderRadius: _editorRadius),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Text('${i + 1}', style: const TextStyle(color: _editorMuted, fontSize: 11.5, fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: (isDialogue ? _editorAccent : Colors.white).withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(4),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        decoration: BoxDecoration(color: _editorFieldBg, borderRadius: _editorRadius),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InkWell(
+              borderRadius: _editorRadius,
+              onTap: () => _openItemSheet(start, shot: true),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text('镜头 ${index + 1}', style: const TextStyle(color: _editorAccent, fontSize: 12, fontWeight: FontWeight.w800)),
+                        if (scale.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Text(scale, style: const TextStyle(color: _editorMuted, fontSize: 11)),
+                        ],
+                        const Spacer(),
+                        const Icon(Icons.edit_outlined, size: 15, color: _editorMuted),
+                      ],
                     ),
-                    child: Text(
-                      isDialogue ? (speaker.isEmpty ? '对白' : speaker) : '旁白',
-                      style: TextStyle(color: isDialogue ? _editorAccent : _editorTextSoft, fontSize: 11, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  if (shot.isNotEmpty) ...[
-                    const SizedBox(width: 6),
-                    Text(shot, style: const TextStyle(color: _editorMuted, fontSize: 11)),
+                    if (prompt.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: _editorRadius),
+                        child: Text(
+                          _expandPrompt(prompt),
+                          style: const TextStyle(color: _editorMuted, fontSize: 11.5, height: 1.45),
+                        ),
+                      ),
+                    ],
                   ],
-                  if (edited) ...[
-                    const SizedBox(width: 6),
-                    const Text('已手改', style: TextStyle(color: _editorAccent, fontSize: 11)),
-                  ],
-                  const Spacer(),
-                  const Icon(Icons.edit_outlined, size: 15, color: _editorMuted),
-                ],
+                ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                item['text']?.toString() ?? '',
+            ),
+            for (final line in lines) _buildLineRow(line),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLineRow(Map<String, dynamic> line) {
+    final isDialogue = line['item_type'] == 'dialogue';
+    final speaker = (line['speaker']?.toString() ?? '').trim();
+    final edited = line['edited'] == true;
+    return InkWell(
+      onTap: () => _openItemSheet(line, shot: false),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 1),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: (isDialogue ? _editorAccent : Colors.white).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                isDialogue ? (speaker.isEmpty ? '对白' : speaker) : '解说',
+                style: TextStyle(color: isDialogue ? _editorAccent : _editorTextSoft, fontSize: 10.5, fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                line['text']?.toString() ?? '',
                 style: const TextStyle(color: _editorText, fontSize: 13.5, height: 1.5),
               ),
-              if (prompt.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: _editorRadius),
-                  child: Text(
-                    _expandPrompt(prompt),
-                    style: const TextStyle(color: _editorMuted, fontSize: 11.5, height: 1.45),
-                  ),
-                ),
-              ],
-            ],
-          ),
+            ),
+            if (edited)
+              const Padding(
+                padding: EdgeInsets.only(left: 6, top: 2),
+                child: Text('已改', style: TextStyle(color: _editorAccent, fontSize: 10.5)),
+              ),
+          ],
         ),
       ),
     );
