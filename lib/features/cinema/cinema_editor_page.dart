@@ -1487,7 +1487,7 @@ class _CinemaEditorPageState extends State<CinemaEditorPage> {
     String label;
     Color color = _editorMuted;
     if (busy) {
-      label = '解析中…（角色、分句、分镜）';
+      label = '解析中…（角色、立绘、分句、分镜）';
       color = _editorAccent;
     } else if (status == 'failed') {
       label = '解析失败';
